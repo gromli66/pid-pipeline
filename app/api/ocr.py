@@ -181,6 +181,13 @@ async def update_ocr_result(
 
     storage = StorageService()
     content = await file.read()
+
+    # Validate JSON before saving
+    try:
+        json.loads(content)
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+
     file_path, file_size = await storage.save_file(
         uid, "ocr", "ocr_result.json", content
     )
@@ -458,9 +465,11 @@ async def apply_ocr_binding(
             node["kks_full"] = binding_map[nid]
             updated += 1
 
-    # Сохранить обновлённый граф
-    with open(graph_path, "w", encoding="utf-8") as f:
+    # Сохранить обновлённый граф (atomic write)
+    tmp_path = graph_path.with_suffix(".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(graph, f, ensure_ascii=False, indent=2)
+    tmp_path.rename(graph_path)
 
     # Перевести статус → OCR_BOUND
     diagram_result = await db.execute(select(Diagram).where(Diagram.uid == uid))
