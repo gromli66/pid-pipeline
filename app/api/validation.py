@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_async_db
 from app.models import Diagram, DiagramStatus, Artifact, ArtifactType
+from app.services.dispatch import async_safe_dispatch
 from app.services.storage import StorageService
 
 router = APIRouter()
@@ -474,17 +475,10 @@ async def complete_mask_validation(
         diagram.error_stage = None
         await db.commit()
 
-        # Auto-dispatch task_skeletonize_simple
-        try:
-            from worker.celery_app import celery_app
-
-            result = celery_app.send_task(
-                "worker.tasks.skeleton.task_skeletonize_simple",
-                args=[str(uid)],
-            )
-            task_id = result.id
-        except Exception:
-            pass
+        task_id = await async_safe_dispatch(
+            "worker.tasks.skeleton.task_skeletonize_simple",
+            args=[str(uid)],
+        )
 
     return {
         "status": "validated_masks",
@@ -631,38 +625,26 @@ async def complete_junction_validation(
     )
 
     task_id = None
+    ocr_task_id = None
     if not already_past:
         diagram.status = DiagramStatus.VALIDATED_JUNCTIONS
         diagram.error_message = None
         diagram.error_stage = None
         await db.commit()
 
-        # Auto-dispatch graph build + OCR (параллельно)
-        try:
-            from worker.celery_app import celery_app
+        # Auto-dispatch graph build + OCR (parallel)
+        task_id = await async_safe_dispatch(
+            "worker.tasks.graph.task_build_graph",
+            args=[str(uid)],
+            queue="gpu",
+        )
 
-            result = celery_app.send_task(
-                "worker.tasks.graph.task_build_graph",
-                args=[str(uid)],
-                queue="gpu",
-            )
-            task_id = result.id
-        except Exception:
-            pass
-
-        # OCR — параллельно с graph (GPU worker, очередь "ocr")
-        ocr_task_id = None
-        try:
-            from worker.celery_app import celery_app
-
-            ocr_result = celery_app.send_task(
-                "worker.tasks.ocr.task_run_ocr",
-                args=[str(uid)],
-                queue="ocr",
-            )
-            ocr_task_id = ocr_result.id
-        except Exception:
-            pass
+        # OCR -- parallel with graph (GPU worker, queue "ocr")
+        ocr_task_id = await async_safe_dispatch(
+            "worker.tasks.ocr.task_run_ocr",
+            args=[str(uid)],
+            queue="ocr",
+        )
 
     return {
         "status": "validated_junctions",
@@ -748,19 +730,12 @@ async def complete_simple_graph_validation(
     diagram.error_stage = None
     await db.commit()
 
-    # Auto-dispatch OCR (НЕ FXML!)
-    task_id = None
-    try:
-        from worker.celery_app import celery_app
-
-        result = celery_app.send_task(
-            "worker.tasks.ocr.task_run_ocr",
-            args=[str(uid)],
-            queue="ocr",
-        )
-        task_id = result.id
-    except Exception:
-        pass
+    # Auto-dispatch OCR (NOT FXML!)
+    task_id = await async_safe_dispatch(
+        "worker.tasks.ocr.task_run_ocr",
+        args=[str(uid)],
+        queue="ocr",
+    )
 
     return {
         "status": "validated_graph",
@@ -972,18 +947,10 @@ async def complete_graph_validation(
     await db.commit()
 
     # Auto-dispatch FXML generation
-    task_id = None
-    try:
-        from worker.celery_app import celery_app
-
-        result = celery_app.send_task(
-            "worker.tasks.graph.task_generate_fxml",
-            args=[str(uid)],
-        )
-        task_id = result.id
-    except Exception:
-        # Если worker недоступен — не блокируем
-        pass
+    task_id = await async_safe_dispatch(
+        "worker.tasks.graph.task_generate_fxml",
+        args=[str(uid)],
+    )
 
     return {
         "status": "validated_graph",

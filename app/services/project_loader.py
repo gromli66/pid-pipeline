@@ -5,7 +5,7 @@ Project Loader - загрузка конфигурации проектов из
 import yaml
 from pathlib import Path
 from typing import Dict, List, Optional
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from functools import lru_cache
 
 from app.config import settings

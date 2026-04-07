@@ -11,11 +11,11 @@ This module contains only universal algorithms:
   - detect_tb (title block detection)
   - semantic_regroup (universal spatial grouping driven by profile)
 """
-import cv2, numpy as np, json, re, os
+import cv2, numpy as np, re, os
 from collections import defaultdict, Counter
 from pathlib import Path
 
-from modules.ocr.domain_profile import BaseDomainProfile, load_profile
+from modules.ocr.domain_profile import BaseDomainProfile
 
 
 # =============================================================================

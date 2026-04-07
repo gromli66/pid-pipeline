@@ -210,7 +210,7 @@ def main():
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
 
     # Load checkpoint
-    ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+    ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
     cfg_dict = ckpt.get("config", {})
     cfg = Config()
     for k, v in cfg_dict.items():

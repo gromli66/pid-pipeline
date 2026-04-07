@@ -173,7 +173,7 @@ def create_model(cfg: Config) -> JunctionSegModel:
 def _init_from_pipe_seg(model: JunctionSegModel, weights_path: str):
     """Init encoder from pipe segmentation weights (4ch → 5ch adaptation)."""
     try:
-        state = torch.load(weights_path, map_location="cpu", weights_only=False)
+        state = torch.load(weights_path, map_location="cpu", weights_only=True)
         if "model_state_dict" in state:
             state = state["model_state_dict"]
         elif "state_dict" in state:

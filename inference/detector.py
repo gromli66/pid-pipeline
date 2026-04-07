@@ -425,7 +425,8 @@ class NodeDetector:
                 line = (f"{det['class_id']} {det['x_center']:.6f} "
                        f"{det['y_center']:.6f} {det['width']:.6f} "
                        f"{det['height']:.6f}")
-
+                if save_confidence:
+                    line += f" {det['confidence']:.4f}"
                 f.write(line + "\n")
 
     def _save_json(

@@ -163,10 +163,11 @@ def task_run_ocr(self, diagram_uid: str):
                 pts = json.load(f)
 
             def _pt(p):
-                """dict {"x","y"} или list [y,x] → (x, y)."""
+                """dict {"x","y"} or list [y, x] -> (x, y)."""
                 if isinstance(p, dict):
-                    return (p["x"], p["y"])
-                return (p[0], p[1])
+                    return (int(p["x"]), int(p["y"]))
+                # list/tuple from image coords: [row, col] = [y, x]
+                return (int(p[1]), int(p[0]))
 
             junctions = [_pt(p) for p in pts.get("junctions", [])]
             bridges = [_pt(p) for p in pts.get("bridges", [])]

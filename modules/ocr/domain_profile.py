@@ -462,8 +462,7 @@ class ConfigDrivenProfile(BaseDomainProfile):
             has_target_fn=self.has_any_target_pattern,
         )
 
-        # Meta
-        meta = self._config.get('meta', {})
+        # Meta (continued)
         self._secondary_script = meta.get('secondary_script', 'cyrillic')
         self._norm_direction = meta.get('normalization_direction', 'cyr_to_lat')
 
@@ -471,7 +470,6 @@ class ConfigDrivenProfile(BaseDomainProfile):
         self._postprocess = self._config.get('postprocess', {})
 
         # Classify preprocessing
-        classify_cfg = self._config.get('classify', {})
         preprocess_cfg = classify_cfg.get('preprocess', {})
         self._classify_preprocess = bool(preprocess_cfg)
         self._preprocess_clean_html = preprocess_cfg.get('clean_html', False)

@@ -114,14 +114,14 @@ def _measure_perp_width(gray, vx, vy, cx, cy, t_val, scan_r,
     return 0, 0.0
 
 
-def refine_pipe_mask_perp(pipe_mask, gray, junctions, bridges, H, W):
+def refine_pipe_mask_perp(pipe_mask, gray, junctions, bridges, H, W, cfg):
     from skimage.morphology import skeletonize
     pm = ensure_size(pipe_mask, H, W)
     skel = skeletonize(pm > 0).astype(np.uint8)
     k3 = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=np.uint8)
     nc = cv2.filter2D(skel.astype(np.uint16), cv2.CV_16U, k3)
     auto_j = ((skel > 0) & (nc >= 3)).astype(np.uint8)
-    r_auto = CONFIG["junction_radius"]
+    r_auto = cfg["junction_radius"]
     kj = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2*r_auto+1, 2*r_auto+1))
     junc_mask = cv2.dilate(auto_j, kj)
     dt_mask = cv2.distanceTransform(pm, cv2.DIST_L2, 5)
@@ -133,7 +133,7 @@ def refine_pipe_mask_perp(pipe_mask, gray, junctions, bridges, H, W):
     skel_cut = skel.copy()
     skel_cut[junc_mask > 0] = 0
     n_seg, labels, stats, _ = cv2.connectedComponentsWithStats(skel_cut, 8)
-    min_len = CONFIG["min_segment_length"]
+    min_len = cfg["min_segment_length"]
     areas = stats[1:, cv2.CC_STAT_AREA]
     short = np.where(areas < min_len)[0] + 1
     if len(short) > 0:
@@ -151,9 +151,9 @@ def refine_pipe_mask_perp(pipe_mask, gray, junctions, bridges, H, W):
     ys, xs, ls = ya[o], xa[o], la[o]
     del ya, xa, la, o
     si = np.searchsorted(ls, np.arange(1, n_seg + 1))
-    thresh = CONFIG["binarize_threshold"]
-    scan_r = CONFIG["max_thickness"] + 5
-    n_samples = CONFIG["thickness_samples"]
+    thresh = cfg["binarize_threshold"]
+    scan_r = cfg["max_thickness"] + 5
+    n_samples = cfg["thickness_samples"]
     refined = np.zeros((H, W), dtype=np.uint8)
     thicknesses = []
     for sl in range(1, n_seg):
@@ -186,9 +186,9 @@ def refine_pipe_mask_perp(pipe_mask, gray, junctions, bridges, H, W):
         mask_vals_pos = mask_vals[mask_vals > 0]
         if len(mask_vals_pos) > 0:
             mask_t = int(np.round(2.0 * np.median(mask_vals_pos)))
-            t = max(CONFIG["min_thickness"], min(perp_t, mask_t, CONFIG["max_thickness"]))
+            t = max(cfg["min_thickness"], min(perp_t, mask_t, cfg["max_thickness"]))
         else:
-            t = max(CONFIG["min_thickness"], min(perp_t, CONFIG["max_thickness"]))
+            t = max(cfg["min_thickness"], min(perp_t, cfg["max_thickness"]))
         thicknesses.append(t)
         hw = t / 2.0
         extend = hw
@@ -203,7 +203,7 @@ def refine_pipe_mask_perp(pipe_mask, gray, junctions, bridges, H, W):
         unique_t = sorted(set(thicknesses))
         logger.info(f"Thickness: {min(thicknesses)}-{max(thicknesses)}px, unique: {unique_t}")
     del dt_mask
-    open_sz = CONFIG["opening_size"]
+    open_sz = cfg["opening_size"]
     if open_sz > 1:
         k_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (open_sz, open_sz))
         refined = cv2.morphologyEx(refined, cv2.MORPH_OPEN, k_open)
@@ -272,9 +272,12 @@ def denoise_erase_artifacts(image_bgr, max_area=15, binarize_thresh=200):
 
 # ── OCR обёртки (универсальные) ──────────────────
 
-def run_ocr(img_pil, rec_predictor, det_predictor, W, H):
-    if max(W, H) > CONFIG["tile_threshold"]:
-        detections = ocr_tiled(img_pil, rec_predictor, det_predictor)
+def run_ocr(img_pil, rec_predictor, det_predictor, W, H, cfg):
+    if max(W, H) > cfg["tile_threshold"]:
+        detections = ocr_tiled(
+            img_pil, rec_predictor, det_predictor,
+            tile_size=cfg["tile_size"], tile_overlap=cfg["tile_overlap"],
+        )
     else:
         detections = ocr_single(img_pil, rec_predictor, det_predictor)
     before = len(detections)
@@ -439,10 +442,11 @@ def run_ocr_pipeline(
     """
     t_total = time.time()
 
-    # ── Настройки CONFIG (локальные, не мутируем глобально) ──
-    CONFIG["languages"] = profile.languages
-    CONFIG["pipe_dilate"] = 0
-    CONFIG["refine_pipes"] = False
+    # ── Local config copy (never mutate global CONFIG) ──
+    cfg = dict(CONFIG)
+    cfg["languages"] = profile.languages
+    cfg["pipe_dilate"] = 0
+    cfg["refine_pipes"] = False
 
     # ── Загрузка моделей Surya если не переданы ──
     if rec_predictor is None or det_predictor is None:
@@ -481,7 +485,7 @@ def run_ocr_pipeline(
         pipe_mask = refine_pipe_mask_perp(
             pipe_mask, orig_gray,
             list(junction_points), list(bridge_points),
-            H, W)
+            H, W, cfg)
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -502,7 +506,8 @@ def run_ocr_pipeline(
         logger.info("[1] Cleaning (pipes + nodes)...")
         cleaned_1, removal_mask, clean_stats = clean_image(
             orig, pipe_mask, node_mask, text_protection, H, W, orig_gray=orig_gray)
-        cleaned_1, edge_cleaned = cleanup_removal_edges(cleaned_1, removal_mask, orig_gray)
+        cleaned_1, edge_cleaned = cleanup_removal_edges(
+            cleaned_1, removal_mask, orig_gray, thresh=cfg["binarize_threshold"])
         if edge_cleaned > 0:
             logger.info(f"[1] Edge cleanup: {edge_cleaned:,}px")
     else:
@@ -515,7 +520,7 @@ def run_ocr_pipeline(
     logger.info("[1] Surya OCR...")
     t1 = time.time()
     img_pil_1 = Image.fromarray(cv2.cvtColor(cleaned_1, cv2.COLOR_BGR2RGB))
-    detections_1 = run_ocr(img_pil_1, rec_predictor, det_predictor, W, H)
+    detections_1 = run_ocr(img_pil_1, rec_predictor, det_predictor, W, H, cfg)
     logger.info(f"[1] Blocks: {len(detections_1)}, OCR: {time.time()-t1:.1f}s")
     _dump_debug(output_dir, "01_iter1_raw", detections_1, "Surya raw detections iter1")
 
@@ -544,16 +549,12 @@ def run_ocr_pipeline(
 
     # ══════════ ИТЕРАЦИЯ 2 ══════════
     logger.info(f"── Iteration 2 (tile={tile2_size}, overlap={tile2_overlap}) — zoom in ──")
-    orig_tile_size = CONFIG["tile_size"]
-    orig_tile_overlap = CONFIG["tile_overlap"]
-    CONFIG["tile_size"] = tile2_size
-    CONFIG["tile_overlap"] = tile2_overlap
+    cfg["tile_size"] = tile2_size
+    cfg["tile_overlap"] = tile2_overlap
 
     t2 = time.time()
     img_pil_2 = Image.fromarray(cv2.cvtColor(cleaned_2, cv2.COLOR_BGR2RGB))
-    detections_2 = run_ocr(img_pil_2, rec_predictor, det_predictor, W, H)
-    CONFIG["tile_size"] = orig_tile_size
-    CONFIG["tile_overlap"] = orig_tile_overlap
+    detections_2 = run_ocr(img_pil_2, rec_predictor, det_predictor, W, H, cfg)
     logger.info(f"[2] Blocks: {len(detections_2)}, OCR: {time.time()-t2:.1f}s")
     _dump_debug(output_dir, "04_iter2_raw", detections_2, "Surya raw detections iter2")
 
@@ -580,14 +581,12 @@ def run_ocr_pipeline(
 
     # ══════════ ИТЕРАЦИЯ 3 ══════════
     logger.info(f"── Iteration 3 (tile={tile3_size}, overlap={tile3_overlap}) — zoom out ──")
-    CONFIG["tile_size"] = tile3_size
-    CONFIG["tile_overlap"] = tile3_overlap
+    cfg["tile_size"] = tile3_size
+    cfg["tile_overlap"] = tile3_overlap
 
     t3 = time.time()
     img_pil_3 = Image.fromarray(cv2.cvtColor(cleaned_3, cv2.COLOR_BGR2RGB))
-    detections_3 = run_ocr(img_pil_3, rec_predictor, det_predictor, W, H)
-    CONFIG["tile_size"] = orig_tile_size
-    CONFIG["tile_overlap"] = orig_tile_overlap
+    detections_3 = run_ocr(img_pil_3, rec_predictor, det_predictor, W, H, cfg)
     logger.info(f"[3] Blocks: {len(detections_3)}, OCR: {time.time()-t3:.1f}s")
     _dump_debug(output_dir, "06_iter3_raw", detections_3, "Surya raw detections iter3")
 

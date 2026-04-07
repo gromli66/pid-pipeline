@@ -72,7 +72,9 @@ EXCLUDED_CLASS_IDS = {34, 36, 38, 39}
 def point_in_polygon(point: Tuple[int, int], polygon: List[float]) -> bool:
     """
     Проверка принадлежности точки полигону (ray casting algorithm).
-    
+
+    NOTE: currently unused -- identify_node_by_point uses bbox-only check.
+    Kept for future use when segmentation quality justifies polygon matching.
     Args:
         point: (x, y) координаты точки
         polygon: Список координат [x1, y1, x2, y2, ...] (плоский список)
@@ -265,16 +267,9 @@ def identify_node_by_point(
                 # Точка вне bbox — точно не принадлежит этой аннотации
                 continue
 
-            if label.get('segmentation'):
-                # Есть полигон → точная проверка, но с fallback на bbox
-                # (точка может быть в bbox, но вне полигона из-за формы)
-                is_inside = point_in_polygon((check_x, check_y), label['segmentation'])
-                if not is_inside:
-                    # Fallback: если в bbox — считаем match (избегаем дубликатов)
-                    is_inside = True
-            else:
-                # Нет полигона → достаточно проверки bbox
-                is_inside = in_bbox
+            # bbox check is sufficient (polygon check was always
+            # overridden back to True, so effectively dead code)
+            is_inside = True  # in_bbox guaranteed True here (continue above)
 
             if is_inside:
                 if label['class_id'] in exclude_classes:

@@ -151,9 +151,9 @@ def merge_overlapping(detections):
 
 # ── Тайлинг ──────────────────────────────────────────────
 
-def tile_image(img):
-    ts = CONFIG["tile_size"]
-    ov = CONFIG["tile_overlap"]
+def tile_image(img, tile_size=None, tile_overlap=None):
+    ts = tile_size if tile_size is not None else CONFIG["tile_size"]
+    ov = tile_overlap if tile_overlap is not None else CONFIG["tile_overlap"]
     w, h = img.size
     tiles = []
     for y in range(0, h, ts - ov):
@@ -577,9 +577,12 @@ def ocr_single(img_pil, rec_predictor, det_predictor):
     ]
 
 
-def ocr_tiled(img_pil, rec_predictor, det_predictor):
-    tiles = tile_image(img_pil)
-    print(f"  Тайлов: {len(tiles)} ({CONFIG['tile_size']}px, overlap={CONFIG['tile_overlap']}px)")
+def ocr_tiled(img_pil, rec_predictor, det_predictor,
+              tile_size=None, tile_overlap=None):
+    ts = tile_size if tile_size is not None else CONFIG["tile_size"]
+    to = tile_overlap if tile_overlap is not None else CONFIG["tile_overlap"]
+    tiles = tile_image(img_pil, tile_size=ts, tile_overlap=to)
+    print(f"  Тайлов: {len(tiles)} ({ts}px, overlap={to}px)")
 
     all_dets = []
     for i, tile in enumerate(tiles):

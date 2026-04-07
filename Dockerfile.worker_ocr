@@ -60,7 +60,7 @@ RUN pip install --no-cache-dir -r requirements/base.txt
 RUN pip install "celery[redis]>=5.3.0"
 
 # ── OpenCV, sklearn, scipy, bidi ──
-RUN pip install opencv-python-headless Pillow scikit-image scikit-learn scipy python-bidi
+RUN pip install opencv-contrib-python-headless Pillow scikit-image scikit-learn scipy python-bidi
 
 # ── Копируем код ──
 COPY worker/ /app/worker/

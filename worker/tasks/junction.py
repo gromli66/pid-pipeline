@@ -157,7 +157,7 @@ def task_detect_junctions(
 
         logger.info("Loading junction segmentation model on %s ...", device)
 
-        ckpt = torch.load(str(weights), map_location="cpu", weights_only=False)
+        ckpt = torch.load(str(weights), map_location="cpu", weights_only=True)
         cfg = JunctConfig()
         for k, v in ckpt.get("config", {}).items():
             if hasattr(cfg, k):
