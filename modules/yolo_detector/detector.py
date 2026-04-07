@@ -29,16 +29,6 @@ class NodeDetector:
             print(f"{det['class_name']}: {det['confidence']:.2f}")
     """
 
-    # Адаптивные параметры слайсинга: max_dim -> (slice_size, overlap)
-    ADAPTIVE_PARAMS = {
-        5000: (1280, 0.25),
-        8000: (1280, 0.25),
-        11000: (1280, 0.25),
-        16000: (1280, 0.25),
-        23000: (1280, 0.25),
-        99999: (1280, 0.25),
-    }
-
     # Параметры preprocessing (фиксированные, как при обучении)
     NLM_H = 10
     NLM_TEMPLATE_WINDOW = 7
@@ -55,7 +45,8 @@ class NodeDetector:
         iou_threshold: float = 0.5,
         device: str = "cuda",
         use_sahi: bool = True,
-        adaptive_slicing: bool = True,
+        sahi_slice_size: int = 1280,
+        sahi_overlap_ratio: float = 0.25,
         apply_preprocessing: bool = False,
         class_agnostic_nms: bool = False,
         class_names: Optional[Dict[int, str]] = None,
@@ -68,7 +59,8 @@ class NodeDetector:
             iou_threshold: Порог IoU для NMS
             device: "cuda" или "cpu"
             use_sahi: Использовать SAHI для больших изображений
-            adaptive_slicing: Автоподбор параметров слайсинга
+            sahi_slice_size: Размер тайла SAHI (пикс.)
+            sahi_overlap_ratio: Overlap между тайлами (0-1)
             apply_preprocessing: Применять preprocessing (NLM+CLAHE+Otsu+Erode)
             class_agnostic_nms: Cross-class NMS - фильтрация дубликатов между разными классами.
                                 Если True, боксы разных классов с высоким IoU будут отфильтрованы,
@@ -82,7 +74,8 @@ class NodeDetector:
         self.iou_threshold = iou_threshold
         self.device = device
         self.use_sahi = use_sahi
-        self.adaptive_slicing = adaptive_slicing
+        self.sahi_slice_size = sahi_slice_size
+        self.sahi_overlap_ratio = sahi_overlap_ratio
         self.apply_preprocessing = apply_preprocessing
         self.class_agnostic_nms = class_agnostic_nms
 
@@ -116,19 +109,6 @@ class NodeDetector:
                 device=self.device
             )
             print(f"✅ SAHI модель загружена")
-
-    def _get_slice_params(self, width: int, height: int) -> Tuple[int, float]:
-        """Получить параметры слайсинга под размер изображения."""
-        if not self.adaptive_slicing:
-            return 1280, 0.25
-
-        max_dim = max(width, height)
-
-        for threshold, (slice_size, overlap) in sorted(self.ADAPTIVE_PARAMS.items()):
-            if max_dim <= threshold:
-                return slice_size, overlap
-
-        return 4096, 0.45
 
     def _preprocess_image(self, image: np.ndarray) -> np.ndarray:
         """
@@ -275,7 +255,8 @@ class NodeDetector:
 
         self._load_sahi_model()
 
-        slice_size, overlap = self._get_slice_params(img_width, img_height)
+        slice_size = self.sahi_slice_size
+        overlap = self.sahi_overlap_ratio
 
         result = get_sliced_prediction(
             image=img,

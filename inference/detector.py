@@ -61,19 +61,7 @@ class NodeDetector:
         iou_threshold: Порог IoU для NMS
         device: Устройство для инференса
         use_sahi: Использовать SAHI для слайсинга
-        adaptive_slicing: Адаптивные параметры слайсинга
     """
-
-    # Таблица адаптивных параметров: max_dim -> (slice_size, overlap)
-    ADAPTIVE_PARAMS = {
-        5000: (1280, 0.25),
-        8000: (1280, 0.25),
-        11000: (1280, 0.25),
-        16000: (1280, 0.25),
-        23000: (1280, 0.25),
-        99999: (1280, 0.25)
-    }
-
 
     def __init__(
         self,
@@ -82,7 +70,6 @@ class NodeDetector:
         iou_threshold: float = 0.5,
         device: str = "cuda",
         use_sahi: bool = True,
-        adaptive_slicing: bool = True,
         fixed_slice_size: int = 1280,
         fixed_overlap: float = 0.25,
         class_names: Optional[Dict[int, str]] = None,
@@ -95,9 +82,8 @@ class NodeDetector:
             iou_threshold: Порог IoU для NMS
             device: Устройство ("cuda", "cpu")
             use_sahi: Использовать SAHI для слайсинга
-            adaptive_slicing: Автоматический подбор параметров слайсинга
-            fixed_slice_size: Фиксированный размер слайса (если adaptive=False)
-            fixed_overlap: Фиксированный overlap (если adaptive=False)
+            fixed_slice_size: Размер тайла SAHI (пикс.)
+            fixed_overlap: Overlap между тайлами (0-1)
             class_names: Маппинг id -> имя класса
             reverse_reindex: Маппинг для обратной переиндексации (34->35, 35->38)
         """
@@ -106,7 +92,6 @@ class NodeDetector:
         self.iou_threshold = iou_threshold
         self.device = device
         self.use_sahi = use_sahi
-        self.adaptive_slicing = adaptive_slicing
         self.fixed_slice_size = fixed_slice_size
         self.fixed_overlap = fixed_overlap
         self.class_names = class_names or {}
@@ -153,26 +138,12 @@ class NodeDetector:
         img_height: int
     ) -> Tuple[int, float]:
         """
-        Получить параметры слайсинга на основе размера изображения.
-
-        Args:
-            img_width: Ширина изображения
-            img_height: Высота изображения
+        Получить параметры слайсинга.
 
         Returns:
             Tuple (slice_size, overlap)
         """
-        if not self.adaptive_slicing:
-            return self.fixed_slice_size, self.fixed_overlap
-
-        max_dim = max(img_width, img_height)
-
-        for threshold, (slice_size, overlap) in sorted(self.ADAPTIVE_PARAMS.items()):
-            if max_dim <= threshold:
-                return slice_size, overlap
-
-        # Fallback
-        return 4096, 0.45
+        return self.fixed_slice_size, self.fixed_overlap
 
     def _convert_to_grayscale(self, img_path: Path) -> np.ndarray:
         """

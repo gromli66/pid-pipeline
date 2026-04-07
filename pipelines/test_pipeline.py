@@ -238,7 +238,6 @@ class TestPipeline:
             iou_threshold=getattr(inference_cfg, 'iou_threshold', 0.5),
             device=getattr(inference_cfg, 'device', 'cuda'),
             use_sahi=getattr(inference_cfg, 'use_sahi', True),
-            adaptive_slicing=getattr(inference_cfg.adaptive_slicing, 'enabled', True) if hasattr(inference_cfg, 'adaptive_slicing') else True,
             class_names=self.classes.class_names,
             reverse_reindex=self.classes.reverse_reindex_mapping
         )

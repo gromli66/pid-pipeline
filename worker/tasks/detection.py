@@ -149,6 +149,8 @@ def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydrauli
             confidence=min_conf,
             device=os.getenv("YOLO_DEVICE", "cuda"),
             use_sahi=True,
+            sahi_slice_size=model_cfg.sahi_slice_size,
+            sahi_overlap_ratio=model_cfg.sahi_overlap_ratio,
             apply_preprocessing=False,
         )
 

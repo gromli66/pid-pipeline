@@ -42,6 +42,8 @@ class DetectionModelConfig:
     #       Классы без записи используют глобальный `confidence`.
     #       Пример: {"strelka": 0.6, "datchik": 0.5}
     per_class_confidence: Dict[str, float] = field(default_factory=dict)
+    sahi_slice_size: int = 1280
+    sahi_overlap_ratio: float = 0.25
 
 
 @dataclass
@@ -271,6 +273,8 @@ class ProjectLoader:
                         str(k): float(v)
                         for k, v in mdata.get("per_class_confidence", {}).items()
                     },
+                    sahi_slice_size=mdata.get("sahi_slice_size", 1280),
+                    sahi_overlap_ratio=mdata.get("sahi_overlap_ratio", 0.25),
                 )
             detection = DetectionConfig(
                 default_model=detection_data.get("default_model", "default"),
@@ -293,6 +297,8 @@ class ProjectLoader:
                     str(k): float(v)
                     for k, v in yolo_data.get("per_class_confidence", {}).items()
                 },
+                sahi_slice_size=yolo_data.get("sahi_slice_size", 1280),
+                sahi_overlap_ratio=yolo_data.get("sahi_overlap_ratio", 0.25),
             )
             detection = DetectionConfig(
                 default_model="default",
