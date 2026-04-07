@@ -302,6 +302,8 @@ def task_segment_pipes(
 
         # ===== 5. Ensemble inference (две модели) =====
         weights_a = Path(seg_cfg.weights)
+        if not seg_cfg.weights_b:
+            raise ValueError("seg_cfg.weights_b is not set — check project YAML")
         weights_b = Path(seg_cfg.weights_b)
         if not weights_a.is_absolute():
             weights_a = Path("/app") / weights_a

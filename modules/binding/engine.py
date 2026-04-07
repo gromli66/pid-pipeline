@@ -252,8 +252,6 @@ def _bbox_to_bbox_distance(bbox_a: list, bbox_b: list) -> float:
     """Минимальное расстояние между границами двух bbox."""
     ax1, ay1, ax2, ay2 = bbox_a
     bx1, by1, bx2, by2 = bbox_b
-    dx = max(0, max(ax1, bx1) - min(ax2, bx2)) if ax2 < bx1 or bx2 < ax1 else 0
-    dy = max(0, max(ay1, by1) - min(ay2, by2)) if ay2 < by1 or by2 < ay1 else 0
     if ax2 < bx1:
         dx = bx1 - ax2
     elif bx2 < ax1:

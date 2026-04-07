@@ -38,6 +38,7 @@ class ContourExtractor:
         self.image = image_gray
         self.pipe_mask = pipe_mask
         self.H, self.W = image_gray.shape
+        self._fill_k = 7  # default; override via set_fill_k()
 
         # Auto-params из данных
         dt = cv2.distanceTransform(pipe_mask, cv2.DIST_L2, 5)

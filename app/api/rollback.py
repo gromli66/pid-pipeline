@@ -58,6 +58,7 @@ _STAGE_ARTIFACTS = {
     ],
     DiagramStatus.SKELETONIZED_FINAL: [
         ArtifactType.SKELETON_FINAL,
+        ArtifactType.PIPE_MASK_REFINED,
     ],
     DiagramStatus.DETECTED_JUNCTIONS: [
         ArtifactType.JUNCTION_MASK,
@@ -78,6 +79,9 @@ _STAGE_ARTIFACTS = {
         ArtifactType.OCR_CLEANED,
         ArtifactType.OCR_RESULT,
         ArtifactType.OCR_BINDING,
+    ],
+    DiagramStatus.OCR_BOUND: [
+        ArtifactType.OCR_VALIDATION,
     ],
     DiagramStatus.COMPLETED: [
         ArtifactType.FXML,
