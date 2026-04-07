@@ -12,7 +12,7 @@ from typing import List, Dict, Tuple
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_async_db
@@ -247,7 +247,13 @@ async def fetch_cvat_annotations(
         )
         
         # Быстрые DB writes после долгой операции (неявная транзакция)
-        # Создаём артефакт COCO_VALIDATED
+        # Upsert артефакт COCO_VALIDATED (удаляем старый при retry)
+        await db.execute(
+            delete(Artifact).where(
+                Artifact.diagram_uid == str(uid),
+                Artifact.artifact_type == ArtifactType.COCO_VALIDATED,
+            )
+        )
         artifact_coco = Artifact(
             diagram_uid=str(uid),
             artifact_type=ArtifactType.COCO_VALIDATED,
@@ -256,7 +262,13 @@ async def fetch_cvat_annotations(
         )
         db.add(artifact_coco)
         
-        # Создаём артефакт YOLO_VALIDATED
+        # Upsert артефакт YOLO_VALIDATED
+        await db.execute(
+            delete(Artifact).where(
+                Artifact.diagram_uid == str(uid),
+                Artifact.artifact_type == ArtifactType.YOLO_VALIDATED,
+            )
+        )
         artifact_yolo = Artifact(
             diagram_uid=str(uid),
             artifact_type=ArtifactType.YOLO_VALIDATED,

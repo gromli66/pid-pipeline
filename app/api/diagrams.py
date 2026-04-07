@@ -85,8 +85,9 @@ async def upload_diagram(
             )
     await file.seek(0)  # Сбрасываем позицию для дальнейшего чтения
 
-    # Следующий номер (advisory lock предотвращает race condition при параллельных uploads)
-    await db.execute(text("SELECT pg_advisory_xact_lock(1)"))
+    # Следующий номер (advisory lock per-project предотвращает race condition)
+    lock_key = hash(project_code) % (2**31)
+    await db.execute(text(f"SELECT pg_advisory_xact_lock({lock_key})"))
 
     # Проверка дубликата по имени файла в проекте
     sanitized_name = sanitize_filename(file.filename or "unnamed")
@@ -104,7 +105,9 @@ async def upload_diagram(
             detail=f"Диаграмма с именем '{sanitized_name}' уже существует в проекте (#{existing.number})",
         )
 
-    result = await db.execute(select(func.max(Diagram.number)))
+    result = await db.execute(
+        select(func.max(Diagram.number)).where(Diagram.project_code == project_code)
+    )
     max_number = result.scalar() or 0
 
     # Создаём диаграмму
@@ -296,7 +299,7 @@ async def delete_diagram(uid: UUID, db: AsyncSession = Depends(get_async_db)):
     storage = StorageService()
     await storage.delete_diagram_folder(uid)
 
-    await db.delete(diagram)
+    diagram.is_deleted = True
     await db.commit()
 
     return {"status": "deleted", "uid": str(uid)}
