@@ -16,6 +16,7 @@ import numpy as np
 from celery.exceptions import SoftTimeLimitExceeded
 
 from worker.celery_app import celery_app
+from worker.utils.db_helpers import set_diagram_error, check_deleted
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,10 @@ def task_detect_junctions(
         diagram = db.query(Diagram).filter(Diagram.uid == diagram_uid).first()
         if not diagram:
             raise ValueError(f"Diagram {diagram_uid} not found")
+
+        if check_deleted(db, diagram_uid):
+            logger.info("Diagram %s is deleted, aborting", diagram_uid)
+            return {"status": "deleted", "diagram_uid": diagram_uid}
 
         # Idempotency
         if diagram.status == DiagramStatus.DETECTED_JUNCTIONS:
@@ -271,11 +276,7 @@ def task_detect_junctions(
 
     except SoftTimeLimitExceeded:
         logger.error("Junction detection timed out for %s", diagram_uid)
-        _set_error(
-            db, diagram_uid,
-            "Junction detection timed out (19 min limit)",
-            "detecting_junctions",
-        )
+        set_diagram_error(db, diagram_uid, "Junction detection timed out (19 min limit)", "detecting_junctions")
         raise
 
     except Exception as exc:
@@ -286,23 +287,8 @@ def task_detect_junctions(
             logger.info("Retrying (%d/%d) ...", self.request.retries + 1, self.max_retries)
             raise self.retry(exc=exc)
 
-        _set_error(db, diagram_uid, str(exc)[:500], "detecting_junctions")
+        set_diagram_error(db, diagram_uid, str(exc)[:500], "detecting_junctions")
         raise
 
     finally:
         db.close()
-
-
-def _set_error(db, diagram_uid: str, message: str, stage: str):
-    """Утилита: пометить диаграмму как ERROR."""
-    try:
-        from app.models import Diagram, DiagramStatus
-
-        diagram = db.query(Diagram).filter(Diagram.uid == diagram_uid).first()
-        if diagram:
-            diagram.status = DiagramStatus.ERROR
-            diagram.error_message = message
-            diagram.error_stage = stage
-            db.commit()
-    except Exception as db_exc:
-        logger.error("Failed to set error status: %s", db_exc)

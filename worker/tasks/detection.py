@@ -9,6 +9,7 @@ from pathlib import Path
 
 from worker.celery_app import celery_app
 from celery.exceptions import SoftTimeLimitExceeded
+from worker.utils.db_helpers import set_diagram_error, check_deleted, upsert_artifact
 
 
 def detections_to_yolo_txt(detections: list) -> str:
@@ -93,6 +94,10 @@ def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydrauli
         diagram = db.query(Diagram).filter(Diagram.uid == diagram_uid).first()
         if not diagram:
             raise ValueError(f"Diagram {diagram_uid} not found")
+
+        if check_deleted(db, diagram_uid):
+            print(f"[SKIP] Diagram {diagram_uid} is deleted, aborting")
+            return {"status": "deleted", "diagram_uid": diagram_uid}
 
         # Idempotency: если уже обработана - не перезапускаем
         if diagram.status == DiagramStatus.DETECTED:
@@ -208,13 +213,8 @@ def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydrauli
         print(f"[SAVE] Saved predictions to {yolo_path}")
 
         # Создаём артефакт YOLO_PREDICTED
-        artifact_yolo = Artifact(
-            diagram_uid=diagram_uid,
-            artifact_type=ArtifactType.YOLO_PREDICTED,
-            file_path=str(yolo_path.relative_to(storage_path)),
-            file_size=yolo_path.stat().st_size,
-        )
-        db.add(artifact_yolo)
+        upsert_artifact(db, diagram_uid, ArtifactType.YOLO_PREDICTED,
+                        str(yolo_path), storage_path)
 
         # ===== 6. Создаём CVAT task =====
         cvat_task_id = None
@@ -300,16 +300,7 @@ def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydrauli
 
     except SoftTimeLimitExceeded:
         print(f"[TIMEOUT] Detection timed out for {diagram_uid}")
-        try:
-            from app.models import Diagram, DiagramStatus
-            diagram = db.query(Diagram).filter(Diagram.uid == diagram_uid).first()
-            if diagram:
-                diagram.status = DiagramStatus.ERROR
-                diagram.error_message = "Detection timed out (29 min limit)"
-                diagram.error_stage = "detecting"
-                db.commit()
-        except Exception as db_exc:
-            print(f"[ERROR] Failed to update timeout status: {db_exc}")
+        set_diagram_error(db, diagram_uid, "Detection timed out (29 min limit)", "detecting")
         raise
 
     except Exception as exc:
@@ -322,17 +313,7 @@ def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydrauli
             raise self.retry(exc=exc)
 
         # Все попытки исчерпаны -- теперь ставим ERROR
-        try:
-            from app.models import Diagram, DiagramStatus
-            diagram = db.query(Diagram).filter(Diagram.uid == diagram_uid).first()
-            if diagram:
-                diagram.status = DiagramStatus.ERROR
-                diagram.error_message = str(exc)[:500]
-                diagram.error_stage = "detecting"
-                db.commit()
-        except Exception as db_exc:
-            print(f"[ERROR] Failed to update error status: {db_exc}")
-
+        set_diagram_error(db, diagram_uid, str(exc)[:500], "detecting")
         raise
 
     finally:

@@ -24,6 +24,7 @@ import numpy as np
 from celery.exceptions import SoftTimeLimitExceeded
 
 from worker.celery_app import celery_app
+from worker.utils.db_helpers import set_diagram_error, check_deleted, upsert_artifact
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +115,10 @@ def task_skeletonize(
         diagram = db.query(Diagram).filter(Diagram.uid == diagram_uid).first()
         if not diagram:
             raise ValueError(f"Diagram {diagram_uid} not found")
+
+        if check_deleted(db, diagram_uid):
+            logger.info("Diagram %s is deleted, aborting", diagram_uid)
+            return {"status": "deleted", "diagram_uid": diagram_uid}
 
         # Idempotency
         if diagram.status in (
@@ -326,14 +331,7 @@ def task_skeletonize(
             (ArtifactType.SKELETON, skeleton_output_path),
             (ArtifactType.SKELETON_MASK, skeleton_mask_output_path),
         ]:
-            artifact = Artifact(
-                diagram_uid=diagram_uid,
-                artifact_type=art_type,
-                file_path=str(art_path.relative_to(storage_path)),
-                file_size=art_path.stat().st_size,
-                mime_type="image/png",
-            )
-            db.add(artifact)
+            upsert_artifact(db, diagram_uid, art_type, str(art_path), storage_path, "image/png")
 
         # ===== 7. Обновление статуса =====
         diagram.status = DiagramStatus.SKELETONIZED
@@ -354,7 +352,7 @@ def task_skeletonize(
 
     except SoftTimeLimitExceeded:
         logger.error("Skeletonization timed out for %s", diagram_uid)
-        _set_error(db, diagram_uid, "Skeletonization timed out (29 min limit)", "skeletonizing")
+        set_diagram_error(db, diagram_uid, "Skeletonization timed out (29 min limit)", "skeletonizing")
         raise
 
     except Exception as exc:
@@ -365,7 +363,7 @@ def task_skeletonize(
             logger.info("Retrying (%d/%d) ...", self.request.retries + 1, self.max_retries)
             raise self.retry(exc=exc)
 
-        _set_error(db, diagram_uid, str(exc)[:500], "skeletonizing")
+        set_diagram_error(db, diagram_uid, str(exc)[:500], "skeletonizing")
         raise
 
     finally:
@@ -430,6 +428,10 @@ def task_skeletonize_simple(
         diagram = db.query(Diagram).filter(Diagram.uid == diagram_uid).first()
         if not diagram:
             raise ValueError(f"Diagram {diagram_uid} not found")
+
+        if check_deleted(db, diagram_uid):
+            logger.info("Diagram %s is deleted, aborting", diagram_uid)
+            return {"status": "deleted", "diagram_uid": diagram_uid}
 
         if diagram.status not in (DiagramStatus.VALIDATED_MASKS, DiagramStatus.SKELETONIZING_FINAL):
             logger.warning(
@@ -696,11 +698,7 @@ def task_skeletonize_simple(
 
     except SoftTimeLimitExceeded:
         logger.error("Simple skeletonization timed out for %s", diagram_uid)
-        _set_error(
-            db, diagram_uid,
-            "Simple skeletonization timed out",
-            "skeletonizing_simple",
-        )
+        set_diagram_error(db, diagram_uid, "Simple skeletonization timed out", "skeletonizing_simple")
         raise
 
     except Exception as exc:
@@ -712,27 +710,8 @@ def task_skeletonize_simple(
         if self.request.retries < self.max_retries:
             raise self.retry(exc=exc)
 
-        _set_error(db, diagram_uid, str(exc)[:500], "skeletonizing_simple")
+        set_diagram_error(db, diagram_uid, str(exc)[:500], "skeletonizing_simple")
         raise
 
     finally:
         db.close()
-
-
-# =============================================================================
-# Утилита
-# =============================================================================
-
-def _set_error(db, diagram_uid: str, message: str, stage: str):
-    """Пометить диаграмму как ERROR."""
-    try:
-        from app.models import Diagram, DiagramStatus
-
-        diagram = db.query(Diagram).filter(Diagram.uid == diagram_uid).first()
-        if diagram:
-            diagram.status = DiagramStatus.ERROR
-            diagram.error_message = message
-            diagram.error_stage = stage
-            db.commit()
-    except Exception as db_exc:
-        logger.error("Failed to set error status: %s", db_exc)
