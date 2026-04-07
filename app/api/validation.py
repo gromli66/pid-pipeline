@@ -7,6 +7,7 @@ Mask validation endpoints:
 - POST /{uid}/masks/complete — завершить валидацию → VALIDATED_MASKS → auto-dispatch skeletonize_simple
 """
 
+import asyncio
 import json
 import shutil
 from uuid import UUID
@@ -311,7 +312,7 @@ async def update_nodes(
         orig_art = orig_result.scalar_one_or_none()
         if orig_art:
             orig_full = storage.base_path / orig_art.file_path
-            img = cv2.imread(str(orig_full))
+            img = await asyncio.to_thread(cv2.imread, str(orig_full))
             if img is not None:
                 img_h, img_w = img.shape[:2]
 
@@ -324,7 +325,7 @@ async def update_nodes(
     node_mask = _generate_node_mask_from_coco(coco_data, img_h, img_w)
 
     # Encode and save
-    _, mask_buf = cv2.imencode(".png", node_mask)
+    _, mask_buf = await asyncio.to_thread(cv2.imencode, ".png", node_mask)
     mask_bytes = mask_buf.tobytes()
     mask_path, mask_size = await storage.save_file(
         uid, "segmentation", "node_mask.png", mask_bytes
@@ -440,7 +441,7 @@ async def complete_mask_validation(
                 detail=f"Original mask file not found: {original_artifact.file_path}",
             )
 
-        shutil.copy2(str(original_path), str(validated_path))
+        await asyncio.to_thread(shutil.copy2, str(original_path), str(validated_path))
 
         # Создаём артефакт
         artifact = Artifact(
@@ -610,7 +611,7 @@ async def complete_junction_validation(
                 detail=f"Original mask file not found: {original_artifact.file_path}",
             )
 
-        shutil.copy2(str(original_path), str(validated_path))
+        await asyncio.to_thread(shutil.copy2, str(original_path), str(validated_path))
 
         artifact = Artifact(
             diagram_uid=uid,
@@ -729,7 +730,7 @@ async def complete_simple_graph_validation(
             )
 
         validated_path = original_path.parent / "graph_validated.json"
-        shutil.copy2(str(original_path), str(validated_path))
+        await asyncio.to_thread(shutil.copy2, str(original_path), str(validated_path))
 
         artifact = Artifact(
             diagram_uid=uid,
@@ -947,7 +948,7 @@ async def complete_graph_validation(
         validated_filename = "graph_validated.json"
         validated_path = original_path.parent / validated_filename
 
-        shutil.copy2(str(original_path), str(validated_path))
+        await asyncio.to_thread(shutil.copy2, str(original_path), str(validated_path))
 
         artifact = Artifact(
             diagram_uid=uid,

@@ -10,6 +10,7 @@ Endpoints:
   POST /api/ocr/{uid}/binding/apply  — применить привязки к graph_validated
 """
 
+import asyncio
 import json
 from uuid import UUID
 
@@ -438,8 +439,8 @@ async def apply_ocr_binding(
         raise HTTPException(status_code=404, detail="Files not found on disk")
 
     # Применить привязки
-    with open(binding_path, encoding="utf-8") as f:
-        binding_raw = json.load(f)
+    binding_text = await asyncio.to_thread(binding_path.read_text, "utf-8")
+    binding_raw = json.loads(binding_text)
     # Поддержка формата v2 {bindings, edited_blocks} и legacy (list)
     if isinstance(binding_raw, dict) and "bindings" in binding_raw:
         bindings = binding_raw["bindings"]
@@ -447,8 +448,8 @@ async def apply_ocr_binding(
         bindings = binding_raw
     else:
         bindings = []
-    with open(graph_path, encoding="utf-8") as f:
-        graph = json.load(f)
+    graph_text = await asyncio.to_thread(graph_path.read_text, "utf-8")
+    graph = json.loads(graph_text)
 
     # Обновить node labels
     binding_map = {}
@@ -467,9 +468,9 @@ async def apply_ocr_binding(
 
     # Сохранить обновлённый граф (atomic write)
     tmp_path = graph_path.with_suffix(".tmp")
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(graph, f, ensure_ascii=False, indent=2)
-    tmp_path.rename(graph_path)
+    graph_json = json.dumps(graph, ensure_ascii=False, indent=2)
+    await asyncio.to_thread(tmp_path.write_text, graph_json, "utf-8")
+    await asyncio.to_thread(tmp_path.rename, graph_path)
 
     # Перевести статус → OCR_BOUND
     diagram_result = await db.execute(select(Diagram).where(Diagram.uid == uid))
