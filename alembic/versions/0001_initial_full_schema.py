@@ -18,69 +18,69 @@ depends_on = None
 
 def upgrade() -> None:
     # ── Enum types ──────────────────────────────────────────────────────
-    # SQLAlchemy sends enum member NAMES (uppercase) by default,
-    # so PostgreSQL enum values must match the Python enum member names.
+    # Python models use (str, Enum) with lowercase values.
+    # PostgreSQL enum is case-sensitive, so values here MUST match model .value.
 
     diagramstatus = sa.Enum(
         # Upload
-        'UPLOADED',
+        'uploaded',
         # Phase 1: Detection
-        'DETECTING', 'DETECTED', 'VALIDATING_BBOX', 'VALIDATED_BBOX',
+        'detecting', 'detected', 'validating_bbox', 'validated_bbox',
         # Phase 2: Segmentation + skeleton
-        'SEGMENTING', 'SKELETONIZING', 'SKELETONIZED',
+        'segmenting', 'skeletonizing', 'skeletonized',
         # Phase 3: Mask validation
-        'VALIDATING_MASKS', 'VALIDATED_MASKS',
+        'validating_masks', 'validated_masks',
         # Phase 4: Final skeletonization
-        'SKELETONIZING_FINAL', 'SKELETONIZED_FINAL',
+        'skeletonizing_final', 'skeletonized_final',
         # Phase 5: Junction/Bridge
-        'DETECTING_JUNCTIONS', 'DETECTED_JUNCTIONS',
+        'detecting_junctions', 'detected_junctions',
         # Phase 6: Junction validation
-        'VALIDATING_JUNCTIONS', 'VALIDATED_JUNCTIONS',
+        'validating_junctions', 'validated_junctions',
         # Phase 7: Graph
-        'BUILDING_GRAPH', 'BUILT', 'VALIDATING_GRAPH', 'VALIDATED_GRAPH',
+        'building_graph', 'built', 'validating_graph', 'validated_graph',
         # Phase 8: OCR
-        'OCR_PROCESSING', 'OCR_COMPLETED', 'OCR_BOUND',
+        'ocr_processing', 'ocr_completed', 'ocr_bound',
         # Phase 9: FXML
-        'GENERATING_FXML', 'COMPLETED',
+        'generating_fxml', 'completed',
         # Error
-        'ERROR',
+        'error',
         name='diagramstatus',
     )
 
     artifacttype = sa.Enum(
         # Original
-        'ORIGINAL_IMAGE',
+        'original_image',
         # Detection
-        'YOLO_PREDICTED', 'YOLO_VALIDATED',
-        'COCO_PREDICTED', 'COCO_VALIDATED',
+        'yolo_predicted', 'yolo_validated',
+        'coco_predicted', 'coco_validated',
         # Segmentation
-        'NODE_MASK', 'PIPE_MASK', 'PIPE_MASK_VALIDATED',
+        'node_mask', 'pipe_mask', 'pipe_mask_validated',
         # Skeleton
-        'SKELETON', 'SKELETON_MASK', 'SKELETON_FINAL',
+        'skeleton', 'skeleton_mask', 'skeleton_final',
         # Junction
-        'JUNCTION_MASK', 'BRIDGE_MASK',
-        'JUNCTION_MASK_VALIDATED', 'BRIDGE_MASK_VALIDATED',
+        'junction_mask', 'bridge_mask',
+        'junction_mask_validated', 'bridge_mask_validated',
         # Graph
-        'GRAPH_JSON', 'GRAPH_VALIDATED',
+        'graph_json', 'graph_validated',
         # OCR
-        'OCR_CLEANED', 'OCR_RESULT', 'OCR_BINDING', 'OCR_VALIDATION',
+        'ocr_cleaned', 'ocr_result', 'ocr_binding', 'ocr_validation',
         # Output
-        'FXML',
+        'fxml',
         # Debug overlays
-        'DETECTION_OVERLAY', 'SEGMENTATION_OVERLAY', 'GRAPH_OVERLAY',
+        'detection_overlay', 'segmentation_overlay', 'graph_overlay',
         name='artifacttype',
     )
 
     stagetype = sa.Enum(
-        'UPLOAD', 'DETECTION', 'CVAT_VALIDATION', 'SEGMENTATION',
-        'SKELETONIZATION', 'JUNCTION_CLASSIFICATION', 'MASK_VALIDATION',
-        'FINAL_SKELETONIZATION', 'GRAPH_BUILDING', 'GRAPH_VALIDATION',
-        'FXML_GENERATION',
+        'upload', 'detection', 'cvat_validation', 'segmentation',
+        'skeletonization', 'junction_classification', 'mask_validation',
+        'final_skeletonization', 'graph_building', 'graph_validation',
+        'fxml_generation',
         name='stagetype',
     )
 
     stagestatus = sa.Enum(
-        'PENDING', 'RUNNING', 'COMPLETED', 'FAILED', 'SKIPPED',
+        'pending', 'running', 'completed', 'failed', 'skipped',
         name='stagestatus',
     )
 
@@ -108,7 +108,7 @@ def upgrade() -> None:
         sa.Column('number', sa.Integer, nullable=False),
         sa.Column('original_filename', sa.String(255), nullable=False),
         sa.Column('status', diagramstatus, nullable=False,
-                  server_default='UPLOADED'),
+                  server_default='uploaded'),
         sa.Column('error_message', sa.Text, nullable=True),
         sa.Column('error_stage', sa.String(50), nullable=True),
         sa.Column('cvat_task_id', sa.Integer, nullable=True),
@@ -160,7 +160,7 @@ def upgrade() -> None:
                   nullable=False, index=True),
         sa.Column('stage_type', stagetype, nullable=False, index=True),
         sa.Column('status', stagestatus, nullable=False,
-                  server_default='PENDING'),
+                  server_default='pending'),
         sa.Column('attempt', sa.Integer, server_default='1'),
         sa.Column('celery_task_id', sa.String(255), nullable=True),
         sa.Column('started_at', sa.DateTime, nullable=True),

@@ -18,7 +18,7 @@ depends_on = None
 def upgrade() -> None:
     # COMMIT required: ALTER TYPE ADD VALUE cannot run inside a transaction
     op.execute("COMMIT")
-    op.execute("ALTER TYPE artifacttype ADD VALUE IF NOT EXISTS 'PIPE_MASK_REFINED'")
+    op.execute("ALTER TYPE artifacttype ADD VALUE IF NOT EXISTS 'pipe_mask_refined'")
 
 
 def downgrade() -> None:
