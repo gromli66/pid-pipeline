@@ -32,7 +32,7 @@ storage/diagrams/*
 !storage/diagrams/.gitkeep
 
 # Models (веса моделей)
-models/
+/models/
 *.pt
 *.pth
 *.onnx
