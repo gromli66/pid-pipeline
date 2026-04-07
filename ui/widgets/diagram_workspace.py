@@ -71,7 +71,10 @@ _STATUS_ORDER = [
     DiagramStatus.BUILT,                 # 17
     DiagramStatus.VALIDATING_GRAPH,      # 18
     DiagramStatus.VALIDATED_GRAPH,       # 19
-    DiagramStatus.OCR_PROCESSING,        # 20
+    DiagramStatus.EXTRACTING_CONTOURS,   # 20
+    DiagramStatus.CONTOURS_EXTRACTED,    # 21
+    DiagramStatus.CONTOURS_VALIDATED,    # 22
+    DiagramStatus.OCR_PROCESSING,        # 23
     DiagramStatus.OCR_COMPLETED,         # 21
     DiagramStatus.OCR_BOUND,             # 22
     DiagramStatus.GENERATING_FXML,       # 23
@@ -592,9 +595,24 @@ class DiagramWorkspace(QWidget):
                 completed.add("junction")
                 available.discard("junction")
 
-        # При ошибке OCR — оставить кнопку OCR доступной для retry
-        _ocr_error = (status == DiagramStatus.ERROR
-                      and error_stage and "ocr" in error_stage.lower())
+        # Map error_stage to button key for retry
+        _STAGE_TO_KEY = {
+            "detecting": "detect",
+            "segmenting": "segment",
+            "skeletonizing": "segment",
+            "skeletonizing_simple": "pipe",
+            "detecting_junctions": "junction",
+            "building_graph": "graph",
+            "validating_graph": "val_graph",
+            "generating_fxml": "fxml",
+            "ocr": "ocr",
+        }
+        _error_key = None
+        if status == DiagramStatus.ERROR and error_stage:
+            _error_key = _STAGE_TO_KEY.get(error_stage.lower())
+
+        # Original button labels for resetting retry text
+        _KEY_LABELS = {k: v for k, v in self._BUTTON_DEFS}
 
         for key, btn in self._action_buttons.items():
             if key in processing:
@@ -607,21 +625,24 @@ class DiagramWorkspace(QWidget):
                 btn.setEnabled(True)  # кликабельна для отката
                 btn.setStyleSheet(_BTN_STYLE_GREEN)
             elif status == DiagramStatus.ERROR:
-                if _ocr_error and key == "ocr":
+                if _error_key and key == _error_key:
+                    # Failed stage — retry button (red, clickable)
                     btn.setEnabled(True)
-                    btn.setText("🔄 OCR")
+                    btn.setText(f"🔄 {_KEY_LABELS.get(key, key)}")
                     btn.setStyleSheet(_BTN_STYLE_RED)
                 else:
                     btn.setEnabled(False)
-                    btn.setStyleSheet(_BTN_STYLE_RED if key in processing else _BTN_STYLE_GRAY)
+                    btn.setStyleSheet(_BTN_STYLE_GRAY)
             else:
                 btn.setEnabled(False)
                 btn.setStyleSheet(_BTN_STYLE_GRAY)
 
-        # Сбросить текст кнопки OCR если не в ошибке
-        if not _ocr_error and "ocr" in self._action_buttons:
-            self._action_buttons["ocr"].setText("OCR")
-
+        # Сбросить текст кнопок если не в ошибке
+        if status != DiagramStatus.ERROR:
+            for key, btn in self._action_buttons.items():
+                label = _KEY_LABELS.get(key)
+                if label:
+                    btn.setText(label)
     # =================================================================
     # Навигация
     # =================================================================
@@ -757,7 +778,8 @@ class DiagramWorkspace(QWidget):
         try:
             diagram = self.api_client.get_diagram(self._uid)
             if diagram.status == validating_status:
-                self.api_client.rollback_diagram(self._uid, rollback_target)
+                preserve_ocr = tab_key == "val_graph"
+                self.api_client.rollback_diagram(self._uid, rollback_target, preserve_ocr=preserve_ocr)
                 logger.info(
                     "Rolled back %s → %s (tab %s force-closed)",
                     validating_status.value, rollback_target, tab_key,
@@ -860,7 +882,10 @@ class DiagramWorkspace(QWidget):
                 return
             try:
                 QApplication.setOverrideCursor(Qt.WaitCursor)
-                result = self.api_client.rollback_diagram(self._uid, target)
+                # Preserve OCR artifacts when rolling back graph stages,
+                # because OCR runs in parallel and is independent of graph.
+                preserve_ocr = key in ("graph", "val_graph")
+                result = self.api_client.rollback_diagram(self._uid, target, preserve_ocr=preserve_ocr)
                 deleted = result.get("deleted_artifacts", 0)
                 self.status_message.emit(
                     f"↩ Откат до {target}: удалено {deleted} артефактов", 3000
@@ -967,9 +992,20 @@ class DiagramWorkspace(QWidget):
         """Ручной запуск/retry OCR."""
         try:
             self.api_client.start_ocr(self._uid)
+            # Immediately show OCR bead as in-progress (don't wait for poll)
+            self.beads.set_state(BEAD_OCR, BeadState.IN_PROGRESS)
+            if "ocr" in self._action_buttons:
+                self._action_buttons["ocr"].setEnabled(False)
+                self._action_buttons["ocr"].setStyleSheet(_BTN_STYLE_BLUE)
+            # Reset downstream beads — OCR result is deleted on retry
+            self.beads.set_state(BEAD_OCR_BINDING, BeadState.UNAVAILABLE)
+            if "ocr_binding" in self._action_buttons:
+                self._action_buttons["ocr_binding"].setEnabled(False)
+                self._action_buttons["ocr_binding"].setStyleSheet(_BTN_STYLE_GRAY)
+            self._ocr_notified = False
             self.status_provider.watch(self._uid)
+            self._start_ocr_poll()
             self.status_message.emit("🔍 OCR запущен", 3000)
-            self._refresh_status()
         except APIError as exc:
             QMessageBox.warning(
                 self, "Ошибка",
@@ -1354,18 +1390,27 @@ class DiagramWorkspace(QWidget):
 
     @Slot()
     def _on_graph_confirmed(self):
-        """Граф подтверждён (Advanced) → complete_graph_validation."""
+        """Граф подтверждён (Advanced) → complete_graph_validation → auto FXML."""
         logger.info("Graph confirmed via signal")
         try:
             self.api_client.complete_graph_validation(self._uid)
-            self.status_message.emit("✅ Валидация графа завершена", 5000)
+            self.status_message.emit(
+                "✅ Валидация графа завершена → генерация FXML запущена", 5000,
+            )
         except APIError as exc:
             QMessageBox.warning(
                 self, "Ошибка",
                 f"Не удалось завершить валидацию графа:\n{exc.message}",
             )
+            self._close_tab_and_restore_header()
+            return
 
         self._close_tab_and_restore_header()
+
+        # Backend auto-dispatches FXML generation after graph validation.
+        # Show GENERATING_FXML immediately and start polling for COMPLETED.
+        self._apply_status(DiagramStatus.GENERATING_FXML)
+        self.status_provider.watch(self._uid)
 
     @Slot()
     def _on_ocr_binding_confirmed(self):

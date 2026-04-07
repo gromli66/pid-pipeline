@@ -146,3 +146,54 @@ def safe_dispatch(
             diagram.error_stage = task_name.split(".")[-1]
         db.commit()
         return None
+
+
+def start_stage(db, diagram_uid: str, stage_type, celery_task_id: str = None):
+    """
+    Create a ProcessingStage record and mark it RUNNING.
+
+    Args:
+        db: SQLAlchemy session
+        diagram_uid: UUID of the diagram
+        stage_type: StageType enum value
+        celery_task_id: optional Celery task ID
+
+    Returns:
+        ProcessingStage instance (already added to session, not yet committed)
+    """
+    from app.models.stage import ProcessingStage, StageStatus
+
+    # Count previous attempts for this diagram + stage_type
+    attempt = (
+        db.query(ProcessingStage)
+        .filter(
+            ProcessingStage.diagram_uid == diagram_uid,
+            ProcessingStage.stage_type == stage_type,
+        )
+        .count()
+        + 1
+    )
+
+    stage = ProcessingStage(
+        diagram_uid=diagram_uid,
+        stage_type=stage_type,
+        status=StageStatus.PENDING,
+        attempt=attempt,
+        celery_task_id=celery_task_id,
+    )
+    stage.start()
+    db.add(stage)
+    db.flush()
+    return stage
+
+
+def complete_stage(stage, metrics: dict = None) -> None:
+    """Mark a ProcessingStage as COMPLETED with optional metrics."""
+    if stage is not None:
+        stage.complete(metrics)
+
+
+def fail_stage(stage, error: str, tb: str = None) -> None:
+    """Mark a ProcessingStage as FAILED."""
+    if stage is not None:
+        stage.fail(error[:2000], tb[:10000] if tb else None)

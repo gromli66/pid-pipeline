@@ -46,6 +46,7 @@ async def start_ocr(
         DiagramStatus.VALIDATED_JUNCTIONS,
         DiagramStatus.BUILDING_GRAPH,
         DiagramStatus.BUILT,
+        DiagramStatus.VALIDATING_GRAPH,
         DiagramStatus.VALIDATED_GRAPH,
         DiagramStatus.OCR_COMPLETED,
         DiagramStatus.OCR_BOUND,

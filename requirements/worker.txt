@@ -31,3 +31,6 @@ scipy>=1.11.0
 matplotlib>=3.8.0
 
 fastapi>=0.109.0
+
+# SAM2 contour extraction
+sam2

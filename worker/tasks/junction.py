@@ -16,7 +16,7 @@ import numpy as np
 from celery.exceptions import SoftTimeLimitExceeded
 
 from worker.celery_app import celery_app
-from worker.utils.db_helpers import set_diagram_error, check_deleted
+from worker.utils.db_helpers import set_diagram_error, check_deleted, start_stage, complete_stage, fail_stage
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,7 @@ def task_detect_junctions(
     from app.db.session import SessionLocal
 
     db = SessionLocal()
+    stage = None
 
     try:
         logger.info("Starting junction detection for %s", diagram_uid)
@@ -98,6 +99,10 @@ def task_detect_junctions(
                 diagram.status.value,
             )
             return {"status": "skipped", "diagram_uid": diagram_uid}
+
+        # ===== Processing Stage tracking =====
+        from app.models.stage import StageType
+        stage = start_stage(db, diagram_uid, StageType.JUNCTION_CLASSIFICATION, celery_task_id=self.request.id)
 
         diagram.status = DiagramStatus.DETECTING_JUNCTIONS
         db.commit()
@@ -255,6 +260,7 @@ def task_detect_junctions(
         diagram.status = DiagramStatus.DETECTED_JUNCTIONS
         diagram.error_message = None
         diagram.error_stage = None
+        complete_stage(stage, {"junction_count": len(junctions), "bridge_count": len(bridges)})
         db.commit()
 
         # НЕ чейним — ждём UI валидации перекрёстков
@@ -276,6 +282,7 @@ def task_detect_junctions(
 
     except SoftTimeLimitExceeded:
         logger.error("Junction detection timed out for %s", diagram_uid)
+        fail_stage(stage, "Junction detection timed out (19 min limit)")
         set_diagram_error(db, diagram_uid, "Junction detection timed out (19 min limit)", "detecting_junctions")
         raise
 
@@ -284,9 +291,11 @@ def task_detect_junctions(
         logger.debug(traceback.format_exc())
 
         if self.request.retries < self.max_retries:
+            fail_stage(stage, str(exc)[:500], traceback.format_exc())
             logger.info("Retrying (%d/%d) ...", self.request.retries + 1, self.max_retries)
             raise self.retry(exc=exc)
 
+        fail_stage(stage, str(exc)[:500], traceback.format_exc())
         set_diagram_error(db, diagram_uid, str(exc)[:500], "detecting_junctions")
         raise
 

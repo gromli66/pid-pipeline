@@ -72,4 +72,4 @@ CMD ["celery", "-A", "worker.celery_app", "worker", \
      "--loglevel=info", \
      "--concurrency=2", \
      "--pool=prefork", \
-     "-Q", "default,gpu"]
+     "-Q", "default,gpu,sam2"]

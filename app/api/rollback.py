@@ -29,6 +29,8 @@ _STAGE_ORDER = [
     DiagramStatus.VALIDATED_JUNCTIONS,    # junction/bridge validation (UI)
     DiagramStatus.BUILT,
     DiagramStatus.VALIDATED_GRAPH,
+    DiagramStatus.CONTOURS_EXTRACTED,     # SAM2 (parallel, but UX after graph)
+    DiagramStatus.CONTOURS_VALIDATED,     # contour review in editor
     DiagramStatus.OCR_COMPLETED,
     DiagramStatus.OCR_BOUND,
     DiagramStatus.COMPLETED,
@@ -75,6 +77,12 @@ _STAGE_ARTIFACTS = {
     DiagramStatus.VALIDATED_GRAPH: [
         ArtifactType.GRAPH_VALIDATED,
     ],
+    DiagramStatus.CONTOURS_EXTRACTED: [
+        ArtifactType.CONTOURS_AUTO,
+    ],
+    DiagramStatus.CONTOURS_VALIDATED: [
+        ArtifactType.CONTOURS_VALIDATED,
+    ],
     DiagramStatus.OCR_COMPLETED: [
         ArtifactType.OCR_CLEANED,
         ArtifactType.OCR_RESULT,
@@ -98,11 +106,38 @@ def _stages_after(target: DiagramStatus) -> list:
     return _STAGE_ORDER[idx + 1:]
 
 
-def _artifacts_to_delete(target: DiagramStatus) -> list:
-    """Типы артефактов, которые нужно удалить при откате до target."""
+def _artifacts_to_delete(
+    target: DiagramStatus,
+    preserve_ocr: bool = False,
+    preserve_contours: bool = False,
+) -> list:
+    """Типы артефактов, которые нужно удалить при откате до target.
+
+    Args:
+        target: target status to rollback to
+        preserve_ocr: if True, keep OCR artifacts even if in stages after target.
+            Use when rolling back graph without losing independent OCR results.
+        preserve_contours: if True, keep contour artifacts (CONTOURS_AUTO,
+            CONTOURS_VALIDATED). SAM2 depends on image + COCO + pipe_mask,
+            not on graph — contours survive graph rollback.
+    """
+    _OCR_ARTIFACTS = {
+        ArtifactType.OCR_CLEANED,
+        ArtifactType.OCR_RESULT,
+        ArtifactType.OCR_BINDING,
+        ArtifactType.OCR_VALIDATION,
+    }
+    _CONTOUR_ARTIFACTS = {
+        ArtifactType.CONTOURS_AUTO,
+        ArtifactType.CONTOURS_VALIDATED,
+    }
     types = []
     for stage in _stages_after(target):
         types.extend(_STAGE_ARTIFACTS.get(stage, []))
+    if preserve_ocr:
+        types = [t for t in types if t not in _OCR_ARTIFACTS]
+    if preserve_contours:
+        types = [t for t in types if t not in _CONTOUR_ARTIFACTS]
     return types
 
 
@@ -110,6 +145,8 @@ def _artifacts_to_delete(target: DiagramStatus) -> list:
 async def rollback_diagram(
     uid: UUID,
     target_status: str = Query(..., description="Target status to rollback to"),
+    preserve_ocr: bool = Query(False, description="Keep OCR artifacts when rolling back graph"),
+    preserve_contours: bool = Query(False, description="Keep contour artifacts when rolling back graph"),
     db: AsyncSession = Depends(get_async_db),
 ):
     """
@@ -154,7 +191,7 @@ async def rollback_diagram(
         )
 
     # Собрать типы артефактов для удаления
-    art_types = _artifacts_to_delete(target)
+    art_types = _artifacts_to_delete(target, preserve_ocr=preserve_ocr, preserve_contours=preserve_contours)
 
     # Удалить артефакты из БД
     deleted_count = 0

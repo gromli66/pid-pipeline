@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 class StageType(str, enum.Enum):
     """Типы этапов обработки."""
-    
+
     UPLOAD = "upload"
     DETECTION = "detection"
     CVAT_VALIDATION = "cvat_validation"
@@ -30,12 +30,14 @@ class StageType(str, enum.Enum):
     FINAL_SKELETONIZATION = "final_skeletonization"
     GRAPH_BUILDING = "graph_building"
     GRAPH_VALIDATION = "graph_validation"
+    CONTOUR_EXTRACTION = "contour_extraction"
+    OCR = "ocr"
     FXML_GENERATION = "fxml_generation"
 
 
 class StageStatus(str, enum.Enum):
     """Статусы этапа."""
-    
+
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -45,12 +47,12 @@ class StageStatus(str, enum.Enum):
 
 class ProcessingStage(Base):
     """Модель этапа обработки."""
-    
+
     __tablename__ = "processing_stages"
-    
+
     # Primary Key
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    
+
     # Foreign Key
     diagram_uid: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -58,52 +60,52 @@ class ProcessingStage(Base):
         nullable=False,
         index=True
     )
-    
+
     # Stage Info
     stage_type: Mapped[StageType] = mapped_column(
-        Enum(StageType),
+        Enum(StageType, values_callable=lambda x: [e.value for e in x]),
         nullable=False,
         index=True
     )
-    
+
     status: Mapped[StageStatus] = mapped_column(
-        Enum(StageStatus),
+        Enum(StageStatus, values_callable=lambda x: [e.value for e in x]),
         default=StageStatus.PENDING,
         nullable=False
     )
-    
+
     attempt: Mapped[int] = mapped_column(Integer, default=1)
-    
+
     # Celery Task Info
     celery_task_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    
+
     # Timing
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     duration_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    
+
     # Error Info
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     error_traceback: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    
+
     # Metrics (JSON string)
     metrics_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    
+
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
         nullable=False
     )
-    
+
     # Relationships
     diagram: Mapped["Diagram"] = relationship("Diagram", back_populates="stages")
-    
+
     def start(self) -> None:
         """Отметить начало выполнения."""
         self.status = StageStatus.RUNNING
         self.started_at = datetime.utcnow()
-    
+
     def complete(self, metrics: Optional[dict] = None) -> None:
         """Отметить успешное завершение."""
         import json
@@ -113,7 +115,7 @@ class ProcessingStage(Base):
             self.duration_seconds = (self.completed_at - self.started_at).total_seconds()
         if metrics:
             self.metrics_json = json.dumps(metrics)
-    
+
     def fail(self, error: str, traceback: Optional[str] = None) -> None:
         """Отметить ошибку."""
         self.status = StageStatus.FAILED
@@ -122,6 +124,6 @@ class ProcessingStage(Base):
         self.error_traceback = traceback
         if self.started_at:
             self.duration_seconds = (self.completed_at - self.started_at).total_seconds()
-    
+
     def __repr__(self) -> str:
         return f"<Stage {self.stage_type.value} ({self.status.value})>"

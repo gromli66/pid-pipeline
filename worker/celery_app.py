@@ -21,6 +21,7 @@ celery_app = Celery(
         "worker.tasks.junction",
         "worker.tasks.graph",
         "worker.tasks.ocr",
+        "worker.tasks.contours",
     ]
 )
 
@@ -47,8 +48,9 @@ celery_app.conf.update(
     task_default_queue="default",
     task_queues={
         "default": {},
-        "gpu": {},  # Для GPU задач
-        "ocr": {},  # OCR worker (отдельный контейнер)
+        "gpu": {},   # GPU detection/segmentation/junction
+        "ocr": {},   # OCR worker (separate container)
+        "sam2": {},  # SAM2 contour extraction (same worker as gpu)
     },
     
     # Worker
@@ -64,4 +66,5 @@ celery_app.conf.task_routes = {
     "worker.tasks.junction.*": {"queue": "gpu"},
     "worker.tasks.graph.*": {"queue": "default"},
     "worker.tasks.ocr.*": {"queue": "ocr"},
+    "worker.tasks.contours.*": {"queue": "sam2"},
 }

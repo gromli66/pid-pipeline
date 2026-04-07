@@ -24,7 +24,7 @@ import numpy as np
 from celery.exceptions import SoftTimeLimitExceeded
 
 from worker.celery_app import celery_app
-from worker.utils.db_helpers import set_diagram_error, check_deleted
+from worker.utils.db_helpers import set_diagram_error, check_deleted, start_stage, complete_stage, fail_stage
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,7 @@ def task_build_graph(self, diagram_uid: str):
     from app.db.session import SessionLocal
 
     db = SessionLocal()
+    stage = None
 
     try:
         logger.info("Starting graph building for %s", diagram_uid)
@@ -106,6 +107,10 @@ def task_build_graph(self, diagram_uid: str):
         if diagram.status != DiagramStatus.BUILDING_GRAPH:
             diagram.status = DiagramStatus.BUILDING_GRAPH
             db.commit()
+
+        # ===== Processing Stage tracking =====
+        from app.models.stage import StageType
+        stage = start_stage(db, diagram_uid, StageType.GRAPH_BUILDING, celery_task_id=self.request.id)
 
         # ===== 2. Paths =====
         storage_path = Path(os.getenv("STORAGE_PATH", "./storage/diagrams"))
@@ -282,6 +287,7 @@ def task_build_graph(self, diagram_uid: str):
         diagram.edge_count = num_edges
         diagram.error_message = None
         diagram.error_stage = None
+        complete_stage(stage, {"num_nodes": num_nodes, "num_edges": num_edges, "elapsed_sec": round(elapsed, 1)})
         db.commit()
 
         logger.info("Graph building complete for %s → BUILT", diagram_uid)
@@ -296,6 +302,7 @@ def task_build_graph(self, diagram_uid: str):
 
     except SoftTimeLimitExceeded:
         logger.error("Graph building timed out for %s", diagram_uid)
+        fail_stage(stage, "Graph building timed out (29 min limit)")
         set_diagram_error(db, diagram_uid, "Graph building timed out (29 min limit)", "building_graph")
         raise
 
@@ -304,9 +311,11 @@ def task_build_graph(self, diagram_uid: str):
         logger.debug(traceback.format_exc())
 
         if self.request.retries < self.max_retries:
+            fail_stage(stage, str(exc)[:500], traceback.format_exc())
             logger.info("Retrying (%d/%d) ...", self.request.retries + 1, self.max_retries)
             raise self.retry(exc=exc)
 
+        fail_stage(stage, str(exc)[:500], traceback.format_exc())
         set_diagram_error(db, diagram_uid, str(exc)[:500], "building_graph")
         raise
 
@@ -347,6 +356,7 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None):
     from app.db.session import SessionLocal
 
     db = SessionLocal()
+    stage = None
 
     try:
         logger.info("Starting FXML generation for %s", diagram_uid)
@@ -387,6 +397,11 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None):
         diagram.status = DiagramStatus.GENERATING_FXML
         diagram.error_message = None
         diagram.error_stage = None
+
+        # ===== Processing Stage tracking =====
+        from app.models.stage import StageType
+        stage = start_stage(db, diagram_uid, StageType.FXML_GENERATION, celery_task_id=self.request.id)
+
         db.commit()
 
         # ===== 2. Paths =====
@@ -428,39 +443,108 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None):
             nodes_count, edges_count,
         )
 
-        # ===== 4. Enrich with contours =====
-        # Извлечь контуры для узлов без скинов (drossel, voronka, etc.)
-        original_image_path = diagram_dir / "original" / "image.png"
-        if not original_image_path.exists():
-            for ext in ('.jpg', '.jpeg', '.tif', '.tiff'):
-                alt = original_image_path.with_suffix(ext)
-                if alt.exists():
-                    original_image_path = alt
-                    break
+        # ===== 4. Enrich with contours (SAM2 or legacy fallback) =====
+        contours_validated_path = diagram_dir / "contours" / "contours_validated.json"
+        contours_auto_path = diagram_dir / "contours" / "contours_auto.json"
 
-        pipe_mask_path = diagram_dir / "segmentation" / "pipe_mask_refined.png"
-        if not pipe_mask_path.exists():
-            pipe_mask_path = diagram_dir / "segmentation" / "pipe_mask_validated.png"
-        if not pipe_mask_path.exists():
-            pipe_mask_path = diagram_dir / "segmentation" / "pipe_mask.png"
+        contours_path = None
+        if contours_validated_path.exists():
+            contours_path = contours_validated_path
+            logger.info("Using validated contours: %s", contours_path)
+        elif contours_auto_path.exists():
+            contours_path = contours_auto_path
+            logger.info("Using auto contours (not validated): %s", contours_path)
 
-        if original_image_path.exists() and pipe_mask_path.exists():
+        if contours_path:
+            # Merge SAM2 contour polygons into graph nodes by bbox matching
             try:
-                from modules.contour_extractor import enrich_graph_with_contours
-                from modules.graph_to_fxml import CLASS_NAME_TO_SKIN
-                enrich_graph_with_contours(
-                    graph_data,
-                    image_path=str(original_image_path),
-                    pipe_mask_path=str(pipe_mask_path),
-                    skin_mapped_classes=set(CLASS_NAME_TO_SKIN.keys()),
+                with open(contours_path, 'r', encoding='utf-8') as f:
+                    contours_data = json.load(f)
+
+                contour_nodes = [
+                    n for n in contours_data.get("nodes", [])
+                    if n.get("polygon_validated") or n.get("polygon_auto")
+                ]
+
+                merged = 0
+                for node in graph_data.get("nodes", []):
+                    if node.get("type") != "equipment":
+                        continue
+                    node_bbox = node.get("bbox")
+                    if not node_bbox or len(node_bbox) != 4:
+                        continue
+
+                    # Graph bbox is [x1, y1, x2, y2]; contour bbox is [x, y, w, h] COCO
+                    nx1, ny1, nx2, ny2 = node_bbox
+
+                    best_iou = 0.0
+                    best_poly = None
+                    for cn in contour_nodes:
+                        cb = cn.get("bbox", [])
+                        if len(cb) != 4:
+                            continue
+                        cx, cy, cw, ch = cb
+                        cx2, cy2 = cx + cw, cy + ch
+
+                        # IoU
+                        ix1 = max(nx1, cx)
+                        iy1 = max(ny1, cy)
+                        ix2 = min(nx2, cx2)
+                        iy2 = min(ny2, cy2)
+                        inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+                        area_n = max(0, nx2 - nx1) * max(0, ny2 - ny1)
+                        area_c = cw * ch
+                        union = area_n + area_c - inter
+                        iou = inter / union if union > 0 else 0
+
+                        if iou > best_iou:
+                            best_iou = iou
+                            best_poly = cn.get("polygon_validated") or cn.get("polygon_auto")
+
+                    if best_iou > 0.5 and best_poly:
+                        # Write to 'segmentation' — graph_to_fxml reads this
+                        # field to render Polygon elements in FXML
+                        node["segmentation"] = best_poly
+                        merged += 1
+
+                logger.info(
+                    "Merged %d contour polygons into graph (%d available)",
+                    merged, len(contour_nodes),
                 )
             except Exception as e:
-                logger.warning("Contour extraction failed (non-fatal): %s", e)
+                logger.warning("Contour merge failed (non-fatal): %s", e)
         else:
-            logger.info(
-                "Skipping contour extraction: image=%s, mask=%s",
-                original_image_path.exists(), pipe_mask_path.exists(),
-            )
+            # Legacy fallback: old contour_extractor (if no SAM2 contours)
+            original_image_path = diagram_dir / "original" / "image.png"
+            if not original_image_path.exists():
+                for ext in ('.jpg', '.jpeg', '.tif', '.tiff'):
+                    alt = original_image_path.with_suffix(ext)
+                    if alt.exists():
+                        original_image_path = alt
+                        break
+
+            pipe_mask_path = diagram_dir / "segmentation" / "pipe_mask_refined.png"
+            if not pipe_mask_path.exists():
+                pipe_mask_path = diagram_dir / "segmentation" / "pipe_mask_validated.png"
+            if not pipe_mask_path.exists():
+                pipe_mask_path = diagram_dir / "segmentation" / "pipe_mask.png"
+
+            if original_image_path.exists() and pipe_mask_path.exists():
+                try:
+                    from modules.contour_extractor import enrich_graph_with_contours
+                    from modules.graph_to_fxml import CLASS_NAME_TO_SKIN
+                    enrich_graph_with_contours(
+                        graph_data,
+                        image_path=str(original_image_path),
+                        pipe_mask_path=str(pipe_mask_path),
+                        skin_mapped_classes=set(CLASS_NAME_TO_SKIN.keys()),
+                    )
+                except Exception as e:
+                    logger.warning("Legacy contour extraction failed (non-fatal): %s", e)
+            else:
+                logger.info(
+                    "Skipping contour extraction: no SAM2 contours and no image/mask for legacy",
+                )
 
         # ===== 5. Generate FXML =====
         page_info = f" (page: {page_size})" if page_size else " (original pixels)"
@@ -505,7 +589,6 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None):
 
         # ===== 8. COMPLETED =====
         diagram.status = DiagramStatus.COMPLETED
-        db.commit()
 
         # Статистика
         equipment_count = sum(
@@ -514,6 +597,14 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None):
         connector_count = sum(
             1 for n in graph_data.get('nodes', []) if n.get('type') == 'connector'
         )
+
+        complete_stage(stage, {
+            "fxml_size": fxml_size,
+            "equipment_count": equipment_count,
+            "connector_count": connector_count,
+            "edges_count": edges_count,
+        })
+        db.commit()
 
         logger.info(
             "FXML generation completed for %s: "
@@ -534,6 +625,7 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None):
 
     except SoftTimeLimitExceeded:
         logger.error("FXML generation timed out for %s", diagram_uid)
+        fail_stage(stage, "FXML generation timed out")
         set_diagram_error(db, diagram_uid, "FXML generation timed out", "generating_fxml")
         raise
 
@@ -542,9 +634,11 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None):
         logger.debug(traceback.format_exc())
 
         if self.request.retries < self.max_retries:
+            fail_stage(stage, str(exc)[:500], traceback.format_exc())
             logger.info("Retrying (%d/%d) ...", self.request.retries + 1, self.max_retries)
             raise self.retry(exc=exc)
 
+        fail_stage(stage, str(exc)[:500], traceback.format_exc())
         set_diagram_error(db, diagram_uid, str(exc)[:500], "generating_fxml")
         raise
 

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from worker.celery_app import celery_app
 from celery.exceptions import SoftTimeLimitExceeded
-from worker.utils.db_helpers import set_diagram_error, check_deleted, upsert_artifact
+from worker.utils.db_helpers import set_diagram_error, check_deleted, upsert_artifact, start_stage, complete_stage, fail_stage
 
 
 def detections_to_yolo_txt(detections: list) -> str:
@@ -66,6 +66,7 @@ def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydrauli
     from app.db.session import SessionLocal
 
     db = SessionLocal()
+    stage = None
 
     try:
         print(f"[DETECT] Starting YOLO detection for {diagram_uid}")
@@ -107,6 +108,10 @@ def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydrauli
         if diagram.status not in [DiagramStatus.DETECTING, DiagramStatus.ERROR]:
             print(f"[SKIP] Diagram {diagram_uid} status is {diagram.status.value}, expected DETECTING")
             return {"status": "skipped", "diagram_uid": diagram_uid}
+
+        # ===== Processing Stage tracking =====
+        from app.models.stage import StageType
+        stage = start_stage(db, diagram_uid, StageType.DETECTION, celery_task_id=self.request.id)
 
         # ===== 3. Получаем путь к изображению =====
         storage_path = Path(os.getenv("STORAGE_PATH", "./storage/diagrams"))
@@ -287,6 +292,7 @@ def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydrauli
         diagram.cvat_task_id = cvat_task_id
         diagram.cvat_job_id = cvat_job_id
 
+        complete_stage(stage, {"detection_count": detection_count, "model": effective_model_id})
         db.commit()
 
         print(f"[OK] Detection completed for {diagram_uid}")
@@ -302,6 +308,7 @@ def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydrauli
 
     except SoftTimeLimitExceeded:
         print(f"[TIMEOUT] Detection timed out for {diagram_uid}")
+        fail_stage(stage, "Detection timed out (29 min limit)")
         set_diagram_error(db, diagram_uid, "Detection timed out (29 min limit)", "detecting")
         raise
 
@@ -311,10 +318,12 @@ def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydrauli
 
         # Retry или fail -- НЕ ставим ERROR до исчерпания всех попыток
         if self.request.retries < self.max_retries:
+            fail_stage(stage, str(exc)[:500], traceback.format_exc())
             print(f"[RETRY] Retrying ({self.request.retries + 1}/{self.max_retries})...")
             raise self.retry(exc=exc)
 
         # Все попытки исчерпаны -- теперь ставим ERROR
+        fail_stage(stage, str(exc)[:500], traceback.format_exc())
         set_diagram_error(db, diagram_uid, str(exc)[:500], "detecting")
         raise
 

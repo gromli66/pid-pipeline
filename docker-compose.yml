@@ -114,16 +114,18 @@ services:
       - YOLO_WEIGHTS=${YOLO_WEIGHTS:-/models/yolo/best.pt}
       - YOLO_DEVICE=${YOLO_DEVICE:-cuda}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - HF_HOME=/models/.hf_cache
     volumes:
       - ./worker:/app/worker
       - ./modules:/app/modules
       - ./configs:/app/configs
       - ./app:/app/app
       - ./storage:/storage
-      - ./models:/models:ro
       - cvat_data:/home/django/data
       - ./models/segmentation:/models/segmentation:ro
       - ./models/junction_cnn:/models/junction_cnn:ro
+      - ./models:/models:ro
+      - ./models/.hf_cache:/models/.hf_cache
     depends_on:
       postgres:
         condition: service_healthy

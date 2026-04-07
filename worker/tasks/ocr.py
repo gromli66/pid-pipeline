@@ -20,7 +20,7 @@ from pathlib import Path
 from celery.exceptions import SoftTimeLimitExceeded
 
 from worker.celery_app import celery_app
-from worker.utils.db_helpers import set_diagram_error, check_deleted
+from worker.utils.db_helpers import set_diagram_error, check_deleted, start_stage, complete_stage, fail_stage
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,7 @@ def task_run_ocr(self, diagram_uid: str):
     ocr_dir = diagram_dir / "ocr"
 
     db = SessionLocal()
+    stage = None
     try:
         # ═══ Проверить существование диаграммы ═══
         diagram = db.query(Diagram).filter(
@@ -79,6 +80,10 @@ def task_run_ocr(self, diagram_uid: str):
                 "OCR result already exists for %s, skipping", diagram_uid
             )
             return
+
+        # ===== Processing Stage tracking =====
+        from app.models.stage import StageType
+        stage = start_stage(db, diagram_uid, StageType.OCR, celery_task_id=self.request.id)
 
         logger.info("OCR started for %s", diagram_uid)
         ocr_dir.mkdir(parents=True, exist_ok=True)
@@ -243,12 +248,14 @@ def task_run_ocr(self, diagram_uid: str):
             file_size=ocr_result_path.stat().st_size,
         )
         db.add(artifact)
+        complete_stage(stage, {"result_path": rel_path})
         db.commit()
 
         logger.info("[%s] OCR completed successfully", diagram_uid)
 
     except SoftTimeLimitExceeded:
         logger.error("[%s] OCR timed out (soft limit)", diagram_uid)
+        fail_stage(stage, "OCR timed out")
         set_diagram_error(db, diagram_uid, "OCR timed out", "ocr")
         db.rollback()
         raise
@@ -261,10 +268,12 @@ def task_run_ocr(self, diagram_uid: str):
 
         # BUG-10 fix: retry before giving up
         if self.request.retries < self.max_retries:
+            fail_stage(stage, str(exc)[:500], traceback.format_exc())
             db.rollback()
             raise self.retry(exc=exc)
 
         # BUG-11 fix: set ERROR status when all retries exhausted
+        fail_stage(stage, str(exc)[:500], traceback.format_exc())
         set_diagram_error(db, diagram_uid, str(exc)[:500], "ocr")
         db.rollback()
         raise

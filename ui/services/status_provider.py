@@ -32,13 +32,14 @@ class StatusProvider(QObject):
     # НЕ финальные (после них автозапуск следующего этапа):
     #   SEGMENTING → auto skeletonize → SKELETONIZED
     #   VALIDATED_MASKS → auto skeletonize_simple → detect_junctions → DETECTED_JUNCTIONS
+    #   VALIDATED_GRAPH → auto task_generate_fxml → COMPLETED
     _FINAL_STATUSES = frozenset({
         DiagramStatus.DETECTED,
         DiagramStatus.VALIDATED_BBOX,
         DiagramStatus.SKELETONIZED,
         DiagramStatus.DETECTED_JUNCTIONS,
         DiagramStatus.BUILT,
-        DiagramStatus.VALIDATED_GRAPH,
+        DiagramStatus.CONTOURS_EXTRACTED,  # SAM2 done (parallel)
         DiagramStatus.OCR_COMPLETED,
         DiagramStatus.OCR_BOUND,
         DiagramStatus.COMPLETED,

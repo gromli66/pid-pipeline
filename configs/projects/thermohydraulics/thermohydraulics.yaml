@@ -204,6 +204,24 @@ junction_seg:
   square_size: 15
 
 # =============================================================================
+# SAM2 Contour Extraction (Phase 7b) — parallel with graph/OCR
+# =============================================================================
+contour_extraction:
+  enabled: true
+  checkpoint: "/models/sam2/sam2_pid_best.pth"
+  base_weights: "/models/sam2/sam2_hiera_small.pt"
+  confidence_threshold: 0.85
+  snap_dp_eps: 0.15
+  snap_threshold: 0.08
+  snap_min_edge: 0.03
+  skip_classes:
+    - background
+    - truba
+    - annotation
+    - strelka
+    - connector
+
+# =============================================================================
 # OCR Pipeline (Phase B) — 3-проходный Surya OCR
 # =============================================================================
 ocr:

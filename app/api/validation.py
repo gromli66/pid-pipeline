@@ -625,6 +625,7 @@ async def complete_junction_validation(
     )
 
     task_id = None
+    contour_task_id = None
     ocr_task_id = None
     if not already_past:
         diagram.status = DiagramStatus.VALIDATED_JUNCTIONS
@@ -632,14 +633,21 @@ async def complete_junction_validation(
         diagram.error_stage = None
         await db.commit()
 
-        # Auto-dispatch graph build + OCR (parallel)
+        # Auto-dispatch graph build + SAM2 contours + OCR (all parallel)
         task_id = await async_safe_dispatch(
             "worker.tasks.graph.task_build_graph",
             args=[str(uid)],
             queue="gpu",
         )
 
-        # OCR -- parallel with graph (GPU worker, queue "ocr")
+        # SAM2 contour extraction (parallel, independent)
+        contour_task_id = await async_safe_dispatch(
+            "worker.tasks.contours.task_extract_contours",
+            args=[str(uid)],
+            queue="sam2",
+        )
+
+        # OCR -- parallel with graph and SAM2 (separate worker, queue "ocr")
         ocr_task_id = await async_safe_dispatch(
             "worker.tasks.ocr.task_run_ocr",
             args=[str(uid)],
@@ -648,8 +656,9 @@ async def complete_junction_validation(
 
     return {
         "status": "validated_junctions",
-        "message": "Junction validation completed, graph build and OCR started",
+        "message": "Junction validation completed, graph build + contours + OCR started",
         "task_id": task_id,
+        "contour_task_id": contour_task_id,
         "ocr_task_id": ocr_task_id,
         "uid": str(uid),
     }

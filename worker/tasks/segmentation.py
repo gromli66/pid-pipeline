@@ -20,7 +20,7 @@ from PIL import Image, ImageDraw
 from celery.exceptions import SoftTimeLimitExceeded
 
 from worker.celery_app import celery_app
-from worker.utils.db_helpers import set_diagram_error, check_deleted, upsert_artifact
+from worker.utils.db_helpers import set_diagram_error, check_deleted, upsert_artifact, start_stage, complete_stage, fail_stage
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +207,7 @@ def task_segment_pipes(
     from app.db.session import SessionLocal
 
     db = SessionLocal()
+    stage = None
 
     try:
         logger.info("Starting pipe segmentation for %s", diagram_uid)
@@ -253,6 +254,10 @@ def task_segment_pipes(
                 diagram.status.value,
             )
             return {"status": "skipped", "diagram_uid": diagram_uid}
+
+        # ===== Processing Stage tracking =====
+        from app.models.stage import StageType
+        stage = start_stage(db, diagram_uid, StageType.SEGMENTATION, celery_task_id=self.request.id)
 
         # ===== 3. Paths =====
         storage_path = Path(os.getenv("STORAGE_PATH", "./storage/diagrams"))
@@ -403,6 +408,11 @@ def task_segment_pipes(
         diagram.status = DiagramStatus.SKELETONIZING
         diagram.error_message = None
         diagram.error_stage = None
+        complete_stage(stage, {
+            "n_tiles": result["n_tiles"],
+            "time_sec": round(result["time_sec"], 2),
+            "coverage_pct": round(result.get("coverage_pct", 0), 2),
+        })
         db.commit()
 
         logger.info("Segmentation complete, dispatching skeletonization")
@@ -422,6 +432,7 @@ def task_segment_pipes(
 
     except SoftTimeLimitExceeded:
         logger.error("Segmentation timed out for %s", diagram_uid)
+        fail_stage(stage, "Segmentation timed out (59 min limit)")
         set_diagram_error(db, diagram_uid, "Segmentation timed out (59 min limit)", "segmenting")
         raise
 
@@ -430,9 +441,11 @@ def task_segment_pipes(
         logger.debug(traceback.format_exc())
 
         if self.request.retries < self.max_retries:
+            fail_stage(stage, str(exc)[:500], traceback.format_exc())
             logger.info("Retrying (%d/%d) ...", self.request.retries + 1, self.max_retries)
             raise self.retry(exc=exc)
 
+        fail_stage(stage, str(exc)[:500], traceback.format_exc())
         set_diagram_error(db, diagram_uid, str(exc)[:500], "segmenting")
         raise
 

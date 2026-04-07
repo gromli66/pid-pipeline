@@ -60,6 +60,11 @@ class DiagramStatus(str, enum.Enum):
     VALIDATING_GRAPH = "validating_graph"
     VALIDATED_GRAPH = "validated_graph"
 
+    # Phase 7b: Contour extraction (SAM2) — parallel with graph/OCR
+    EXTRACTING_CONTOURS = "extracting_contours"
+    CONTOURS_EXTRACTED = "contours_extracted"
+    CONTOURS_VALIDATED = "contours_validated"
+
     # Phase 8: OCR
     OCR_PROCESSING = "ocr_processing"
     OCR_COMPLETED = "ocr_completed"
@@ -102,7 +107,7 @@ class Diagram(Base):
 
     # Status
     status: Mapped[DiagramStatus] = mapped_column(
-        Enum(DiagramStatus),
+        Enum(DiagramStatus, values_callable=lambda x: [e.value for e in x]),
         default=DiagramStatus.UPLOADED,
         nullable=False,
         index=True,

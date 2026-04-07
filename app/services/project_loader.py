@@ -179,6 +179,19 @@ class JunctionSegConfig:
 
 
 @dataclass
+class ContourExtractionConfig:
+    """Конфигурация SAM2 contour extraction (Phase 7b)."""
+    enabled: bool = False
+    checkpoint: str = ""
+    base_weights: str = ""
+    confidence_threshold: float = 0.85
+    snap_dp_eps: float = 0.15
+    snap_threshold: float = 0.08
+    snap_min_edge: float = 0.03
+    skip_classes: list = field(default_factory=list)
+
+
+@dataclass
 class OcrConfig:
     """Конфигурация OCR из project YAML (Phase B)."""
     profile_module: str = ""              # Legacy: importlib module path (пустой = не используется)
@@ -205,6 +218,7 @@ class ProjectConfig:
     segmentation: SegmentationConfig
     skeleton: SkeletonConfig
     junction_seg: JunctionSegConfig
+    contour_extraction: ContourExtractionConfig
     ocr: OcrConfig
     config_path: str
 
@@ -396,6 +410,18 @@ class ProjectLoader:
             tile3_overlap=ocr_data.get("tile3_overlap", 384),
         )
 
+        ce_data = data.get("contour_extraction", {})
+        contour_extraction = ContourExtractionConfig(
+            enabled=ce_data.get("enabled", False),
+            checkpoint=ce_data.get("checkpoint", ""),
+            base_weights=ce_data.get("base_weights", ""),
+            confidence_threshold=ce_data.get("confidence_threshold", 0.85),
+            snap_dp_eps=ce_data.get("snap_dp_eps", 0.15),
+            snap_threshold=ce_data.get("snap_threshold", 0.08),
+            snap_min_edge=ce_data.get("snap_min_edge", 0.03),
+            skip_classes=ce_data.get("skip_classes", []),
+        )
+
         return ProjectConfig(
             code=project.get("code", yaml_path.stem),
             name=project.get("name", yaml_path.stem),
@@ -407,6 +433,7 @@ class ProjectLoader:
             segmentation=segmentation,
             skeleton=skeleton,
             junction_seg=junction_seg,
+            contour_extraction=contour_extraction,
             ocr=ocr,
             config_path=str(yaml_path),
         )

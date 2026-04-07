@@ -37,6 +37,9 @@ class DiagramStatus(str, Enum):
     BUILT = "built"
     VALIDATING_GRAPH = "validating_graph"
     VALIDATED_GRAPH = "validated_graph"
+    EXTRACTING_CONTOURS = "extracting_contours"
+    CONTOURS_EXTRACTED = "contours_extracted"
+    CONTOURS_VALIDATED = "contours_validated"
     OCR_PROCESSING = "ocr_processing"
     OCR_COMPLETED = "ocr_completed"
     OCR_BOUND = "ocr_bound"
@@ -575,9 +578,12 @@ class APIClient:
         dest.write_bytes(response.content)
         return dest
 
-    def rollback_diagram(self, uid: str, target_status: str) -> Dict[str, Any]:
+    def rollback_diagram(self, uid: str, target_status: str, preserve_ocr: bool = False) -> Dict[str, Any]:
         """Откатить диаграмму до указанного этапа."""
-        return self._request("POST", f"/api/diagrams/{uid}/rollback?target_status={target_status}")
+        url = f"/api/diagrams/{uid}/rollback?target_status={target_status}"
+        if preserve_ocr:
+            url += "&preserve_ocr=true"
+        return self._request("POST", url)
 
     # === Projects ===
 

@@ -24,7 +24,7 @@ import numpy as np
 from celery.exceptions import SoftTimeLimitExceeded
 
 from worker.celery_app import celery_app
-from worker.utils.db_helpers import set_diagram_error, check_deleted, upsert_artifact
+from worker.utils.db_helpers import set_diagram_error, check_deleted, upsert_artifact, start_stage, complete_stage, fail_stage
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,7 @@ def task_skeletonize(
     from app.db.session import SessionLocal
 
     db = SessionLocal()
+    stage = None
 
     try:
         logger.info("Starting skeletonization for %s", diagram_uid)
@@ -136,6 +137,10 @@ def task_skeletonize(
                 diagram.status.value,
             )
             return {"status": "skipped", "diagram_uid": diagram_uid}
+
+        # ===== Processing Stage tracking =====
+        from app.models.stage import StageType
+        stage = start_stage(db, diagram_uid, StageType.SKELETONIZATION, celery_task_id=self.request.id)
 
         # ===== 3. Paths =====
         storage_path = Path(os.getenv("STORAGE_PATH", "./storage/diagrams"))
@@ -337,6 +342,7 @@ def task_skeletonize(
         diagram.status = DiagramStatus.SKELETONIZED
         diagram.error_message = None
         diagram.error_stage = None
+        complete_stage(stage, {"skeleton_pixels": skeleton_pixels, "mask_pixels": mask_pixels})
         db.commit()
 
         logger.info("Skeletonization complete. Ready for mask validation.")
@@ -352,6 +358,7 @@ def task_skeletonize(
 
     except SoftTimeLimitExceeded:
         logger.error("Skeletonization timed out for %s", diagram_uid)
+        fail_stage(stage, "Skeletonization timed out (29 min limit)")
         set_diagram_error(db, diagram_uid, "Skeletonization timed out (29 min limit)", "skeletonizing")
         raise
 
@@ -360,9 +367,11 @@ def task_skeletonize(
         logger.debug(traceback.format_exc())
 
         if self.request.retries < self.max_retries:
+            fail_stage(stage, str(exc)[:500], traceback.format_exc())
             logger.info("Retrying (%d/%d) ...", self.request.retries + 1, self.max_retries)
             raise self.retry(exc=exc)
 
+        fail_stage(stage, str(exc)[:500], traceback.format_exc())
         set_diagram_error(db, diagram_uid, str(exc)[:500], "skeletonizing")
         raise
 
@@ -407,6 +416,7 @@ def task_skeletonize_simple(
     from app.db.session import SessionLocal
 
     db = SessionLocal()
+    stage = None
 
     try:
         logger.info("Starting simple skeletonization for %s", diagram_uid)
@@ -443,6 +453,11 @@ def task_skeletonize_simple(
 
         # Set status → SKELETONIZING_FINAL
         diagram.status = DiagramStatus.SKELETONIZING_FINAL
+
+        # ===== Processing Stage tracking =====
+        from app.models.stage import StageType
+        stage = start_stage(db, diagram_uid, StageType.FINAL_SKELETONIZATION, celery_task_id=self.request.id)
+
         db.commit()
 
         # ===== 3. Paths =====
@@ -670,6 +685,7 @@ def task_skeletonize_simple(
         diagram.status = DiagramStatus.SKELETONIZED_FINAL
         diagram.error_message = None
         diagram.error_stage = None
+        complete_stage(stage, {"skeleton_pixels": skeleton_pixels})
         db.commit()
 
         # Auto-dispatch junction detection
@@ -698,6 +714,7 @@ def task_skeletonize_simple(
 
     except SoftTimeLimitExceeded:
         logger.error("Simple skeletonization timed out for %s", diagram_uid)
+        fail_stage(stage, "Simple skeletonization timed out")
         set_diagram_error(db, diagram_uid, "Simple skeletonization timed out", "skeletonizing_simple")
         raise
 
@@ -708,8 +725,10 @@ def task_skeletonize_simple(
         logger.debug(traceback.format_exc())
 
         if self.request.retries < self.max_retries:
+            fail_stage(stage, str(exc)[:500], traceback.format_exc())
             raise self.retry(exc=exc)
 
+        fail_stage(stage, str(exc)[:500], traceback.format_exc())
         set_diagram_error(db, diagram_uid, str(exc)[:500], "skeletonizing_simple")
         raise
 

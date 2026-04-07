@@ -52,6 +52,10 @@ class ArtifactType(str, enum.Enum):
     GRAPH_JSON = "graph_json"
     GRAPH_VALIDATED = "graph_validated"
 
+    # Contours (SAM2)
+    CONTOURS_AUTO = "contours_auto"
+    CONTOURS_VALIDATED = "contours_validated"
+
     # OCR
     OCR_CLEANED = "ocr_cleaned"
     OCR_RESULT = "ocr_result"
@@ -85,7 +89,7 @@ class Artifact(Base):
 
     # Artifact Info
     artifact_type: Mapped[ArtifactType] = mapped_column(
-        Enum(ArtifactType),
+        Enum(ArtifactType, values_callable=lambda x: [e.value for e in x]),
         nullable=False,
         index=True
     )
