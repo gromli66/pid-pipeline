@@ -24,6 +24,7 @@ import numpy as np
 from celery.exceptions import SoftTimeLimitExceeded
 
 from worker.celery_app import celery_app
+from worker.utils.db_helpers import set_diagram_error, check_deleted
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,10 @@ def task_build_graph(self, diagram_uid: str):
         diagram = db.query(Diagram).filter(Diagram.uid == diagram_uid).first()
         if not diagram:
             raise ValueError(f"Diagram {diagram_uid} not found")
+
+        if check_deleted(db, diagram_uid):
+            logger.info("Diagram %s is deleted, aborting", diagram_uid)
+            return {"status": "deleted", "diagram_uid": diagram_uid}
 
         # Idempotency: если уже дальше — пропускаем
         if diagram.status in (
@@ -291,7 +296,7 @@ def task_build_graph(self, diagram_uid: str):
 
     except SoftTimeLimitExceeded:
         logger.error("Graph building timed out for %s", diagram_uid)
-        _set_error(db, diagram_uid, "Graph building timed out (29 min limit)", "building_graph")
+        set_diagram_error(db, diagram_uid, "Graph building timed out (29 min limit)", "building_graph")
         raise
 
     except Exception as exc:
@@ -302,7 +307,7 @@ def task_build_graph(self, diagram_uid: str):
             logger.info("Retrying (%d/%d) ...", self.request.retries + 1, self.max_retries)
             raise self.retry(exc=exc)
 
-        _set_error(db, diagram_uid, str(exc)[:500], "building_graph")
+        set_diagram_error(db, diagram_uid, str(exc)[:500], "building_graph")
         raise
 
     finally:
@@ -353,6 +358,10 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None):
         diagram = db.query(Diagram).filter(Diagram.uid == diagram_uid).first()
         if not diagram:
             raise ValueError(f"Diagram {diagram_uid} not found")
+
+        if check_deleted(db, diagram_uid):
+            logger.info("Diagram %s is deleted, aborting", diagram_uid)
+            return {"status": "deleted", "diagram_uid": diagram_uid}
 
         # Idempotency
         if diagram.status == DiagramStatus.COMPLETED:
@@ -525,7 +534,7 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None):
 
     except SoftTimeLimitExceeded:
         logger.error("FXML generation timed out for %s", diagram_uid)
-        _set_error(db, diagram_uid, "FXML generation timed out", "generating_fxml")
+        set_diagram_error(db, diagram_uid, "FXML generation timed out", "generating_fxml")
         raise
 
     except Exception as exc:
@@ -536,27 +545,8 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None):
             logger.info("Retrying (%d/%d) ...", self.request.retries + 1, self.max_retries)
             raise self.retry(exc=exc)
 
-        _set_error(db, diagram_uid, str(exc)[:500], "generating_fxml")
+        set_diagram_error(db, diagram_uid, str(exc)[:500], "generating_fxml")
         raise
 
     finally:
         db.close()
-
-
-# =============================================================================
-# Утилита
-# =============================================================================
-
-def _set_error(db, diagram_uid: str, message: str, stage: str):
-    """Пометить диаграмму как ERROR."""
-    try:
-        from app.models import Diagram, DiagramStatus
-
-        diagram = db.query(Diagram).filter(Diagram.uid == diagram_uid).first()
-        if diagram:
-            diagram.status = DiagramStatus.ERROR
-            diagram.error_message = message
-            diagram.error_stage = stage
-            db.commit()
-    except Exception as db_exc:
-        logger.error("Failed to set error status: %s", db_exc)
