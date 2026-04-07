@@ -25,7 +25,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Python зависимости
 COPY requirements/base.txt requirements/base.txt
 COPY requirements/api.txt requirements/api.txt
-RUN pip install --no-cache-dir -r requirements/api.txt
+RUN pip install --no-cache-dir -r requirements/api.txt && \
+    pip install --no-cache-dir opencv-python-headless
 
 # Копируем приложение
 COPY app/ /app/app/

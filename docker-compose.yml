@@ -18,7 +18,6 @@ services:
   # ===========================================================================
   # P&ID Pipeline Services
   # ===========================================================================
-
   # PostgreSQL - База данных P&ID Pipeline
   postgres:
     image: postgres:15-alpine
@@ -123,6 +122,8 @@ services:
       - ./storage:/storage
       - ./models:/models:ro
       - cvat_data:/home/django/data
+      - ./models/segmentation:/models/segmentation:ro
+      - ./models/junction_cnn:/models/junction_cnn:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -132,6 +133,46 @@ services:
     networks:
       - pid_network
       - cvat
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  worker_ocr:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker_ocr
+    container_name: pid_worker_ocr
+    environment:
+      - DATABASE_URL=postgresql://${DB_USER:-pid_user}:${DB_PASSWORD:-changeme}@postgres:5432/${DB_NAME:-pid_pipeline}
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - STORAGE_PATH=/storage/diagrams
+      - PROJECTS_CONFIG_DIR=/app/configs/projects
+      - HF_HOME=/models/ocr/hf_cache
+      - RECOGNITION_BATCH_SIZE=64
+      - DETECTOR_BATCH_SIZE=4
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - SKIP_SURYA_CROPS=${SKIP_SURYA_CROPS:-0}
+    volumes:
+      - ./worker:/app/worker
+      - ./modules:/app/modules
+      - ./configs:/app/configs
+      - ./app:/app/app
+      - ./storage:/storage
+      - ./models/ocr/datalab_cache:/root/.cache/datalab    # Surya models
+      - ./models/ocr/hf_cache:/models/ocr/hf_cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - pid_network
     deploy:
       resources:
         reservations:
@@ -412,4 +453,3 @@ networks:
   cvat:
     name: cvat
     driver: bridge
-

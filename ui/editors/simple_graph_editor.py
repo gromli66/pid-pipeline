@@ -1,0 +1,376 @@
+"""
+Simple Graph Editor — CRUD операции над графом P&ID.
+
+Режимы: add_edge, delete_edge, add_connector, delete_node, add_node_from_list.
+Рёбра: point-to-point (без L-route).
+"""
+
+import math
+from typing import Optional
+
+from PySide6.QtCore import Qt
+
+from ui.editors.base_graph_editor import BaseGraphEditor
+from ui.editors.mode_handlers.simple_handlers import (
+    IdleHandler, AddEdgeHandler, DeleteEdgeHandler, AddConnectorHandler,
+    DeleteNodeHandler, AddNodeFromListHandler, ResizeNodeHandler,
+)
+from ui.editors.commands.simple_commands import (
+    AddEdgeCommand, RemoveEdgeCommand, AddConnectorOnEdgeCommand,
+    AddConnectorIsolatedCommand, DeleteNodeCommand,
+    AddEquipmentNodeCommand, ResizeNodeCommand,
+)
+from ui.editors.graph_geometry import (
+    connect_bbox_bbox, connect_bbox_polygon,
+    connect_polygon_polygon, connect_point_bbox,
+    connect_point_polygon,
+)
+from ui.editors.resize_overlay import ResizableNodeOverlay
+
+
+class SimpleGraphEditor(BaseGraphEditor):
+    """Простой редактор: CRUD операции над графом.
+
+    Потомок: AdvancedGraphEditor.
+    """
+
+    def __init__(self):
+        super().__init__()
+
+        # Регистрация режимов
+        self.register_mode("idle", IdleHandler())
+        self.register_mode("add_edge", AddEdgeHandler())
+        self.register_mode("delete_edge", DeleteEdgeHandler())
+        self.register_mode("add_connector", AddConnectorHandler())
+        self.register_mode("delete_node", DeleteNodeHandler())
+        self.register_mode("add_node_from_list", AddNodeFromListHandler())
+        self.register_mode("resize_node", ResizeNodeHandler())
+
+        # Resize state
+        self._resize_overlay = None  # ResizableNodeOverlay | None
+        self._resizing_node: str | None = None
+        self._mode_before_resize: str = "idle"
+
+        # Pending equipment class for AddNodeFromList
+        self._pending_node_class: dict | None = None
+
+        # Default mode
+        self.set_mode("idle")
+
+    # =================================================================
+    # CRUD — Edges (point-to-point)
+    # =================================================================
+
+    def add_edge(self, node_a: str, node_b: str) -> bool:
+        """Добавить ребро — ПРОСТОЕ point-to-point соединение.
+
+        Advanced переопределяет для полного L-route.
+        """
+        if node_a == node_b:
+            self.update_status("Нельзя соединить узел с самим собой")
+            return False
+
+        if self.model.edge_exists(node_a, node_b):
+            self.update_status(f"Ребро уже существует: {node_a} — {node_b}")
+            return False
+
+        # Получаем данные узлов
+        src = self.nodes[node_a]
+        tgt = self.nodes[node_b]
+
+        src_cx, src_cy = src['centroid'][1], src['centroid'][0]
+        tgt_cx, tgt_cy = tgt['centroid'][1], tgt['centroid'][0]
+
+        # Вычисляем connection points:
+        # 1. Сначала точку на цели (по центроиду источника)
+        # 2. Потом точку на источнике (по РЕАЛЬНОЙ точке на цели, не центроиду)
+        tgt_x, tgt_y = self.get_connection_point(node_b, src_cx, src_cy)
+        src_x, src_y = self.get_connection_point(node_a, tgt_x, tgt_y)
+
+        edge_data = self.model.create_edge_data(
+            node_a, node_b,
+            source_point=[src_y, src_x],
+            target_point=[tgt_y, tgt_x],
+        )
+        edge_data['straight_line_distance'] = math.sqrt(
+            (tgt_x - src_x) ** 2 + (tgt_y - src_y) ** 2
+        )
+
+        cmd = AddEdgeCommand(self.model, self, node_a, node_b, edge_data)
+        self.undo_mgr.execute(cmd)
+        self.update_statistics()
+        self.update_status(f"Добавлено ребро: {node_a} — {node_b}")
+        return True
+
+    def remove_edge(self, node_a: str, node_b: str) -> bool:
+        """Удалить ребро между узлами."""
+        key = self.model.edge_key(node_a, node_b)
+        if key not in self.edges:
+            self.update_status(f"Ребро не существует: {node_a} — {node_b}")
+            return False
+
+        cmd = RemoveEdgeCommand(self.model, self, node_a, node_b)
+        self.undo_mgr.execute(cmd)
+        self.update_statistics()
+        self.update_status(f"Удалено ребро: {node_a} — {node_b}")
+        return True
+
+    # =================================================================
+    # CRUD — Connectors
+    # =================================================================
+
+    def add_connector_on_edge(self, edge_key: tuple, pos_x: float, pos_y: float) -> Optional[str]:
+        """Добавить коннектор на ребро, разбив его на два.
+
+        Returns:
+            ID нового коннектора или None.
+        """
+        if edge_key not in self.edges:
+            return None
+
+        # Находим segment index
+        _, _, seg_idx, _ = self.find_nearest_edge_segment(pos_x, pos_y)
+
+        # Получаем edge_data
+        old_edge_data = self.model.find_edge_data(edge_key)
+        if not old_edge_data:
+            return None
+        old_edge_data_copy = old_edge_data.copy()
+        old_edge_data_copy['waypoints'] = [wp.copy() for wp in old_edge_data.get('waypoints', [])]
+        if old_edge_data.get('source_point'):
+            old_edge_data_copy['source_point'] = old_edge_data['source_point'].copy()
+        if old_edge_data.get('target_point'):
+            old_edge_data_copy['target_point'] = old_edge_data['target_point'].copy()
+
+        cmd = AddConnectorOnEdgeCommand(
+            self.model, self, edge_key, pos_x, pos_y, seg_idx, old_edge_data_copy
+        )
+        self.undo_mgr.execute(cmd)
+        self.update_statistics()
+
+        node_id = cmd._created_node_id
+        self.update_status(f"Создан коннектор {node_id} на ребре")
+        return node_id
+
+    def add_connector_isolated(self, pos_x: float, pos_y: float) -> str:
+        """Добавить изолированный коннектор."""
+        node = self.model.create_connector_node(pos_x, pos_y)
+        cmd = AddConnectorIsolatedCommand(self.model, self, node)
+        self.undo_mgr.execute(cmd)
+        self.update_statistics()
+        self.update_status(f"Создан изолированный коннектор {node['id']}")
+        return node['id']
+
+    # =================================================================
+    # CRUD — Nodes
+    # =================================================================
+
+    def delete_node(self, node_id: str) -> bool:
+        """Удалить узел и все его рёбра."""
+        if node_id not in self.nodes:
+            self.update_status(f"Узел не найден: {node_id}")
+            return False
+
+        cmd = DeleteNodeCommand(self.model, self, node_id)
+        self.undo_mgr.execute(cmd)
+        self.update_statistics()
+        self.update_status(f"Удалён узел {node_id}")
+        return True
+
+    # =================================================================
+    # Add equipment from list
+    # =================================================================
+
+    def set_pending_node_class(self, cls: dict):
+        """Установить класс оборудования для следующего клика."""
+        self._pending_node_class = cls
+
+    def add_equipment_node(self, x: float, y: float,
+                           class_id: int, class_name: str,
+                           width: float = 40, height: float = 40) -> str:
+        """Добавить equipment-узел."""
+        node = self.model.create_equipment_node(x, y, width, height, class_id, class_name)
+        cmd = AddEquipmentNodeCommand(self.model, self, node)
+        self.undo_mgr.execute(cmd)
+        self.update_statistics()
+        self.update_status(f"Добавлено оборудование: {class_name}")
+        # Переключиться в resize для задания размера
+        self._enter_resize_mode(node['id'])
+        return node['id']
+
+    # =================================================================
+    # Resize — 4 corner handles для equipment-узлов
+    # =================================================================
+
+    def _enter_resize_mode(self, node_id: str):
+        """Переключиться в resize_node и показать overlay."""
+        self._mode_before_resize = self._current_mode or "add_edge"
+        self.set_mode("resize_node")
+        self._start_resize(node_id)
+
+    def _start_resize(self, node_id: str):
+        """Показать 4 resize handles для узла."""
+        if self._resize_overlay:
+            self._resize_overlay.hide()
+            self._resize_overlay = None
+
+        node = self.nodes.get(node_id)
+        if not node or not node.get('bbox'):
+            return
+
+        bbox = node['bbox']
+        if not bbox or len(bbox) != 4:
+            return
+
+        self._resizing_node = node_id
+
+        # Сохраняем начальное состояние для undo
+        self._resize_start_bbox = bbox.copy()
+        self._resize_start_centroid = node['centroid'].copy()
+        self._resize_start_area = node.get('area', 0)
+
+        self._resize_overlay = ResizableNodeOverlay(
+            scene=self.scene,
+            bbox=bbox,
+            min_size=15,
+            on_resize=lambda new_bbox: self._on_node_resized(node_id, new_bbox),
+            on_commit=lambda: self._commit_resize(node_id),
+        )
+        self._resize_overlay.show()
+        self.update_status(f"Resize: {node_id} — тяните за углы, Escape для отмены")
+
+    def _on_node_resized(self, node_id: str, new_bbox: list):
+        """Callback от overlay — обновить визуалы + пересчитать рёбра."""
+        node = self.nodes.get(node_id)
+        if not node:
+            return
+
+        # Обновляем данные
+        node['bbox'] = new_bbox.copy()
+        x1, y1, x2, y2 = new_bbox
+        node['centroid'] = [(y1 + y2) / 2, (x1 + x2) / 2]
+        node['area'] = (x2 - x1) * (y2 - y1)
+
+        # Обновляем bbox rect если есть
+        if node_id in self.bbox_items:
+            self.bbox_items[node_id].setRect(x1, y1, x2 - x1, y2 - y1)
+
+        # Обновляем маркер
+        if node_id in self.node_items:
+            cx, cy = node['centroid'][1], node['centroid'][0]
+            r = self.EQUIPMENT_MARKER_RADIUS
+            self.node_items[node_id].setRect(cx - r, cy - r, r * 2, r * 2)
+
+        # Пересчитать связанные рёбра (как при drag)
+        cx, cy = node['centroid'][1], node['centroid'][0]
+        for edge in self.edges_data:
+            if edge['source'] == node_id or edge['target'] == node_id:
+                other_id = edge['target'] if edge['source'] == node_id else edge['source']
+                other = self.nodes.get(other_id)
+                if not other:
+                    continue
+                ocx, ocy = other['centroid'][1], other['centroid'][0]
+                # Пересчитать connection points (простой point-to-point)
+                sp_x, sp_y = self.get_connection_point(edge['source'],
+                    self.nodes[edge['target']]['centroid'][1],
+                    self.nodes[edge['target']]['centroid'][0])
+                tp_x, tp_y = self.get_connection_point(edge['target'],
+                    self.nodes[edge['source']]['centroid'][1],
+                    self.nodes[edge['source']]['centroid'][0])
+                edge['source_point'] = [sp_y, sp_x]
+                edge['target_point'] = [tp_y, tp_x]
+                key = self.model.edge_key(edge['source'], edge['target'])
+                self._update_edge_path(key)
+
+    def _commit_resize(self, node_id: str):
+        """Финализировать resize — записать в undo."""
+        if not self._resizing_node or not hasattr(self, '_resize_start_bbox'):
+            return
+
+        node = self.nodes.get(node_id)
+        if not node:
+            return
+
+        new_bbox = node['bbox'].copy()
+        new_centroid = node['centroid'].copy()
+        new_area = node.get('area', 0)
+
+        # Только если реально изменилось
+        if new_bbox != self._resize_start_bbox:
+            cmd = ResizeNodeCommand(
+                self.model, self, node_id,
+                old_bbox=self._resize_start_bbox,
+                old_centroid=self._resize_start_centroid,
+                old_area=self._resize_start_area,
+                new_bbox=new_bbox,
+                new_centroid=new_centroid,
+                new_area=new_area,
+            )
+            self.undo_mgr.push_executed(cmd)
+            self.update_status(f"Resize: {node_id} → {int(new_bbox[2]-new_bbox[0])}×{int(new_bbox[3]-new_bbox[1])}")
+
+        # Обновить start для следующего drag (если пользователь продолжит)
+        self._resize_start_bbox = new_bbox
+        self._resize_start_centroid = new_centroid
+        self._resize_start_area = new_area
+
+    def _stop_resize(self):
+        """Убрать resize handles и вернуться в предыдущий режим."""
+        if self._resize_overlay:
+            self._resize_overlay.hide()
+            self._resize_overlay = None
+        self._resizing_node = None
+        self._resize_start_bbox = None
+        self._resize_start_centroid = None
+        self._resize_start_area = None
+        # Вернуться в предыдущий режим
+        if self._current_mode == "resize_node":
+            self.set_mode(self._mode_before_resize)
+
+    def _ctrl_right_click_delete(self, x: float, y: float):
+        """Ctrl+ПКМ — удалить узел или ребро под курсором."""
+        # Приоритет: узел > ребро
+        node_id = self.find_node_at(x, y)
+        if node_id:
+            self.delete_node(node_id)
+            return
+        edge_key, _ = self.find_nearest_edge(x, y)
+        if edge_key:
+            self.remove_edge(edge_key[0], edge_key[1])
+            return
+        self.update_status("Нет узла или ребра под курсором")
+
+    # =================================================================
+    # Events
+    # =================================================================
+
+    def undo(self):
+        super().undo()
+        # Если resize-узел исчез после undo — убрать overlay
+        if self._resizing_node and self._resizing_node not in self.nodes:
+            self._stop_resize()
+
+    def redo(self):
+        super().redo()
+        if self._resizing_node and self._resizing_node not in self.nodes:
+            self._stop_resize()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            if self._current_mode == "resize_node":
+                self._stop_resize()
+                return
+        super().keyPressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        """Двойной Ctrl+Click на equipment → переключиться в resize_node."""
+        if self.ctrl_pressed and event.button() == Qt.MouseButton.LeftButton:
+            pos = self.mapToScene(event.pos())
+            x, y = pos.x(), pos.y()
+            clicked = self.find_node_at(x, y)
+            if clicked:
+                node = self.nodes.get(clicked)
+                if node and node.get('type') == 'equipment' and node.get('bbox'):
+                    self._enter_resize_mode(clicked)
+                    return
+        super().mouseDoubleClickEvent(event)

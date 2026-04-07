@@ -47,18 +47,18 @@ async def upload_diagram(
 ):
     """
     Загрузить новую диаграмму.
-    
+
     Требует указания project_code.
     """
     # Проверка проекта
     config = loader.load(project_code)
     if not config:
         raise HTTPException(status_code=400, detail=f"Unknown project: {project_code}")
-    
+
     # Проверяем/создаём проект в БД
     result = await db.execute(select(Project).where(Project.code == project_code))
     project = result.scalar_one_or_none()
-    
+
     if not project:
         project = Project(
             code=config.code,
@@ -68,12 +68,12 @@ async def upload_diagram(
         )
         db.add(project)
         await db.flush()
-    
+
     # Проверка типа файла
     allowed_types = {"image/png", "image/jpeg", "image/tiff"}
     if file.content_type not in allowed_types:
         raise HTTPException(status_code=400, detail=f"Invalid file type. Allowed: {allowed_types}")
-    
+
     # Проверка размера файла (чанками, без загрузки всего в RAM)
     size = 0
     while chunk := await file.read(1024 * 1024):  # 1MB чанки
@@ -84,29 +84,46 @@ async def upload_diagram(
                 detail=f"File too large. Maximum: {MAX_FILE_SIZE // (1024 * 1024)}MB"
             )
     await file.seek(0)  # Сбрасываем позицию для дальнейшего чтения
-    
+
     # Следующий номер (advisory lock предотвращает race condition при параллельных uploads)
     await db.execute(text("SELECT pg_advisory_xact_lock(1)"))
+
+    # Проверка дубликата по имени файла в проекте
+    sanitized_name = sanitize_filename(file.filename or "unnamed")
+    dup_result = await db.execute(
+        select(Diagram).where(
+            Diagram.project_code == project_code,
+            Diagram.original_filename == sanitized_name,
+            Diagram.is_deleted == False,  # noqa: E712
+        )
+    )
+    existing = dup_result.scalars().first()
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Диаграмма с именем '{sanitized_name}' уже существует в проекте (#{existing.number})",
+        )
+
     result = await db.execute(select(func.max(Diagram.number)))
     max_number = result.scalar() or 0
-    
+
     # Создаём диаграмму
     diagram = Diagram(
         number=max_number + 1,
         project_code=project_code,
-        original_filename=sanitize_filename(file.filename or "unnamed"),
+        original_filename=sanitized_name,
         status=DiagramStatus.UPLOADED,
     )
     db.add(diagram)
     await db.flush()
-    
+
     # Сохраняем файл
     storage = StorageService()
     file_path, file_size, dimensions = await storage.save_upload(diagram.uid, file, "original")
-    
+
     diagram.image_width = dimensions[0] if dimensions else None
     diagram.image_height = dimensions[1] if dimensions else None
-    
+
     # Артефакт
     artifact = Artifact(
         diagram_uid=diagram.uid,
@@ -116,10 +133,10 @@ async def upload_diagram(
         mime_type=file.content_type,
     )
     db.add(artifact)
-    
+
     await db.commit()
     await db.refresh(diagram)
-    
+
     return DiagramUploadResponse(
         uid=diagram.uid,
         number=diagram.number,
@@ -138,20 +155,22 @@ async def list_diagrams(
     db: AsyncSession = Depends(get_async_db),
 ):
     """Получить список диаграмм."""
-    query = select(Diagram).order_by(Diagram.number.desc())
-    
+    query = select(Diagram).where(
+        Diagram.is_deleted == False  # noqa: E712
+    ).order_by(Diagram.number.desc())
+
     if project_code:
         query = query.where(Diagram.project_code == project_code)
     if status:
         query = query.where(Diagram.status == status)
-    
+
     count_query = select(func.count()).select_from(query.subquery())
     total = (await db.execute(count_query)).scalar()
-    
+
     query = query.offset(skip).limit(limit)
     result = await db.execute(query)
     diagrams = result.scalars().all()
-    
+
     return DiagramListResponse(
         items=[DiagramResponse.model_validate(d) for d in diagrams],
         total=total,
@@ -165,10 +184,10 @@ async def get_diagram(uid: UUID, db: AsyncSession = Depends(get_async_db)):
     """Получить диаграмму по UID."""
     result = await db.execute(select(Diagram).where(Diagram.uid == uid))
     diagram = result.scalar_one_or_none()
-    
+
     if not diagram:
         raise HTTPException(status_code=404, detail="Diagram not found")
-    
+
     return DiagramResponse.model_validate(diagram)
 
 
@@ -187,10 +206,10 @@ async def get_diagram_status(uid: UUID, db: AsyncSession = Depends(get_async_db)
         ).where(Diagram.uid == uid)
     )
     row = result.one_or_none()
-    
+
     if not row:
         raise HTTPException(status_code=404, detail="Diagram not found")
-    
+
     return DiagramStatusResponse(
         status=row.status,
         error_message=row.error_message,
@@ -211,7 +230,9 @@ async def download_artifact(
     """
     Скачать артефакт диаграммы.
 
-    artifact_type: original_image, yolo_predicted, yolo_validated, coco_validated
+    artifact_type: original_image, yolo_predicted, yolo_validated, coco_validated,
+                   node_mask, pipe_mask, skeleton, skeleton_mask,
+                   junction_mask, bridge_mask
     """
     from fastapi.responses import FileResponse
     from app.config import settings
@@ -268,16 +289,16 @@ async def delete_diagram(uid: UUID, db: AsyncSession = Depends(get_async_db)):
     """Удалить диаграмму."""
     result = await db.execute(select(Diagram).where(Diagram.uid == uid))
     diagram = result.scalar_one_or_none()
-    
+
     if not diagram:
         raise HTTPException(status_code=404, detail="Diagram not found")
-    
+
     storage = StorageService()
     await storage.delete_diagram_folder(uid)
-    
+
     await db.delete(diagram)
     await db.commit()
-    
+
     return {"status": "deleted", "uid": str(uid)}
 
 
@@ -302,15 +323,23 @@ async def retry_operation(
             detail=f"Cannot retry: status is '{diagram.status.value}', expected 'error'"
         )
 
-    # Маппинг error_stage → предыдущий статус
+    # Маппинг error_stage → предыдущий статус для retry
     stage_to_status = {
+        # Phase 1: Detection
         "detecting": DiagramStatus.UPLOADED,
         "creating_cvat_task": DiagramStatus.DETECTED,
         "fetching_annotations": DiagramStatus.VALIDATING_BBOX,
+        # Phase 2: Segmentation + skeleton #1
         "segmenting": DiagramStatus.VALIDATED_BBOX,
-        "skeletonizing": DiagramStatus.SEGMENTED,
-        "classifying": DiagramStatus.SKELETONIZED,
-        "building_graph": DiagramStatus.CLASSIFIED,
+        "skeletonizing": DiagramStatus.SEGMENTING,
+        # Phase 3: Mask Validation
+        "validating_masks": DiagramStatus.SKELETONIZED,
+        # Phase 4: Final skeleton + junction detection
+        "skeletonizing_simple": DiagramStatus.VALIDATED_MASKS,
+        "skeletonizing_final": DiagramStatus.VALIDATED_MASKS,
+        "detecting_junctions": DiagramStatus.SKELETONIZED_FINAL,
+        # Phase 7: Graph
+        "building_graph": DiagramStatus.VALIDATED_JUNCTIONS,
     }
 
     new_status = stage_to_status.get(diagram.error_stage, DiagramStatus.UPLOADED)

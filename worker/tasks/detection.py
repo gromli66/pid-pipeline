@@ -44,7 +44,7 @@ def detections_to_yolo_txt(detections: list) -> str:
     soft_time_limit=1740,  # 29 min - 1 min for cleanup before hard kill
     acks_late=True,
 )
-def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydraulics"):
+def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydraulics", model_id: str = None):
     """
     YOLO детекция с SAHI.
 
@@ -59,6 +59,7 @@ def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydrauli
     Args:
         diagram_uid: UUID диаграммы
         project_code: Код проекта для загрузки конфигурации (default: thermohydraulics)
+        model_id: ID модели детекции (None → default_model из конфига)
     """
     # Импорт SessionLocal (PYTHONPATH=/app настроен в Dockerfile.worker)
     from app.db.session import SessionLocal
@@ -119,14 +120,28 @@ def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydrauli
         print(f"[FILE] Image path: {image_path}")
 
         # ===== 4. YOLO детекция =====
-        weights_path = Path(project_config.yolo.weights)
+        model_cfg = project_config.detection.get_model(model_id)
+        effective_model_id = model_id or project_config.detection.default_model
+        print(f"[MODEL] Using detection model: '{effective_model_id}' ({model_cfg.name})")
+
+        weights_path = Path(model_cfg.weights)
         if not weights_path.is_absolute():
             # Относительный путь - относительно /app
             weights_path = Path("/app") / weights_path
 
+        # Per-class confidence: инференс с min(thresholds), потом фильтрация
+        base_confidence = model_cfg.confidence
+        if model_cfg.per_class_confidence:
+            min_conf = min(
+                base_confidence,
+                min(model_cfg.per_class_confidence.values()),
+            )
+        else:
+            min_conf = base_confidence
+
         detector = NodeDetector(
             weights=weights_path,
-            confidence=project_config.yolo.confidence,
+            confidence=min_conf,
             device=os.getenv("YOLO_DEVICE", "cuda"),
             use_sahi=True,
             apply_preprocessing=False,
@@ -138,8 +153,46 @@ def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydrauli
             apply_reverse_mapping=True,  # 34->35, 35->38
         )
 
+        detection_count_raw = len(detections)
+        print(f"[OK] Detected {detection_count_raw} objects (raw)")
+
+        # ===== 4.0.1. Per-class confidence фильтрация =====
+        if model_cfg.per_class_confidence:
+            before = len(detections)
+            filtered = []
+            for det in detections:
+                cls_name = det.get("class_name", "")
+                threshold = model_cfg.per_class_confidence.get(
+                    cls_name, base_confidence
+                )
+                if det.get("confidence", 1.0) >= threshold:
+                    filtered.append(det)
+            detections = filtered
+            dropped = before - len(detections)
+            if dropped > 0:
+                print(f"[FILTER] per_class_confidence: {dropped} dropped, {len(detections)} remaining")
+        else:
+            # Фильтрация по глобальному порогу если min_conf был ниже base
+            if min_conf < base_confidence:
+                detections = [
+                    d for d in detections
+                    if d.get("confidence", 1.0) >= base_confidence
+                ]
+
+        # ===== 4.1. Постпроцессинг: разрешение перекрытий =====
+        from modules.yolo_detector import resolve_overlaps
+
+        detections = resolve_overlaps(
+            detections,
+            mutual_overlap_threshold=0.7,
+        )
+
         detection_count = len(detections)
-        print(f"[OK] Detected {detection_count} objects")
+        suppressed = detection_count_raw - detection_count
+        if suppressed > 0:
+            print(f"[FILTER] resolve_overlaps: {suppressed} suppressed, {detection_count} remaining")
+        else:
+            print(f"[FILTER] resolve_overlaps: no overlaps found")
 
         # ===== 5. Сохраняем YOLO predictions =====
         detection_dir = storage_path / str(diagram_uid) / "detection"
@@ -228,6 +281,7 @@ def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydrauli
         # ===== 8. Обновляем диаграмму в БД =====
         diagram.status = DiagramStatus.DETECTED
         diagram.detection_count = detection_count
+        diagram.detection_model = effective_model_id
         diagram.cvat_task_id = cvat_task_id
         diagram.cvat_job_id = cvat_job_id
 
@@ -239,6 +293,7 @@ def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydrauli
             "status": "success",
             "diagram_uid": diagram_uid,
             "detection_count": detection_count,
+            "detection_model": effective_model_id,
             "cvat_task_id": cvat_task_id,
             "cvat_job_id": cvat_job_id,
         }

@@ -15,6 +15,7 @@ from modules.yolo_detector.detector import (
     NodeDetector,
     detections_to_yolo,
     detections_to_coco,
+    resolve_overlaps,
 )
 from modules.yolo_detector.config import CLASS_NAMES, CLASS_IDS, NUM_CLASSES
 
@@ -22,6 +23,7 @@ __all__ = [
     "NodeDetector",
     "detections_to_yolo",
     "detections_to_coco",
+    "resolve_overlaps",
     "CLASS_NAMES",
     "CLASS_IDS", 
     "NUM_CLASSES",

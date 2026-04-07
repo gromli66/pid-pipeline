@@ -23,17 +23,23 @@ class DiagramStatus(str, Enum):
     VALIDATING_BBOX = "validating_bbox"
     VALIDATED_BBOX = "validated_bbox"
     SEGMENTING = "segmenting"
-    SEGMENTED = "segmented"
     SKELETONIZING = "skeletonizing"
     SKELETONIZED = "skeletonized"
-    CLASSIFYING_JUNCTIONS = "classifying_junctions"
-    CLASSIFIED = "classified"
     VALIDATING_MASKS = "validating_masks"
     VALIDATED_MASKS = "validated_masks"
+    SKELETONIZING_FINAL = "skeletonizing_final"
+    SKELETONIZED_FINAL = "skeletonized_final"
+    DETECTING_JUNCTIONS = "detecting_junctions"
+    DETECTED_JUNCTIONS = "detected_junctions"
+    VALIDATING_JUNCTIONS = "validating_junctions"
+    VALIDATED_JUNCTIONS = "validated_junctions"
     BUILDING_GRAPH = "building_graph"
     BUILT = "built"
     VALIDATING_GRAPH = "validating_graph"
     VALIDATED_GRAPH = "validated_graph"
+    OCR_PROCESSING = "ocr_processing"
+    OCR_COMPLETED = "ocr_completed"
+    OCR_BOUND = "ocr_bound"
     GENERATING_FXML = "generating_fxml"
     COMPLETED = "completed"
     ERROR = "error"
@@ -81,18 +87,6 @@ class APIClient:
     HTTP клиент для P&ID Pipeline API.
 
     Persistent connection с автоматическим retry при потере связи.
-
-    Использование:
-        client = APIClient("http://localhost:8000")
-
-        # Загрузить диаграмму
-        info = client.upload_diagram("path/to/image.png", "thermohydraulics")
-
-        # Запустить детекцию
-        client.start_detection(info.uid)
-
-        # Получить статус
-        status = client.get_status(info.uid)
     """
 
     def __init__(
@@ -316,7 +310,7 @@ class APIClient:
 
         Args:
             uid: UUID диаграммы
-            artifact_type: Тип артефакта (original_image, yolo_predicted, yolo_validated, coco_validated)
+            artifact_type: Тип артефакта (original_image, yolo_predicted, etc.)
             dest_path: Путь для сохранения файла
 
         Returns:
@@ -336,9 +330,16 @@ class APIClient:
 
     # === Detection ===
 
-    def start_detection(self, uid: str) -> Dict[str, Any]:
+    def start_detection(self, uid: str, model_id: str = None) -> Dict[str, Any]:
         """Запустить YOLO детекцию."""
-        return self._request("POST", f"/api/detection/{uid}/detect")
+        params = {}
+        if model_id:
+            params["model_id"] = model_id
+        return self._request("POST", f"/api/detection/{uid}/detect", params=params)
+
+    def get_detection_models(self, project_code: str) -> Dict[str, Any]:
+        """Получить список доступных моделей детекции."""
+        return self._request("GET", f"/api/projects/{project_code}/detection-models")
 
     # === CVAT ===
 
@@ -369,6 +370,215 @@ class APIClient:
         """Запустить скелетизацию."""
         return self._request("POST", f"/api/skeleton/{uid}/skeletonize")
 
+    # === Mask Validation (Phase 4) ===
+
+    def start_mask_validation(self, uid: str) -> Dict[str, Any]:
+        """Начать валидацию масок (SKELETONIZED → VALIDATING_MASKS)."""
+        return self._request("POST", f"/api/validation/{uid}/masks/start")
+
+    def upload_validated_mask(
+        self, uid: str, mask_type: str, file_path: Path
+    ) -> Dict[str, Any]:
+        """
+        Загрузить валидированную маску.
+
+        Args:
+            uid: UUID диаграммы
+            mask_type: junction_mask_validated | bridge_mask_validated | pipe_mask_validated
+            file_path: путь к PNG файлу
+        """
+        file_path = Path(file_path)
+        with open(file_path, "rb") as f:
+            files = {"file": (file_path.name, f, "image/png")}
+            data = {"mask_type": mask_type}
+            return self._request(
+                "POST",
+                f"/api/validation/{uid}/masks/upload",
+                files=files,
+                data=data,
+                timeout=120.0,
+            )
+
+    def upload_updated_nodes(
+        self, uid: str, file_path: Path
+    ) -> Dict[str, Any]:
+        """
+        Upload updated coco_validated.json and regenerate node_mask.
+
+        Used when user adds/removes equipment nodes during pipe mask validation.
+
+        Args:
+            uid: UUID диаграммы
+            file_path: путь к обновлённому coco_validated.json
+        """
+        file_path = Path(file_path)
+        with open(file_path, "rb") as f:
+            files = {"file": (file_path.name, f, "application/json")}
+            return self._request(
+                "POST",
+                f"/api/validation/{uid}/nodes/update",
+                files=files,
+                timeout=120.0,
+            )
+
+    def complete_mask_validation(self, uid: str) -> Dict[str, Any]:
+        """
+        Завершить валидацию масок.
+
+        Проверяет наличие pipe mask, переводит в VALIDATED_MASKS,
+        автоматически запускает task_skeletonize_simple → task_detect_junctions.
+        """
+        return self._request("POST", f"/api/validation/{uid}/masks/complete")
+
+    # === Junction Validation ===
+
+    def start_junction_validation(self, uid: str) -> Dict[str, Any]:
+        """Начать валидацию перекрёстков (DETECTED_JUNCTIONS → VALIDATING_JUNCTIONS)."""
+        return self._request("POST", f"/api/validation/{uid}/junctions/start")
+
+    def complete_junction_validation(self, uid: str) -> Dict[str, Any]:
+        """
+        Завершить валидацию перекрёстков.
+
+        Копирует junction/bridge маски как validated, переводит в VALIDATED_JUNCTIONS,
+        автоматически запускает task_build_graph.
+        """
+        return self._request("POST", f"/api/validation/{uid}/junctions/complete")
+
+    # === Graph ===
+
+    def build_graph(self, uid: str) -> Dict[str, Any]:
+        """
+        Запустить построение графа.
+
+        Проверяет наличие SKELETON_FINAL, переводит в BUILDING_GRAPH,
+        запускает task_build_graph через Celery.
+        """
+        return self._request("POST", f"/api/graph/{uid}/build")
+
+    def get_graph_result(self, uid: str) -> Dict[str, Any]:
+        """Получить результат построения графа (node_count, edge_count, artifacts)."""
+        return self._request("GET", f"/api/graph/{uid}/result")
+
+    # === Graph Validation (Phase 5) ===
+
+    def start_graph_validation(self, uid: str) -> Dict[str, Any]:
+        """Начать валидацию графа (BUILT → VALIDATING_GRAPH)."""
+        return self._request("POST", f"/api/validation/{uid}/graph/start")
+
+    def upload_validated_graph(self, uid: str, file_path: Path) -> Dict[str, Any]:
+        """
+        Загрузить валидированный граф.
+
+        Args:
+            uid: UUID диаграммы
+            file_path: путь к JSON файлу графа
+        """
+        file_path = Path(file_path)
+        with open(file_path, "rb") as f:
+            files = {"file": (file_path.name, f, "application/json")}
+            return self._request(
+                "POST",
+                f"/api/validation/{uid}/graph/save",
+                files=files,
+                timeout=120.0,
+            )
+
+    def complete_graph_validation(self, uid: str) -> Dict[str, Any]:
+        """
+        Завершить валидацию графа.
+
+        Проверяет наличие graph_validated, переводит в VALIDATED_GRAPH,
+        автоматически запускает генерацию FXML.
+        """
+        return self._request("POST", f"/api/validation/{uid}/graph/complete")
+
+    def generate_fxml(self, uid: str, page_size: str = None) -> Dict[str, Any]:
+        """
+        Запустить генерацию FXML из валидированного графа.
+
+        Args:
+            uid: UUID диаграммы
+            page_size: 'A4', 'A3', 'A2', 'A1', 'A0' или None
+
+        VALIDATED_GRAPH → GENERATING_FXML → COMPLETED.
+        """
+        params = {}
+        if page_size:
+            params["page_size"] = page_size
+        return self._request("POST", f"/api/graph/{uid}/generate-fxml", params=params)
+
+    # === OCR ===
+
+    def complete_simple_graph_validation(self, uid: str) -> Dict[str, Any]:
+        """
+        Завершить Simple-валидацию графа → запустить OCR.
+
+        VALIDATING_GRAPH → VALIDATED_GRAPH → auto-start OCR.
+        """
+        return self._request("POST", f"/api/validation/{uid}/graph/complete-simple")
+
+    def start_ocr(self, uid: str) -> Dict[str, Any]:
+        """Ручной запуск/retry OCR."""
+        return self._request("POST", f"/api/ocr/{uid}/start")
+
+    def get_ocr_status(self, uid: str) -> Dict[str, Any]:
+        """Получить статус OCR."""
+        return self._request("GET", f"/api/ocr/{uid}/status")
+
+    def download_ocr_result(self, uid: str, dest: Path) -> Path:
+        """Скачать OCR результат."""
+        response = self._request_raw("GET", f"/api/ocr/{uid}/result", timeout=60.0)
+        dest = Path(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(response.content)
+        return dest
+
+    def upload_ocr_result(self, uid: str, path: Path) -> Dict[str, Any]:
+        """Обновить OCR результат (после слияния блоков)."""
+        path = Path(path)
+        with open(path, "rb") as f:
+            files = {"file": (path.name, f, "application/json")}
+            return self._request("PUT", f"/api/ocr/{uid}/result", files=files)
+
+    def save_ocr_binding(self, uid: str, path: Path) -> Dict[str, Any]:
+        """Сохранить привязки OCR → граф."""
+        path = Path(path)
+        with open(path, "rb") as f:
+            files = {"file": (path.name, f, "application/json")}
+            return self._request("POST", f"/api/ocr/{uid}/binding/save", files=files)
+
+    def download_ocr_binding(self, uid: str, dest: Path) -> Path:
+        """Скачать привязки OCR."""
+        response = self._request_raw("GET", f"/api/ocr/{uid}/binding", timeout=60.0)
+        dest = Path(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(response.content)
+        return dest
+
+    def apply_ocr_binding(self, uid: str) -> Dict[str, Any]:
+        """Применить привязки к графу."""
+        return self._request("POST", f"/api/ocr/{uid}/binding/apply")
+
+    def save_ocr_validation(self, uid: str, path: Path) -> Dict[str, Any]:
+        """Сохранить результаты валидации OCR-блоков."""
+        path = Path(path)
+        with open(path, "rb") as f:
+            files = {"file": (path.name, f, "application/json")}
+            return self._request("POST", f"/api/ocr/{uid}/validation/save", files=files)
+
+    def download_ocr_validation(self, uid: str, dest: Path) -> Path:
+        """Скачать результаты валидации OCR."""
+        response = self._request_raw("GET", f"/api/ocr/{uid}/validation", timeout=60.0)
+        dest = Path(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(response.content)
+        return dest
+
+    def rollback_diagram(self, uid: str, target_status: str) -> Dict[str, Any]:
+        """Откатить диаграмму до указанного этапа."""
+        return self._request("POST", f"/api/diagrams/{uid}/rollback?target_status={target_status}")
+
     # === Projects ===
 
     def list_projects(self) -> List[Dict[str, Any]]:
@@ -379,6 +589,14 @@ class APIClient:
         except APIError:
             # Fallback если API проектов не работает
             return [{"code": "thermohydraulics", "name": "Термогидравлика"}]
+
+    def get_project_classes(self, project_code: str) -> Dict[str, Any]:
+        """Получить список классов проекта.
+
+        Returns:
+            {"project_code": "...", "num_classes": N, "classes": [{"id": N, "name": "..."}, ...]}
+        """
+        return self._request("GET", f"/api/projects/{project_code}/classes")
 
     # === Operations ===
 

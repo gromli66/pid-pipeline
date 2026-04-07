@@ -1,0 +1,401 @@
+# =============================================================================
+# Маппинг классов детекции → KKS Equipment Unit codes (A1A2)
+# На основе PAKSII-PMM-01.1.01.01 (Rules of A-Numbering)
+# =============================================================================
+#
+# Логика привязки:
+#   1. OCR распознаёт KKS рядом с узлом графа
+#   2. Из KKS извлекается unit code (A1A2) — например AA, CP, BR
+#   3. Проверяется: допустим ли этот unit code для данного класса узла?
+#   4. Если да → привязка валидна. Если нет → предупреждение оператору.
+#
+# expected_units — какие A1A2 коды ожидаются для этого класса
+# kks_target — "node" (привязка к узлу) или "edge" (к ребру) или "none" (не участвует)
+
+class_to_kks:
+
+  # =========================================================================
+  # АРМАТУРА (Valves) → AA
+  # =========================================================================
+
+  armatura_ruchn:
+    description: "Ручная арматура"
+    kks_target: "node"
+    expected_units: ["AA"]
+    expected_ranges:
+      AA: [1-99, 251-299, 301-399, 501-599, 901-999]
+    note: "Ручные клапаны: основные (001-099, 901-999), регулирующие (251-299), измерительные (301-399), дренаж/вентиляция (501-599)"
+
+  armatura_electro:
+    description: "Арматура с электроприводом"
+    kks_target: "node"
+    expected_units: ["AA"]
+    expected_ranges:
+      AA: [101-199, 201-249]
+    note: "Дистанционные клапаны с электро/гидро/пневмоприводом (101-199), регулирующие (201-249)"
+
+  armatura_seroprivod:
+    description: "Арматура с серво-приводом"
+    kks_target: "node"
+    expected_units: ["AA"]
+    expected_ranges:
+      AA: [101-199, 201-249]
+    note: "Серво-приводная арматура = дистанционные клапаны"
+
+  armatura_membr_electro:
+    description: "Мембранная арматура с электроприводом"
+    kks_target: "node"
+    expected_units: ["AA"]
+    expected_ranges:
+      AA: [101-199, 201-249]
+    note: "Мембранная дистанционная арматура"
+
+  klapan_obratn:
+    description: "Обратный клапан"
+    kks_target: "node"
+    expected_units: ["AA"]
+    expected_ranges:
+      AA: [601-699]
+    note: "Check valves, non-return valves"
+
+  klapan_obratn_seroprivod:
+    description: "Обратный клапан с сервоприводом"
+    kks_target: "node"
+    expected_units: ["AA"]
+    expected_ranges:
+      AA: [601-699]
+    note: "Управляемый обратный клапан"
+
+  predohran:
+    description: "Предохранительный клапан"
+    kks_target: "node"
+    expected_units: ["AA"]
+    expected_ranges:
+      AA: [401-449]
+    note: "Safety valves"
+
+  # =========================================================================
+  # РЕГУЛЯТОРЫ (Control valves) → AA (201-299)
+  # =========================================================================
+
+  regulator_ruchn:
+    description: "Ручной регулятор"
+    kks_target: "node"
+    expected_units: ["AA"]
+    expected_ranges:
+      AA: [251-299]
+    note: "Manually operated control valves"
+
+  regulator_electro:
+    description: "Регулятор с электроприводом"
+    kks_target: "node"
+    expected_units: ["AA"]
+    expected_ranges:
+      AA: [201-249]
+    note: "Remote operated control valves"
+
+  regulator_seroprivod:
+    description: "Регулятор с сервоприводом"
+    kks_target: "node"
+    expected_units: ["AA"]
+    expected_ranges:
+      AA: [201-249]
+    note: "Servo-operated control valves"
+
+  # =========================================================================
+  # НАСОСЫ, ПРИВОДЫ → AP, AT
+  # =========================================================================
+
+  nasos:
+    description: "Насос"
+    kks_target: "node"
+    expected_units: ["AP"]
+    expected_ranges:
+      AP: [1-999]
+    note: "Pumps"
+
+  vodostruiniy_nasos:
+    description: "Водоструйный насос (эжектор)"
+    kks_target: "node"
+    expected_units: ["AP"]
+    expected_ranges:
+      AP: [1-999]
+    note: "Water jet pump / ejector"
+
+  ventilaytor:
+    description: "Вентилятор"
+    kks_target: "node"
+    expected_units: ["AT"]
+    expected_ranges:
+      AT: [1-999]
+    note: "Fan / ventilator — drives category"
+
+  # =========================================================================
+  # ЁМКОСТИ, ТЕПЛООБМЕННИКИ → BB, AC
+  # =========================================================================
+
+  bak:
+    description: "Бак / ёмкость"
+    kks_target: "node"
+    expected_units: ["BB"]
+    expected_ranges:
+      BB: [1-99]
+    note: "Tanks, vessels"
+
+  voronka:
+    description: "Воронка"
+    kks_target: "node"
+    expected_units: ["BB"]
+    expected_ranges:
+      BB: [401-499, 501-599]
+    note: "Funnel traps, internal drain funnels"
+
+  teploobmen:
+    description: "Теплообменник"
+    kks_target: "node"
+    expected_units: ["AC"]
+    expected_ranges:
+      AC: [1-999]
+    note: "Heat exchanger — general equipment"
+
+  dearator:
+    description: "Деаэратор"
+    kks_target: "node"
+    expected_units: ["BB", "AC"]
+    expected_ranges:
+      BB: [1-99]
+      AC: [1-999]
+    note: "Deaerator — vessel or general equipment"
+
+  separator:
+    description: "Сепаратор"
+    kks_target: "node"
+    expected_units: ["AC"]
+    expected_ranges:
+      AC: [1-999]
+    note: "Separator"
+
+  separator_paro:
+    description: "Сепаратор-пароперегреватель"
+    kks_target: "node"
+    expected_units: ["AC"]
+    expected_ranges:
+      AC: [1-999]
+    note: "Steam separator-superheater"
+
+  kapleulov:
+    description: "Каплеуловитель"
+    kks_target: "node"
+    expected_units: ["AC"]
+    expected_ranges:
+      AC: [1-999]
+    note: "Droplet catcher"
+
+  condensatootvod:
+    description: "Конденсатоотводчик"
+    kks_target: "node"
+    expected_units: ["AC"]
+    expected_ranges:
+      AC: [1-999]
+    note: "Condensate trap"
+
+  # =========================================================================
+  # СПЕЦИАЛЬНОЕ ОБОРУДОВАНИЕ → AC, AA
+  # =========================================================================
+
+  drossel:
+    description: "Дроссельная шайба"
+    kks_target: "node"
+    expected_units: ["AA", "AC",  "BP"]
+    expected_ranges:
+      AA: [701-799]
+      AC: [1-999]
+    note: "Throttle — specialized valve or equipment"
+
+  rashodomernaya_shaiba:
+    description: "Расходомерная шайба"
+    kks_target: "node"
+    expected_units: ["CF"]
+    expected_ranges:
+      CF: [1-999]
+    note: "Flow measurement orifice plate"
+
+  filtr_meh:
+    description: "Механический фильтр"
+    kks_target: "node"
+    expected_units: ["AC"]
+    expected_ranges:
+      AC: [1-999]
+    note: "Mechanical filter"
+
+  perehod:
+    description: "Переход (редукция)"
+    kks_target: "none"
+    expected_units: []
+    note: "Reducer/transition — не имеет собственного KKS, является частью трубопровода"
+
+  zaglushka:
+    description: "Заглушка"
+    kks_target: "none"
+    expected_units: []
+    note: "Blind flange — не имеет собственного KKS"
+
+  gidrozatvor:
+    description: "Гидрозатвор"
+    kks_target: "node"
+    expected_units: ["AC"]
+    expected_ranges:
+      AC: [1-999]
+    note: "Hydraulic seal"
+
+  silfonnii_kompensator:
+    description: "Сильфонный компенсатор"
+    kks_target: "none"
+    expected_units: []
+    note: "Bellows compensator — часть трубопровода, не имеет KKS"
+
+  electronagrevat:
+    description: "Электронагреватель"
+    kks_target: "node"
+    expected_units: ["AH"]
+    expected_ranges:
+      AH: [401-499, 501-599, 901-999]
+    note: "Electric heater"
+
+  smotrowoe_steclo:
+    description: "Смотровое стекло"
+    kks_target: "none"
+    expected_units: []
+    note: "Sight glass — часть трубопровода"
+
+  celindr_turb:
+    description: "Цилиндр турбины"
+    kks_target: "node"
+    expected_units: ["AT"]
+    expected_ranges:
+      AT: [1-999]
+    note: "Turbine cylinder"
+
+  redukcion_ustr:
+    description: "Редукционное устройство"
+    kks_target: "node"
+    expected_units: ["AA"]
+    expected_ranges:
+      AA: [701-799]
+    note: "Reduction device — specialized valve"
+
+  bistro_redukc_ustr:
+    description: "Быстродействующее редукционное устройство"
+    kks_target: "node"
+    expected_units: ["AA"]
+    expected_ranges:
+      AA: [701-799]
+    note: "Fast-acting reduction device"
+
+  # =========================================================================
+  # ПРИБОРЫ (Instruments) → C* (CF, CG, CL, CM, CP, CQ, CR, CT, CY)
+  # =========================================================================
+
+  datchik:
+    description: "Датчик / измерительный прибор"
+    kks_target: "node"
+    expected_units: ["CF", "CG", "CL", "CM", "CP", "CQ", "CR", "CT", "CY"]
+    note: "Любой измерительный прибор: CF=расход, CG=положение, CL=уровень, CM=влажность, CP=давление, CR=радиация, CT=температура, CY=прочие"
+
+  # =========================================================================
+  # ТРУБОПРОВОДЫ → BR (привязка к РЁБРАМ графа)
+  # =========================================================================
+
+  truba:
+    description: "Трубопровод"
+    kks_target: "none"
+    expected_units: []
+    note: "Визуальное представление трубы. KKS BR привязывается к РЕБРУ графа, а не к классу truba"
+
+  # =========================================================================
+  # НЕ УЧАСТВУЮТ В KKS
+  # =========================================================================
+
+  annotation:
+    description: "Аннотация / выноска"
+    kks_target: "none"
+    expected_units: []
+    note: "Text annotation — не оборудование"
+
+  output:
+    description: "Вход/выход из листа"
+    kks_target: "none"
+    expected_units: []
+    note: "Sheet connection — не оборудование"
+
+  strelka:
+    description: "Стрелка направления потока"
+    kks_target: "none"
+    expected_units: []
+    note: "Flow direction arrow — не оборудование"
+
+  unknow:
+    description: "Неизвестный объект — переклассифицируется по KKS"
+    kks_target: "reclassify"
+    expected_units: ["AA", "AC", "AP", "AT", "BB", "CF", "CG", "CL", "CM", "CP", "CQ", "CR", "CT", "CY", "AH", "GF", "GH"]
+    note: >
+      Обратный маппинг: если рядом с unknow есть KKS, а у KKS нет
+      подходящего узла оборудования поблизости — unknow меняет свой класс
+      на класс, соответствующий unit code из KKS.
+      Пример: KKS 50KAA10AA001 (unit=AA) рядом с unknow → unknow становится armatura.
+    reclassify_rules:
+      AA: "armatura_electro"
+      AC: "teploobmen"
+      AH: "electronagrevat"
+      AP: "nasos"
+      AT: "celindr_turb"
+      BB: "bak"
+      CF: "rashodomernaya_shaiba"
+      CG: "datchik"
+      CL: "datchik"
+      CM: "datchik"
+      CP: "datchik"
+      CQ: "datchik"
+      CR: "datchik"
+      CT: "datchik"
+      CY: "datchik"
+      GF: "datchik"
+      GH: "datchik"
+
+  background:
+    description: "Фон"
+    kks_target: "none"
+    expected_units: []
+    note: "Background — не оборудование"
+
+# =============================================================================
+# Сводная таблица: unit_code → допустимые классы детекции
+# =============================================================================
+# Обратный маппинг (для быстрой валидации)
+unit_to_classes:
+  AA: [armatura_ruchn, armatura_electro, armatura_seroprivod, armatura_membr_electro,
+       klapan_obratn, klapan_obratn_seroprivod, predohran,
+       regulator_ruchn, regulator_electro, regulator_seroprivod,
+       drossel, redukcion_ustr, bistro_redukc_ustr]
+  AC: [teploobmen, dearator, separator, separator_paro, kapleulov,
+       condensatootvod, drossel, filtr_meh, gidrozatvor]
+  AH: [electronagrevat]
+  AP: [nasos, vodostruiniy_nasos]
+  AT: [ventilaytor, celindr_turb]
+  BB: [bak, voronka, dearator]
+  BR: []  # привязка к ребру графа, не к узлу
+  BP: [drossel]
+  CF: [rashodomernaya_shaiba, datchik]
+  CG: [datchik]
+  CL: [datchik]
+  CM: [datchik]
+  CP: [datchik]
+  CQ: [datchik]
+  CR: [datchik]
+  CT: [datchik]
+  CY: [datchik]
+  GF: []
+  GH: []
+
+# Если unit_to_classes[unit] пуст или ни один класс не найден рядом →
+# KKS привязывается к unknow и unknow переклассифицируется через reclassify_rules

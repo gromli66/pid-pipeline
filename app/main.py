@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.logging import setup_logging, get_logger
 from app.db import async_engine, get_async_db
-from app.api import projects, diagrams, detection, cvat, segmentation, skeleton, junction, graph, validation
+from app.api import projects, diagrams, detection, cvat, segmentation, skeleton, junction, graph, validation, ocr, rollback
 
 # Настройка логирования (DEBUG по умолчанию, переключается через LOG_LEVEL в .env)
 setup_logging(level=settings.LOG_LEVEL)
@@ -88,6 +88,8 @@ app.include_router(skeleton.router, prefix="/api/skeleton", tags=["Skeleton"])
 app.include_router(junction.router, prefix="/api/junction", tags=["Junction"])
 app.include_router(graph.router, prefix="/api/graph", tags=["Graph"])
 app.include_router(validation.router, prefix="/api/validation", tags=["Validation"])
+app.include_router(ocr.router, prefix="/api/ocr", tags=["OCR"])
+app.include_router(rollback.router, prefix="/api/diagrams", tags=["Rollback"])
 
 
 @app.get("/", tags=["Root"])

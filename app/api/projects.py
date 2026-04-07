@@ -149,6 +149,8 @@ async def get_project_config(
         num_classes=config.num_classes,
         yolo_num_classes=config.yolo.num_classes,
         yolo_weights=config.yolo.weights,
+        detection_models_count=len(config.detection.models),
+        default_detection_model=config.detection.default_model,
     )
 
 
@@ -166,4 +168,31 @@ async def get_project_classes(
         "project_code": project_code,
         "num_classes": config.num_classes,
         "classes": [{"id": c.id, "name": c.name} for c in config.classes],
+    }
+
+
+@router.get("/{project_code}/detection-models")
+async def get_detection_models(
+    project_code: str,
+    loader: ProjectLoader = Depends(get_project_loader),
+):
+    """Получить список доступных моделей детекции для проекта."""
+    config = loader.load(project_code)
+    if not config:
+        raise HTTPException(status_code=404, detail=f"Project config not found: {project_code}")
+
+    return {
+        "project_code": project_code,
+        "default_model": config.detection.default_model,
+        "models": [
+            {
+                "id": mid,
+                "name": m.name or mid,
+                "type": m.type,
+                "description": m.description,
+                "confidence": m.confidence,
+                "has_per_class_confidence": bool(m.per_class_confidence),
+            }
+            for mid, m in config.detection.models.items()
+        ],
     }

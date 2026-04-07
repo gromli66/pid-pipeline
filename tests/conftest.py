@@ -1,0 +1,41 @@
+"""
+Test configuration — neutralize async engine before any app imports.
+"""
+import os
+import sys
+from pathlib import Path
+from unittest.mock import MagicMock
+
+# Add project root
+PROJECT_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+# Set test env vars BEFORE any app import
+os.environ["DATABASE_URL"] = "sqlite:///test.db"
+os.environ["STORAGE_PATH"] = "/tmp/test_storage"
+os.environ["PROJECTS_CONFIG_DIR"] = "/tmp/test_configs"
+os.environ["CELERY_BROKER_URL"] = "redis://localhost:6380/0"
+
+# Monkeypatch create_async_engine to return a mock
+# This prevents the crash when app.db.session is imported
+import sqlalchemy.ext.asyncio as _asyncio_mod
+_original_create_async_engine = _asyncio_mod.create_async_engine
+_asyncio_mod.create_async_engine = lambda *a, **kw: MagicMock()
+
+# Also patch async_sessionmaker
+import sqlalchemy.ext.asyncio as _asyncio_mod2
+if hasattr(_asyncio_mod2, 'async_sessionmaker'):
+    _original_async_sessionmaker = _asyncio_mod2.async_sessionmaker
+    _asyncio_mod2.async_sessionmaker = lambda *a, **kw: MagicMock()
+
+# Now safe to import app modules
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+_test_engine = create_engine("sqlite:///:memory:", echo=False)
+_test_session_factory = sessionmaker(bind=_test_engine)
+
+# Patch session module after it's imported
+import app.db.session as _session_mod
+_session_mod.engine = _test_engine
+_session_mod.SessionLocal = _test_session_factory

@@ -1,0 +1,187 @@
+# =============================================================================
+# P&ID Node Detection - Ensemble Configuration
+# =============================================================================
+#
+# Конфиг для обучения ансамбля моделей на разных tile_size.
+# Все пути относительно рабочей директории: C:\project\pid\pid\app
+#
+# ЗАПУСК:
+#   cd C:\project\pid\pid\app
+#   python -m pid_node_detection ensemble-train --config pid_node_detection/config/ensemble.yaml --tile-sizes 640 1280 2048 --name ensemble_v1
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# ПУТИ К ДАННЫМ
+# -----------------------------------------------------------------------------
+paths:
+  # Входные данные
+  raw_images: "./data/raw/images"
+  raw_labels: "./data/raw/labels"
+
+  # Маски труб для CPA (аннотационных масок нет)
+  pipe_masks: "./data_seg_pipe/dataset/masks/pipes"
+  annotation_masks: "./data/masks/annotations"  # не существует — CPA будет без неё
+
+  # Выходные данные
+  work_dir: "./data_yolo_node/processed"
+  dataset_dir: "./data_yolo_node/dataset"
+  experiments_dir: "./result_yolo_node/experiments"
+  inference_output: "./result_yolo_node/output/predictions"
+  statistics_dir: "./result_yolo_node/output/statistics"
+
+# -----------------------------------------------------------------------------
+# ПРЕДОБРАБОТКА
+# -----------------------------------------------------------------------------
+preprocessing:
+  grayscale: true
+  image_extensions:
+    - ".png"
+    - ".jpg"
+    - ".jpeg"
+
+# -----------------------------------------------------------------------------
+# РАЗБИЕНИЕ ДАННЫХ
+# -----------------------------------------------------------------------------
+splitting:
+  test_ratio: 0.2
+  val_ratio: 0.3
+  random_seed: 42
+  stratified: true
+
+# -----------------------------------------------------------------------------
+# ТАЙЛИНГ
+# -----------------------------------------------------------------------------
+# Базовые параметры — EnsembleTrainPipeline перезаписывает tile_size и overlap
+# из пресетов TILE_SIZE_PRESETS для каждой модели
+tiling:
+  tile_size: 1280
+  overlap: 0.25
+  min_visible_ratio: 0.6
+  keep_empty_ratio: 0.1
+  create_forbidden_masks: true
+  forbidden_mask_dilation: 7
+
+# -----------------------------------------------------------------------------
+# АУГМЕНТАЦИЯ
+# -----------------------------------------------------------------------------
+augmentation:
+  copy_paste:
+    enabled: true
+    placement_rules:
+      full_visible: 0.70
+      partial_80_90: 0.20
+      occlusion: 0.10
+    max_attempts: 50
+    forbidden_threshold: 0.10
+    min_object_size: 20
+    internal_augmentation:
+      rotation_angles: [0, 90, 180, 270]
+      brightness_range: [-15, 15]
+      brightness_prob: 0.5
+      thickness_prob: 0.3
+      thickness_operations: ["erode", "dilate"]
+      thickness_kernel_sizes: [2, 3]
+      binarization_prob: 0.2
+    synthetic_tiles:
+      enabled: true
+      max_tiles: 300
+      objects_per_tile: [3, 8]
+
+  rotation:
+    enabled: true
+    mode: "all"
+    angles: [90, 180, 270]
+
+# -----------------------------------------------------------------------------
+# ОБУЧЕНИЕ
+# -----------------------------------------------------------------------------
+# Базовые параметры — EnsembleTrainPipeline перезаписывает imgsz и batch_size
+# из пресетов для каждого tile_size
+training:
+  model: "yolov8m.pt"
+  epochs: 100
+  batch_size: 4
+  img_size: 1280
+  patience: 25
+  optimizer: "AdamW"
+  lr0: 0.001
+  lrf: 0.01
+  weight_decay: 0.0005
+  loss_weights:
+    box: 7.5
+    cls: 0.5
+    dfl: 1.5
+  builtin_augmentation:
+    enabled: true
+    degrees: 0
+    translate: 0.05
+    scale: 0.15
+    flipud: 0
+    fliplr: 0
+    mosaic: 0
+    mixup: 0
+  save_period: 10
+  device: 0
+
+# -----------------------------------------------------------------------------
+# FINETUNE
+# -----------------------------------------------------------------------------
+finetune:
+  weights: "./result_yolo_node/experiments/baseline_start/weights/best.pt"
+  old_images: "./data/raw/images"
+  old_labels: "./data/raw/labels"
+  new_images: "./data/finetune/images"
+  new_labels: "./data/finetune/labels"
+  val_ratio: 0.15
+  test_count_per_source: 2
+  lr0: 0.0001
+  epochs: 20
+  patience: 10
+
+# -----------------------------------------------------------------------------
+# ИНФЕРЕНС
+# -----------------------------------------------------------------------------
+inference:
+  weights: "./result_yolo_node/experiments/ensemble_v1_ensemble.yaml"
+  use_sahi: true
+  confidence_threshold: 0.5
+  iou_threshold: 0.5
+  device: "cuda"
+  adaptive_slicing:
+    enabled: true
+    size_table:
+      5000:  [1280, 0.25]
+      8000:  [1280, 0.25]
+      11000: [1280, 0.25]
+      16000: [1280, 0.25]
+      23000: [1280, 0.25]
+      99999: [1280, 0.25]
+  fixed_slicing:
+    slice_size: 1280
+    overlap: 0.25
+  apply_reverse_mapping: true
+
+# -----------------------------------------------------------------------------
+# ОЦЕНКА МОДЕЛИ
+# -----------------------------------------------------------------------------
+evaluation:
+  iou_threshold: 0.5
+  confidence_thresholds:
+    - 0.5
+    - 0.6
+    - 0.7
+    - 0.8
+    - 0.9
+  save_confusion_matrix: true
+  save_per_class_metrics: true
+  visualization:
+    save_predictions: true
+    max_images: 20
+
+# -----------------------------------------------------------------------------
+# СТАТИСТИКА
+# -----------------------------------------------------------------------------
+statistics:
+  rare_threshold: 50
+  save_intermediate: true

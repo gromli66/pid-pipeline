@@ -1,0 +1,82 @@
+# ===== P&ID Graph Builder Configuration =====
+
+# ===== ВХОДНЫЕ ДИРЕКТОРИИ =====
+# Заполните пути к вашим данным
+paths:
+  # Маски узлов (оборудование)
+  equipment_masks: "C:/project/pid/pid/app/data/test_validation/node_masks"  # /path/to/equipment/masks
+  
+  # Маски соединений (connections)
+  connection_masks: "C:/project/pid/pid/app/data/test_validation/junctions/masks/junctions"  # /path/to/connection/masks
+
+  # Маски поворотов (turns) - опционально, объединяется с connections
+  turn_masks: ""  # /path/to/turn/masks
+  
+  # Маски мостов (bridges)
+  bridge_masks: "C:/project/pid/pid/app/data/test_validation/junctions/masks/bridges"  # /path/to/bridge/masks
+  
+  # Скелеты труб
+  skeletons: "C:/project/pid/pid/app/data/test_validation/skeleton_val" # /path/to/skeletons
+  
+  # Оригинальные изображения (для фона визуализации) - опционально
+  original_images: "C:/project/pid/pid/app/data/test_validation/images" # /path/to/original/images
+  
+  # Выходная директория
+  output_dir: "C:/project/pid/pid/app/data/test_validation/graph_batch_pach"
+
+# ===== РАЗМЕТКА КЛАССОВ УЗЛОВ =====
+labels:
+  # Формат разметки: "yolo" или "coco"
+  format: "coco"
+  
+  # Путь к YOLO разметке (для format: "yolo")
+  # Директория с .txt файлами
+  yolo_labels_dir: "./data/pages_test_3_labels"
+  
+  # Путь к COCO JSON (для format: "coco")
+  # Один файл со всеми аннотациями
+  coco_annotations: "C:/project/pid/pid/app/data/test_validation/instances_default.json"
+
+
+# ===== ПАРАМЕТРЫ ПОСТРОЕНИЯ ГРАФА =====
+graph:
+  # Минимальная длина концевого ребра (пиксели)
+  # Рёбра короче будут удалены как шум
+  min_spur_length: 5
+  
+  # Максимальная длина пути (защита от зацикливания)
+  max_path_length: 10000
+  
+  # Дилатация узлов для поиска контактных точек
+  node_dilation: 0
+
+# ===== ВИЗУАЛИЗАЦИЯ =====
+visualization:
+  # DPI выходных изображений
+  dpi: 150
+  
+  # Показывать ID узлов на визуализации
+  show_labels: false
+  
+  # Сохранять статистику (гистограммы)
+  save_stats: false
+  
+  # Сохранять отладочные изображения
+  debug_isolated: true
+  debug_contacts: true
+
+# ===== JSON ЭКСПОРТ =====
+export:
+  # Формат JSON: node-link | adjacency | cytoscape
+  json_format: "node-link"
+  
+  # Включать полные пути рёбер (координаты пикселей)
+  include_paths: false
+
+# ===== ОБРАБОТКА =====
+processing:
+  # Количество параллельных процессов (1 = последовательно)
+  workers: 1
+  
+  # Подробный вывод
+  verbose: false

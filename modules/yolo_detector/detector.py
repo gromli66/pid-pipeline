@@ -32,11 +32,11 @@ class NodeDetector:
     # Адаптивные параметры слайсинга: max_dim -> (slice_size, overlap)
     ADAPTIVE_PARAMS = {
         5000: (1280, 0.25),
-        8000: (1600, 0.30),
-        11000: (1920, 0.35),
-        16000: (2560, 0.40),
-        23000: (3200, 0.40),
-        99999: (4096, 0.45)
+        8000: (1280, 0.25),
+        11000: (1280, 0.25),
+        16000: (1280, 0.25),
+        23000: (1280, 0.25),
+        99999: (1280, 0.25),
     }
 
     # Параметры preprocessing (фиксированные, как при обучении)
@@ -421,3 +421,104 @@ def detections_to_coco(
         })
 
     return annotations
+
+
+def resolve_overlaps(
+    detections: List[Dict],
+    mutual_overlap_threshold: float = 0.7,
+) -> List[Dict]:
+    """
+    Разрешение перекрытий между детекциями после SAHI + NMS.
+
+    Проверяет каждую пару боксов на взаимное перекрытие (intersection / area).
+    Срабатывает только когда ОБОИМ боксам пересечение составляет значительную
+    долю площади (mutual overlap). Это отсекает ситуацию, когда большой бокс
+    покрывает маленький — там ratio для большого будет низким.
+
+    Правила разрешения:
+    - Одинаковый класс (A vs A): оставляем бокс с большей площадью.
+    - Разный класс (A vs B): оставляем бокс с большим confidence.
+
+    Args:
+        detections: Список детекций от NodeDetector.detect().
+            Каждая детекция — dict с ключами:
+            class_id, class_name, x_center, y_center, width, height,
+            confidence, bbox [x1, y1, x2, y2].
+        mutual_overlap_threshold: Порог для ОБОИХ ratio_i и ratio_j (0-1).
+            При 0.7 — оба бокса должны перекрываться на ≥70% своей площади.
+
+    Returns:
+        Отфильтрованный список детекций (без подавленных дубликатов).
+    """
+    if len(detections) <= 1:
+        return detections
+
+    n = len(detections)
+    suppressed = [False] * n
+
+    # Предвычисляем площади из bbox [x1, y1, x2, y2]
+    areas = []
+    for det in detections:
+        x1, y1, x2, y2 = det["bbox"]
+        areas.append((x2 - x1) * (y2 - y1))
+
+    for i in range(n):
+        if suppressed[i]:
+            continue
+
+        for j in range(i + 1, n):
+            if suppressed[j]:
+                continue
+
+            # Считаем intersection
+            x1_i, y1_i, x2_i, y2_i = detections[i]["bbox"]
+            x1_j, y1_j, x2_j, y2_j = detections[j]["bbox"]
+
+            inter_x1 = max(x1_i, x1_j)
+            inter_y1 = max(y1_i, y1_j)
+            inter_x2 = min(x2_i, x2_j)
+            inter_y2 = min(y2_i, y2_j)
+
+            if inter_x2 <= inter_x1 or inter_y2 <= inter_y1:
+                continue  # Нет пересечения
+
+            intersection = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
+
+            # Mutual overlap: доля пересечения для каждого бокса
+            area_i = areas[i]
+            area_j = areas[j]
+
+            if area_i <= 0 or area_j <= 0:
+                continue
+
+            ratio_i = intersection / area_i
+            ratio_j = intersection / area_j
+
+            # Срабатываем только при взаимном перекрытии
+            if ratio_i < mutual_overlap_threshold or ratio_j < mutual_overlap_threshold:
+                continue
+
+            # --- Разрешение конфликта ---
+            class_i = detections[i]["class_id"]
+            class_j = detections[j]["class_id"]
+
+            if class_i == class_j:
+                # Одинаковый класс → оставляем бокс с большей площадью
+                if area_i >= area_j:
+                    suppressed[j] = True
+                else:
+                    suppressed[i] = True
+                    break  # i подавлен, переходим к следующему i
+            else:
+                # Разный класс → оставляем бокс с большим confidence
+                conf_i = detections[i]["confidence"]
+                conf_j = detections[j]["confidence"]
+
+                if conf_i >= conf_j:
+                    suppressed[j] = True
+                else:
+                    suppressed[i] = True
+                    break  # i подавлен, переходим к следующему i
+
+    result = [det for det, sup in zip(detections, suppressed) if not sup]
+    return result

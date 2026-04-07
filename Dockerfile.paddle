@@ -1,0 +1,49 @@
+# =============================================================================
+# Dockerfile.paddle — PaddleOCR HTTP Service (без torch/CUDA)
+# =============================================================================
+# Чистый Python контейнер только для PaddleOCR recognition.
+# Без torch — не зависает на CPU inference.
+# =============================================================================
+
+FROM python:3.11-slim
+
+LABEL maintainer="P&ID Pipeline"
+LABEL description="PaddleOCR recognition HTTP service"
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
+
+WORKDIR /app
+
+# Системные зависимости
+RUN apt-get update -qq && \
+    apt-get install -y -qq --no-install-recommends \
+    libgl1 libglib2.0-0 libgomp1 wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# PaddlePaddle CPU + PaddleX + PaddleOCR
+RUN pip install --no-cache-dir \
+    paddlepaddle==3.0.0 \
+    paddlex \
+    paddleocr==3.0.0 \
+    python-bidi \
+    opencv-python-headless \
+    Pillow \
+    fastapi \
+    uvicorn[standard] \
+    python-multipart
+
+# Предзагрузка моделей (server_rec — лучшее качество)
+RUN python -c "\
+from paddlex import create_model; \
+model = create_model('PP-OCRv5_server_rec'); \
+print('PP-OCRv5_server_rec downloaded') \
+" || echo "Model download will happen at first request"
+
+COPY services/paddle_service.py /app/paddle_service.py
+
+EXPOSE 8010
+
+CMD ["uvicorn", "paddle_service:app", "--host", "0.0.0.0", "--port", "8010", "--workers", "1"]

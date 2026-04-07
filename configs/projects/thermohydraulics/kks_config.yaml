@@ -1,0 +1,258 @@
+# =============================================================================
+# KKS Configuration for Paks II NPP (PAKSII-PMM-01.1.01.01)
+# =============================================================================
+# KKS structure: Block(1-2d) + System(2-3L) + FN(2-3d) + Unit(2L) + Number(2-4d) + Suffix(0-1L)
+# Example: 50KAA10CT001, 10JND10AA001, 50FAK10CG804A
+
+kks:
+  # =========================================================================
+  # Regex patterns
+  # =========================================================================
+  patterns:
+    # Clean pattern (for PDF vector text)
+    - name: "kks_clean"
+      regex: "(?P<block>\\d{1,2})(?P<system>[A-Z]{2,3})(?P<fn>\\d{2,3})(?P<unit>[A-Z]{2})(?P<num>\\d{2,4})(?P<suffix>[A-Z])?"
+      flags: "IGNORECASE"
+      description: "KKS clean (no OCR noise)"
+
+    # OCR-tolerant pattern (handles O↔0, cyrillic↔latin)
+    - name: "kks_ocr"
+      regex: "(?<![A-Za-z\\u0400-\\u04FF0-9])(?P<block>[0-9O\\u043EO\\u041E]{1,2})\\s?(?P<system>[A-Za-z\\u0400-\\u04FF]{2,3})\\s?(?P<fn>[0-9O\\u043EO\\u041E]{2,3})\\s?(?P<unit>[A-Za-z\\u0400-\\u04FF]{2})\\s?(?P<num>[0-9O\\u043EO\\u041E]{2,4})(?P<suffix>[A-Za-z\\u0400-\\u04FF](?=[^A-Za-z\\u0400-\\u04FF0-9]|$))?(?![A-Za-z\\u0400-\\u04FF0-9])"
+      flags: "IGNORECASE"
+      description: "KKS OCR-tolerant (cyrillic, O/0 confusion, spaces)"
+
+  # =========================================================================
+  # OCR corrections (normalize noisy text → clean KKS)
+  # =========================================================================
+  ocr_corrections:
+    # Cyrillic → Latin letter mapping
+    cyrillic_to_latin:
+      "А": "A"
+      "В": "B"
+      "С": "C"
+      "Е": "E"
+      "К": "K"
+      "М": "M"
+      "Н": "H"
+      "О": "O"
+      "Р": "P"
+      "Т": "T"
+      "У": "Y"
+      "Х": "X"
+      "а": "a"
+      "в": "b"
+      "с": "c"
+      "е": "e"
+      "к": "k"
+      "м": "m"
+      "н": "h"
+      "о": "o"
+      "р": "p"
+      "т": "t"
+      "у": "y"
+      "х": "x"
+
+    # Digit position corrections (O→0, I→1, l→1)
+    digit_corrections:
+      "O": "0"
+      "о": "0"
+      "О": "0"
+      "I": "1"
+      "l": "1"
+      "L": "1"
+
+  # =========================================================================
+  # Project blocks
+  # =========================================================================
+  blocks:
+    - id: "10"
+      description: "Block 10"
+    - id: "50"
+      description: "Block 50 (main)"
+
+  # =========================================================================
+  # Systems (2-3 letter codes after block)
+  # =========================================================================
+  systems:
+    # Primary / Nuclear island
+    KAA: "Reactor coolant system"
+    KAB: "Reactor coolant system (auxiliary)"
+    KBA: "Pressurizer system"
+    KBB: "Pressurizer relief system"
+    KBC: "Pressurizer auxiliary system"
+    KBD: "Pressurizer support system"
+    KPL: "Boron system"
+    KTA: "Steam generator system"
+    KTB: "Steam generator auxiliary"
+    KTC: "Steam generator control"
+    KTF: "Feedwater system"
+    KTP: "Steam generator piping"
+    KUA: "Volume control system"
+    KUB: "Volume control auxiliary"
+    KUK: "Chemical dosing system"
+    KRK: "Reactor control system"
+
+    # Safety systems
+    JNA: "Safety injection system"
+    JNB: "Emergency core cooling system"
+    JNC: "Containment spray system"
+    JND: "Safety system (general)"
+    JNG: "Passive safety system"
+    JNK: "Safety system control"
+
+    # Auxiliary systems
+    JEA: "Component cooling water"
+    JEC: "Essential service water"
+    JEF: "Fuel pool cooling system"
+    JEG: "Essential cooling"
+    JET: "Essential cooling (turbine)"
+
+    # Ventilation
+    JDH: "HVAC system"
+
+    # Waste / Special
+    JMR: "Radioactive waste system"
+    JMN: "Liquid waste system"
+
+    # Turbine island
+    LBA: "Main steam system"
+    LBU: "Steam auxiliary system"
+    LCU: "Condensate system"
+
+    # Fire protection
+    FAB: "Fire protection (general)"
+    FAK: "Fire protection (active)"
+    FAL: "Fire protection (local)"
+
+    # Electrical / I&C
+    PEB: "Power supply system"
+    QEB: "I&C power supply"
+
+    # Special
+    CYB: "Containment system B"
+    CYC: "Containment system C"
+    CYE: "Containment system E"
+
+  # =========================================================================
+  # Equipment unit codes (A1A2)
+  # =========================================================================
+  equipment_units:
+    # Valves
+    AA:
+      description: "Valves"
+      category: "valve"
+      ranges:
+        - {start: 1, end: 99, type: "Manual valves (main pipelines)"}
+        - {start: 101, end: 199, type: "Remote operated valves (main pipelines)"}
+        - {start: 201, end: 249, type: "Remote operated control valves"}
+        - {start: 251, end: 299, type: "Manual control valves"}
+        - {start: 301, end: 399, type: "Measuring pipeline valves"}
+        - {start: 401, end: 449, type: "Safety valves"}
+        - {start: 501, end: 599, type: "Venting/drainage valves"}
+        - {start: 601, end: 699, type: "Check valves"}
+        - {start: 701, end: 799, type: "Specialized valves"}
+        - {start: 801, end: 899, type: "Containment localizing valves"}
+        - {start: 901, end: 999, type: "Manual valves (main pipelines)"}
+
+    # Equipment
+    AC:
+      description: "General equipment"
+      category: "equipment"
+
+    AP:
+      description: "Pumps"
+      category: "equipment"
+
+    AT:
+      description: "Turbines/Drives"
+      category: "equipment"
+
+    # Vessels
+    BB:
+      description: "Tanks/Vessels"
+      category: "vessel"
+      ranges:
+        - {start: 1, end: 99, type: "Tanks, vessels"}
+        - {start: 201, end: 299, type: "Traps with grating"}
+        - {start: 401, end: 499, type: "Funnel traps"}
+        - {start: 501, end: 599, type: "Internal drain funnel"}
+        - {start: 601, end: 699, type: "Shower trays"}
+        - {start: 701, end: 799, type: "Solid substance containers"}
+
+    # Pipelines
+    BR:
+      description: "Pipelines"
+      category: "pipeline"
+      ranges:
+        - {start: 1, end: 299, type: "Main pipelines"}
+        - {start: 301, end: 399, type: "Measuring pipelines"}
+        - {start: 401, end: 499, type: "Drainage/flushing pipelines"}
+        - {start: 501, end: 599, type: "Air removal pipelines"}
+        - {start: 601, end: 699, type: "Sampling/dosing pipelines"}
+        - {start: 701, end: 799, type: "Control media supply pipelines"}
+        - {start: 801, end: 899, type: "Safety valve discharge pipelines"}
+        - {start: 901, end: 999, type: "Main pipelines"}
+    BP:
+      description: "Throttle devices"
+      category: "equipment"
+    # Embedded parts
+    BQ:
+      description: "Embedded parts, supports, penetrations"
+      category: "support"
+
+    # Instrumentation (C* = Cx where x is measurement type)
+    CF:
+      description: "Flow measurement"
+      category: "instrument"
+    CG:
+      description: "Position/Level measurement"
+      category: "instrument"
+    CL:
+      description: "Level measurement"
+      category: "instrument"
+    CM:
+      description: "Moisture measurement"
+      category: "instrument"
+    CP:
+      description: "Pressure measurement"
+      category: "instrument"
+    CQ:
+      description: "Quality measurement"
+      category: "instrument"
+    CR:
+      description: "Radiation measurement"
+      category: "instrument"
+    CT:
+      description: "Temperature measurement"
+      category: "instrument"
+    CY:
+      description: "Other/Combined measurement"
+      category: "instrument"
+
+    # I&C
+    GF:
+      description: "I&C field equipment"
+      category: "ioc"
+    GH:
+      description: "Cubicles/Panels/Control desks"
+      category: "ioc"
+
+  # =========================================================================
+  # Binding rules for P&ID
+  # =========================================================================
+  binding:
+    target: "node"
+    method: "nearest_node"
+    max_distance: 200
+
+    # Category → node class mapping (for validation)
+    category_to_node_class:
+      valve: ["armatura_electro", "armatura_ruchn", "klapan_obratn", "predohran"]
+      equipment: ["nasos", "drossel", "filtr_meh", "rashodomernaya_shaiba", "voronka"]
+      vessel: ["nasos"]  # vessels often shown as special symbols
+      instrument: ["datchik", "regulator_electro"]
+      pipeline: []  # BR binds to edges, not nodes
+      ioc: []  # not on P&ID typically
+
+    # Pipeline KKS (BR) binds to edges instead of nodes
+    edge_binding_units: ["BR"]

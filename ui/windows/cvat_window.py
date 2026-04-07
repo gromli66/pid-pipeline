@@ -1,22 +1,38 @@
 """
 CVAT Window - окно для валидации аннотаций в встроенном CVAT.
+
+Чистый QWebEngineView без кастомных инъекций.
+Единственный JS — Ctrl+S для принудительного сохранения перед экспортом.
 """
 
 from typing import Optional
-import re
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout,
     QPushButton, QLabel, QToolBar, QStatusBar,
+    QMessageBox,
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtCore import Signal, Slot, QUrl, QTimer
 
 
+# JS для принудительного сохранения в CVAT (Ctrl+S)
+_CVAT_SAVE_JS = """
+(function() {
+    document.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 's', code: 'KeyS', keyCode: 83,
+        ctrlKey: true, bubbles: true, cancelable: true
+    }));
+})();
+"""
+
+
 class CVATWindow(QMainWindow):
     """Окно с встроенным CVAT для валидации аннотаций."""
 
+    # Аннотации сохранены в CVAT, можно скачивать экспорт
     validation_confirmed = Signal(str)
+    # Окно закрыто без сохранения
     window_closed = Signal(str)
 
     def __init__(
@@ -33,30 +49,18 @@ class CVATWindow(QMainWindow):
         self.diagram_uid = diagram_uid
         self.cvat_url = cvat_url
         self.diagram_name = diagram_name
-
-        # Извлекаем task_id и job_id из URL если не переданы
-        if cvat_task_id is None or cvat_job_id is None:
-            cvat_task_id, cvat_job_id = self._extract_ids(cvat_url)
-
         self.cvat_task_id = cvat_task_id
         self.cvat_job_id = cvat_job_id
-        self._is_redirecting = False
+
+        # Флаги состояния
+        self._is_saving = False
+        self._close_after_save = False
 
         self.setWindowTitle(f"CVAT Валидация - {diagram_name or diagram_uid[:8]}")
         self.setMinimumSize(1200, 800)
 
         self._setup_ui()
-        self._load_cvat()
-
-    def _extract_ids(self, url: str) -> tuple:
-        """Извлечь task_id и job_id из URL."""
-        task_match = re.search(r'/tasks/(\d+)', url)
-        job_match = re.search(r'/jobs/(\d+)', url)
-
-        task_id = int(task_match.group(1)) if task_match else None
-        job_id = int(job_match.group(1)) if job_match else None
-
-        return task_id, job_id
+        self.web_view.setUrl(QUrl(self.cvat_url))
 
     def _setup_ui(self):
         """Настройка UI."""
@@ -72,7 +76,10 @@ class CVATWindow(QMainWindow):
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
 
-        label = QLabel("  Отредактируйте аннотации, затем нажмите 'Подтвердить валидацию'  ")
+        label = QLabel(
+            "  Отредактируйте аннотации, затем нажмите "
+            "'Подтвердить валидацию'  "
+        )
         label.setStyleSheet("color: #666; font-size: 12px;")
         toolbar.addWidget(label)
 
@@ -96,6 +103,9 @@ class CVATWindow(QMainWindow):
             QPushButton:hover {
                 background-color: #45a049;
             }
+            QPushButton:disabled {
+                background-color: #9E9E9E;
+            }
         """)
         self.btn_confirm.clicked.connect(self._on_confirm)
         toolbar.addWidget(self.btn_confirm)
@@ -109,66 +119,9 @@ class CVATWindow(QMainWindow):
         self.setStatusBar(self.statusbar)
         self.statusbar.showMessage("Загрузка CVAT...")
 
-        # Сигналы
-        self.web_view.loadStarted.connect(self._on_load_started)
-        self.web_view.loadFinished.connect(self._on_load_finished)
-        self.web_view.urlChanged.connect(self._on_url_changed)
-
-    def _load_cvat(self):
-        """Загрузить CVAT страницу."""
-        self.web_view.setUrl(QUrl(self.cvat_url))
-
-    def _is_url_allowed(self, url: str) -> bool:
-        """Проверить, разрешён ли URL."""
-        # Разрешаем пустые и about:blank
-        if not url or url == "about:blank":
-            return True
-
-        # Разрешаем только наш task/job
-        if self.cvat_task_id and self.cvat_job_id:
-            # Разрешённые паттерны
-            allowed = [
-                f"/tasks/{self.cvat_task_id}/jobs/{self.cvat_job_id}",
-                f"/tasks/{self.cvat_task_id}",
-            ]
-            for pattern in allowed:
-                if pattern in url:
-                    return True
-
-        # Запрещаем другие tasks/jobs/projects
-        forbidden = ["/tasks/", "/jobs/", "/projects/", "/cloudstorages"]
-        for pattern in forbidden:
-            if pattern in url:
-                # Но разрешаем если это наш task
-                if self.cvat_task_id and f"/tasks/{self.cvat_task_id}" in url:
-                    return True
-                return False
-
-        # Запрещаем главную страницу CVAT
-        if url.endswith(":8080") or url.endswith(":8080/"):
-            return False
-
-        return True
-
-    @Slot(QUrl)
-    def _on_url_changed(self, url: QUrl):
-        """Отслеживаем изменение URL и блокируем навигацию."""
-        url_str = url.toString()
-
-        # Избегаем рекурсии при редиректе
-        if self._is_redirecting:
-            return
-
-        if not self._is_url_allowed(url_str):
-            self._is_redirecting = True
-            self.statusbar.showMessage("⚠️ Навигация заблокирована — работайте только с текущей задачей!", 5000)
-            # Возвращаем на разрешённый URL
-            self.web_view.setUrl(QUrl(self.cvat_url))
-            # Сбрасываем флаг через небольшую задержку
-            QTimer.singleShot(500, self._reset_redirect_flag)
-
-    def _reset_redirect_flag(self):
-        self._is_redirecting = False
+    # -----------------------------------------------------------------
+    # Actions
+    # -----------------------------------------------------------------
 
     @Slot()
     def _on_refresh(self):
@@ -177,79 +130,114 @@ class CVATWindow(QMainWindow):
 
     @Slot()
     def _on_confirm(self):
-        """Подтвердить валидацию."""
+        """
+        Подтвердить валидацию.
+
+        Flow: Ctrl+S → ждём 5 сек → emit validation_confirmed.
+        При вызове из кнопки — _close_after_save = True (закрыть после).
+        """
+        if self._is_saving:
+            return
+
+        self._is_saving = True
+        # Кнопка в окне всегда закрывает после сохранения
+        self._close_after_save = True
+        self.btn_confirm.setEnabled(False)
+        self.statusbar.showMessage("💾 Сохранение аннотаций в CVAT...")
+
+        self._trigger_save_in_cvat()
+        QTimer.singleShot(5000, self._after_save)
+
+    def _trigger_save_in_cvat(self):
+        """Инжектить Ctrl+S в CVAT для принудительного сохранения."""
+        self.web_view.page().runJavaScript(_CVAT_SAVE_JS)
+
+    def _after_save(self):
+        """Вызывается через 5 сек после Ctrl+S."""
+        self._is_saving = False
+        self.btn_confirm.setEnabled(True)
+
         self.validation_confirmed.emit(self.diagram_uid)
 
-    @Slot()
-    def _on_load_started(self):
-        self.statusbar.showMessage("Загрузка...")
-
-    @Slot(bool)
-    def _on_load_finished(self, ok: bool):
-        if ok:
-            self.statusbar.showMessage("CVAT загружен. Отредактируйте аннотации и нажмите 'Подтвердить валидацию'")
-            # Скрываем меню навигации CVAT
-            self._hide_cvat_navigation()
+        if self._close_after_save:
+            self.statusbar.showMessage("✅ Сохранено. Закрытие...")
+            # close() вызовет closeEvent, но _close_after_save уже True
+            # — сразу примем закрытие
+            self.close()
         else:
-            self.statusbar.showMessage("Ошибка загрузки CVAT")
+            self.statusbar.showMessage("✅ Аннотации сохранены", 5000)
 
-    def _hide_cvat_navigation(self):
-        """Скрыть элементы навигации CVAT через CSS."""
-        script = """
-        (function() {
-            var style = document.createElement('style');
-            style.id = 'cvat-nav-blocker';
-            style.textContent = `
-                /* Скрыть верхнее меню */
-                .cvat-header-menu,
-                header nav,
-                .ant-menu-horizontal,
-                a[href="/projects"],
-                a[href="/tasks"],
-                a[href="/jobs"],
-                a[href="/cloudstorages"],
-                a[href="/models"],
-                a[href="/analytics"],
-                /* Скрыть ссылки на другие задачи */
-                .cvat-task-item-task-name a,
-                .cvat-tasks-list a,
-                .cvat-projects-list a {
-                    pointer-events: none !important;
-                    opacity: 0.5 !important;
-                }
-                /* Скрыть меню пользователя с выходом и настройками */
-                .cvat-right-header,
-                .cvat-header-menu-user-dropdown {
-                    /* оставляем видимым, но можно скрыть */
-                }
-            `;
-            
-            // Удаляем старый стиль если есть
-            var old = document.getElementById('cvat-nav-blocker');
-            if (old) old.remove();
-            
-            document.head.appendChild(style);
-            
-            // Также перехватываем клики по меню
-            document.addEventListener('click', function(e) {
-                var target = e.target;
-                while (target && target !== document) {
-                    if (target.tagName === 'A') {
-                        var href = target.getAttribute('href');
-                        if (href && (href.startsWith('/projects') || href.startsWith('/tasks') || href.startsWith('/jobs') || href === '/')) {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            return false;
-                        }
-                    }
-                    target = target.parentNode;
-                }
-            }, true);
-        })();
+    # -----------------------------------------------------------------
+    # Public API (для вызова из MainWindow)
+    # -----------------------------------------------------------------
+
+    def trigger_save_and_confirm(self):
         """
-        self.web_view.page().runJavaScript(script)
+        Сохранить аннотации и emit validation_confirmed.
+
+        Вызывается из MainWindow когда кнопка "Валидация" нажата
+        в таблице при открытом CVAT окне. После сохранения окно
+        закроется автоматически.
+        """
+        if self._is_saving:
+            return
+
+        self._is_saving = True
+        self._close_after_save = True
+        self.btn_confirm.setEnabled(False)
+        self.statusbar.showMessage("💾 Сохранение аннотаций в CVAT...")
+
+        self._trigger_save_in_cvat()
+        QTimer.singleShot(5000, self._after_save)
+
+    # -----------------------------------------------------------------
+    # Close handling
+    # -----------------------------------------------------------------
 
     def closeEvent(self, event):
         """Обработка закрытия окна."""
-        self.window_closed.emit(self.diagram_uid)
-        super().closeEvent(event)
+        # Если уже в процессе сохранения — не мешать
+        if self._is_saving:
+            if self._close_after_save:
+                # Сохранение завершилось, можно закрывать
+                self.window_closed.emit(self.diagram_uid)
+                event.accept()
+            else:
+                event.ignore()
+            return
+
+        # Если close вызван программно после save — просто закрываем
+        if self._close_after_save:
+            self.window_closed.emit(self.diagram_uid)
+            event.accept()
+            return
+
+        # Спрашиваем пользователя
+        reply = QMessageBox.question(
+            self,
+            "Закрытие CVAT",
+            "Сохранить аннотации перед закрытием?",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+
+        if reply == QMessageBox.StandardButton.Save:
+            # Сохранить → Ctrl+S → 5 сек → emit → close
+            event.ignore()
+            self._is_saving = True
+            self._close_after_save = True
+            self.btn_confirm.setEnabled(False)
+            self.statusbar.showMessage("💾 Сохранение аннотаций в CVAT...")
+            self._trigger_save_in_cvat()
+            QTimer.singleShot(5000, self._after_save)
+
+        elif reply == QMessageBox.StandardButton.Discard:
+            # Закрыть без сохранения
+            self.window_closed.emit(self.diagram_uid)
+            event.accept()
+
+        else:
+            # Отмена — остаться
+            event.ignore()

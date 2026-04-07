@@ -60,7 +60,12 @@ COPY worker/ /app/worker/
 COPY modules/ /app/modules/
 
 # Добавляем модули в PYTHONPATH
-ENV PYTHONPATH=/app:/app/modules:$PYTHONPATH
+ENV PYTHONPATH="/app:/app/modules"
+
+# TODO: Worker non-root (задача 1.7) — отложена до решения прав на volumes
+# RUN adduser --disabled-password --gecos '' celery && \
+#     chown -R celery:celery /app
+# USER celery
 
 # Запуск Celery worker
 CMD ["celery", "-A", "worker.celery_app", "worker", \

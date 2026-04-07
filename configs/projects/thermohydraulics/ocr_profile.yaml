@@ -1,0 +1,158 @@
+# profiles/kks_rosatom.yaml — KKS (Kraftwerk-Kennzeichen-System) для Росатом P&ID
+#
+# Используется с KKSProfile из kks_rosatom.py
+# Запуск: python pipeline.py --profile profiles/kks_rosatom.py:KKSProfile:profiles/kks_rosatom.yaml
+
+name: "KKS (Росатом)"
+version: "1.0"
+languages: ["en", "ru"]
+
+# ── Юниты KKS ────────────────────────────────────
+units:
+  - "AA"
+  - "AC"
+  - "AH"
+  - "AP"
+  - "AT"
+  - "AX"
+  - "BB"
+  - "BR"
+  - "BP"
+  - "BQ"
+  - "CF"
+  - "CG"
+  - "CL"
+  - "CM"
+  - "CP"
+  - "CQ"
+  - "CR"
+  - "CT"
+  - "CY"
+  - "GF"
+  - "GH"
+
+# ── Паттерны ──────────────────────────────────────
+patterns:
+  full_code:
+    regex: '\b(\d{1,2})([A-Z\u0400-\u04FF]{2,3})(\d{2,3})(%%UNITS%%)(\d{2,4})[A-Z]?\b'
+    flags: "IGNORECASE"
+    role: "full"
+    min_length: 8
+
+  head_code:
+    regex: '\b(\d{1,2}[A-Z\u0400-\u04FF]{2,3}\d{2,3})\b'
+    flags: "IGNORECASE"
+    role: "head"
+    min_length: 6
+
+  tail_code:
+    regex: '^(%%UNITS%%)(\d{2,4})[A-Z]?$'
+    flags: "IGNORECASE"
+    role: "tail"
+
+  diameter:
+    regex: '^(<b>)?D[NnYy\u0443\u0423vV\u043d\u041djJiI]\s*\d'
+    flags: "IGNORECASE"
+    role: "standalone"
+
+  diameter_inline:
+    regex: '(D[NnYy\u0443\u0423vV\u043d\u041djJ]\s*\d+(?:\s*[a-z\u0430-\u044f/]+)*)'
+    flags: "IGNORECASE"
+    role: "standalone"
+
+  fragment_head:
+    regex: '^(\d{1,2})([A-Z\u0400-\u04FF]{2,3})\d{0,1}$'
+    flags: "IGNORECASE"
+    role: "fragment"
+
+  # Мягкий паттерн для split_multi: ищет HEAD внутри строки без \b в начале
+  head_loose:
+    regex: '(\d{1,2}[A-Z]{2,3}\d{2,3})\b'
+    flags: "IGNORECASE"
+    role: "head"
+    min_length: 6
+
+# ── Группировка ───────────────────────────────────
+grouping:
+  passes:
+    - name: "fragment_completion"
+      source: "FRAG"
+      target: ["HEAD", "FULL", "TAIL", "OTHER"]
+      max_distance: 2.0
+      direction: "any"
+      action: "merge_text_and_reclassify"
+
+    - name: "full_codes"
+      source: ["FULL", "FULL_BR"]
+      action: "emit"
+
+    - name: "head_to_tail"
+      source: ["HEAD", "HEAD_DN"]
+      target: ["TAIL"]
+      max_distance: 3.0
+      direction: "below_only"
+      x_overlap_min: 0.25
+      chain: true
+      chain_max_distance: 2.0
+      chain_head_between_check: true
+      action: "merge_and_emit"
+
+    - name: "orphan_tail"
+      source: "TAIL"
+      target: ["HEAD", "FULL"]
+      max_distance: 3.0
+      direction: "any"
+      action: "attach_to_existing"
+
+    - name: "diameters"
+      source: "DN"
+      action: "emit"
+
+    - name: "multi_codes"
+      source: "MULTI"
+      action: "emit"
+
+    - name: "remaining_heads"
+      source: ["HEAD"]
+      action: "emit"
+
+# ── Шумовые фильтры (regex) ──────────────────────
+noise:
+  rules:
+    - name: "instrument_tag"
+      regex: '^(FI[CSA]*|LI[CSA]*|TI[CSA]*|PI[CSA]*|LISAC|PISA|FIDA?)\b'
+      flags: "IGNORECASE"
+
+    - name: "date"
+      regex: '^\d{1,2}[./]\d{1,2}[./]\d{2,4}$'
+
+    - name: "company_boilerplate"
+      regex: 'shall not be disclosed|Nuclear Power|Engineering Company|\u041f\u0440\u043e\u0435\u043a\u0442\u043d\u0430\u044f \u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442|internet:|www\.|e-mail:|phone:|Agreed by|Checked by|Developed by|Translated by|Signature|arch\.\s*Nr|First revision|Whole drawing|^PKS2\b'
+      flags: "IGNORECASE"
+
+    - name: "file_extension"
+      regex: '\.(pdf|dwg|doc|xlsx?)\b'
+      flags: "IGNORECASE"
+
+# ── Нормализация символов ─────────────────────────
+char_normalization:
+  enabled: true
+  table:
+    "А": "A"
+    "а": "a"
+    "В": "B"
+    "С": "C"
+    "с": "c"
+    "Е": "E"
+    "е": "e"
+    "Н": "H"
+    "К": "K"
+    "М": "M"
+    "О": "O"
+    "о": "o"
+    "Р": "P"
+    "р": "p"
+    "Т": "T"
+    "У": "Y"
+    "Х": "X"
+    "х": "x"

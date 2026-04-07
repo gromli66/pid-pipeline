@@ -1,0 +1,281 @@
+# =============================================================================
+# P&ID Pipe Segmentation - Default Configuration (v2 - all fixes applied)
+# =============================================================================
+#
+# ИЗМЕНЕНИЯ:
+#   [FIX 1.1]  binarization: block_size 51→31, c 10→7
+#   [FIX 3.1]  postprocessing: directional_closing
+#   [FIX 3.2]  postprocessing: skeleton_gap_fill (max_gap=80)
+#   [FIX 3.3]  postprocessing: fill_holes
+#   [FIX 4.1]  loss: cldice_weight 0.3→0.5, cldice_iters 3→5
+#   [FIX 4.2]  loss: pos_weight clamp 20→50
+#   [FIX 5.2]  model: decoder_attention_type = scse
+#   [FIX 8.2]  inference: tta enabled by default
+#   [NEW]      loss: OHEM (top 50% hardest pixels)
+#   [NEW]      augmentation: realistic_dashed_line
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# ПУТИ К ДАННЫМ
+# -----------------------------------------------------------------------------
+paths:
+  raw_images: "./data/finetune/images"
+  coco_annotations: "./data/finetune/merged_clean_3.json"
+  masks:
+    pipes: "./data/masks/pipes"
+    nodes: "./data/masks/nodes"
+  work_dir: "./data_seg_pipe/processed"
+  dataset_dir: "./data_seg_pipe/dataset"
+  experiments_dir: "./result_seg_pipe/experiments"
+  inference_output: "./result_seg_pipe/output/predictions_pach"
+  statistics_dir: "./result_seg_pipe/output/statistics"
+
+# -----------------------------------------------------------------------------
+# ПРЕДОБРАБОТКА ИЗОБРАЖЕНИЙ
+# -----------------------------------------------------------------------------
+preprocessing:
+  binarization:
+    enabled: true
+    # [FIX 1.1] Смягчённые параметры для сохранения пунктира
+    method: "adaptive"
+    adaptive:
+      block_size: 31    # 51→31: меньше окно = лучше сохранение коротких штрихов
+      c: 7              # 10→7: менее агрессивный порог
+    fixed:
+      threshold: 128
+  image_extensions:
+    - ".png"
+    - ".jpg"
+    - ".jpeg"
+
+# -----------------------------------------------------------------------------
+# РАЗБИЕНИЕ ДАННЫХ
+# -----------------------------------------------------------------------------
+splitting:
+  ratios:
+    train: 0.70
+    val: 0.15
+    test: 0.15
+  ratios_finetune:
+    train: 0.80
+    val: 0.20
+  test_files: "./data/test_img.txt"
+  random_seed: 42
+  stratified: true
+
+# -----------------------------------------------------------------------------
+# ТАЙЛИНГ
+# -----------------------------------------------------------------------------
+tiling:
+  tile_size: 1024
+  overlap: 128
+  filtering:
+    min_pipe_pixels: 100
+    min_node_pixels: 50
+    empty_threshold: 0.90
+
+# -----------------------------------------------------------------------------
+# АУГМЕНТАЦИЯ
+# -----------------------------------------------------------------------------
+augmentation:
+  enabled: true
+  geometric:
+    horizontal_flip: 0.5
+    vertical_flip: 0.5
+    rotate_90: 0.5
+    shift_scale_rotate:
+      enabled: true
+      probability: 0.5
+      shift_limit: 0.1
+      scale_limit: 0.15
+      rotate_limit: 45
+    elastic:
+      enabled: true
+      probability: 0.3
+      alpha: 50
+      sigma: 10
+  color:
+    brightness_contrast:
+      enabled: true
+      probability: 0.5
+      brightness_limit: 0.2
+      contrast_limit: 0.2
+    gamma:
+      enabled: true
+      probability: 0.3
+      gamma_limit: [80, 120]
+  noise:
+    gaussian:
+      enabled: true
+      probability: 0.3
+      var_limit: [5, 25]
+  blur:
+    motion:
+      enabled: true
+      probability: 0.2
+      blur_limit: 5
+    gaussian:
+      enabled: true
+      probability: 0.2
+      blur_limit: 5
+  pipe_specific:
+    dashed_line:
+      enabled: true
+      probability: 0.30
+      gap_length: [10, 30]
+      num_gaps: [3, 8]
+      dilate_radius: 4       # [FIX 2.2] 2→4
+    # [v3] Реалистичный пунктир — увеличена вероятность для лучшего обучения
+    realistic_dashed_line:
+      enabled: true
+      probability: 0.50            # 0.35→0.50 для лучшего заполнения пунктира
+      dash_length: [10, 50]        # Расширен диапазон (было 15-40)
+      gap_length: [8, 35]          # Расширен (было 10-30)
+      line_thickness: [1, 3]
+      fraction_pipes: [0.15, 0.5]  # Больше труб превращаем в пунктир
+    coarse_dropout:
+      enabled: true
+      probability: 0.2
+      max_holes: 8
+      max_height: 32
+      max_width: 32
+
+# -----------------------------------------------------------------------------
+# МОДЕЛЬ
+# -----------------------------------------------------------------------------
+model:
+  architecture: "UnetPlusPlus"
+  encoder_name: "efficientnet-b3"
+  encoder_weights: "imagenet"
+  in_channels: 4
+  classes: 1
+  activation: null
+  # SCSE: включать только при ≥16 GB VRAM
+  decoder_attention_type: null
+  # [v3] Dual head: mask + skeleton для multi-task learning
+  dual_head: false               # true = добавляет скелетную голову
+
+# -----------------------------------------------------------------------------
+# LOSS ФУНКЦИЯ
+# -----------------------------------------------------------------------------
+loss:
+  weights:
+    dice: 1.0
+    focal: 1.0
+    cldice: 0.5                   # Используется если use_clce=false
+  # [v3] clCE (MICCAI 2024) вместо clDice — робастнее для пунктира
+  use_clce: true                  # true=clCE, false=clDice(CVPR 2021)
+  clce_weight: 0.7               # Вес clCE (увеличен для топологии)
+  focal:
+    alpha: 0.25
+    gamma: 2.0
+    pos_weight: null
+    pos_weight_max: 50
+  cldice:
+    iterations: 10                # [v3] 5→10 для зазоров пунктира
+  ohem:
+    enabled: true
+    top_k_ratio: 0.5
+  # [v3] Multi-task (только при dual_head=true)
+  skeleton_weight: 0.5           # Вес skeleton BCE loss
+  skeleton_pos_weight: 20.0      # pos_weight для скелета (~1% пикселей)
+
+# -----------------------------------------------------------------------------
+# ОБУЧЕНИЕ
+# -----------------------------------------------------------------------------
+training:
+  epochs: 50
+  batch_size: 2
+  accumulation_steps: 4
+  learning_rate:
+    encoder: 0.00001
+    decoder: 0.0001
+  weight_decay: 0.0001
+  patience: 15
+  gradient_clip: 1.0
+  # [FIX 9.1] Scheduler настраивается через конфиг
+  scheduler:
+    type: "CosineAnnealing"   # "CosineAnnealing" или "ReduceLROnPlateau"
+    factor: 0.5               # Только для ReduceLROnPlateau
+    patience: 5               # Только для ReduceLROnPlateau
+    min_lr: 0.000001
+  save_period: 10
+  device: "cuda"
+  random_seed: 42
+  # [PERF] num_workers=2 для параллельной подготовки данных
+  # GPU не простаивает пока CPU грузит следующий батч
+  # Если падает на Windows — верните 0
+  num_workers: 2
+  pin_memory: true
+
+# -----------------------------------------------------------------------------
+# FINETUNE
+# -----------------------------------------------------------------------------
+finetune:
+  checkpoint: ""
+  epochs: 20
+  learning_rate: 0.00001
+  weight_decay: 0.00001
+  patience: 10
+  freeze_encoder_epochs: 5
+
+# -----------------------------------------------------------------------------
+# ИНФЕРЕНС
+# -----------------------------------------------------------------------------
+inference:
+  checkpoint: ""
+  tile_size: 1024
+  overlap: 128
+  batch_size: 4
+  threshold: 0.5
+  tta:
+    enabled: true
+    mode: "flip"
+  postprocessing:
+    enabled: true
+    remove_small_objects: 100
+    closing_kernel_size: 0
+    opening_kernel_size: 0
+    directional_closing:
+      enabled: false
+    skeleton_gap_fill:
+      enabled: false
+    fill_holes:
+      enabled: true
+      max_hole_size: 500
+  binarization:
+    enabled: true
+    method: "adaptive"
+  device: "cuda"
+  save_overlay: false
+
+# -----------------------------------------------------------------------------
+# ОЦЕНКА МОДЕЛИ
+# -----------------------------------------------------------------------------
+evaluation:
+  metrics:
+    - "dice"
+    - "iou"
+    - "precision"
+    - "recall"
+    - "f1"
+  thresholds:
+    - 0.3
+    - 0.4
+    - 0.5
+    - 0.6
+    - 0.7
+  save:
+    per_image_metrics: true
+    summary: true
+    predictions: true
+    overlays: true
+    max_overlay_images: 50
+
+# -----------------------------------------------------------------------------
+# СТАТИСТИКА
+# -----------------------------------------------------------------------------
+statistics:
+  save_intermediate: true
+  coverage:
+    bins: [0, 1, 2, 5, 10, 20, 50, 100]

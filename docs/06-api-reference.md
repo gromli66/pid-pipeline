@@ -263,7 +263,6 @@
 
 ## 6.7 Segmentation API
 
-<<<<<<< HEAD
 ### POST /api/segmentation/{uid}/segment
 
 Запустить сегментацию U2-Net++.
@@ -271,15 +270,6 @@
 **Precondition:** `status == "validated_bbox"`
 
 **Статус:** Реализован endpoint, Celery task ожидает интеграции ML модуля.
-=======
-| Endpoint | Статус |
-|----------|--------|
-| POST /api/segmentation/{uid}/segment |  Phase 3 |
-| POST /api/skeleton/{uid}/skeletonize |  Phase 3 |
-| POST /api/junction/{uid}/classify |  Phase 4 |
-| POST /api/graph/{uid}/build |  Phase 5 |
-| POST /api/graph/{uid}/generate-fxml |  Phase 5 |
->>>>>>> 90fdd883de8a8d9391f08e933a05b42a252eed65
 
 ---
 

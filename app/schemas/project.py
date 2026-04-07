@@ -47,3 +47,5 @@ class ProjectConfigInfo(BaseModel):
     num_classes: int
     yolo_num_classes: int
     yolo_weights: str
+    detection_models_count: int = 1
+    default_detection_model: str = "default"

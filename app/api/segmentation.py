@@ -1,8 +1,13 @@
 """
-Segmentation API - U2-Net++ сегментация труб (Phase 3).
+Segmentation API — запуск цепочки: сегментация → скелетизация.
+
+POST /{uid}/segment — основная точка входа.
+Запускает полную цепочку обработки. При повторном вызове на ERROR
+определяет error_stage и перезапускает с нужного шага.
 """
 
 from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,25 +17,79 @@ from app.models import Diagram, DiagramStatus
 
 router = APIRouter()
 
+# error_stage → (celery task name, target status)
+_STAGE_DISPATCH = {
+    "segmenting": ("worker.tasks.segmentation.task_segment_pipes", DiagramStatus.SEGMENTING),
+    "skeletonizing": ("worker.tasks.skeleton.task_skeletonize", DiagramStatus.SKELETONIZING),
+    "detecting_junctions": ("worker.tasks.junction.task_detect_junctions", DiagramStatus.DETECTING_JUNCTIONS),
+}
+
+# Статусы, допускающие запуск сегментации
+_ALLOWED_STATUSES = {
+    DiagramStatus.VALIDATED_BBOX,
+    DiagramStatus.ERROR,
+}
+
 
 @router.post("/{uid}/segment")
 async def start_segmentation(
     uid: UUID,
     db: AsyncSession = Depends(get_async_db),
 ):
-    """Запустить сегментацию труб."""
-    
+    """
+    Запустить цепочку: сегментация → скелетизация.
+
+    Preconditions:
+    - status == validated_bbox: полный запуск с начала
+    - status == error: smart retry — определяет error_stage, перезапускает
+      с нужного шага (segmenting / skeletonizing / detecting_junctions)
+
+    Returns:
+        task_id, status, restart_from (если retry)
+    """
     result = await db.execute(select(Diagram).where(Diagram.uid == uid))
     diagram = result.scalar_one_or_none()
-    
+
     if not diagram:
         raise HTTPException(status_code=404, detail="Diagram not found")
-    
-    if diagram.status != DiagramStatus.VALIDATED_BBOX:
+
+    if diagram.status not in _ALLOWED_STATUSES:
         raise HTTPException(
             status_code=400,
-            detail=f"Cannot start segmentation: status is '{diagram.status.value}'"
+            detail=(
+                f"Cannot start segmentation: status is '{diagram.status.value}'. "
+                f"Expected: validated_bbox or error"
+            ),
         )
-    
-    # TODO: Phase 3
-    return {"status": "not_implemented", "message": "Segmentation will be implemented in Phase 3"}
+
+    # Определяем, с какого шага запускать
+    restart_from = "segmenting"
+    target_status = DiagramStatus.SEGMENTING
+    task_name = "worker.tasks.segmentation.task_segment_pipes"
+
+    if diagram.status == DiagramStatus.ERROR and diagram.error_stage:
+        stage = diagram.error_stage
+        if stage in _STAGE_DISPATCH:
+            task_name, target_status = _STAGE_DISPATCH[stage]
+            restart_from = stage
+
+    # Обновляем статус
+    diagram.status = target_status
+    diagram.error_message = None
+    diagram.error_stage = None
+    await db.commit()
+
+    # Dispatch task через send_task (без импорта worker модулей)
+    from worker.celery_app import celery_app
+
+    async_result = celery_app.send_task(
+        task_name,
+        args=[str(uid), diagram.project_code],
+    )
+
+    return {
+        "status": target_status.value,
+        "task_id": async_result.id,
+        "diagram_uid": str(uid),
+        "restart_from": restart_from,
+    }

@@ -1,0 +1,542 @@
+# =============================================================================
+# domain_profile.yaml — Единый конфиг OCR + Binding
+# Проект: Термогидравлика (KKS Росатом)
+# =============================================================================
+#
+# Заменяет:
+#   - ocr_profile.yaml (паттерны, группировка, noise, нормализация)
+#   - ocr_profile.py   (classify логика → classify.rules)
+#   - kks_config.yaml   (KKS regex, OCR corrections, equipment units, binding)
+#   - class_to_kks_config.yaml (unit↔class валидация, reclassify)
+#   - thermohydraulics.yaml → text_recognition (диаметры)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# META
+# ═══════════════════════════════════════════════════════════════════════════════
+meta:
+  name: "KKS (Росатом)"
+  version: "2.0"
+  languages: ["en", "ru"]
+  normalization_direction: "cyr_to_lat"
+  # Какой скрипт считать "secondary" (описания, не коды)
+  secondary_script: "cyrillic"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CODE TYPES — типы кодов, привязка к графу
+# ═══════════════════════════════════════════════════════════════════════════════
+code_types:
+  # --- Код оборудования (KKS) ---
+  equipment_code:
+    structure: "{block}{system}{fn}{unit}{num}{suffix}"
+    fields:
+      block:  { regex: '\d{1,2}', position: "digit" }
+      system: { regex: '[A-Z\u0400-\u04FF]{2,3}', position: "letter" }
+      fn:     { regex: '\d{2,3}', position: "digit" }
+      unit:   { regex: '%%UNITS%%', position: "letter" }
+      num:    { regex: '\d{2,4}', position: "digit" }
+      suffix: { regex: '[A-Z]?', position: "letter", optional: true }
+    binding:
+      target: "node"
+      method: "nearest_node"
+      max_distance: 200
+    validation_field: "unit"
+    # KKS regex — clean (для чистого текста)
+    match_patterns:
+      - name: "kks_clean"
+        regex: '(?P<block>\d{1,2})(?P<system>[A-Z]{2,3})(?P<fn>\d{2,3})(?P<unit>[A-Z]{2})(?P<num>\d{2,4})(?P<suffix>[A-Z])?'
+        flags: "IGNORECASE"
+      # KKS regex — OCR-tolerant (кириллица, O/0, пробелы)
+      - name: "kks_ocr"
+        regex: '(?<![A-Za-z\u0400-\u04FF0-9])(?P<block>[0-9O\u043EO\u041E]{1,2})\s?(?P<system>[A-Za-z\u0400-\u04FF]{2,3})\s?(?P<fn>[0-9O\u043EO\u041E]{2,3})\s?(?P<unit>[A-Za-z\u0400-\u04FF]{2})\s?(?P<num>[0-9O\u043EO\u041E]{2,4})(?P<suffix>[A-Za-z\u0400-\u04FF](?=[^A-Za-z\u0400-\u04FF0-9]|$))?(?![A-Za-z\u0400-\u04FF0-9])'
+        flags: "IGNORECASE"
+
+  # --- Код трубопровода (BR → edge) ---
+  pipeline_code:
+    inherit: "equipment_code"
+    filter:
+      unit: ["BR"]
+    binding:
+      target: "edge"
+      method: "nearest_edge"
+      max_distance: 150
+
+  # --- Диаметр трубы ---
+  diameter:
+    structure: "{prefix}{value}{suffix}"
+    fields:
+      prefix: { regex: '[DdДд][yYvVнНnNуУ]' }
+      value:  { regex: '\d{2,4}', type: "integer" }
+      suffix: { regex: '[a-zA-Zа-яА-Я/]*', optional: true }
+    binding:
+      target: "edge"
+      method: "nearest_edge_boundary"
+      max_distance: 150
+    match_patterns:
+      - name: "dy_dn_format"
+        regex: '(?P<prefix>[DdДд][yYvVнНnNуУ])\s*(?P<diameter>\d{2,4})\s*(?P<suffix>[a-zA-Zа-яА-Я]{0,3})?'
+        flags: "IGNORECASE"
+    ocr_corrections:
+      - { pattern: '^0([yYvVуУ])', replace: 'D\1' }
+      - { pattern: '^[oOоО]([yYvVуУ])', replace: 'D\1' }
+    valid_values: []  # пусто = не валидировать
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# UNITS — юниты оборудования (подставляются в %%UNITS%%)
+# ═══════════════════════════════════════════════════════════════════════════════
+units:
+  - "AA"
+  - "AC"
+  - "AH"
+  - "AP"
+  - "AT"
+  - "AX"
+  - "BB"
+  - "BR"
+  - "BP"
+  - "BQ"
+  - "CF"
+  - "CG"
+  - "CL"
+  - "CM"
+  - "CP"
+  - "CQ"
+  - "CR"
+  - "CT"
+  - "CY"
+  - "GF"
+  - "GH"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PATTERNS — regex для OCR classify (используются в classify.rules)
+# ═══════════════════════════════════════════════════════════════════════════════
+patterns:
+  full_code:
+    regex: '\b(\d{1,2})([A-Z\u0400-\u04FF]{2,3})(\d{2,3})(%%UNITS%%)(\d{2,4})[A-Z]?\b'
+    flags: "IGNORECASE"
+    role: "full"
+    code_type: "equipment_code"
+    min_length: 8
+
+  head_code:
+    regex: '\b(\d{1,2}[A-Z\u0400-\u04FF]{2,3}\d{2,3})\b'
+    flags: "IGNORECASE"
+    role: "head"
+    code_type: "equipment_code"
+    min_length: 6
+
+  tail_code:
+    regex: '^(%%UNITS%%)(\d{2,4})[A-Z]?$'
+    flags: "IGNORECASE"
+    role: "tail"
+    code_type: "equipment_code"
+
+  diameter:
+    regex: '^(<b>)?D[NnYy\u0443\u0423vV\u043d\u041djJiI]\s*\d'
+    flags: "IGNORECASE"
+    role: "standalone"
+    code_type: "diameter"
+
+  diameter_inline:
+    regex: '(D[NnYy\u0443\u0423vV\u043d\u041djJ]\s*\d+(?:\s*[a-z\u0430-\u044f/]+)*)'
+    flags: "IGNORECASE"
+    role: "standalone"
+    code_type: "diameter"
+
+  fragment_head:
+    regex: '^(\d{1,2})([A-Z\u0400-\u04FF]{2,3})\d{0,1}$'
+    flags: "IGNORECASE"
+    role: "fragment"
+    code_type: "equipment_code"
+
+  head_loose:
+    regex: '(\d{1,2}[A-Z]{2,3}\d{2,3})\b'
+    flags: "IGNORECASE"
+    role: "head"
+    code_type: "equipment_code"
+    min_length: 6
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CLASSIFY — правила классификации (заменяют Python if/elif)
+# ═══════════════════════════════════════════════════════════════════════════════
+classify:
+  rules:
+    - pattern: "full_code"
+      condition: "match_count >= 2"
+      result: "MULTI"
+
+    - pattern: "full_code"
+      condition: "matches"
+      result: "FULL"
+
+    - pattern: "head_code"
+      condition: "matches"
+      exclude_pattern: "tail_code"
+      sub_rules:
+        - pattern: "head_code"
+          condition: "match_count >= 2"
+          result: "MULTI"
+        - pattern: "diameter"
+          condition: "matches"
+          result: "HEAD_DN"
+        - result: "HEAD"
+
+    - pattern: "tail_code"
+      condition: "matches"
+      result: "TAIL"
+
+    - pattern: "diameter"
+      condition: "match_only"
+      result: "DN"
+
+    - pattern: "fragment_head"
+      condition: "match_only"
+      result: "FRAG"
+
+    - result: "OTHER"
+
+  # Маппинг категория → семантическая роль (для grouping engine)
+  roles:
+    full:       ["FULL", "FULL_BR", "MULTI"]
+    head:       ["HEAD", "HEAD_DN"]
+    tail:       ["TAIL"]
+    standalone: ["DN"]
+    fragment:   ["FRAG"]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# GROUPING — пространственная сборка блоков
+# ═══════════════════════════════════════════════════════════════════════════════
+grouping:
+  passes:
+    - name: "fragment_completion"
+      source: "FRAG"
+      target: ["HEAD", "FULL", "TAIL", "OTHER"]
+      max_distance: 2.0
+      direction: "any"
+      action: "merge_text_and_reclassify"
+
+    - name: "full_codes"
+      source: ["FULL", "FULL_BR"]
+      action: "emit"
+
+    - name: "head_to_tail"
+      source: ["HEAD", "HEAD_DN"]
+      target: ["TAIL"]
+      max_distance: 3.0
+      direction: "below_only"
+      x_overlap_min: 0.25
+      chain: true
+      chain_max_distance: 2.0
+      chain_head_between_check: true
+      action: "merge_and_emit"
+
+    - name: "orphan_tail"
+      source: "TAIL"
+      target: ["HEAD", "FULL"]
+      max_distance: 3.0
+      direction: "any"
+      action: "attach_to_existing"
+
+    - name: "diameters"
+      source: "DN"
+      action: "emit"
+
+    - name: "multi_codes"
+      source: "MULTI"
+      action: "emit"
+
+    - name: "remaining_heads"
+      source: ["HEAD"]
+      action: "emit"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NOISE — фильтрация шума
+# ═══════════════════════════════════════════════════════════════════════════════
+noise:
+  rules:
+    - name: "instrument_tag"
+      regex: '^(FI[CSA]*|LI[CSA]*|TI[CSA]*|PI[CSA]*|LISAC|PISA|FIDA?)\b'
+      flags: "IGNORECASE"
+
+    - name: "date"
+      regex: '^\d{1,2}[./]\d{1,2}[./]\d{2,4}$'
+
+    - name: "company_boilerplate"
+      regex: 'shall not be disclosed|Nuclear Power|Engineering Company|\u041F\u0440\u043E\u0435\u043A\u0442\u043D\u0430\u044F \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442|internet:|www\.|e-mail:|phone:|Agreed by|Checked by|Developed by|Translated by|Signature|arch\.\s*Nr|First revision|Whole drawing|^PKS2\b'
+      flags: "IGNORECASE"
+
+    - name: "file_extension"
+      regex: '\.(pdf|dwg|doc|xlsx?)\b'
+      flags: "IGNORECASE"
+
+  thresholds:
+    min_length_without_target: 2
+    max_length_text_only: 25
+    max_word_count_no_target: 4
+    max_special_char_ratio_short: 0.5
+    short_text_max_length: 5
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHAR NORMALIZATION — замена символов
+# ═══════════════════════════════════════════════════════════════════════════════
+char_normalization:
+  enabled: true
+  direction: "cyr_to_lat"
+  table:
+    "А": "A"
+    "а": "a"
+    "В": "B"
+    "С": "C"
+    "с": "c"
+    "Е": "E"
+    "е": "e"
+    "Н": "H"
+    "К": "K"
+    "М": "M"
+    "О": "O"
+    "о": "o"
+    "Р": "P"
+    "р": "p"
+    "Т": "T"
+    "У": "Y"
+    "Х": "X"
+    "х": "x"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# OCR CORRECTIONS — исправление OCR-ошибок при парсинге кодов
+# ═══════════════════════════════════════════════════════════════════════════════
+ocr_corrections:
+  cyrillic_to_latin:
+    "А": "A"
+    "В": "B"
+    "С": "C"
+    "Е": "E"
+    "К": "K"
+    "М": "M"
+    "Н": "H"
+    "О": "O"
+    "Р": "P"
+    "Т": "T"
+    "У": "Y"
+    "Х": "X"
+    "а": "a"
+    "в": "b"
+    "с": "c"
+    "е": "e"
+    "к": "k"
+    "м": "m"
+    "н": "h"
+    "о": "o"
+    "р": "p"
+    "т": "t"
+    "у": "y"
+    "х": "x"
+
+  digit_corrections:
+    "O": "0"
+    "о": "0"
+    "О": "0"
+    "I": "1"
+    "l": "1"
+
+  symbol_fixes:
+    "(": "C"
+    "[": "C"
+    "{": "C"
+    ")": "D"
+    "]": "J"
+    "|": "I"
+
+  # Blacklist unit codes (совпадают с префиксами диаметров)
+  unit_blacklist: ["DY", "DV", "DN", "DН"]
+
+  # Известные блоки (для коррекции "0"→"10", "00"→"10")
+  known_blocks: ["10", "50"]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# POSTPROCESS — хуки пост-обработки
+# ═══════════════════════════════════════════════════════════════════════════════
+postprocess:
+  split_multi:
+    enabled: true
+    strategy: "head_tail_join"
+
+  promote_from_secondary:
+    enabled: true
+    secondary_script: "cyrillic"
+    min_head_length: 6
+
+  merge_secondary:
+    enabled: true
+    max_vgap_factor: 1.0
+    max_hgap_factor: 1.0
+
+  extract_target_from_merged:
+    enabled: true
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# BINDING — привязка кодов к графу
+# ═══════════════════════════════════════════════════════════════════════════════
+binding:
+  node_max_distance: 30.0
+  edge_max_distance: 150.0
+
+  # unit → допустимые классы (обратный маппинг для быстрой валидации)
+  unit_to_classes:
+    AA: [armatura_ruchn, armatura_electro, armatura_seroprivod, armatura_membr_electro,
+         klapan_obratn, klapan_obratn_seroprivod, predohran,
+         regulator_ruchn, regulator_electro, regulator_seroprivod,
+         drossel, redukcion_ustr, bistro_redukc_ustr]
+    AC: [teploobmen, dearator, separator, separator_paro, kapleulov,
+         condensatootvod, drossel, filtr_meh, gidrozatvor]
+    AH: [electronagrevat]
+    AP: [nasos, vodostruiniy_nasos]
+    AT: [ventilaytor, celindr_turb]
+    BB: [bak, voronka, dearator]
+    BR: []  # привязка к ребру, не к узлу
+    BP: [drossel]
+    CF: [rashodomernaya_shaiba, datchik]
+    CG: [datchik]
+    CL: [datchik]
+    CM: [datchik]
+    CP: [datchik]
+    CQ: [datchik]
+    CR: [datchik]
+    CT: [datchik]
+    CY: [datchik]
+    GF: []
+    GH: []
+
+  # unit codes привязываемые к рёбрам (не к узлам)
+  edge_binding_units: ["BR"]
+
+  # class → правила привязки
+  class_rules:
+    armatura_ruchn:
+      kks_target: "node"
+      expected_units: ["AA"]
+    armatura_electro:
+      kks_target: "node"
+      expected_units: ["AA"]
+    armatura_seroprivod:
+      kks_target: "node"
+      expected_units: ["AA"]
+    armatura_membr_electro:
+      kks_target: "node"
+      expected_units: ["AA"]
+    klapan_obratn:
+      kks_target: "node"
+      expected_units: ["AA"]
+    klapan_obratn_seroprivod:
+      kks_target: "node"
+      expected_units: ["AA"]
+    predohran:
+      kks_target: "node"
+      expected_units: ["AA"]
+    regulator_ruchn:
+      kks_target: "node"
+      expected_units: ["AA"]
+    regulator_electro:
+      kks_target: "node"
+      expected_units: ["AA"]
+    regulator_seroprivod:
+      kks_target: "node"
+      expected_units: ["AA"]
+    nasos:
+      kks_target: "node"
+      expected_units: ["AP"]
+    vodostruiniy_nasos:
+      kks_target: "node"
+      expected_units: ["AP"]
+    ventilaytor:
+      kks_target: "node"
+      expected_units: ["AT"]
+    bak:
+      kks_target: "node"
+      expected_units: ["BB"]
+    voronka:
+      kks_target: "node"
+      expected_units: ["BB"]
+    teploobmen:
+      kks_target: "node"
+      expected_units: ["AC"]
+    dearator:
+      kks_target: "node"
+      expected_units: ["BB", "AC"]
+    separator:
+      kks_target: "node"
+      expected_units: ["AC"]
+    separator_paro:
+      kks_target: "node"
+      expected_units: ["AC"]
+    kapleulov:
+      kks_target: "node"
+      expected_units: ["AC"]
+    condensatootvod:
+      kks_target: "node"
+      expected_units: ["AC"]
+    drossel:
+      kks_target: "node"
+      expected_units: ["AA", "AC", "BP"]
+    rashodomernaya_shaiba:
+      kks_target: "node"
+      expected_units: ["CF"]
+    filtr_meh:
+      kks_target: "node"
+      expected_units: ["AC"]
+    perehod:
+      kks_target: "none"
+    zaglushka:
+      kks_target: "none"
+    gidrozatvor:
+      kks_target: "node"
+      expected_units: ["AC"]
+    silfonnii_kompensator:
+      kks_target: "none"
+    electronagrevat:
+      kks_target: "node"
+      expected_units: ["AH"]
+    smotrowoe_steclo:
+      kks_target: "none"
+    celindr_turb:
+      kks_target: "node"
+      expected_units: ["AT"]
+    redukcion_ustr:
+      kks_target: "node"
+      expected_units: ["AA"]
+    bistro_redukc_ustr:
+      kks_target: "node"
+      expected_units: ["AA"]
+    datchik:
+      kks_target: "node"
+      expected_units: ["CF", "CG", "CL", "CM", "CP", "CQ", "CR", "CT", "CY"]
+    unknow:
+      kks_target: "reclassify"
+      expected_units: ["AA", "AC", "AP", "AT", "BB", "CF", "CG", "CL", "CM", "CP", "CQ", "CR", "CT", "CY", "AH", "GF", "GH"]
+      reclassify_rules:
+        AA: "armatura_electro"
+        AC: "teploobmen"
+        AH: "electronagrevat"
+        AP: "nasos"
+        AT: "celindr_turb"
+        BB: "bak"
+        CF: "rashodomernaya_shaiba"
+        CG: "datchik"
+        CL: "datchik"
+        CM: "datchik"
+        CP: "datchik"
+        CQ: "datchik"
+        CR: "datchik"
+        CT: "datchik"
+        CY: "datchik"
+        GF: "datchik"
+        GH: "datchik"
+    annotation:
+      kks_target: "none"
+    output:
+      kks_target: "none"
+    strelka:
+      kks_target: "none"
+    truba:
+      kks_target: "none"
+    background:
+      kks_target: "none"

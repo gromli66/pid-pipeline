@@ -1,0 +1,271 @@
+# =============================================================================
+# P&ID Pipeline - Проект "Термогидравлика"
+# =============================================================================
+
+project:
+  name: "Термогидравлика"
+  code: "thermohydraulics"
+
+cvat:
+  project_name: "P&ID Термогидравлика"
+
+# =============================================================================
+# Классы проекта (для CVAT, 1-based)
+# =============================================================================
+classes:
+  - {id: 1, name: "armatura_ruchn"}
+  - {id: 2, name: "klapan_obratn"}
+  - {id: 3, name: "regulator_ruchn"}
+  - {id: 4, name: "armatura_electro"}
+  - {id: 5, name: "regulator_electro"}
+  - {id: 6, name: "drossel"}
+  - {id: 7, name: "perehod"}
+  - {id: 8, name: "klapan_obratn_seroprivod"}
+  - {id: 9, name: "armatura_seroprivod"}
+  - {id: 10, name: "regulator_seroprivod"}
+  - {id: 11, name: "armatura_membr_electro"}
+  - {id: 12, name: "nasos"}
+  - {id: 13, name: "ventilaytor"}
+  - {id: 14, name: "predohran"}
+  - {id: 15, name: "condensatootvod"}
+  - {id: 16, name: "rashodomernaya_shaiba"}
+  - {id: 17, name: "vodostruiniy_nasos"}
+  - {id: 18, name: "teploobmen"}
+  - {id: 19, name: "zaglushka"}
+  - {id: 20, name: "gidrozatvor"}
+  - {id: 21, name: "bak"}
+  - {id: 22, name: "voronka"}
+  - {id: 23, name: "filtr_meh"}
+  - {id: 24, name: "separator"}
+  - {id: 25, name: "kapleulov"}
+  - {id: 26, name: "celindr_turb"}
+  - {id: 27, name: "redukcion_ustr"}
+  - {id: 28, name: "bistro_redukc_ustr"}
+  - {id: 29, name: "separator_paro"}
+  - {id: 30, name: "dearator"}
+  - {id: 31, name: "silfonnii_kompensator"}
+  - {id: 32, name: "electronagrevat"}
+  - {id: 33, name: "smotrowoe_steclo"}
+  - {id: 34, name: "datchik"}
+  - {id: 35, name: "annotation"}
+  - {id: 36, name: "output"}
+  - {id: 37, name: "truba"}
+  - {id: 38, name: "unknow"}
+  - {id: 39, name: "strelka"}
+  - {id: 40, name: "background"}
+
+# =============================================================================
+# Детекция (мульти-модель)
+# =============================================================================
+detection:
+  default_model: "thermo"
+
+  # class_id (после reverse_reindex) → CVAT category_id (1-based)
+  # Общий для всех моделей с 36 классами:
+  #   Классы 0-33 совпадают: class_id N → category_id N+1
+  #   35 (output) и 38 (strelka) — результат reverse_reindex из YOLO 34, 35
+  _shared_class_mapping: &class_mapping
+    0: 1
+    1: 2
+    2: 3
+    3: 4
+    4: 5
+    5: 6
+    6: 7
+    7: 8
+    8: 9
+    9: 10
+    10: 11
+    11: 12
+    12: 13
+    13: 14
+    14: 15
+    15: 16
+    16: 17
+    17: 18
+    18: 19
+    19: 20
+    20: 21
+    21: 22
+    22: 23
+    23: 24
+    24: 25
+    25: 26
+    26: 27
+    27: 28
+    28: 29
+    29: 30
+    30: 31
+    31: 32
+    32: 33
+    33: 34
+    35: 36  # output (class_id 35 → CVAT category 36)
+    38: 39  # strelka (class_id 38 → CVAT category 39)
+
+  models:
+    thermo:
+      name: "Термогидравлика"
+      weights: "/models/yolo/best.pt"
+      num_classes: 36
+      confidence: 0.8
+      description: "Основная модель (термогидравлика)"
+      class_mapping: *class_mapping
+
+    paksh:
+      name: "Пакш"
+      weights: "/models/yolo/best_pakh.pt"
+      num_classes: 36
+      confidence: 0.8
+      description: "Проект Пакш"
+      class_mapping: *class_mapping
+
+# =============================================================================
+# U2-Net++ сегментация труб (Phase 3)
+# =============================================================================
+segmentation:
+  # ─── Два чекпоинта (оба обязательны) ───
+  weights: "/models/segmentation/best.pth"                # Model A: plain UNet++
+  weights_b: "/models/segmentation/best_dual.pth"        # Model B: DualHeadModel
+
+  # ─── Ensemble параметры ───
+  dual_head_a: false
+  dual_head_b: true
+  ensemble_strategy: "or"              # OR даёт +4% recall
+
+  # ─── Тайлинг ───
+  tile_size: 1024
+  overlap: 128
+  batch_size: 4
+  threshold: 0.5
+  use_tta: true
+  binarize: true
+  binarize_method: "adaptive"
+  postprocess: true
+
+  # ─── Постобработка v3 ───
+  postprocess_config:
+    skeleton_gap_fill:
+      enabled: true
+      max_gap: 40
+      direction_tolerance: 20
+      verify_path: true
+    remove_border_frame:
+      enabled: true
+      margin: 30
+    fill_holes:
+      enabled: true
+      max_hole_size: 500
+
+  # ─── Категории для node_mask (без изменений) ───
+  pipe_categories: ["truba"]
+  ignore_categories: ["annotation", "background"]
+
+# =============================================================================
+# Скелетизация (Phase 3)
+# =============================================================================
+skeleton:
+  simple_mode: false           # Полный режим: trim + directed lines + BFS
+  node_boundary_expansion: 1
+  trim_length: 10
+  trim_protection: 15
+  mask_width: 8
+  extend_radius: 5
+  direction_trace_length: 5
+  max_line_length: 600
+  endpoint_search_radius: 5
+  endpoint_line_white_tolerance: 2
+  skeleton_search_radius: 5
+  skeleton_line_white_tolerance: 2
+  bfs_max_depth: 1000
+  bfs_iterations: 1
+  bfs_mask_tolerance: 5
+  remove_orphans: false
+  orphan_trim_length: 5
+  orphan_touch_distance: 3
+  # Параметры генерации маски из скелета (skeleton → mask)
+  mask_adaptive: true            # Адаптивная толщина из реальной ширины труб
+  mask_min_thickness: 2          # Минимальный диаметр (px)
+  mask_max_thickness: 40         # Максимальный диаметр (px)
+  mask_thickness: 4              # Fallback толщина (диаметр dilate) для фиксированного режима
+  mask_prune_spurs: 5            # Длина шпор для удаления (0 = отключить)
+  mask_smooth_size: 5            # Ядро closing-сглаживания (0 = отключить)
+
+# =============================================================================
+# Junction CNN классификация (Phase 3)
+# =============================================================================
+junction_seg:
+  weights: "/models/junction_seg/best.pth"
+  tile_size: 512
+  overlap: 128
+  batch_size: 8
+  junction_threshold: 0.40
+  bridge_threshold: 0.45
+  nms_kernel: 3
+  square_size: 15
+
+# =============================================================================
+# OCR Pipeline (Phase B) — 3-проходный Surya OCR
+# =============================================================================
+ocr:
+  # ══ 2.0: Переключение OCR-профиля — ОДНА СТРОКА ══
+  #  docker-compose restart worker_ocr
+  # KKS (Росатом):
+  domain_profile_path: "configs/projects/thermohydraulics/domain_profile_kks.yaml"
+  # Кириллический (ТЭЦ):
+#  domain_profile_path: "configs/projects/thermohydraulics/domain_profile_cyrillic.yaml"
+
+  # 1.x legacy (используется если domain_profile_path не задан):
+  profile_path: "configs/projects/thermohydraulics/ocr_profile.py"
+  profile_class: "KKSProfile"
+
+  # Параметры pipeline:
+  no_protection: true
+  tile2_size: 1536
+  tile2_overlap: 256
+  tile3_size: 2560
+  tile3_overlap: 384
+
+# =============================================================================
+# Распознавание текста (OCR → привязка к графу)
+# =============================================================================
+text_recognition:
+
+  # --- KKS (Kraftwerk-Kennzeichensystem) ---
+  kks:
+    patterns:
+      - name: "standard_kks"
+        # Блок(0-2ц) + Система(2-3б) + FN(2-3ц) + [пробел] + Агрегат(2б) + Счётчик(2-4ц)
+        # Примеры: 10LFN10 AA017, 10LAB30AA201, 2LAC03CT002
+        regex: "(?P<block>\\d{0,2})(?P<system>[A-Za-z]{2,3})(?P<fn>\\d{2,3})\\s*(?P<unit>[A-Za-z]{2})(?P<unit_num>\\d{2,4})"
+        flags: "IGNORECASE"
+        description: "Стандартный KKS: блок + система + агрегат"
+    binding:
+      target: "equipment"
+      method: "nearest_bbox"
+      max_distance: 150
+
+  # --- Диаметр трубы ---
+  pipe_diameter:
+    # OCR corrections — применяются ТОЛЬКО к текстам-кандидатам
+    # (bbox рядом с ребром, текст не совпал с raw regex)
+    ocr_corrections:
+      - pattern: "^0([yYvVуУ])"
+        replace: "D\\1"
+      - pattern: "^[oOоО]([yYvVуУ])"
+        replace: "D\\1"
+
+    patterns:
+      - name: "dy_dn_format"
+        # Dy 200, DN50, Dv 20 c, Dy 32 cs
+        regex: "(?P<prefix>[DdДд][yYvVнНnNуУ])\\s*(?P<diameter>\\d{2,4})\\s*(?P<suffix>[a-zA-Zа-яА-Я]{0,3})?"
+        flags: "IGNORECASE"
+        description: "Диаметр трубы: Dy/DN/Dv + число + суффикс"
+
+    # Валидные диаметры (пусто = не валидировать)
+    valid_diameters: []
+
+    binding:
+      target: "edge"
+      method: "nearest_edge_boundary"
+      max_distance: 150
+      edge_rule: "node_to_node"

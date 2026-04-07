@@ -1,0 +1,342 @@
+# =============================================================================
+# domain_profile.yaml — Единый конфиг OCR + Binding
+# Проект: ТЭЦ / Котельные (кириллические коды P&ID)
+# =============================================================================
+#
+# Формат кодов: [блок]-[система]-[номер][суффикс]
+#   блок:     Т1, Е1, Г1 (кириллическая буква + цифра) — может отсутствовать
+#   система:  ПД, ПО, ПП, ПР, ВП, КТ, ... (2 кириллические буквы)
+#   номер:    1–4 цифры
+#   суффикс:  К, Р, А, Б, Л, Н, СК (опционально)
+#
+# Примеры: Т1-ПД-585, ПД-601Р, Е1-ПД-32Л, Т1-ПО-45СК
+# Диаметры: ⌀50, Ø125, ø20
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# META
+# ═══════════════════════════════════════════════════════════════════════════════
+meta:
+  name: "P&ID Кириллические коды"
+  version: "2.0"
+  languages: ["ru", "en"]
+  normalization_direction: "lat_to_cyr"
+  secondary_script: "cyrillic"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# UNITS — системы (подставляются в %%UNITS%%)
+# ═══════════════════════════════════════════════════════════════════════════════
+units:
+  - "ПД"
+  - "ПО"
+  - "ПП"
+  - "ПР"
+  - "ВП"
+  - "КТ"
+  - "НК"
+  - "ТК"
+  - "ВД"
+  - "НД"
+  - "КД"
+  - "ДП"
+  - "ДР"
+  - "РД"
+  - "СК"
+  - "КН"
+  - "ПВ"
+  - "ОК"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PATTERNS
+# ═══════════════════════════════════════════════════════════════════════════════
+patterns:
+  # Полный код с блоком: Т1-ПД-585К
+  full_code:
+    regex: '([TТтГгЕеКкНн]\d)[\-\u2010\u2011\u2013\u2014\u2212\u00AD](%%UNITS%%)[\-\u2010\u2011\u2013\u2014\u2212\u00AD](\d{1,4})([А-ЯA-Z]{0,2})(?![а-яёa-z\d])'
+    flags: "IGNORECASE"
+    role: "full"
+    code_type: "equipment_code"
+    min_length: 6
+
+  # Bare-код (без блока): ПД-601Р
+  bare_code:
+    regex: '(?<![А-ЯA-Zа-яa-z\d])(%%UNITS%%)[\-\u2010\u2011\u2013\u2014\u2212\u00AD](\d{1,4})([А-ЯA-Z]{0,2})(?![А-ЯA-Zа-яa-z\d])'
+    flags: "IGNORECASE"
+    role: "full"
+    code_type: "equipment_code"
+    min_length: 4
+
+  # HEAD: блок-система (Т1-ПД)
+  head_block_sys:
+    regex: '(?<![А-ЯA-Zа-яa-z\d])([TТтГгЕеКкНн]\d)[\-\u2010\u2011\u2013\u2014\u2212\u00AD]([А-Я]{2})\s*$'
+    flags: "IGNORECASE"
+    role: "head"
+    min_length: 4
+
+  # HEAD: только блок (Т1)
+  head_block:
+    regex: '(?<![А-ЯA-Zа-яa-z\d])([TТтГгЕеКкНн]\d)\s*$'
+    flags: "IGNORECASE"
+    role: "head"
+    min_length: 2
+
+  # Для split_inline / has_any_target_pattern: head = block-sys (generic alias)
+  head_code:
+    regex: '(?<![А-ЯA-Zа-яa-z\d])([TТтГгЕеКкНн]\d)[\-\u2010\u2011\u2013\u2014\u2212\u00AD]([А-Я]{2})'
+    flags: "IGNORECASE"
+    role: "head"
+    min_length: 4
+
+  # TAIL: система-номер (ПД-585К или -ПД-585К)
+  tail_sys_num:
+    regex: '^[\-\u2010\u2011\u2013\u2014\u2212\u00AD]?(%%UNITS%%)[\-\u2010\u2011\u2013\u2014\u2212\u00AD](\d{1,4})([А-ЯA-Z]{0,2})$'
+    flags: "IGNORECASE"
+    role: "tail"
+
+  # TAIL: с обязательным дефисом (-585К) — для classify
+  tail_num_dash:
+    regex: '^[\-\u2010\u2011\u2013\u2014\u2212\u00AD](\d{1,4})([А-ЯA-Z]{0,2})$'
+    flags: "IGNORECASE"
+    role: "tail"
+
+  # Общий tail alias для has_any_target_pattern
+  tail_code:
+    regex: '^[\-\u2010\u2011\u2013\u2014\u2212\u00AD]?(%%UNITS%%)[\-\u2010\u2011\u2013\u2014\u2212\u00AD](\d{1,4})([А-ЯA-Z]{0,2})$'
+    flags: "IGNORECASE"
+    role: "tail"
+
+  # Фрагмент с OCR-ошибками блока: 71-ПД-328К
+  fragment_ocr_block:
+    regex: '^([7\[\(1Iil]{1,2}[\.\-]?)[\-\u2010\u2011\u2013\u2014\u2212\u00AD]([А-Я]{2})[\-\u2010\u2011\u2013\u2014\u2212\u00AD](\d{1,4})([А-ЯA-Z]{0,2})$'
+    flags: "IGNORECASE"
+    role: "full"
+    min_length: 5
+
+  # Диаметр: ⌀50, Ø 125
+  diameter:
+    regex: '(?:^|(?<=[\s<]))[ØøΦ⌀∅]\s*\d'
+    flags: "IGNORECASE"
+    role: "standalone"
+    code_type: "diameter"
+
+  diameter_inline:
+    regex: '([ØøΦ⌀∅]\s*\d+(?:\s*[*×xXхХ]\s*\d+)?)'
+    flags: "IGNORECASE"
+    role: "standalone"
+    code_type: "diameter"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CLASSIFY
+# ═══════════════════════════════════════════════════════════════════════════════
+classify:
+  preprocess:
+    clean_html: true
+    normalize: true
+    block_fixes: true
+
+  rules:
+    # Combined count: full (с блоком) + bare (без блока), non-overlapping
+    - patterns: ["full_code", "bare_code"]
+      condition: "total_count >= 2"
+      result: "MULTI"
+
+    - patterns: ["full_code", "bare_code"]
+      condition: "total_count >= 1"
+      sub_rules:
+        - pattern: "diameter"
+          condition: "matches"
+          result: "HEAD_DN"
+        - result: "FULL"
+
+    # Только диаметр
+    - pattern: "diameter"
+      condition: "matches"
+      result: "DN"
+
+    # HEAD: блок-система
+    - pattern: "head_block_sys"
+      condition: "match_only"
+      result: "HEAD"
+
+    # HEAD: только блок
+    - pattern: "head_block"
+      condition: "match_only"
+      result: "HEAD"
+
+    # TAIL: система-номер
+    - pattern: "tail_sys_num"
+      condition: "match_only"
+      result: "TAIL"
+
+    # TAIL: дефис-номер (-585К)
+    - pattern: "tail_num_dash"
+      condition: "match_only"
+      result: "TAIL"
+
+    # Фрагмент с OCR-ошибками → после block_fix это FULL
+    - pattern: "fragment_ocr_block"
+      condition: "match_only"
+      result: "FULL"
+
+    - result: "OTHER"
+
+  roles:
+    full:       ["FULL", "FULL_BR", "MULTI"]
+    head:       ["HEAD", "HEAD_DN"]
+    tail:       ["TAIL"]
+    standalone: ["DN"]
+    fragment:   ["FRAG"]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# GROUPING
+# ═══════════════════════════════════════════════════════════════════════════════
+grouping:
+  passes:
+    - name: "full_codes"
+      source: ["FULL", "FULL_BR"]
+      action: "emit"
+
+    - name: "head_to_tail"
+      source: ["HEAD"]
+      target: ["TAIL"]
+      max_distance: 3.0
+      direction: "below_only"
+      x_overlap_min: 0.25
+      chain: true
+      chain_max_distance: 2.0
+      action: "merge_and_emit"
+
+    - name: "orphan_tail"
+      source: "TAIL"
+      target: ["HEAD", "FULL"]
+      max_distance: 3.0
+      direction: "any"
+      action: "attach_to_existing"
+
+    - name: "diameters"
+      source: "DN"
+      action: "emit"
+
+    - name: "multi_codes"
+      source: "MULTI"
+      action: "emit"
+
+    - name: "remaining_heads"
+      source: ["HEAD"]
+      action: "emit"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NOISE
+# ═══════════════════════════════════════════════════════════════════════════════
+noise:
+  rules:
+    - name: "date"
+      regex: '^\d{1,2}[./]\d{1,2}[./]\d{2,4}$'
+
+    - name: "boilerplate"
+      regex: 'Нач\s*(ПТО|КТЦ)|Гл\.?\s*инженер|Дата\s*пересмот|Схема\s*N|БЭРН|Мозырская|Юрчак|Михнюк|Швед|Глинженер'
+      flags: "IGNORECASE"
+
+    - name: "description_long"
+      regex: '(коллектор|конденсат|подогреватель|опрессовка|паропровод|трубопровод|деаэратор|эжектор|насос)\w*'
+      flags: "IGNORECASE"
+
+    - name: "file_extension"
+      regex: '\.(pdf|dwg|doc|xlsx?)\b'
+      flags: "IGNORECASE"
+
+    - name: "destinations"
+      regex: '^(В\s+РД[ВН]Д|В\s+КД|На\s+(ПНД|ПВД|ПО|производств)|Из\s+(напорн|втор)|общест|Продувка|Свежий\s+пар)'
+      flags: "IGNORECASE"
+
+    - name: "equipment_ref"
+      regex: '(ТГ|ПТ|ПНД|ПВД|ПЭН|ЦВД|ЦНД|ЦСД|РК|НТ)\s*[\-\u2010\u2011\u2013\u2014\u2212\u00AD]\s*\d'
+      flags: "IGNORECASE"
+
+  thresholds:
+    min_length_without_target: 2
+    max_length_text_only: 30
+    max_word_count_no_target: 5
+    max_special_char_ratio_short: 0.5
+    short_text_max_length: 5
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHAR NORMALIZATION (латиница/греческий → кириллица)
+# ═══════════════════════════════════════════════════════════════════════════════
+char_normalization:
+  enabled: true
+  direction: "lat_to_cyr"
+  table:
+    "T": "Т"
+    "t": "т"
+    "P": "Р"
+    "p": "р"
+    "K": "К"
+    "k": "к"
+    "H": "Н"
+    "C": "С"
+    "c": "с"
+    "E": "Е"
+    "e": "е"
+    "A": "А"
+    "a": "а"
+    "B": "В"
+    "O": "О"
+    "o": "о"
+    "X": "Х"
+    "x": "х"
+    "M": "М"
+    # Греческие → Кириллица
+    "Π": "П"
+    "π": "п"
+    "Τ": "Т"
+    "τ": "т"
+    "Λ": "Л"
+    "Ο": "О"
+    "ο": "о"
+    "Κ": "К"
+    "Ρ": "Р"
+    "Α": "А"
+    "Β": "В"
+    "Η": "Н"
+    "Χ": "Х"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# OCR CORRECTIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+ocr_corrections:
+  # Для кириллического профиля — block fixes (OCR ошибки блока)
+  block_fixes:
+    "71": "Т1"
+    "7l": "Т1"
+    "7I": "Т1"
+    "[1": "Т1"
+    "(1": "Т1"
+    "{1": "Т1"
+    "11": "Т1"
+    "l1": "Т1"
+    "I1": "Т1"
+    "г.": "Г1"
+    "Г.": "Г1"
+    "Г]": "Г1"
+    "г]": "Г1"
+    "Е]": "Е1"
+    "е]": "Е1"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# POSTPROCESS
+# ═══════════════════════════════════════════════════════════════════════════════
+postprocess:
+  split_multi:
+    enabled: true
+    strategy: "inline_split"
+
+  promote_from_secondary:
+    enabled: false
+
+  merge_secondary:
+    enabled: true
+    max_vgap_factor: 1.5
+    max_hgap_factor: 3.0
+
+  extract_target_from_merged:
+    enabled: false

@@ -20,6 +20,7 @@ celery_app = Celery(
         "worker.tasks.skeleton",
         "worker.tasks.junction",
         "worker.tasks.graph",
+        "worker.tasks.ocr",
     ]
 )
 
@@ -47,6 +48,7 @@ celery_app.conf.update(
     task_queues={
         "default": {},
         "gpu": {},  # Для GPU задач
+        "ocr": {},  # OCR worker (отдельный контейнер)
     },
     
     # Worker
@@ -61,4 +63,5 @@ celery_app.conf.task_routes = {
     "worker.tasks.skeleton.*": {"queue": "default"},
     "worker.tasks.junction.*": {"queue": "gpu"},
     "worker.tasks.graph.*": {"queue": "default"},
+    "worker.tasks.ocr.*": {"queue": "ocr"},
 }

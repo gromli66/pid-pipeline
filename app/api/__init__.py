@@ -10,6 +10,7 @@ from app.api import skeleton
 from app.api import junction
 from app.api import graph
 from app.api import validation
+from app.api import ocr
 
 __all__ = [
     "diagrams",
@@ -20,4 +21,5 @@ __all__ = [
     "junction",
     "graph",
     "validation",
+    "ocr",
 ]
