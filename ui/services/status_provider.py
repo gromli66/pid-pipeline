@@ -39,7 +39,9 @@ class StatusProvider(QObject):
         DiagramStatus.SKELETONIZED,
         DiagramStatus.DETECTED_JUNCTIONS,
         DiagramStatus.BUILT,
-        DiagramStatus.CONTOURS_EXTRACTED,  # SAM2 done (parallel)
+        DiagramStatus.VALIDATED_GRAPH,      # ждёт оператора (контуры)
+        DiagramStatus.CONTOURS_EXTRACTED,   # SAM2 done (parallel)
+        DiagramStatus.CONTOURS_VALIDATED,   # ждёт оператора (привязка)
         DiagramStatus.OCR_COMPLETED,
         DiagramStatus.OCR_BOUND,
         DiagramStatus.COMPLETED,

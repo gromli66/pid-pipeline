@@ -368,29 +368,31 @@ def task_segment_pipes(
         cv2.imwrite(str(pipe_mask_path), pipe_mask)
 
         # ===== 5b. Overlay визуализация =====
-        overlay_path = seg_dir / "segmentation_overlay.png"
-        try:
-            overlay = image_bgr.copy()
-            # Зелёный полупрозрачный overlay на pipe_mask
-            green = np.zeros_like(overlay)
-            green[:, :, 1] = 255  # зелёный канал
-            mask_bool = pipe_mask > 127
-            alpha = 0.4
-            overlay[mask_bool] = cv2.addWeighted(
-                overlay[mask_bool], 1 - alpha,
-                green[mask_bool], alpha, 0,
-            )
-            # Красный контур node_mask
-            node_bool = node_mask > 127
-            node_contours, _ = cv2.findContours(
-                node_bool.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE,
-            )
-            cv2.drawContours(overlay, node_contours, -1, (0, 0, 255), 2)
-            cv2.imwrite(str(overlay_path), overlay)
-            logger.info("Segmentation overlay saved: %s", overlay_path.name)
-        except Exception as viz_exc:
-            logger.warning("Failed to create overlay: %s", viz_exc)
-            overlay_path = None
+        overlay_path = None
+        if project_config.save_visualizations:
+            overlay_path = seg_dir / "segmentation_overlay.png"
+            try:
+                overlay = image_bgr.copy()
+                # Зелёный полупрозрачный overlay на pipe_mask
+                green = np.zeros_like(overlay)
+                green[:, :, 1] = 255  # зелёный канал
+                mask_bool = pipe_mask > 127
+                alpha = 0.4
+                overlay[mask_bool] = cv2.addWeighted(
+                    overlay[mask_bool], 1 - alpha,
+                    green[mask_bool], alpha, 0,
+                )
+                # Красный контур node_mask
+                node_bool = node_mask > 127
+                node_contours, _ = cv2.findContours(
+                    node_bool.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE,
+                )
+                cv2.drawContours(overlay, node_contours, -1, (0, 0, 255), 2)
+                cv2.imwrite(str(overlay_path), overlay)
+                logger.info("Segmentation overlay saved: %s", overlay_path.name)
+            except Exception as viz_exc:
+                logger.warning("Failed to create overlay: %s", viz_exc)
+                overlay_path = None
 
         # ===== 6. Артефакты в БД =====
         artifacts_to_save = [

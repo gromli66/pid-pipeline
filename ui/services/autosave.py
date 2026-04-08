@@ -21,6 +21,7 @@ _SAVE_METHODS = {
     "JunctionTab": "_save_masks",
     "SimpleGraphTab": "_save_graph",
     "AdvancedGraphTab": "_save_graph",
+    "ContourTab": "_save_graph",
     "OcrBindingTab": "_save_binding",
 }
 

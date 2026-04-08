@@ -48,6 +48,9 @@ async def start_ocr(
         DiagramStatus.BUILT,
         DiagramStatus.VALIDATING_GRAPH,
         DiagramStatus.VALIDATED_GRAPH,
+        DiagramStatus.EXTRACTING_CONTOURS,
+        DiagramStatus.CONTOURS_EXTRACTED,
+        DiagramStatus.CONTOURS_VALIDATED,
         DiagramStatus.OCR_COMPLETED,
         DiagramStatus.OCR_BOUND,
         DiagramStatus.ERROR,
@@ -240,6 +243,7 @@ async def save_ocr_binding(
     # Binding требует: 1) граф провалидирован, 2) OCR результат есть
     if diagram.status not in (
         DiagramStatus.VALIDATED_GRAPH,
+        DiagramStatus.CONTOURS_VALIDATED,
         DiagramStatus.OCR_COMPLETED,
         DiagramStatus.OCR_BOUND,
     ):
@@ -479,6 +483,7 @@ async def apply_ocr_binding(
     if diagram and diagram.status in (
         DiagramStatus.OCR_COMPLETED,
         DiagramStatus.VALIDATED_GRAPH,
+        DiagramStatus.CONTOURS_VALIDATED,
     ):
         diagram.status = DiagramStatus.OCR_BOUND
         await db.commit()

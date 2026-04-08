@@ -815,6 +815,7 @@ async def save_validated_graph(
         DiagramStatus.BUILT,
         DiagramStatus.VALIDATING_GRAPH,
         DiagramStatus.VALIDATED_GRAPH,
+        DiagramStatus.CONTOURS_VALIDATED,
         DiagramStatus.OCR_COMPLETED,
         DiagramStatus.OCR_BOUND,
     ):

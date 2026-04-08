@@ -1,0 +1,400 @@
+"""
+Contour Tab -- SAM2 contour selection and validation.
+
+Inherits BaseGraphTab: artifact download, save, confirm, undo.
+Editor: ContourEditor (extends SimpleGraphEditor).
+
+Workflow:
+  1. Load graph + contours_auto.json
+  2. Ctrl+Click on equipment centroid -> toggle SAM2 polygon
+  3. "Apply all" applies all contours with confidence >= threshold
+  4. Save -> graph (updated segmentation/centroid) + contours_validated.json
+  5. Confirm -> complete_contour_validation -> CONTOURS_VALIDATED
+"""
+
+import json
+import logging
+from copy import deepcopy
+from pathlib import Path
+from typing import Optional
+
+from PySide6.QtWidgets import (
+    QHBoxLayout, QPushButton, QLabel, QMessageBox,
+    QApplication,
+)
+from PySide6.QtCore import Slot, Qt
+
+from ui.services.api_client import APIClient, APIError
+from ui.editors.base_graph_editor import BaseGraphEditor
+from ui.editors.contour_editor import ContourEditor
+from ui.tabs.base_graph_tab import BaseGraphTab
+
+logger = logging.getLogger(__name__)
+
+
+class ContourTab(BaseGraphTab):
+    """Tab for SAM2 contour selection.
+
+    Click on equipment centroid to apply/remove SAM2 polygon.
+    Saves both graph (with segmentation) and contours_validated.json.
+    """
+
+    def __init__(
+        self,
+        diagram_uid: str,
+        diagram_name: str,
+        api_client: APIClient,
+        parent=None,
+    ):
+        super().__init__(diagram_uid, diagram_name, api_client, parent)
+
+    # =================================================================
+    # BaseGraphTab interface
+    # =================================================================
+
+    def _create_editor(self) -> BaseGraphEditor:
+        return ContourEditor()
+
+    def _setup_toolbar(self, toolbar: QHBoxLayout):
+        # Edit polygon mode (toggle: checked=edit, unchecked=apply_contour)
+        self.btn_edit_polygon = QPushButton("✏ Редактировать")
+        self.btn_edit_polygon.setCheckable(True)
+        self.btn_edit_polygon.setToolTip(
+            "Ctrl+Click на equipment → редактировать вершины / нарисовать.\n"
+            "Drag вершину, Click ребро = добавить, Ctrl+RMB = удалить.\n"
+            "Delete = удалить полигон и нарисовать заново.\n"
+            "Повторный клик — выход из режима."
+        )
+        self.btn_edit_polygon.setStyleSheet(
+            "QPushButton:checked { background-color: #FF8F00; color: white; }"
+        )
+        self.btn_edit_polygon.clicked.connect(self._toggle_edit_mode)
+        toolbar.addWidget(self.btn_edit_polygon)
+
+        self._add_separator(toolbar)
+
+        # Apply all (high confidence)
+        btn_apply_all = QPushButton("✅ Применить все")
+        btn_apply_all.setToolTip(
+            "Применить SAM2 контуры ко всем узлам с confidence >= 0.85"
+        )
+        btn_apply_all.setStyleSheet(
+            "QPushButton { background-color: #4CAF50; color: white; }"
+            "QPushButton:hover { background-color: #45a049; }"
+        )
+        btn_apply_all.clicked.connect(self._apply_all_contours)
+        toolbar.addWidget(btn_apply_all)
+
+        # Remove all
+        btn_remove_all = QPushButton("❌ Снять все")
+        btn_remove_all.setToolTip("Снять все применённые контуры")
+        btn_remove_all.clicked.connect(self._remove_all_contours)
+        toolbar.addWidget(btn_remove_all)
+
+        self._add_separator(toolbar)
+
+        # Contour stats (separate from graph stats)
+        self.contour_stats_label = QLabel("⬡ —")
+        self.contour_stats_label.setStyleSheet(
+            "color: #aaa; font-size: 11px;"
+        )
+        toolbar.addWidget(self.contour_stats_label)
+
+    @Slot()
+    def _toggle_edit_mode(self):
+        """Toggle edit_polygon mode on/off."""
+        if self.btn_edit_polygon.isChecked():
+            self._set_mode("edit_polygon")
+        else:
+            self._set_mode("apply_contour")
+
+    def _on_mode_changed(self, mode: str):
+        """Sync button state when mode changes (Escape, etc.)."""
+        self.btn_edit_polygon.setChecked(mode == "edit_polygon")
+
+    def _get_mode_button_map(self) -> dict:
+        return {}
+
+    # =================================================================
+    # Editor ready hook -- load contours
+    # =================================================================
+
+    def _on_editor_ready(self):
+        """After graph is loaded, load SAM2 contour data for selective apply.
+
+        Graph is loaded from graph_validated (result of graph editor work).
+        SAM2 contours are available but NOT auto-applied.
+        User selectively clicks on nodes to apply SAM2 polygons.
+        """
+        super()._on_editor_ready()
+
+        editor: ContourEditor = self._editor
+
+        # Load SAM2 contour data (for selective apply)
+        contours_path = self.temp_dir / "contours_auto.json"
+        try:
+            self.api_client.download_contours_auto(self.uid, contours_path)
+        except APIError as exc:
+            logger.warning("Failed to download contours_auto: %s", exc)
+            self.status_label.setText(
+                "⚠ SAM2 контуры недоступны — извлечение ещё не завершено?"
+            )
+            self._update_contour_stats()
+            return
+
+        if not editor.load_contours(str(contours_path)):
+            self.status_label.setText("⚠ Ошибка загрузки контуров")
+            self._update_contour_stats()
+            return
+
+        # Activate contour mode — no auto-apply, user clicks selectively
+        editor.set_mode("apply_contour")
+
+        self._update_contour_stats()
+        self.status_label.setText(
+            "Готово — кликайте на узлы для применения SAM2 контуров"
+        )
+
+    # =================================================================
+    # Stats
+    # =================================================================
+
+    def _update_stats(self, stats: dict):
+        """Override graph stats callback to also update contour stats."""
+        super()._update_stats(stats)
+        self._update_contour_stats()
+
+    def _update_contour_stats(self):
+        """Update contour-specific stats label."""
+        editor: ContourEditor = self._editor
+        if not editor:
+            self.contour_stats_label.setText("⬡ —")
+            return
+
+        cs = editor.get_contour_stats()
+        self.contour_stats_label.setText(
+            f"⬡ {cs['applied']}/{cs['has_contour']} применено"
+        )
+
+    # =================================================================
+    # Apply all / Remove all
+    # =================================================================
+
+    @Slot()
+    def _apply_all_contours(self):
+        """Apply all contours with confidence >= 0.85."""
+        editor: ContourEditor = self._editor
+        if not editor:
+            return
+
+        from ui.editors.commands.contour_commands import ToggleContourCommand
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            count = 0
+            for ann_id, cn in editor._ann_to_contour.items():
+                node_id = editor._ann_to_node.get(ann_id)
+                if not node_id:
+                    continue
+                if node_id in editor._applied_nodes:
+                    continue
+                if not cn.get("polygon_auto"):
+                    continue
+                if cn.get("confidence", 0) < 0.85:
+                    continue
+
+                cmd = ToggleContourCommand(editor, node_id, apply=True)
+                editor.undo_mgr.execute(cmd)
+                count += 1
+
+            self.status_label.setText(f"Применено {count} контуров")
+            self._update_contour_stats()
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    @Slot()
+    def _remove_all_contours(self):
+        """Remove all applied contours."""
+        editor: ContourEditor = self._editor
+        if not editor:
+            return
+
+        from ui.editors.commands.contour_commands import ToggleContourCommand
+
+        count = 0
+        for node_id in list(editor._applied_nodes):
+            cmd = ToggleContourCommand(editor, node_id, apply=False)
+            editor.undo_mgr.execute(cmd)
+            count += 1
+
+        self.status_label.setText(f"Снято {count} контуров")
+        self._update_contour_stats()
+
+    # =================================================================
+    # Save -- graph + contours_validated.json
+    # =================================================================
+
+    def _save_graph(self) -> bool:
+        """Override: save graph AND contours_validated.json."""
+        # 1. Save graph (with updated segmentation + centroid)
+        if not super()._save_graph():
+            return False
+
+        # 2. Save contours_validated.json
+        try:
+            self._save_contours_validated()
+            return True
+        except Exception as exc:
+            logger.error("Failed to save contours: %s", exc)
+            QMessageBox.warning(
+                self, "Ошибка",
+                f"Граф сохранён, но контуры не сохранены:\n{exc}",
+            )
+            return True  # graph saved OK, contours failed
+
+    def _save_contours_validated(self):
+        """Build and upload contours_validated.json."""
+        editor: ContourEditor = self._editor
+        if not editor or not editor._contour_data:
+            return
+
+        validated = deepcopy(editor._contour_data)
+
+        for cn in validated.get("nodes", []):
+            ann_id = cn.get("ann_id")
+            node_id = editor._ann_to_node.get(ann_id)
+
+            if node_id and node_id in editor._applied_nodes:
+                # Use actual node segmentation (may differ from polygon_auto
+                # after vertex editing or redrawing)
+                node = editor.nodes.get(node_id)
+                seg = node.get("segmentation") if node else None
+                cn["polygon_validated"] = seg if seg else cn["polygon_auto"]
+                cn["status"] = "approved"
+                # Preserve was_edited from contour data (set by mark_was_edited)
+                src_cn = editor._ann_to_contour.get(ann_id, {})
+                cn["was_edited"] = src_cn.get("was_edited", False)
+            else:
+                cn["polygon_validated"] = None
+                cn["status"] = "skipped"
+
+        # Update stats
+        approved = sum(
+            1 for cn in validated.get("nodes", [])
+            if cn.get("status") == "approved"
+        )
+        skipped = sum(
+            1 for cn in validated.get("nodes", [])
+            if cn.get("status") == "skipped"
+        )
+        stats = validated.get("stats", {})
+        stats["auto"] = approved
+        stats["manual_review"] = skipped
+        validated["stats"] = stats
+
+        path = self.temp_dir / "contours_validated.json"
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(validated, f, indent=2, ensure_ascii=False)
+
+        self.api_client.upload_contours_validated(self.uid, path)
+        logger.info(
+            "Saved contours_validated.json: %d approved, %d skipped",
+            approved, skipped,
+        )
+
+        # Also save training data artifact
+        self._save_contours_training(validated)
+
+    def _save_contours_training(self, validated_data: dict):
+        """Build and upload contours_training.json for SAM2 fine-tuning.
+
+        Contains only approved polygons (accepted by engineer).
+        Training script reconstructs 6-channel input from pipeline artifacts:
+          - original_image → RGB crop
+          - coco_validated → rough mask (ch3) + other nodes (ch5)
+          - pipe_mask_refined → pipe mask (ch4)
+          - polygon from this file → GT mask
+        """
+        editor: ContourEditor = self._editor
+        if not editor:
+            return
+
+        samples = []
+        from_sam2 = 0
+        from_sam2_edited = 0
+        from_manual = 0
+
+        for cn in validated_data.get("nodes", []):
+            if cn.get("status") != "approved":
+                continue
+
+            polygon = cn.get("polygon_validated")
+            if not polygon or len(polygon) < 6:
+                continue
+
+            ann_id = cn.get("ann_id")
+            has_sam2 = ann_id is not None and ann_id in editor._ann_to_contour
+            was_edited = cn.get("was_edited", False)
+
+            if has_sam2:
+                source = "sam2"
+                from_sam2 += 1
+                if was_edited:
+                    from_sam2_edited += 1
+            else:
+                source = "manual"
+                from_manual += 1
+
+            # bbox in COCO [x, y, w, h] format
+            bbox_xywh = cn.get("bbox")
+            if not bbox_xywh:
+                # Fallback: convert from graph node [x1,y1,x2,y2]
+                node_id = editor._ann_to_node.get(ann_id)
+                node = editor.nodes.get(node_id) if node_id else None
+                if node and node.get("bbox"):
+                    x1, y1, x2, y2 = node["bbox"]
+                    bbox_xywh = [x1, y1, x2 - x1, y2 - y1]
+                else:
+                    continue  # skip — no bbox available
+
+            samples.append({
+                "ann_id": ann_id,
+                "category_id": cn.get("category_id"),
+                "class_name": cn.get("class_name", "unknown"),
+                "bbox_xywh": bbox_xywh,
+                "polygon": polygon,
+                "source": source,
+                "was_edited": was_edited,
+                "confidence": cn.get("confidence"),
+                "n_points": len(polygon) // 2,
+            })
+
+        if not samples:
+            logger.info("No approved contours for training data")
+            return
+
+        training_data = {
+            "version": "1.0",
+            "diagram_uid": self.uid,
+            "samples": samples,
+            "stats": {
+                "total_approved": len(samples),
+                "from_sam2": from_sam2,
+                "from_sam2_edited": from_sam2_edited,
+                "from_manual": from_manual,
+            },
+        }
+
+        path = self.temp_dir / "contours_training.json"
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(training_data, f, indent=2, ensure_ascii=False)
+
+        try:
+            self.api_client.upload_contours_training(self.uid, path)
+            logger.info(
+                "Saved contours_training.json: %d samples "
+                "(sam2=%d, edited=%d, manual=%d)",
+                len(samples), from_sam2, from_sam2_edited, from_manual,
+            )
+        except Exception as exc:
+            logger.warning("Failed to upload contours_training: %s", exc)

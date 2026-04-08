@@ -221,6 +221,7 @@ class ProjectConfig:
     contour_extraction: ContourExtractionConfig
     ocr: OcrConfig
     config_path: str
+    save_visualizations: bool = False
 
     @property
     def yolo(self) -> DetectionModelConfig:
@@ -436,6 +437,7 @@ class ProjectLoader:
             contour_extraction=contour_extraction,
             ocr=ocr,
             config_path=str(yaml_path),
+            save_visualizations=project.get("save_visualizations", False),
         )
 
     def load(self, project_code: str) -> Optional[ProjectConfig]:

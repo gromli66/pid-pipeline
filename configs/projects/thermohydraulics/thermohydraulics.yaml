@@ -5,6 +5,7 @@
 project:
   name: "Термогидравлика"
   code: "thermohydraulics"
+  save_visualizations: false    # true = save debug overlays (slow), false = skip
 
 cvat:
   project_name: "P&ID Термогидравлика"

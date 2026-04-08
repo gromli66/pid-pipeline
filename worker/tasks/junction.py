@@ -215,11 +215,12 @@ def task_detect_junctions(
                 "time_sec": round(result["time_sec"], 2),
             }, f, indent=2)
 
-        vis = create_visualization(img_rgb, skeleton, junctions, bridges, jcfg.square_size)
-        cv2.imwrite(
-            str(junction_dir / "visualization.png"),
-            cv2.cvtColor(vis, cv2.COLOR_RGB2BGR),
-        )
+        if project_config.save_visualizations:
+            vis = create_visualization(img_rgb, skeleton, junctions, bridges, jcfg.square_size)
+            cv2.imwrite(
+                str(junction_dir / "visualization.png"),
+                cv2.cvtColor(vis, cv2.COLOR_RGB2BGR),
+            )
 
         # Free GPU memory
         del model

@@ -234,14 +234,27 @@ def task_build_graph(self, diagram_uid: str):
         )
 
         # builder.save() creates {scheme_name}_graph.png → graph_graph.png
-        # Rename to our standard name
+        # Rename to our standard name (only if visualizations enabled)
         auto_viz_path = graph_dir / "graph_graph.png"
-        if auto_viz_path.exists():
+
+        # Load project config for save_visualizations flag
+        from app.services.project_loader import get_project_loader
+        _save_vis = False
+        try:
+            _proj = get_project_loader().load(diagram.project_code)
+            _save_vis = _proj.save_visualizations if _proj else False
+        except Exception:
+            pass
+
+        if _save_vis and auto_viz_path.exists():
             auto_viz_path.replace(graph_overlay_path)
+        elif auto_viz_path.exists():
+            auto_viz_path.unlink()  # remove unneeded visualization
 
         logger.info(
-            "Saved: graph.json (%d bytes), graph_overlay.png",
+            "Saved: graph.json (%d bytes)%s",
             graph_json_path.stat().st_size if graph_json_path.exists() else 0,
+            ", graph_overlay.png" if _save_vis else "",
         )
 
         # ===== 5. Artifacts in DB =====
@@ -271,7 +284,7 @@ def task_build_graph(self, diagram_uid: str):
             db.add(artifact_json)
 
         # GRAPH_OVERLAY
-        if graph_overlay_path.exists():
+        if _save_vis and graph_overlay_path.exists():
             artifact_overlay = Artifact(
                 diagram_uid=diagram_uid,
                 artifact_type=ArtifactType.GRAPH_OVERLAY,

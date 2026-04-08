@@ -80,6 +80,10 @@ def export_node_link_format(nodes: List[Dict],
         if 'yolo_idx' in node:
             node_data['yolo_idx'] = node['yolo_idx']
         
+        # Добавить ann_idx (COCO annotation id) для матчинга с SAM2 контурами
+        if node.get('ann_idx') is not None:
+            node_data['ann_idx'] = node['ann_idx']
+        
         # Добавить segmentation (полигон) если есть
         if node.get('segmentation'):
             node_data['segmentation'] = node['segmentation']

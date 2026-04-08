@@ -39,11 +39,12 @@ BEAD_VAL_PIPE = 3
 BEAD_VAL_JUNCTION = 4
 BEAD_GRAPH = 5
 BEAD_VAL_GRAPH = 6
-BEAD_OCR = 7
-BEAD_OCR_BINDING = 8
-BEAD_EDIT_GRAPH = 9
-BEAD_FXML = 10
-NUM_BEADS = 11
+BEAD_CONTOURS = 7
+BEAD_OCR = 8
+BEAD_OCR_BINDING = 9
+BEAD_EDIT_GRAPH = 10
+BEAD_FXML = 11
+NUM_BEADS = 12
 
 # =====================================================================
 # Порядок статусов и маппинг бусин/кнопок
@@ -75,10 +76,10 @@ _STATUS_ORDER = [
     DiagramStatus.CONTOURS_EXTRACTED,    # 21
     DiagramStatus.CONTOURS_VALIDATED,    # 22
     DiagramStatus.OCR_PROCESSING,        # 23
-    DiagramStatus.OCR_COMPLETED,         # 21
-    DiagramStatus.OCR_BOUND,             # 22
-    DiagramStatus.GENERATING_FXML,       # 23
-    DiagramStatus.COMPLETED,             # 24
+    DiagramStatus.OCR_COMPLETED,         # 24
+    DiagramStatus.OCR_BOUND,             # 25
+    DiagramStatus.GENERATING_FXML,       # 26
+    DiagramStatus.COMPLETED,             # 27
 ]
 _STATUS_IDX = {s: i for i, s in enumerate(_STATUS_ORDER)}
 
@@ -120,10 +121,16 @@ _BEAD_DEFS = [
      set(),
      DiagramStatus.BUILT),
 
+    (BEAD_CONTOURS,      "contours",    DiagramStatus.CONTOURS_VALIDATED,
+     set(),
+     DiagramStatus.VALIDATED_GRAPH),
+
     (BEAD_OCR,           "ocr",         DiagramStatus.OCR_COMPLETED,
      {DiagramStatus.OCR_PROCESSING,
       DiagramStatus.BUILDING_GRAPH, DiagramStatus.BUILT,
-      DiagramStatus.VALIDATING_GRAPH, DiagramStatus.VALIDATED_GRAPH},
+      DiagramStatus.VALIDATING_GRAPH, DiagramStatus.VALIDATED_GRAPH,
+      DiagramStatus.EXTRACTING_CONTOURS, DiagramStatus.CONTOURS_EXTRACTED,
+      DiagramStatus.CONTOURS_VALIDATED},
      DiagramStatus.VALIDATED_GRAPH),
 
     (BEAD_OCR_BINDING,   "ocr_binding", DiagramStatus.OCR_BOUND,
@@ -237,6 +244,7 @@ class DiagramWorkspace(QWidget):
         ("junction",    "Вал. j/b"),
         ("graph",       "Граф"),
         ("val_graph",   "Вал. графа"),
+        ("contours",    "Контуры"),
         ("ocr",         "OCR"),
         ("ocr_binding", "Привязка"),
         ("edit_graph",  "Редактор"),
@@ -316,6 +324,7 @@ class DiagramWorkspace(QWidget):
             BeadInfo("Вал. pipe"),
             BeadInfo("Граф"),
             BeadInfo("Вал. графа"),
+            BeadInfo("Контуры"),
             BeadInfo("OCR"),
             BeadInfo("Привязка"),
             BeadInfo("Редактор"),
@@ -373,6 +382,7 @@ class DiagramWorkspace(QWidget):
             "junction": "detected_junctions",
             "graph": "validated_junctions",
             "val_graph": "built",
+            "contours": "validated_graph",
             "ocr": "validated_graph",
             "ocr_binding": "ocr_completed",
             "edit_graph": "ocr_bound",
@@ -388,6 +398,7 @@ class DiagramWorkspace(QWidget):
             "pipe": self._open_pipe,
             "graph": self._start_graph_build,
             "val_graph": self._open_graph_validation,
+            "contours": self._open_contours,
             "edit_graph": self._open_graph_editor,
             "ocr": self._start_ocr,
             "ocr_binding": self._open_ocr_binding,
@@ -426,12 +437,15 @@ class DiagramWorkspace(QWidget):
         self._refresh_status()
 
         # Подписаться на обновления (один раз)
-        try:
-            self.status_provider.status_updated.disconnect(
-                self._on_status_updated,
-            )
-        except (RuntimeError, RuntimeWarning, TypeError):
-            pass
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            try:
+                self.status_provider.status_updated.disconnect(
+                    self._on_status_updated,
+                )
+            except (RuntimeError, TypeError):
+                pass
         self.status_provider.status_updated.connect(self._on_status_updated)
 
     def cleanup(self):
@@ -440,12 +454,15 @@ class DiagramWorkspace(QWidget):
         self._force_close_tab()
         if self._uid:
             self.status_provider.unwatch(self._uid)
-        try:
-            self.status_provider.status_updated.disconnect(
-                self._on_status_updated,
-            )
-        except (RuntimeError, RuntimeWarning, TypeError):
-            pass
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            try:
+                self.status_provider.status_updated.disconnect(
+                    self._on_status_updated,
+                )
+            except (RuntimeError, TypeError):
+                pass
 
     # =================================================================
     # Refresh
@@ -475,6 +492,9 @@ class DiagramWorkspace(QWidget):
             DiagramStatus.BUILT,
             DiagramStatus.VALIDATING_GRAPH,
             DiagramStatus.VALIDATED_GRAPH,
+            DiagramStatus.EXTRACTING_CONTOURS,
+            DiagramStatus.CONTOURS_EXTRACTED,
+            DiagramStatus.CONTOURS_VALIDATED,
         ):
             try:
                 ocr_info = self.api_client.get_ocr_status(self._uid)
@@ -503,6 +523,9 @@ class DiagramWorkspace(QWidget):
             DiagramStatus.BUILT,
             DiagramStatus.VALIDATING_GRAPH,
             DiagramStatus.VALIDATED_GRAPH,
+            DiagramStatus.EXTRACTING_CONTOURS,
+            DiagramStatus.CONTOURS_EXTRACTED,
+            DiagramStatus.CONTOURS_VALIDATED,
         ):
             self.beads.set_state(BEAD_OCR, BeadState.COMPLETED)
             if "ocr" in self._action_buttons:
@@ -604,6 +627,7 @@ class DiagramWorkspace(QWidget):
             "detecting_junctions": "junction",
             "building_graph": "graph",
             "validating_graph": "val_graph",
+            "contour_extraction": "contours",
             "generating_fxml": "fxml",
             "ocr": "ocr",
         }
@@ -779,7 +803,12 @@ class DiagramWorkspace(QWidget):
             diagram = self.api_client.get_diagram(self._uid)
             if diagram.status == validating_status:
                 preserve_ocr = tab_key == "val_graph"
-                self.api_client.rollback_diagram(self._uid, rollback_target, preserve_ocr=preserve_ocr)
+                preserve_contours = tab_key == "val_graph"
+                self.api_client.rollback_diagram(
+                    self._uid, rollback_target,
+                    preserve_ocr=preserve_ocr,
+                    preserve_contours=preserve_contours,
+                )
                 logger.info(
                     "Rolled back %s → %s (tab %s force-closed)",
                     validating_status.value, rollback_target, tab_key,
@@ -882,14 +911,21 @@ class DiagramWorkspace(QWidget):
                 return
             try:
                 QApplication.setOverrideCursor(Qt.WaitCursor)
-                # Preserve OCR artifacts when rolling back graph stages,
-                # because OCR runs in parallel and is independent of graph.
-                preserve_ocr = key in ("graph", "val_graph")
-                result = self.api_client.rollback_diagram(self._uid, target, preserve_ocr=preserve_ocr)
+                # Preserve OCR/contour artifacts when rolling back graph/contour stages,
+                # because OCR and SAM2 run in parallel and are independent of graph.
+                preserve_ocr = key in ("graph", "val_graph", "contours")
+                preserve_contours = key in ("graph", "val_graph", "contours")
+                result = self.api_client.rollback_diagram(
+                    self._uid, target,
+                    preserve_ocr=preserve_ocr,
+                    preserve_contours=preserve_contours,
+                )
                 deleted = result.get("deleted_artifacts", 0)
                 self.status_message.emit(
                     f"↩ Откат до {target}: удалено {deleted} артефактов", 3000
                 )
+                # Reset OCR notification — let _refresh_status re-detect from artifact
+                self._ocr_notified = False
                 self._refresh_status()
             except APIError as exc:
                 QMessageBox.warning(
@@ -1367,11 +1403,11 @@ class DiagramWorkspace(QWidget):
 
     @Slot()
     def _on_simple_graph_confirmed(self):
-        """Простая валидация графа завершена → запустить OCR."""
-        logger.info("Simple graph confirmed → starting OCR")
+        """Простая валидация графа завершена."""
+        logger.info("Simple graph confirmed")
         try:
             self.api_client.complete_simple_graph_validation(self._uid)
-            self.status_message.emit("✅ Валидация графа завершена, OCR запущен", 5000)
+            self.status_message.emit("✅ Валидация графа завершена", 5000)
         except APIError as exc:
             QMessageBox.warning(
                 self, "Ошибка",
@@ -1382,11 +1418,71 @@ class DiagramWorkspace(QWidget):
 
         self._close_tab_and_restore_header()
 
-        # Сразу показать OCR как IN_PROGRESS (не ждать polling)
-        self._apply_status(DiagramStatus.OCR_PROCESSING)
+        # Не форсим OCR_PROCESSING — следующая бусина "Контуры"
+        # _refresh_status покажет: CONTOURS=AVAILABLE, OCR=IN_PROGRESS (parallel)
+        self._refresh_status()
 
-        # Начать polling чтобы отследить завершение OCR
+        # Polling для OCR artifact (параллельный)
         self.status_provider.watch(self._uid)
+
+    @Slot()
+    def _open_contours(self):
+        """Открыть вкладку валидации SAM2 контуров."""
+        if not self._uid:
+            return
+
+        # Проверить наличие контуров
+        try:
+            contours_info = self.api_client.get_contours_status(self._uid)
+            if not contours_info.get("has_auto"):
+                QMessageBox.information(
+                    self, "Контуры",
+                    "SAM2 контуры ещё не готовы.\n"
+                    "Дождитесь завершения извлечения контуров.",
+                )
+                return
+        except APIError:
+            pass  # вкладка сама покажет ошибку
+
+        try:
+            from ui.tabs.contour_tab import ContourTab
+
+            tab = ContourTab(
+                diagram_uid=self._uid,
+                diagram_name=self._diagram_name,
+                api_client=self.api_client,
+            )
+            tab.confirmed.connect(self._on_contours_confirmed)
+            tab.status_message.connect(
+                lambda msg: self.status_message.emit(msg, 5000)
+            )
+            self._open_tab(tab, "contours")
+
+        except Exception as exc:
+            logger.error(
+                "Failed to open contour tab: %s", exc, exc_info=True
+            )
+            QMessageBox.warning(
+                self, "Ошибка",
+                f"Не удалось открыть редактор контуров:\n{exc}",
+            )
+
+    @Slot()
+    def _on_contours_confirmed(self):
+        """Контуры подтверждены → CONTOURS_VALIDATED."""
+        logger.info("Contours confirmed")
+        try:
+            self.api_client.complete_contour_validation(self._uid)
+            self.status_message.emit("✅ Контуры приняты", 5000)
+        except APIError as exc:
+            QMessageBox.warning(
+                self, "Ошибка",
+                f"Не удалось завершить валидацию контуров:\n{exc.message}",
+            )
+            self._close_tab_and_restore_header()
+            return
+
+        self._close_tab_and_restore_header()
 
     @Slot()
     def _on_graph_confirmed(self):

@@ -578,12 +578,60 @@ class APIClient:
         dest.write_bytes(response.content)
         return dest
 
-    def rollback_diagram(self, uid: str, target_status: str, preserve_ocr: bool = False) -> Dict[str, Any]:
+    def rollback_diagram(self, uid: str, target_status: str,
+                         preserve_ocr: bool = False,
+                         preserve_contours: bool = False) -> Dict[str, Any]:
         """Откатить диаграмму до указанного этапа."""
         url = f"/api/diagrams/{uid}/rollback?target_status={target_status}"
         if preserve_ocr:
             url += "&preserve_ocr=true"
+        if preserve_contours:
+            url += "&preserve_contours=true"
         return self._request("POST", url)
+
+    # === Contours ===
+
+    def get_contours_status(self, uid: str) -> Dict[str, Any]:
+        """Проверить наличие контуров и статистику."""
+        return self._request("GET", f"/api/contours/{uid}/status")
+
+    def download_contours_auto(self, uid: str, dest: Path) -> Path:
+        """Скачать contours_auto.json."""
+        response = self._request_raw("GET", f"/api/contours/{uid}/auto", timeout=60.0)
+        dest = Path(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(response.content)
+        return dest
+
+    def download_contours_validated(self, uid: str, dest: Path) -> Path:
+        """Скачать contours_validated.json."""
+        response = self._request_raw("GET", f"/api/contours/{uid}/validated", timeout=60.0)
+        dest = Path(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(response.content)
+        return dest
+
+    def upload_contours_validated(self, uid: str, path: Path) -> Dict[str, Any]:
+        """Загрузить contours_validated.json."""
+        path = Path(path)
+        with open(path, "rb") as f:
+            files = {"file": (path.name, f, "application/json")}
+            return self._request("PUT", f"/api/contours/{uid}/validated", files=files)
+
+    def upload_contours_training(self, uid: str, path: Path) -> Dict[str, Any]:
+        """Загрузить contours_training.json (approved polygons for SAM2 fine-tuning)."""
+        path = Path(path)
+        with open(path, "rb") as f:
+            files = {"file": (path.name, f, "application/json")}
+            return self._request("PUT", f"/api/contours/{uid}/training", files=files)
+
+    def auto_accept_contours(self, uid: str) -> Dict[str, Any]:
+        """Auto-accept всех контуров."""
+        return self._request("POST", f"/api/contours/{uid}/auto-accept")
+
+    def complete_contour_validation(self, uid: str) -> Dict[str, Any]:
+        """Завершить валидацию контуров."""
+        return self._request("POST", f"/api/contours/{uid}/complete")
 
     # === Projects ===
 

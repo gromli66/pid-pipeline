@@ -11,6 +11,7 @@ from app.api import junction
 from app.api import graph
 from app.api import validation
 from app.api import ocr
+from app.api import contours
 
 __all__ = [
     "diagrams",
@@ -22,4 +23,5 @@ __all__ = [
     "graph",
     "validation",
     "ocr",
+    "contours",
 ]
