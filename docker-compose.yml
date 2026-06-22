@@ -136,13 +136,14 @@ services:
     networks:
       - pid_network
       - cvat
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    # --- GPU отключён для CPU-сервера (Д5). Раскомментировать при наличии GPU. ---
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
 
   worker_ocr:
     build:
@@ -177,13 +178,14 @@ services:
     restart: unless-stopped
     networks:
       - pid_network
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    # --- GPU отключён для CPU-сервера (Д5). Раскомментировать при наличии GPU. ---
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
 
   # ===========================================================================
   # CVAT Services
