@@ -21,8 +21,10 @@ class StageType(str, enum.Enum):
     """Типы этапов обработки."""
 
     UPLOAD = "upload"
+    FRAME_REMOVAL = "frame_removal"
     DETECTION = "detection"
     CVAT_VALIDATION = "cvat_validation"
+    DIRECTION_CLASSIFICATION = "direction_classification"
     SEGMENTATION = "segmentation"
     SKELETONIZATION = "skeletonization"
     JUNCTION_CLASSIFICATION = "junction_classification"

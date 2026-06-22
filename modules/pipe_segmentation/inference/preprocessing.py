@@ -132,6 +132,45 @@ def prepare_tile_batch(
     return tile_tensor
 
 
+def prepare_tile_batch_rgb(
+    rgb_tile: np.ndarray,
+    mean: List[float] = None,
+    std: List[float] = None,
+    binarize: bool = False,
+    binarize_method: str = BINARIZE_METHOD
+) -> torch.Tensor:
+    """
+    Подготавливает 3-канальный тензор (RGB only).
+    
+    Для моделей с in_channels=3, обученных без node_mask.
+    
+    Returns:
+        Тензор [1, 3, H, W]
+    """
+    if binarize:
+        rgb_tile = preprocess_image(rgb_tile, binarize=True, binarize_method=binarize_method)
+    
+    rgb_normalized = normalize_tile(rgb_tile, mean, std)
+    tile_tensor = torch.from_numpy(rgb_normalized).permute(2, 0, 1).unsqueeze(0)
+    return tile_tensor
+
+
+def prepare_batch_from_tiles_rgb(
+    rgb_tiles: List[np.ndarray],
+    mean: List[float] = None,
+    std: List[float] = None,
+    binarize: bool = False,
+    binarize_method: str = BINARIZE_METHOD
+) -> torch.Tensor:
+    """3-канальная версия prepare_batch_from_tiles."""
+    batch = []
+    for rgb in rgb_tiles:
+        batch.append(prepare_tile_batch_rgb(
+            rgb, mean, std, binarize=binarize, binarize_method=binarize_method
+        ))
+    return torch.cat(batch, dim=0)
+
+
 def prepare_batch_from_tiles(
     rgb_tiles: List[np.ndarray],
     node_tiles: List[np.ndarray],

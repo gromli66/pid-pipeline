@@ -22,6 +22,7 @@ from PySide6.QtCore import Signal, Slot, Qt, QThread, QObject
 
 from ui.services.api_client import APIClient, APIError
 from ui.editors.base_graph_editor import BaseGraphEditor
+from ui.widgets.appearance_panel import AppearanceMixin
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +83,7 @@ class _GraphArtifactDownloader(QObject):
             self.error.emit(str(exc))
 
 
-class BaseGraphTab(QWidget):
+class BaseGraphTab(AppearanceMixin, QWidget):
     """Базовый класс вкладки редактора графа P&ID.
 
     Template method:
@@ -166,26 +167,23 @@ class BaseGraphTab(QWidget):
 
         toolbar.addStretch()
 
-        # --- Stats label (общий для всех вкладок) ---
-        self.stats_label = QLabel("")
-        self.stats_label.setStyleSheet("color: #aaa; font-size: 11px;")
-        toolbar.addWidget(self.stats_label)
-
-        self._add_separator(toolbar)
-
         # --- Undo ---
-        btn_undo = QPushButton("↩ Undo")
-        btn_undo.setToolTip("Ctrl+Z")
+        btn_undo = QPushButton("Undo")
+        btn_undo.setToolTip("Отменить последнее действие (Ctrl+Z)")
         btn_undo.clicked.connect(self._undo)
         toolbar.addWidget(btn_undo)
 
         # --- Save ---
-        btn_save = QPushButton("💾 Сохранить")
+        btn_save = QPushButton("Сохранить")
+        btn_save.setToolTip("Сохранить граф на сервер")
         btn_save.clicked.connect(self._save_graph)
         toolbar.addWidget(btn_save)
 
         # --- Confirm ---
         self.btn_confirm = QPushButton("✅ Подтвердить")
+        self.btn_confirm.setToolTip(
+            "Сохранить и подтвердить граф.\nПереход к следующему этапу."
+        )
         self.btn_confirm.setStyleSheet("""
             QPushButton {
                 background-color: #4CAF50;
@@ -203,7 +201,7 @@ class BaseGraphTab(QWidget):
         layout.addLayout(toolbar)
 
         # === Loading placeholder ===
-        self.loading_label = QLabel("⏳ Загрузка артефактов...")
+        self.loading_label = QLabel("Загрузка артефактов...")
         self.loading_label.setAlignment(Qt.AlignCenter)
         self.loading_label.setStyleSheet("font-size: 18px; color: #666;")
         layout.addWidget(self.loading_label)
@@ -258,6 +256,7 @@ class BaseGraphTab(QWidget):
             )
             self._editor = editor  # присвоить только после успеха
             self.status_label.setText("Граф загружен")
+            self.apply_saved_appearance()
             self._on_editor_ready()
         except Exception as exc:
             logger.error("Failed to init graph editor: %s", exc, exc_info=True)
@@ -266,11 +265,40 @@ class BaseGraphTab(QWidget):
                 f"Не удалось инициализировать редактор графа:\n{exc}"
             )
 
+    def _appearance_editor(self):
+        return self._editor
+
+    def _build_appearance_controls(self, panel):
+        from PySide6.QtGui import QColor
+        self._add_bg_darkness_slider(panel)
+        self._add_color_setting(
+            panel, "Цвет рёбер", "edge_color", QColor(255, 255, 255),
+            lambda c: self._editor and self._editor.set_edge_color(c),
+        )
+
+    def apply_saved_appearance(self):
+        super().apply_saved_appearance()
+        ed = self._editor
+        if ed is None:
+            return
+        from PySide6.QtGui import QColor
+        if hasattr(ed, "set_edge_color"):
+            self._apply_saved_color("edge_color", QColor(255, 255, 255), ed.set_edge_color)
+
+    def apply_default_appearance(self):
+        super().apply_default_appearance()
+        ed = self._editor
+        if ed is None:
+            return
+        from PySide6.QtGui import QColor
+        if hasattr(ed, "set_edge_color"):
+            ed.set_edge_color(QColor(255, 255, 255, 150))
+
     @Slot(str)
     def _on_download_error(self, error_msg: str):
         self._download_thread.quit()
         self._download_thread.wait()
-        self.loading_label.setText(f"❌ Ошибка: {error_msg}")
+        self.loading_label.setText(f"Ошибка: {error_msg}")
 
     def _on_editor_ready(self):
         """Хук: вызывается сразу после успешной загрузки редактора.
@@ -283,13 +311,8 @@ class BaseGraphTab(QWidget):
     # =================================================================
 
     def _update_stats(self, stats: dict):
-        """Callback от редактора — обновить статистику в toolbar."""
-        self.stats_label.setText(
-            f"Узлов: {stats['total_nodes']}  "
-            f"Рёбер: {stats['total_edges']}  "
-            f"Связанных: {stats['connected']}  "
-            f"Изолированных: {stats['isolated']}"
-        )
+        """Callback от редактора. Счётчик в toolbar убран — оставлено для совместимости."""
+        return
 
     # =================================================================
     # Common mode/tool helpers
@@ -347,14 +370,14 @@ class BaseGraphTab(QWidget):
 
             graph_path = self.temp_dir / "graph_validated.json"
             if not self._editor.save_graph(str(graph_path)):
-                self.status_label.setText("❌ Не удалось сохранить локально")
+                self.status_label.setText("Не удалось сохранить локально")
                 return False
 
             self.status_label.setText("Загрузка графа на сервер...")
             self.api_client.upload_validated_graph(self.uid, graph_path)
 
             self._saved_stack_depth = self._editor.undo_mgr.stack_depth
-            self.status_label.setText("✅ Граф сохранён")
+            self.status_label.setText("Граф сохранён")
             return True
 
         except Exception as exc:
@@ -383,7 +406,7 @@ class BaseGraphTab(QWidget):
                 if not self._save_graph():
                     return
 
-        self.status_message.emit("✅ Граф подтверждён")
+        self.status_message.emit("Граф подтверждён")
         self.confirmed.emit()
 
     # =================================================================

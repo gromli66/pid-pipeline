@@ -407,18 +407,25 @@ def detections_to_coco(
 def resolve_overlaps(
     detections: List[Dict],
     mutual_overlap_threshold: float = 0.7,
+    containment_threshold: float = 0.8,
 ) -> List[Dict]:
     """
     Разрешение перекрытий между детекциями после SAHI + NMS.
 
-    Проверяет каждую пару боксов на взаимное перекрытие (intersection / area).
-    Срабатывает только когда ОБОИМ боксам пересечение составляет значительную
-    долю площади (mutual overlap). Это отсекает ситуацию, когда большой бокс
-    покрывает маленький — там ratio для большого будет низким.
+    Проверяет каждую пару боксов на:
+    1. ВЗАИМНОЕ перекрытие (intersection / area для ОБОИХ боксов). Срабатывает
+       когда оба бокса перекрываются на значительную долю своей площади.
+    2. ВЛОЖЕННОСТЬ (containment): меньший бокс почти целиком внутри большего
+       (intersection / площадь_меньшего ≥ containment_threshold), даже если у
+       большого бокса доля перекрытия низкая. Это типичный артефакт тайлинга —
+       полный бокс на оборудование + отдельный бокс на его часть.
 
     Правила разрешения:
-    - Одинаковый класс (A vs A): оставляем бокс с большей площадью.
-    - Разный класс (A vs B): оставляем бокс с большим confidence.
+    - Взаимное перекрытие, одинаковый класс (A vs A): оставляем бокс с большей площадью.
+    - Взаимное перекрытие, разный класс (A vs B): оставляем бокс с большим confidence.
+    - Вложенность, ТОЛЬКО одинаковый класс: подавляем меньший (оставляем полный).
+      Разные классы при вложенности НЕ трогаем (мелкий объект может легитимно
+      лежать внутри оборудования — датчик, выход и т.п.).
 
     Args:
         detections: Список детекций от NodeDetector.detect().
@@ -427,6 +434,8 @@ def resolve_overlaps(
             confidence, bbox [x1, y1, x2, y2].
         mutual_overlap_threshold: Порог для ОБОИХ ratio_i и ratio_j (0-1).
             При 0.7 — оба бокса должны перекрываться на ≥70% своей площади.
+        containment_threshold: Порог вложенности (0-1) — доля меньшего бокса,
+            покрытая большим. При 0.8 — меньший должен быть внутри большего на ≥80%.
 
     Returns:
         Отфильтрованный список детекций (без подавленных дубликатов).
@@ -475,31 +484,45 @@ def resolve_overlaps(
             ratio_i = intersection / area_i
             ratio_j = intersection / area_j
 
-            # Срабатываем только при взаимном перекрытии
-            if ratio_i < mutual_overlap_threshold or ratio_j < mutual_overlap_threshold:
-                continue
-
-            # --- Разрешение конфликта ---
             class_i = detections[i]["class_id"]
             class_j = detections[j]["class_id"]
 
-            if class_i == class_j:
-                # Одинаковый класс → оставляем бокс с большей площадью
+            is_mutual = (
+                ratio_i >= mutual_overlap_threshold
+                and ratio_j >= mutual_overlap_threshold
+            )
+            # Вложенность: доля МЕНЬШЕГО бокса, покрытая большим
+            containment = intersection / min(area_i, area_j)
+            is_contained = containment >= containment_threshold
+
+            if is_mutual:
+                # --- Взаимное перекрытие ---
+                if class_i == class_j:
+                    # Одинаковый класс → оставляем бокс с большей площадью
+                    if area_i >= area_j:
+                        suppressed[j] = True
+                    else:
+                        suppressed[i] = True
+                        break  # i подавлен, переходим к следующему i
+                else:
+                    # Разный класс → оставляем бокс с большим confidence
+                    conf_i = detections[i]["confidence"]
+                    conf_j = detections[j]["confidence"]
+                    if conf_i >= conf_j:
+                        suppressed[j] = True
+                    else:
+                        suppressed[i] = True
+                        break  # i подавлен, переходим к следующему i
+            elif is_contained and class_i == class_j:
+                # --- Вложенный фрагмент тайлинга (только одинаковый класс) ---
+                # Меньший бокс почти целиком внутри большего → подавляем меньший
                 if area_i >= area_j:
                     suppressed[j] = True
                 else:
                     suppressed[i] = True
                     break  # i подавлен, переходим к следующему i
             else:
-                # Разный класс → оставляем бокс с большим confidence
-                conf_i = detections[i]["confidence"]
-                conf_j = detections[j]["confidence"]
-
-                if conf_i >= conf_j:
-                    suppressed[j] = True
-                else:
-                    suppressed[i] = True
-                    break  # i подавлен, переходим к следующему i
+                continue
 
     result = [det for det, sup in zip(detections, suppressed) if not sup]
     return result

@@ -220,10 +220,11 @@ def task_extract_contours(self, diagram_uid: str):
         # ===== 8. Run SAM2 inference =====
         from modules.sam2_contour import ContourExtractor
 
+        from worker.utils.device import resolve_device
         extractor = ContourExtractor(
             checkpoint=ce_cfg.checkpoint,
             checkpoint_v8=None,
-            device="cuda",
+            device=resolve_device(),
             target_size=1024,
             snap_dp_eps=ce_cfg.snap_dp_eps,
             snap_threshold=ce_cfg.snap_threshold,

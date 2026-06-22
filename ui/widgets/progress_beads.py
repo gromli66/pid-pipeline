@@ -1,12 +1,17 @@
 """
 Progress Beads — визуальный индикатор прогресса пайплайна P&ID.
 
-Цепочка бусин: ●—●—●—●—●—●—●—●
-Состояния: выполнено (зелёная), текущий (оранжевая пульсирующая),
+Поддерживает горизонтальную и вертикальную ориентацию.
+Вертикальная цепочка бусин:  ●
+                             │
+                             ●
+                             │
+                             ●
+Состояния: выполнено (зелёная), текущий (оранжевая sweep-анимация),
            доступно (белая обводка), недоступно (серая), ошибка (красная).
 
-Поддерживает выравнивание бусин по X-позициям внешних виджетов
-(например, кнопок расположенных под бусинами).
+Может выравнивать бусины по позициям внешних виджетов
+(кнопок этапов) через set_anchor_widgets() — по X (гориз.) или Y (вертик.).
 """
 
 from typing import List, Optional
@@ -56,41 +61,53 @@ class ProgressBeads(QWidget):
     """
     Виджет прогресс-бусин.
 
-    Отображает горизонтальную цепочку бусин с подписями.
-    Может выравнивать бусины по X-позициям внешних виджетов
-    через set_anchor_widgets().
+    orientation="vertical" — цепочка сверху вниз (по умолчанию),
+    бусины выравниваются по Y-центрам якорных виджетов.
+    orientation="horizontal" — цепочка слева направо, по X-центрам.
     """
 
-    BEAD_RADIUS = 18
     LINE_THICKNESS = 3
-    VERTICAL_PADDING = 12
+    PADDING = 12
     LABEL_SPACING = 8
     DATE_SPACING = 2
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, orientation: str = "vertical"):
         super().__init__(parent)
 
         self._beads: List[BeadInfo] = []
         self._anchor_widgets: List[QWidget] = []
-        self._sweep_angle = 0  # 0..360 для sweep animation
+        self._sweep_angle = 0
+        self._orientation = orientation
+        self._radius = 16
+        self._show_labels = (orientation == "horizontal")
 
-        # Анимация заполнения для IN_PROGRESS
         self._pulse_timer = QTimer(self)
         self._pulse_timer.timeout.connect(self._animate_sweep)
         self._pulse_timer.start(40)
 
-        self.setMinimumHeight(100)
+        if orientation == "vertical":
+            self.setMinimumWidth(2 * self._radius + 2 * self.PADDING)
+        else:
+            self.setMinimumHeight(100)
 
     # === Public API ===
 
     def set_beads(self, beads: List[BeadInfo]):
-        """Установить список бусин."""
         self._beads = beads
         self.update()
 
     def set_anchor_widgets(self, widgets: List[QWidget]):
         self._anchor_widgets = widgets
         self.update()
+
+    def set_radius(self, r: int):
+        """Адаптивный радиус бусины (px)."""
+        r = max(6, int(r))
+        if r != self._radius:
+            self._radius = r
+            if self._orientation == "vertical":
+                self.setFixedWidth(2 * r + 2 * self.PADDING)
+            self.update()
 
     def set_state(self, index: int, state: BeadState, date: str = ""):
         if 0 <= index < len(self._beads):
@@ -114,29 +131,37 @@ class ProgressBeads(QWidget):
     # === Positioning ===
 
     def _get_bead_positions(self) -> List[QPointF]:
-        """Вычислить позиции бусин."""
         n = len(self._beads)
         if n == 0:
             return []
+        r = self._radius
 
-        r = self.BEAD_RADIUS
-        y_center = self.VERTICAL_PADDING + r
+        if self._orientation == "vertical":
+            x_center = self.width() / 2
+            if self._anchor_widgets and len(self._anchor_widgets) == n:
+                positions = []
+                for widget in self._anchor_widgets:
+                    center = widget.mapTo(self.parent(), widget.rect().center())
+                    local = self.mapFrom(self.parent(), center)
+                    positions.append(QPointF(x_center, local.y()))
+                return positions
+            margin = r + 16
+            available = self.height() - 2 * margin
+            step = available / (n - 1) if n > 1 else 0
+            return [QPointF(x_center, margin + i * step) for i in range(n)]
 
-        # Если есть якорные виджеты — выравниваем по ним
+        # horizontal
+        y_center = self.PADDING + r
         if self._anchor_widgets and len(self._anchor_widgets) == n:
             positions = []
             for widget in self._anchor_widgets:
-                # Центр виджета в координатах ProgressBeads
                 center = widget.mapTo(self.parent(), widget.rect().center())
                 local = self.mapFrom(self.parent(), center)
                 positions.append(QPointF(local.x(), y_center))
             return positions
-
-        # Fallback — равномерное распределение
         margin = r + 30
         available_width = self.width() - 2 * margin
         step = available_width / (n - 1) if n > 1 else 0
-
         return [QPointF(margin + i * step, y_center) for i in range(n)]
 
     # === Painting ===
@@ -148,28 +173,29 @@ class ProgressBeads(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        r = self.BEAD_RADIUS
+        r = self._radius
         positions = self._get_bead_positions()
         n = len(self._beads)
+        vertical = (self._orientation == "vertical")
 
-        # Рисуем линии между бусинами
+        # Линии между бусинами
         for i in range(n - 1):
             p1 = positions[i]
             p2 = positions[i + 1]
-
             if (self._beads[i].state == BeadState.COMPLETED
                     and self._beads[i + 1].state == BeadState.COMPLETED):
                 pen = QPen(_LINE_COLOR_DONE, self.LINE_THICKNESS)
             else:
                 pen = QPen(_LINE_COLOR, self.LINE_THICKNESS)
-
             painter.setPen(pen)
-            painter.drawLine(
-                QPointF(p1.x() + r, p1.y()),
-                QPointF(p2.x() - r, p2.y()),
-            )
+            if vertical:
+                painter.drawLine(QPointF(p1.x(), p1.y() + r),
+                                 QPointF(p2.x(), p2.y() - r))
+            else:
+                painter.drawLine(QPointF(p1.x() + r, p1.y()),
+                                 QPointF(p2.x() - r, p2.y()))
 
-        # Рисуем бусины
+        # Бусины
         label_font = QFont("Segoe UI", 9)
         date_font = QFont("Segoe UI", 7)
         label_fm = QFontMetrics(label_font)
@@ -179,66 +205,55 @@ class ProgressBeads(QWidget):
             color = QColor(_COLORS[bead.state])
 
             if bead.state == BeadState.IN_PROGRESS:
-                # Фон: тёмно-оранжевый круг
                 bg_color = QColor(80, 50, 0)
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(QBrush(bg_color))
                 painter.drawEllipse(pos, r, r)
 
-                # Заполнение: sweep (заливка сектором)
                 fill_color = QColor(_COLORS[BeadState.IN_PROGRESS])
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(QBrush(fill_color))
                 rect = QRectF(pos.x() - r, pos.y() - r, r * 2, r * 2)
-                # drawPie: startAngle, spanAngle в 1/16 градуса
-                start = 90 * 16  # начало сверху
-                span = -int(self._sweep_angle * 16)  # по часовой
+                start = 90 * 16
+                span = -int(self._sweep_angle * 16)
                 painter.drawPie(rect, start, span)
 
-                # Обводка
                 painter.setPen(QPen(fill_color.darker(130), 1.5))
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawEllipse(pos, r, r)
             else:
-                # Обычная заливка
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(QBrush(color))
                 painter.drawEllipse(pos, r, r)
 
-            # Обводка для AVAILABLE
             if bead.state == BeadState.AVAILABLE:
                 painter.setPen(QPen(QColor(220, 220, 220), 2))
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawEllipse(pos, r, r)
 
-            # Галочка для COMPLETED
             if bead.state == BeadState.COMPLETED:
                 painter.setPen(QPen(QColor(255, 255, 255), 2.5))
                 cx, cy = pos.x(), pos.y()
-                painter.drawLine(
-                    QPointF(cx - 6, cy),
-                    QPointF(cx - 2, cy + 5),
-                )
-                painter.drawLine(
-                    QPointF(cx - 2, cy + 5),
-                    QPointF(cx + 7, cy - 4),
-                )
+                k = r / 18.0
+                painter.drawLine(QPointF(cx - 6 * k, cy),
+                                 QPointF(cx - 2 * k, cy + 5 * k))
+                painter.drawLine(QPointF(cx - 2 * k, cy + 5 * k),
+                                 QPointF(cx + 7 * k, cy - 4 * k))
 
-            # Подпись снизу
-            painter.setFont(label_font)
-            painter.setPen(QPen(_TEXT_COLOR))
-            text_width = label_fm.horizontalAdvance(bead.label)
-            text_x = pos.x() - text_width / 2
-            text_y = pos.y() + r + self.LABEL_SPACING + label_fm.ascent()
-            painter.drawText(QPointF(text_x, text_y), bead.label)
+            if self._show_labels:
+                painter.setFont(label_font)
+                painter.setPen(QPen(_TEXT_COLOR))
+                text_width = label_fm.horizontalAdvance(bead.label)
+                text_x = pos.x() - text_width / 2
+                text_y = pos.y() + r + self.LABEL_SPACING + label_fm.ascent()
+                painter.drawText(QPointF(text_x, text_y), bead.label)
 
-            # Дата под подписью
-            if bead.date:
-                painter.setFont(date_font)
-                painter.setPen(QPen(_DATE_COLOR))
-                date_width = date_fm.horizontalAdvance(bead.date)
-                date_x = pos.x() - date_width / 2
-                date_y = text_y + self.DATE_SPACING + date_fm.ascent()
-                painter.drawText(QPointF(date_x, date_y), bead.date)
+                if bead.date:
+                    painter.setFont(date_font)
+                    painter.setPen(QPen(_DATE_COLOR))
+                    date_width = date_fm.horizontalAdvance(bead.date)
+                    date_x = pos.x() - date_width / 2
+                    date_y = text_y + self.DATE_SPACING + date_fm.ascent()
+                    painter.drawText(QPointF(date_x, date_y), bead.date)
 
         painter.end()

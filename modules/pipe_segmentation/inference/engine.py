@@ -11,7 +11,6 @@ TiledInference разбивает большое изображение на т�
 import cv2
 import torch
 import numpy as np
-import logging
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import time
@@ -35,8 +34,6 @@ from pipe_segmentation.inference.preprocessing import (
 )
 from pipe_segmentation.inference.postprocessing import post_process_mask
 from pipe_segmentation.inference.tta import predict_with_tta
-
-logger = logging.getLogger(__name__)
 
 
 class TiledInference:
@@ -68,21 +65,17 @@ class TiledInference:
         tta_mode: str = 'flip',
         use_amp: bool = True,
         binarize: bool = True,
-        binarize_method: str = BINARIZE_METHOD
+        binarize_method: str = BINARIZE_METHOD,
+        in_channels: int = 4,
+        postprocess_config: Optional[dict] = None,
     ):
         """
         Args:
-            model: Обученная модель
-            device: Устройство (cuda/cpu)
-            tile_size: Размер тайла
-            overlap: Перекрытие между тайлами
-            batch_size: Размер батча для инференса
-            threshold: Порог бинаризации
-            use_tta: Использовать Test-Time Augmentation
-            tta_mode: Режим TTA ('flip', 'flip_rotate')
-            use_amp: Использовать Automatic Mixed Precision
-            binarize: Бинаризовать изображения (трубы чёрные, фон белый)
-            binarize_method: Метод бинаризации ('adaptive', 'otsu', 'fixed')
+            in_channels: 4 (RGB + node_mask) или 3 (RGB only).
+                         Должно совпадать с in_channels модели.
+            postprocess_config: dict с параметрами постобработки из YAML.
+                         Используется как дефолт в predict(), если там
+                         postprocess_config не передан явно.
         """
         self.model = model
         self.device = device
@@ -96,7 +89,8 @@ class TiledInference:
         self.use_amp = use_amp and device == 'cuda'
         self.binarize = binarize
         self.binarize_method = binarize_method
-        
+        self.in_channels = in_channels
+        self.postprocess_config = postprocess_config or {}
         # Переводим модель на устройство
         self.model.to(device)
         self.model.eval()
@@ -133,17 +127,14 @@ class TiledInference:
         start_time = time.time()
         
         height, width = image.shape[:2]
-        logger.warning("[TILED] Start predict (%dx%d)", width, height)
         
         # Бинаризация изображения "на лету"
         if self.binarize:
-            t0 = time.time()
             image = preprocess_image(
                 image, 
                 binarize=True, 
                 binarize_method=self.binarize_method
             )
-            logger.warning("[TILED] binarize: %.2fs", time.time() - t0)
         
         # Если node_mask не указан — используем zeros
         if node_mask is None:
@@ -154,16 +145,12 @@ class TiledInference:
             height, width,
             self.tile_size, self.stride
         )
-        logger.warning("[TILED] %d tiles (tile=%d, stride=%d)",
-                       len(positions), self.tile_size, self.stride)
         
         # Создаём буферы для накопления результатов
         prob_accumulator = np.zeros((height, width), dtype=np.float32)
         weight_accumulator = np.zeros((height, width), dtype=np.float32)
         
         # Обрабатываем батчами
-        t_inf_start = time.time()
-        n_batches = 0
         for batch_start in range(0, len(positions), self.batch_size):
             batch_end = min(batch_start + self.batch_size, len(positions))
             batch_positions = positions[batch_start:batch_end]
@@ -174,15 +161,23 @@ class TiledInference:
             
             for y, x in batch_positions:
                 rgb_tile = extract_tile(image, y, x, self.tile_size)
-                node_tile = extract_tile(node_mask, y, x, self.tile_size)
                 rgb_tiles.append(rgb_tile)
-                node_tiles.append(node_tile)
+                if self.in_channels == 4:
+                    node_tile = extract_tile(node_mask, y, x, self.tile_size)
+                    node_tiles.append(node_tile)
             
             # Подготавливаем батч (бинаризация уже сделана выше)
-            batch_tensor = prepare_batch_from_tiles(
-                rgb_tiles, node_tiles,
-                binarize=False  # Уже бинаризовано
-            )
+            if self.in_channels == 4:
+                batch_tensor = prepare_batch_from_tiles(
+                    rgb_tiles, node_tiles, binarize=False
+                )
+            else:
+                from pipe_segmentation.inference.preprocessing import (
+                    prepare_batch_from_tiles_rgb,
+                )
+                batch_tensor = prepare_batch_from_tiles_rgb(
+                    rgb_tiles, binarize=False
+                )
             batch_tensor = batch_tensor.to(self.device)
             
             # Инференс
@@ -210,11 +205,6 @@ class TiledInference:
                     pred_tile[:tile_h, :tile_w] * self.blend_mask[:tile_h, :tile_w]
                 weight_accumulator[y:y_end, x:x_end] += \
                     self.blend_mask[:tile_h, :tile_w]
-            n_batches += 1
-
-        t_inf_end = time.time()
-        logger.warning("[TILED] inference (%d batches): %.2fs",
-                       n_batches, t_inf_end - t_inf_start)
         
         # Нормализуем по весам
         weight_accumulator = np.maximum(weight_accumulator, 1e-8)
@@ -222,16 +212,14 @@ class TiledInference:
         
         # Бинаризация
         binary_mask = (prob_map > self.threshold).astype(np.uint8) * 255
-        logger.warning("[TILED] assembly+threshold: %.2fs", time.time() - t_inf_end)
         
         # Постобработка
         if postprocess:
-            t0 = time.time()
+            cfg_pp = postprocess_config if postprocess_config is not None else self.postprocess_config
             binary_mask = post_process_mask(
                 binary_mask,
-                **(postprocess_config or {})
+                **(cfg_pp or {})
             )
-            logger.warning("[TILED] postprocess: %.2fs", time.time() - t0)
         
         elapsed_time = time.time() - start_time
         

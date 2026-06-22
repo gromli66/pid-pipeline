@@ -20,6 +20,7 @@ router = APIRouter()
 # Порядок этапов пайплайна
 _STAGE_ORDER = [
     DiagramStatus.UPLOADED,
+    DiagramStatus.FRAME_CLEANED,        # frame/stamp removal (UI)
     DiagramStatus.DETECTED,
     DiagramStatus.VALIDATED_BBOX,
     DiagramStatus.SKELETONIZED,           # segmentation + skeleton #1
@@ -38,6 +39,9 @@ _STAGE_ORDER = [
 
 # Какие артефакты принадлежат каждому этапу (создаются НА этом этапе)
 _STAGE_ARTIFACTS = {
+    DiagramStatus.FRAME_CLEANED: [
+        ArtifactType.ORIGINAL_CLEANED,
+    ],
     DiagramStatus.DETECTED: [
         ArtifactType.YOLO_PREDICTED,
         ArtifactType.COCO_PREDICTED,
@@ -203,6 +207,18 @@ async def rollback_diagram(
             )
         )
         deleted_count = result.rowcount
+
+    # Откат за этап рамки: вернуть сырое изображение в канонический image.png из
+    # бэкапа image_raw.png (при очистке мы перезаписали image.png очищенным).
+    if ArtifactType.ORIGINAL_CLEANED in art_types:
+        import shutil
+        from app.services.storage import StorageService
+        orig = StorageService().base_path / str(uid) / "original"
+        raw = orig / "image_raw.png"
+        canon = orig / "image.png"
+        if raw.exists():
+            shutil.copy2(str(raw), str(canon))
+            raw.unlink()
 
     # Установить статус
     diagram.status = target

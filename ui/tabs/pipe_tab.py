@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Signal, Slot, Qt, QThread, QObject
 
 from ui.services.api_client import APIClient, APIError
+from ui.widgets.appearance_panel import AppearanceMixin
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ class _PipeArtifactDownloader(QObject):
             self.error.emit(str(exc))
 
 
-class PipeTab(QWidget):
+class PipeTab(AppearanceMixin, QWidget):
     """Вкладка валидации pipe маски."""
 
     confirmed = Signal()          # Подтверждено
@@ -114,6 +115,45 @@ class PipeTab(QWidget):
         """Set project code for loading equipment classes."""
         self._project_code = project_code
 
+    def _appearance_editor(self):
+        return self._editor
+
+    def _build_appearance_controls(self, panel):
+        from PySide6.QtGui import QColor
+        self._add_bg_darkness_slider(panel)
+        self._add_color_setting(
+            panel, "Цвет маски", "mask_color", QColor(255, 255, 255),
+            lambda c: self._editor and self._editor.set_mask_color(c),
+        )
+        self._add_pct_setting(
+            panel, "Яркость маски", "mask_brightness", 100.0,
+            lambda v: self._editor and self._editor.set_mask_brightness(v), 20, 100,
+        )
+        self._add_pct_setting(
+            panel, "Прозрачность маски", "mask_opacity", 50.0,
+            lambda v: self._editor and self._editor.set_mask_opacity(v), 0, 100,
+        )
+
+    def apply_saved_appearance(self):
+        super().apply_saved_appearance()
+        ed = self._editor
+        if ed is None:
+            return
+        from PySide6.QtGui import QColor
+        self._apply_saved_color("mask_color", QColor(255, 255, 255), ed.set_mask_color)
+        self._apply_saved_pct("mask_brightness", 100.0, ed.set_mask_brightness)
+        self._apply_saved_pct("mask_opacity", 50.0, ed.set_mask_opacity)
+
+    def apply_default_appearance(self):
+        super().apply_default_appearance()
+        ed = self._editor
+        if ed is None:
+            return
+        from PySide6.QtGui import QColor
+        ed.set_mask_color(QColor(255, 255, 255))
+        ed.set_mask_brightness(100.0)
+        ed.set_mask_opacity(50.0)
+
     def _setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -124,27 +164,38 @@ class PipeTab(QWidget):
         toolbar.setContentsMargins(8, 4, 8, 4)
         toolbar.setSpacing(8)
 
-        self.btn_polyline = QPushButton("✏️ Полилиния")
+        self.btn_polyline = QPushButton("Нарисовать линию")
         self.btn_polyline.setCheckable(True)
         self.btn_polyline.setChecked(True)
+        self.btn_polyline.setToolTip(
+            "Рисование линии трубы.\n"
+            "Ctrl+ЛКМ — ставить точки, Enter / ПКМ / двойной клик — завершить, "
+            "Esc — отменить.\nCtrl+колесо — менять толщину."
+        )
         self.btn_polyline.setStyleSheet(
             "QPushButton:checked { background-color: #4CAF50; color: white; }"
         )
         self.btn_polyline.clicked.connect(lambda: self._set_tool("polyline"))
         toolbar.addWidget(self.btn_polyline)
 
-        self.btn_eraser = QPushButton("🧹 Ластик")
+        self.btn_eraser = QPushButton("Ластик")
         self.btn_eraser.setCheckable(True)
+        self.btn_eraser.setToolTip(
+            "Стирание маски труб.\n"
+            "Ctrl+ЛКМ — стирать кистью, Shift+ЛКМ — стереть прямоугольником.\n"
+            "Ctrl+колесо — менять размер кисти."
+        )
         self.btn_eraser.setStyleSheet(
             "QPushButton:checked { background-color: #FF9800; color: white; }"
         )
         self.btn_eraser.clicked.connect(lambda: self._set_tool("eraser"))
         toolbar.addWidget(self.btn_eraser)
 
-        self.btn_add_node = QPushButton("📦 Добавить узел")
+        self.btn_add_node = QPushButton("Добавить узел")
         self.btn_add_node.setCheckable(True)
         self.btn_add_node.setToolTip(
-            "Выбрать класс оборудования и нарисовать bbox на схеме (Ctrl+LMB drag)"
+            "Добавление узла оборудования.\n"
+            "Выберите класс, затем Ctrl+ЛКМ с протяжкой — нарисовать bbox на схеме."
         )
         self.btn_add_node.setStyleSheet(
             "QPushButton:checked { background-color: #2196F3; color: white; }"
@@ -152,31 +203,53 @@ class PipeTab(QWidget):
         self.btn_add_node.clicked.connect(self._on_add_node_clicked)
         toolbar.addWidget(self.btn_add_node)
 
-        toolbar.addWidget(QLabel(" Ширина:"))
+        self.btn_endpoints = QPushButton("🔴 Эндпоинты")
+        self.btn_endpoints.setCheckable(True)
+        self.btn_endpoints.setChecked(True)
+        self.btn_endpoints.setToolTip(
+            "Показ концов труб — разрывов цепи узел→узел.\n"
+            "Нажмите, чтобы скрыть или показать маркеры."
+        )
+        self.btn_endpoints.setStyleSheet(
+            "QPushButton:checked { background-color: #E53935; color: white; }"
+        )
+        self.btn_endpoints.toggled.connect(self._on_toggle_endpoints)
+        toolbar.addWidget(self.btn_endpoints)
+
+        self.width_title = QLabel(" Ширина:")
+        self.width_title.setToolTip(
+            "Толщина линии и размер кисти ластика.\n"
+            "По умолчанию — медианная толщина труб на схеме.\n"
+            "Также меняется через Ctrl+колесо."
+        )
+        toolbar.addWidget(self.width_title)
         self.width_slider = QSlider(Qt.Horizontal)
         self.width_slider.setRange(2, 12)
         self.width_slider.setValue(4)
         self.width_slider.setMaximumWidth(120)
+        self.width_slider.setToolTip("Толщина линии / размер кисти (Ctrl+колесо)")
         self.width_slider.valueChanged.connect(self._on_width_changed)
         toolbar.addWidget(self.width_slider)
         self.width_label = QLabel("4px")
         toolbar.addWidget(self.width_label)
 
-        toolbar.addWidget(
-            QLabel("  |  Ctrl+LMB: точки/bbox, Enter: завершить, E: ластик")
-        )
-
         toolbar.addStretch()
 
-        btn_undo = QPushButton("↩ Undo")
+        btn_undo = QPushButton("Undo")
+        btn_undo.setToolTip("Отменить последнее действие (Ctrl+Z)")
         btn_undo.clicked.connect(self._undo)
         toolbar.addWidget(btn_undo)
 
-        btn_save = QPushButton("💾 Сохранить")
+        btn_save = QPushButton("Сохранить")
+        btn_save.setToolTip("Сохранить маску и узлы на сервер (Ctrl+S)")
         btn_save.clicked.connect(self._save_mask)
         toolbar.addWidget(btn_save)
 
         self.btn_confirm = QPushButton("✅ Подтвердить")
+        self.btn_confirm.setToolTip(
+            "Сохранить и подтвердить валидацию маски труб.\n"
+            "Запускает следующий этап обработки схемы."
+        )
         self.btn_confirm.setStyleSheet("""
             QPushButton {
                 background-color: #4CAF50;
@@ -194,7 +267,7 @@ class PipeTab(QWidget):
         layout.addLayout(toolbar)
 
         # === Editor placeholder ===
-        self.loading_label = QLabel("⏳ Загрузка артефактов...")
+        self.loading_label = QLabel("Загрузка артефактов...")
         self.loading_label.setAlignment(Qt.AlignCenter)
         self.loading_label.setStyleSheet("font-size: 18px; color: #666;")
         layout.addWidget(self.loading_label)
@@ -235,6 +308,7 @@ class PipeTab(QWidget):
 
             self._editor = PolylineMaskEditor()
             self._editor.status_callback = lambda msg: self.status_label.setText(msg)
+            self._editor.width_changed_callback = self._on_editor_width_changed
 
             # pipe_mask_validated (если ранее сохранена) → fallback skeleton_mask
             mask_path = artifacts.get("pipe_mask_validated") or artifacts.get("skeleton_mask")
@@ -248,7 +322,19 @@ class PipeTab(QWidget):
             self._editor_layout.insertWidget(
                 self._editor_layout.count() - 1, self._editor
             )
+
+            # Стартовая ширина = медианная толщина труб на схеме (clamp к слайдеру)
+            median = self._editor.median_thickness
+            lo, hi = self.width_slider.minimum(), self.width_slider.maximum()
+            start_w = max(lo, min(hi, int(median))) if median else self.width_slider.value()
+            self.width_slider.blockSignals(True)
+            self.width_slider.setValue(start_w)
+            self.width_slider.blockSignals(False)
+            self.width_label.setText(f"{start_w}px")
+            self._editor.set_line_width(start_w)
+
             self._undo_baseline = len(self._editor.undo_stack)
+            self.apply_saved_appearance()
             self.status_label.setText("Артефакты загружены")
         except Exception as exc:
             logger.error("Failed to init pipe editor: %s", exc, exc_info=True)
@@ -261,7 +347,7 @@ class PipeTab(QWidget):
     def _on_download_error(self, error_msg: str):
         self._download_thread.quit()
         self._download_thread.wait()
-        self.loading_label.setText(f"❌ Ошибка: {error_msg}")
+        self.loading_label.setText(f"Ошибка: {error_msg}")
 
     # === Tools ===
 
@@ -277,6 +363,10 @@ class PipeTab(QWidget):
                 self._editor.set_tool(PolylineTool.ERASER)
             elif tool == "add_node":
                 self._editor.set_tool(PolylineTool.ADD_NODE)
+
+    def _on_toggle_endpoints(self, checked: bool):
+        if self._editor is not None:
+            self._editor.set_endpoints_visible(checked)
 
     def _on_add_node_clicked(self):
         """Open class selection dialog, then switch to ADD_NODE tool."""
@@ -335,6 +425,13 @@ class PipeTab(QWidget):
         if self._editor:
             self._editor.set_line_width(value)
 
+    def _on_editor_width_changed(self, value: int):
+        """Ширина изменена из редактора (Ctrl+колесо) → синхронизировать слайдер."""
+        self.width_slider.blockSignals(True)
+        self.width_slider.setValue(value)
+        self.width_slider.blockSignals(False)
+        self.width_label.setText(f"{value}px")
+
     def _undo(self):
         if self._editor:
             self._editor.undo()
@@ -373,7 +470,7 @@ class PipeTab(QWidget):
 
             self._saved = True
             self._undo_baseline = len(self._editor.undo_stack)
-            self.status_label.setText("✅ Pipe маска сохранена")
+            self.status_label.setText("Pipe маска сохранена")
             return True
 
         except Exception as exc:
@@ -392,7 +489,8 @@ class PipeTab(QWidget):
         if self._save_mask():
             self._confirmed = True
             logger.info("Pipe mask saved, emitting confirmed")
-            self.status_message.emit("✅ Pipe маска подтверждена")
+            self.status_message.emit("Pipe маска подтверждена")
             self.confirmed.emit()
         else:
             logger.warning("Pipe _save_mask returned False")
+            self.status_label.setText("Не удалось сохранить — изменения не подтверждены")

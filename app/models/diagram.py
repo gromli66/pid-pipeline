@@ -27,6 +27,10 @@ class DiagramStatus(str, enum.Enum):
     # Upload
     UPLOADED = "uploaded"
 
+    # Phase 0: Frame/stamp removal (UI, manual)
+    CLEANING_FRAME = "cleaning_frame"
+    FRAME_CLEANED = "frame_cleaned"
+
     # Phase 1: Detection (YOLO)
     DETECTING = "detecting"
     DETECTED = "detected"

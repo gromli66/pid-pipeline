@@ -74,10 +74,20 @@ class CvatTab(QWidget):
         toolbar.addStretch()
 
         btn_refresh = QPushButton("🔄 Обновить")
+        btn_refresh.setToolTip(
+            "Перезагрузить страницу CVAT (если не прогрузилась/зависла "
+            "или не видно разметки).\n"
+            "⚠️ Несохранённые правки потеряются — сначала сохрани в CVAT "
+            "(Ctrl+S) или нажми 'Подтвердить валидацию'."
+        )
         btn_refresh.clicked.connect(self._on_refresh)
         toolbar.addWidget(btn_refresh)
 
         self.btn_confirm = QPushButton("✅ Подтвердить валидацию")
+        self.btn_confirm.setToolTip(
+            "Сохранить отредактированные аннотации в CVAT и перейти "
+            "к следующему этапу пайплайна."
+        )
         self.btn_confirm.setStyleSheet("""
             QPushButton {
                 background-color: #4CAF50;

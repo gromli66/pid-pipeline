@@ -115,7 +115,7 @@ def main():
     args = parser.parse_args()
 
     # Load config from checkpoint
-    ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
+    ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     cfg_dict = ckpt.get("config", {})
     cfg = Config()
     for k, v in cfg_dict.items():

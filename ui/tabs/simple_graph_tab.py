@@ -56,8 +56,15 @@ class SimpleGraphTab(BaseGraphTab):
         self.mode_group = QButtonGroup(self)
 
         # --- add_edge ---
-        self.btn_add_edge = QPushButton("➕ Ребро")
+        self.btn_add_edge = QPushButton("Добавить ребро")
         self.btn_add_edge.setCheckable(True)
+        self.btn_add_edge.setToolTip(
+            "Добавить ребро — соединение между двумя узлами.\n"
+            "Ctrl+ЛКМ по центроиду первого узла, затем Ctrl+ЛКМ по центроиду второго "
+            "— ребро создаётся.\n"
+            "Esc — сбросить выбор. Ctrl+ПКМ — удалить ребро или узел под курсором.\n"
+            "Навигация: ЛКМ — двигать схему, колесо мыши — масштаб."
+        )
         self.btn_add_edge.setStyleSheet(
             "QPushButton:checked { background-color: #4CAF50; color: white; }"
         )
@@ -66,8 +73,14 @@ class SimpleGraphTab(BaseGraphTab):
         toolbar.addWidget(self.btn_add_edge)
 
         # --- add_connector ---
-        self.btn_add_connector = QPushButton("⊕ Коннектор")
+        self.btn_add_connector = QPushButton("Добавить перекрёсток")
         self.btn_add_connector.setCheckable(True)
+        self.btn_add_connector.setToolTip(
+            "Добавить перекрёсток — точку соединения/разветвления труб.\n"
+            "Ctrl+ЛКМ по ребру — вставить перекрёсток в это место (ребро делится надвое).\n"
+            "Ctrl+ЛКМ по свободному месту — отдельный (изолированный) перекрёсток.\n"
+            "Ctrl+ПКМ — удалить узел или ребро под курсором."
+        )
         self.btn_add_connector.setStyleSheet(
             "QPushButton:checked { background-color: #FF9800; color: white; }"
         )
@@ -78,10 +91,14 @@ class SimpleGraphTab(BaseGraphTab):
         self._add_separator(toolbar)
 
         # --- add_node_from_list (не toggleable — открывает диалог) ---
-        self.btn_add_node = QPushButton("📦 Добавить узел")
+        self.btn_add_node = QPushButton("Добавить узел")
         self.btn_add_node.setCheckable(True)
         self.btn_add_node.setToolTip(
-            "Выбрать класс оборудования и добавить узел кликом на схему"
+            "Добавить узел оборудования из списка классов проекта.\n"
+            "Выберите класс, затем Ctrl+ЛКМ с протяжкой — обведите рамкой область узла. "
+            "Слишком маленькая рамка — отмена.\n"
+            "Класс остаётся выбранным: можно обвести несколько узлов подряд.\n"
+            "Ctrl+ПКМ — удалить узел под курсором. Esc — выйти из режима."
         )
         self.btn_add_node.setStyleSheet(
             "QPushButton:checked { background-color: #2196F3; color: white; }"
@@ -128,7 +145,7 @@ class SimpleGraphTab(BaseGraphTab):
             self._editor.set_pending_node_class(selected)
             self._set_mode("add_node_from_list")
             self.status_label.setText(
-                f"Кликните на схему для добавления: {selected['name']}"
+                f"Ctrl+ЛКМ с протяжкой — обведите узел: {selected['name']}"
             )
         else:
             # Пользователь отменил — вернуться в idle

@@ -107,21 +107,33 @@ class DeleteNodeHandler(ModeHandler):
 
 
 class AddNodeFromListHandler(ModeHandler):
-    """Режим добавления equipment из списка: клик → разместить узел."""
+    """Режим добавления equipment из списка: Ctrl+ЛКМ протяжка → рамка узла.
+
+    Поведение как в сегментации (Вал. pipe): обводим рамку, на отпускании
+    создаётся узел; слишком маленькая рамка — отмена. Класс остаётся выбранным,
+    поэтому можно нарисовать несколько узлов подряд.
+    """
 
     def on_press(self, ed, x, y, event):
         cls = getattr(ed, '_pending_node_class', None)
-        if cls:
-            ed.add_equipment_node(x, y, cls['id'], cls['name'])
-            ed._pending_node_class = None
-        else:
+        if not cls:
             ed.update_status("Сначала выберите класс оборудования")
+            return True
+        ed.start_node_bbox(x, y)
         return True
 
     def on_move(self, ed, x, y, event):
-        # Ghost preview — реализуется в editor через temporary item
-        # Handler просто сигнализирует что move обработан
+        ed.update_node_bbox(x, y)
         return True
+
+    def on_release(self, ed, x, y, event):
+        ed.finish_node_bbox(x, y)
+        return True
+
+    def on_exit(self, ed):
+        # Отменить незавершённое рисование рамки при смене режима
+        if hasattr(ed, "_cancel_node_bbox"):
+            ed._cancel_node_bbox()
 
 
 class ResizeNodeHandler(ModeHandler):

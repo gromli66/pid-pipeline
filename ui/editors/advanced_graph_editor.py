@@ -118,6 +118,10 @@ class AdvancedGraphEditor(SimpleGraphEditor):
         self._kks_labels: dict[str, QGraphicsSimpleTextItem] = {}  # node_id → label item
         self._kks_tooltip_visible: bool = False
 
+        # ── Подсветка узлов/рёбер по привязке OCR (KKS-цвет, цвет по диаметру,
+        #    KKS-подписи и hover-подсказка). Выключается галочкой в тулбаре. ──
+        self._ocr_highlight: bool = True
+
     # =================================================================
     # Overrides — Base/Simple hooks
     # =================================================================
@@ -138,16 +142,45 @@ class AdvancedGraphEditor(SimpleGraphEditor):
                 if not perp_info.get('is_good', True):
                     return self.COLOR_EDGE_BAD
 
-        if not edge_data.get('diameter_text'):
+        # Красная подсветка «нет диаметра» — часть подсветки привязки OCR.
+        if self._ocr_highlight and not edge_data.get('diameter_text'):
             return self.COLOR_NO_DIAMETER
 
         return self.COLOR_EDGE
 
     def _get_equipment_brush(self, node: dict) -> QBrush:
-        """Подсветка equipment: зелёная если есть KKS, красная если нет."""
+        """Подсветка equipment: зелёная если есть KKS, красная если нет.
+
+        Если подсветка привязки OCR выключена — нейтральная (прозрачная) заливка.
+        """
+        if not self._ocr_highlight:
+            return super()._get_equipment_brush(node)
         if node.get('kks_full'):
             return QBrush(self.COLOR_KKS_BOUND)
         return QBrush(self.COLOR_NO_KKS)
+
+    def set_edge_no_diameter_color(self, color: QColor):
+        """Цвет рёбер без диаметра (подсветка привязки)."""
+        self.COLOR_NO_DIAMETER = QColor(color)
+        self._redraw_all()
+
+    def set_edge_bad_color(self, color: QColor):
+        """Цвет неперпендикулярных (плохих) рёбер."""
+        self.COLOR_EDGE_BAD = QColor(color)
+        self._redraw_all()
+
+    def set_ocr_highlight(self, enabled: bool):
+        """Вкл/выкл подсветку узлов и рёбер по привязке OCR.
+
+        Выключение убирает KKS-цвет узлов, красный цвет рёбер без диаметра,
+        KKS-подписи и hover-подсказку — остаются нейтральные цвета графа.
+        """
+        if self._ocr_highlight == enabled:
+            return
+        self._ocr_highlight = enabled
+        if not enabled:
+            self._hide_all_kks_labels()
+        self._redraw_all()
 
     def _get_edge_pen(self, edge_data: dict, key: tuple = None) -> QPen:
         """Утолщение для неперпендикулярных рёбер."""
@@ -1598,7 +1631,7 @@ class AdvancedGraphEditor(SimpleGraphEditor):
 
         # KKS hover tooltip — ищем equipment по bbox (а не только по centroid)
         hovered_kks = None
-        for node_id, node in self.nodes.items():
+        for node_id, node in (self.nodes.items() if self._ocr_highlight else []):
             if node.get('type') != 'equipment' or not node.get('kks_full'):
                 continue
             bbox = node.get('bbox')
@@ -1809,6 +1842,8 @@ class AdvancedGraphEditor(SimpleGraphEditor):
 
     def _show_kks_label(self, node_id: str):
         """Show KKS label at the top edge of the equipment bbox."""
+        if not self._ocr_highlight:
+            return
         node = self.nodes.get(node_id)
         if not node or not node.get('kks_full'):
             return

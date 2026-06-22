@@ -10,6 +10,7 @@ Header (бусины + кнопки действий) прячется при о
 """
 
 import logging
+from pathlib import Path
 from typing import Optional, Dict
 
 from PySide6.QtWidgets import (
@@ -19,11 +20,12 @@ from PySide6.QtWidgets import (
     QMenu,
 )
 from PySide6.QtCore import Qt, Signal, Slot, QTimer
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QFont
 
 from ui.services.api_client import APIClient, APIError, DiagramStatus
 from ui.services.status_provider import StatusProvider
 from ui.widgets.progress_beads import ProgressBeads, BeadInfo, BeadState
+from ui.widgets.bead_gif_player import BeadGifPlayer
 
 logger = logging.getLogger(__name__)
 
@@ -32,19 +34,20 @@ logger = logging.getLogger(__name__)
 # Бусины — индексы (11 бусин, 1:1 с кнопками)
 # =====================================================================
 
-BEAD_DETECTION = 0
-BEAD_VAL_DET = 1
-BEAD_SEGMENTATION = 2
-BEAD_VAL_PIPE = 3
-BEAD_VAL_JUNCTION = 4
-BEAD_GRAPH = 5
-BEAD_VAL_GRAPH = 6
-BEAD_CONTOURS = 7
-BEAD_OCR = 8
-BEAD_OCR_BINDING = 9
-BEAD_EDIT_GRAPH = 10
-BEAD_FXML = 11
-NUM_BEADS = 12
+BEAD_FRAME = 0
+BEAD_DETECTION = 1
+BEAD_VAL_DET = 2
+BEAD_SEGMENTATION = 3
+BEAD_VAL_PIPE = 4
+BEAD_VAL_JUNCTION = 5
+BEAD_GRAPH = 6
+BEAD_VAL_GRAPH = 7
+BEAD_CONTOURS = 8
+BEAD_OCR = 9
+BEAD_OCR_BINDING = 10
+BEAD_EDIT_GRAPH = 11
+BEAD_FXML = 12
+NUM_BEADS = 13
 
 # =====================================================================
 # Порядок статусов и маппинг бусин/кнопок
@@ -53,6 +56,8 @@ NUM_BEADS = 12
 # Линейный порядок статусов (для сравнения "дальше/раньше")
 _STATUS_ORDER = [
     DiagramStatus.UPLOADED,              # 0
+    DiagramStatus.CLEANING_FRAME,        # frame removal (in progress)
+    DiagramStatus.FRAME_CLEANED,         # frame removed / skipped
     DiagramStatus.DETECTING,             # 1
     DiagramStatus.DETECTED,              # 2
     DiagramStatus.VALIDATING_BBOX,       # 3
@@ -91,9 +96,13 @@ def _status_ge(current: DiagramStatus, threshold: DiagramStatus) -> bool:
 
 # Каждая бусина: (idx, key, completed_when, in_progress_statuses, available_when)
 _BEAD_DEFS = [
+    (BEAD_FRAME,         "frame",       DiagramStatus.FRAME_CLEANED,
+     {DiagramStatus.CLEANING_FRAME},
+     DiagramStatus.UPLOADED),
+
     (BEAD_DETECTION,     "detect",      DiagramStatus.DETECTED,
      {DiagramStatus.DETECTING},
-     DiagramStatus.UPLOADED),
+     DiagramStatus.FRAME_CLEANED),
 
     (BEAD_VAL_DET,       "cvat",        DiagramStatus.VALIDATED_BBOX,
      set(),
@@ -220,6 +229,62 @@ _BTN_STYLE_RED = """
 
 
 # =====================================================================
+# GIF активного этапа
+# =====================================================================
+
+_IDX_KEY = {idx: key for (idx, key, *_rest) in _BEAD_DEFS}
+_GIF_DIR = Path(__file__).resolve().parent.parent / "resources" / "beads"
+_GIF_FILES = {
+    "detect":   "pid_detection_light.gif",
+    "cvat":     "pid_cvat_manual.gif",
+    "segment":  "pid_pipe_trace.gif",
+    "pipe":     "pid_valpipe_fix.gif",
+    "graph":    "pid_graph.gif",
+    "val_graph": "pid_valgraph.gif",
+    "contours": "pid_contours.gif",
+    "ocr":      "pid_ocr.gif",
+    # frame / ocr_binding / edit_graph / fxml — гифки пока нет (плейсхолдер)
+}
+
+
+def _gif_path_for(key: str, status: DiagramStatus):
+    """Путь к GIF для активного этапа (с нюансом junction: процесс/проверка)."""
+    if key == "junction":
+        # в процессе авто-поиска узлов — скелет; на проверке — разметка узлов
+        fname = ("pid_valjb_fix.gif"
+                 if status == DiagramStatus.VALIDATING_JUNCTIONS
+                 else "pid_skeleton.gif")
+        p = _GIF_DIR / fname
+        return str(p) if p.exists() else None
+    fname = _GIF_FILES.get(key)
+    if not fname:
+        return None
+    p = _GIF_DIR / fname
+    return str(p) if p.exists() else None
+
+
+class _StagePanel(QWidget):
+    """Панель этапа: вертикальные бусины + кнопки слева, GIF справа.
+
+    Адаптивно масштабирует высоту строк/шрифт/радиус бусин под размер окна.
+    """
+
+    def __init__(self, beads, buttons, parent=None):
+        super().__init__(parent)
+        self._beads = beads
+        self._buttons = buttons
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        row_h = max(22, min(40, self.height() // 16))
+        font = QFont("Segoe UI", max(9, int(row_h * 0.40)))
+        for btn in self._buttons:
+            btn.setFixedHeight(row_h)
+            btn.setFont(font)
+        self._beads.set_radius(int(row_h * 0.30))
+
+
+# =====================================================================
 # DiagramWorkspace
 # =====================================================================
 
@@ -235,20 +300,22 @@ class DiagramWorkspace(QWidget):
     back_requested = Signal()
     status_message = Signal(str, int)
 
-    # Описание кнопок: (key, label) — 9 кнопок, 1:1 с бусинами
+    # Описание кнопок: (key, label) — 13 этапов, 1:1 с бусинами.
+    # Порядок — по пайплайну (pipe → junction); подписи — по таблице.
     _BUTTON_DEFS = [
-        ("detect",      "Детекция"),
-        ("cvat",        "CVAT"),
-        ("segment",     "Сегментация"),
-        ("pipe",        "Вал. pipe"),
-        ("junction",    "Вал. j/b"),
-        ("graph",       "Граф"),
-        ("val_graph",   "Вал. графа"),
-        ("contours",    "Контуры"),
-        ("ocr",         "OCR"),
-        ("ocr_binding", "Привязка"),
-        ("edit_graph",  "Редактор"),
-        ("fxml",        "FXML"),
+        ("frame",       "Очистка рамки"),
+        ("detect",      "Поиск элементов"),
+        ("cvat",        "Проверка элементов"),
+        ("segment",     "Выделение труб"),
+        ("pipe",        "Проверка труб"),
+        ("junction",    "Проверка узлов"),
+        ("graph",       "Сборка схемы"),
+        ("val_graph",   "Проверка схемы"),
+        ("contours",    "Контуры элемента"),
+        ("ocr",         "Распознавание текста"),
+        ("ocr_binding", "Привязка подписей"),
+        ("edit_graph",  "Ручная правка"),
+        ("fxml",        "Экспорт"),
     ]
 
     def __init__(
@@ -292,77 +359,74 @@ class DiagramWorkspace(QWidget):
         self._root_layout.setContentsMargins(0, 0, 0, 0)
         self._root_layout.setSpacing(0)
 
-        # === Header panel (три строки: название, бусины, кнопки) ===
+        # === Header panel: ← Назад | Название ===
         self.header_panel = QWidget()
         header_layout = QVBoxLayout(self.header_panel)
         header_layout.setContentsMargins(8, 4, 8, 4)
         header_layout.setSpacing(4)
 
-        # Строка 1: ← Назад | Название
         top_row = QHBoxLayout()
         top_row.setSpacing(8)
-
         self.btn_back_header = QPushButton("← Назад")
         self.btn_back_header.setFixedSize(80, 28)
         self.btn_back_header.clicked.connect(self._on_back_to_list)
         top_row.addWidget(self.btn_back_header)
-
         self.title_label = QLabel("Диаграмма")
         self.title_label.setStyleSheet("font-size: 13px; font-weight: bold;")
         top_row.addWidget(self.title_label)
         top_row.addStretch()
-
         header_layout.addLayout(top_row)
-
-        # Строка 2: Бусины (полная ширина)
-        self.beads = ProgressBeads()
-        self.beads.set_beads([
-            BeadInfo("Детекция"),
-            BeadInfo("Вал. дет."),
-            BeadInfo("Сегмент."),
-            BeadInfo("Вал. j/b"),
-            BeadInfo("Вал. pipe"),
-            BeadInfo("Граф"),
-            BeadInfo("Вал. графа"),
-            BeadInfo("Контуры"),
-            BeadInfo("OCR"),
-            BeadInfo("Привязка"),
-            BeadInfo("Редактор"),
-            BeadInfo("FXML"),
-        ])
-        header_layout.addWidget(self.beads)
-
-        # Строка 3: Кнопки действий (выровнены под бусинами)
-        actions_layout = QHBoxLayout()
-        actions_layout.setContentsMargins(0, 0, 0, 0)
-        actions_layout.setSpacing(4)
-
-        self._action_buttons: Dict[str, QPushButton] = {}
-        for key, label in self._BUTTON_DEFS:
-            btn = QPushButton(label)
-            btn.setFixedHeight(28)
-            btn.setEnabled(False)
-            btn.setStyleSheet(_BTN_STYLE_GRAY)
-            actions_layout.addWidget(btn, stretch=1)
-            self._action_buttons[key] = btn
-
-        header_layout.addLayout(actions_layout)
-
-        # Привязываем бусины к позициям кнопок
-        self.beads.set_anchor_widgets(list(self._action_buttons.values()))
 
         self._root_layout.addWidget(self.header_panel)
 
-        # === Content area (placeholder / вкладка) ===
+        # === Content area (панель этапа / вкладка) ===
         self.content_stack = QStackedWidget()
 
-        # Page 0: Placeholder
-        placeholder = QLabel("Выберите действие из кнопок выше")
-        placeholder.setAlignment(Qt.AlignCenter)
-        placeholder.setStyleSheet("font-size: 18px; color: #666;")
-        self.content_stack.addWidget(placeholder)
+        # --- Вертикальные бусины (слева) ---
+        self.beads = ProgressBeads(orientation="vertical")
+        self.beads.set_beads([BeadInfo(cap) for _, cap in self._BUTTON_DEFS])
 
-        # Page 1: контейнер для вкладки (← Назад в одну линию с toolbar вкладки)
+        # --- Кнопки этапов (столбик, по центру по вертикали) ---
+        buttons_widget = QWidget()
+        buttons_col = QVBoxLayout(buttons_widget)
+        buttons_col.setContentsMargins(0, 0, 0, 0)
+        buttons_col.setSpacing(8)
+        buttons_col.addStretch()
+        self._action_buttons: Dict[str, QPushButton] = {}
+        for key, label in self._BUTTON_DEFS:
+            btn = QPushButton(label)
+            btn.setFixedHeight(30)
+            btn.setMinimumWidth(180)
+            btn.setEnabled(False)
+            btn.setStyleSheet(_BTN_STYLE_GRAY)
+            buttons_col.addWidget(btn)
+            self._action_buttons[key] = btn
+        buttons_col.addStretch()
+
+        left_col = QWidget()
+        left_row = QHBoxLayout(left_col)
+        left_row.setContentsMargins(0, 0, 0, 0)
+        left_row.setSpacing(6)
+        left_row.addWidget(self.beads)
+        left_row.addWidget(buttons_widget)
+
+        # Привязываем бусины к позициям кнопок (по вертикали)
+        self.beads.set_anchor_widgets(list(self._action_buttons.values()))
+
+        # --- GIF активного этапа (справа, по центру) ---
+        self.gif_player = BeadGifPlayer()
+
+        # Page 0: панель этапа
+        self.stage_panel = _StagePanel(self.beads,
+                                       list(self._action_buttons.values()))
+        stage_layout = QHBoxLayout(self.stage_panel)
+        stage_layout.setContentsMargins(12, 8, 12, 8)
+        stage_layout.setSpacing(16)
+        stage_layout.addWidget(left_col, stretch=0)
+        stage_layout.addWidget(self.gif_player, stretch=1)
+        self.content_stack.addWidget(self.stage_panel)
+
+        # Page 1: контейнер для вкладки
         self._tab_container = QWidget()
         self._tab_container_layout = QVBoxLayout(self._tab_container)
         self._tab_container_layout.setContentsMargins(0, 0, 0, 0)
@@ -375,7 +439,8 @@ class DiagramWorkspace(QWidget):
         # === Подключение кнопок ===
         # Маппинг: кнопка → целевой статус для отката (статус ПЕРЕД этим этапом)
         self._ROLLBACK_TARGET = {
-            "detect": "uploaded",
+            "frame": "uploaded",
+            "detect": "frame_cleaned",
             "cvat": "detected",
             "segment": "validated_bbox",
             "pipe": "skeletonized",
@@ -391,6 +456,7 @@ class DiagramWorkspace(QWidget):
 
         # Оригинальные обработчики
         self._original_handlers = {
+            "frame": self._open_frame,
             "detect": self._start_detection,
             "cvat": self._open_cvat,
             "segment": self._start_segmentation,
@@ -485,6 +551,7 @@ class DiagramWorkspace(QWidget):
         self._last_status = status
         self._update_beads(status)
         self._update_buttons(status, error_stage=error_stage)
+        self._update_gif(status)
 
         # B6.4: При параллельных статусах — проверить готовность OCR по артефакту
         if not self._ocr_notified and status in (
@@ -602,6 +669,32 @@ class DiagramWorkspace(QWidget):
             self.beads.set_state(i, target.get(i, BeadState.UNAVAILABLE))
 
     # =================================================================
+    # GIF активного этапа
+    # =================================================================
+
+    def _update_gif(self, status: DiagramStatus):
+        """Показать анимацию активного этапа: в процессе, иначе доступного."""
+        states = dict(_beads_for_status(status))
+
+        # Перекрыть pipe/junction если подтверждены по отдельности
+        if status == DiagramStatus.VALIDATING_MASKS and self._pipe_confirmed:
+            states[BEAD_VAL_PIPE] = BeadState.COMPLETED
+        if status == DiagramStatus.VALIDATING_JUNCTIONS and self._junction_confirmed:
+            states[BEAD_VAL_JUNCTION] = BeadState.COMPLETED
+
+        # самый ранний активный этап (передний план оператора),
+        # фоновые параллельные процессы — позже по индексу
+        active = sorted(i for i, s in states.items()
+                        if s in (BeadState.IN_PROGRESS, BeadState.AVAILABLE))
+        active_idx = active[0] if active else None
+
+        if active_idx is None:
+            self.gif_player.set_gif(None)
+            return
+        key = _IDX_KEY.get(active_idx)
+        self.gif_player.set_gif(_gif_path_for(key, status))
+
+    # =================================================================
     # Кнопки
     # =================================================================
 
@@ -712,11 +805,33 @@ class DiagramWorkspace(QWidget):
 
             # Вставляем в первый layout-item если это QHBoxLayout
             first_item = tab_layout.itemAt(0)
-            if first_item and first_item.layout():
-                first_item.layout().insertWidget(0, self._btn_back_injected)
+            target_layout = first_item.layout() if (first_item and first_item.layout()) else None
+            if target_layout:
+                target_layout.insertWidget(0, self._btn_back_injected)
             else:
                 # Fallback: вставить сверху
                 tab_layout.insertWidget(0, self._btn_back_injected)
+
+            # Кнопка ⚙ — настройки оформления (затемнение фона, цвета), если
+            # вкладка их поддерживает. Рядом с «← Назад».
+            if hasattr(tab_widget, "toggle_appearance_panel"):
+                self._btn_appearance_injected = QPushButton("⚙")
+                self._btn_appearance_injected.setFixedSize(28, 26)
+                self._btn_appearance_injected.setToolTip(
+                    "Оформление вкладки (затемнение фона, цвета)"
+                )
+                self._btn_appearance_injected.setStyleSheet(
+                    "QPushButton { background: #555; color: white; "
+                    "border-radius: 3px; font-size: 14px; }"
+                    "QPushButton:hover { background: #777; }"
+                )
+                self._btn_appearance_injected.clicked.connect(
+                    tab_widget.toggle_appearance_panel
+                )
+                if target_layout:
+                    target_layout.insertWidget(1, self._btn_appearance_injected)
+                else:
+                    tab_layout.insertWidget(1, self._btn_appearance_injected)
 
         # Добавить в контейнер
         self._tab_container_layout.addWidget(tab_widget)
@@ -731,6 +846,7 @@ class DiagramWorkspace(QWidget):
 
     # Маппинг: tab_key → статус, из которого нужно откатить при закрытии без confirm
     _VALIDATING_ROLLBACK = {
+        "frame": (DiagramStatus.CLEANING_FRAME, "uploaded"),
         "junction": (DiagramStatus.VALIDATING_JUNCTIONS, "detected_junctions"),
         "pipe":     (DiagramStatus.VALIDATING_MASKS, "skeletonized"),
         "val_graph": (DiagramStatus.VALIDATING_GRAPH, "built"),
@@ -1153,6 +1269,41 @@ class DiagramWorkspace(QWidget):
     # =================================================================
 
     @Slot()
+    def _open_frame(self):
+        """Открыть вкладку очистки рамки (этап 0)."""
+        try:
+            diagram = self.api_client.get_diagram(self._uid)
+            if diagram.status == DiagramStatus.UPLOADED:
+                try:
+                    self.api_client.start_frame_removal(self._uid)
+                except APIError:
+                    pass
+
+            from ui.tabs.frame_tab import FrameTab
+            tab = FrameTab(
+                diagram_uid=self._uid,
+                diagram_name=self._diagram_name,
+                api_client=self.api_client,
+            )
+            tab.confirmed.connect(self._on_frame_confirmed)
+            tab.status_message.connect(
+                lambda msg: self.status_message.emit(msg, 5000),
+            )
+            self._open_tab(tab, "frame")
+
+        except APIError as exc:
+            QMessageBox.warning(
+                self, "Ошибка",
+                f"Не удалось открыть очистку рамки:\n{exc.message}",
+            )
+
+    @Slot()
+    def _on_frame_confirmed(self):
+        """Очистка рамки завершена (save+complete или skip) — статус уже FRAME_CLEANED."""
+        logger.info("Frame confirmed via signal")
+        self._close_tab_and_restore_header()
+        self._refresh_status()
+
     def _open_cvat(self):
         try:
             diagram = self.api_client.get_diagram(self._uid)

@@ -34,7 +34,8 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1200, 700)
 
         # Shared services
-        self.api_client = APIClient("http://localhost:8000")
+        import os
+        self.api_client = APIClient(os.environ.get("PID_API_URL", "http://localhost:8000"))
         self.status_provider = StatusProvider(self.api_client, parent=self)
         self.status_provider.status_updated.connect(self._on_status_updated)
         self.status_provider.error_occurred.connect(self._on_status_error)
@@ -193,14 +194,14 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
-        file_path, project_code = dialog.get_values()
+        file_path, project_code, pdf_page = dialog.get_values()
         if not file_path or not str(file_path):
             QMessageBox.warning(self, "Ошибка", "Файл не выбран")
             return
 
         try:
             self._show_progress("Загрузка файла...")
-            info = self.api_client.upload_diagram(file_path, project_code)
+            info = self.api_client.upload_diagram(file_path, project_code, page=pdf_page)
             self._hide_progress()
             self.statusbar.showMessage(f"Загружено: {info.filename}", 3000)
             self.diagram_list.load_diagrams()

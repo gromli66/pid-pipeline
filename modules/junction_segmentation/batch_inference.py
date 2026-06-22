@@ -187,7 +187,7 @@ def main():
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
 
     # Load model
-    ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
+    ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     cfg = Config()
     for k, v in ckpt.get("config", {}).items():
         if hasattr(cfg, k):

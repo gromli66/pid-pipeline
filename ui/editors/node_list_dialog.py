@@ -14,7 +14,9 @@ from PySide6.QtCore import Qt
 
 
 # Технические классы, не показываемые в диалоге
-_SKIP_CLASSES = {"annotation", "background", "truba", "unknow", "strelka"}
+# "unknow" НЕ скрываем — это валидный класс-заглушка, его можно ставить вручную
+# (например, неопознанное оборудование, с последующей переклассификацией по KKS).
+_SKIP_CLASSES = {"annotation", "background", "truba", "strelka"}
 
 
 class NodeListDialog(QDialog):

@@ -190,14 +190,19 @@ def run_inference(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Junction/bridge inference")
+    parser = argparse.ArgumentParser(description="Junction/bridge inference (single or batch)")
     parser.add_argument("--checkpoint", type=str, required=True)
-    parser.add_argument("--image", type=str, required=True)
-    parser.add_argument("--pipe-mask", type=str, required=True)
-    parser.add_argument("--skeleton", type=str, default=None, help="If not provided, generated from pipe mask")
-    parser.add_argument("--output-dir", type=str, required=True)
-    parser.add_argument("--junction-threshold", type=float, default=None, help="Override junction threshold")
-    parser.add_argument("--bridge-threshold", type=float, default=None, help="Override bridge threshold")
+    parser.add_argument("--image", type=str, required=True,
+                        help="Path to a single image file OR a directory of images for batch mode")
+    parser.add_argument("--pipe-mask", type=str, required=True,
+                        help="Path to a single pipe mask file OR a directory of pipe masks (matched by stem)")
+    parser.add_argument("--skeleton", type=str, default=None,
+                        help="Path to a single skeleton OR a directory of skeletons. "
+                             "If not provided, skeleton is generated from pipe mask.")
+    parser.add_argument("--output-dir", type=str, required=True,
+                        help="Output directory. In batch mode each image gets its own subdirectory.")
+    parser.add_argument("--junction-threshold", type=float, default=None)
+    parser.add_argument("--bridge-threshold", type=float, default=None)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--visualize", action="store_true")
@@ -209,25 +214,24 @@ def main():
 
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
 
-    # Load checkpoint
-    ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
+    # ── Load checkpoint ────────────────────────────────────────────────────────
+    ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     cfg_dict = ckpt.get("config", {})
     cfg = Config()
     for k, v in cfg_dict.items():
         if hasattr(cfg, k):
             setattr(cfg, k, v)
 
-    # Load model
+    # ── Load model ─────────────────────────────────────────────────────────────
     model = JunctionSegModel(cfg).to(device)
     model.load_state_dict(ckpt["model_state_dict"])
     model.eval()
     logger.info("Model loaded from epoch %d", ckpt.get("epoch", -1))
 
-    # Thresholds: CLI override > threshold_analysis.json > config defaults
+    # ── Thresholds: CLI > threshold_analysis.json > config defaults ────────────
     j_thr = args.junction_threshold or cfg.val_threshold_junction
     b_thr = args.bridge_threshold or cfg.val_threshold_bridge
 
-    # Try loading optimized thresholds
     thr_path = Path(args.checkpoint).parent / "threshold_analysis" / "threshold_analysis.json"
     if thr_path.exists() and not args.junction_threshold and not args.bridge_threshold:
         with open(thr_path) as f:
@@ -238,79 +242,138 @@ def main():
 
     logger.info("Thresholds: junction=%.2f, bridge=%.2f", j_thr, b_thr)
 
-    # Load image
-    img_bgr = cv2.imread(args.image)
-    if img_bgr is None:
-        raise FileNotFoundError(f"Cannot read image: {args.image}")
-    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-    h, w = img_rgb.shape[:2]
-    logger.info("Image: %s (%dx%d)", args.image, w, h)
+    # ── Resolve image list ─────────────────────────────────────────────────────
+    image_path = Path(args.image)
+    pipe_mask_path = Path(args.pipe_mask)
+    skeleton_path = Path(args.skeleton) if args.skeleton else None
 
-    # Load pipe mask
-    pipe_mask = cv2.imread(args.pipe_mask, cv2.IMREAD_GRAYSCALE)
-    if pipe_mask is None:
-        raise FileNotFoundError(f"Cannot read pipe mask: {args.pipe_mask}")
-
-    # Load or generate skeleton
-    if args.skeleton:
-        skeleton = cv2.imread(args.skeleton, cv2.IMREAD_GRAYSCALE)
-        if skeleton is None:
-            raise FileNotFoundError(f"Cannot read skeleton: {args.skeleton}")
+    if image_path.is_dir():
+        image_files = sorted(
+            list(image_path.glob("*.png")) +
+            list(image_path.glob("*.jpg")) +
+            list(image_path.glob("*.jpeg"))
+        )
+        if not image_files:
+            raise FileNotFoundError(f"No PNG/JPG images found in directory: {image_path}")
+        batch_mode = True
+        logger.info("Batch mode: %d images found in %s", len(image_files), image_path)
+    elif image_path.is_file():
+        image_files = [image_path]
+        batch_mode = False
+        logger.info("Single mode: %s", image_path)
     else:
-        logger.info("Generating skeleton from pipe mask...")
-        skeleton = skeletonize_mask(pipe_mask)
+        raise FileNotFoundError(f"--image path does not exist: {image_path}")
 
-    # Run inference
-    result = run_inference(
-        model, img_rgb, pipe_mask, skeleton, device,
-        tile_size=cfg.tile_size,
-        overlap=cfg.val_tile_overlap,
-        batch_size=args.batch_size,
-        junction_threshold=j_thr,
-        bridge_threshold=b_thr,
-        nms_kernel=cfg.nms_kernel,
-        use_amp=cfg.amp,
-    )
+    # ── Process each image ─────────────────────────────────────────────────────
+    total_j = 0
+    total_b = 0
+    failed = []
 
-    junctions = result["junction_points"]
-    bridges = result["bridge_points"]
+    for img_file in image_files:
+        stem = img_file.stem
+        logger.info("── Processing: %s", stem)
 
-    logger.info("Found %d junctions, %d bridges in %.1fs (%d tiles)",
-                len(junctions), len(bridges), result["time_sec"], result["n_tiles"])
+        # Load image
+        img_bgr = cv2.imread(str(img_file))
+        if img_bgr is None:
+            logger.warning("Cannot read image: %s — skipping", img_file)
+            failed.append(stem)
+            continue
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        h, w = img_rgb.shape[:2]
+        logger.info("  Image size: %dx%d", w, h)
 
-    # Save binary masks
-    junction_mask = create_binary_mask(h, w, junctions, args.square_size)
-    bridge_mask = create_binary_mask(h, w, bridges, args.square_size)
+        # Load pipe mask
+        if pipe_mask_path.is_dir():
+            mask_file = pipe_mask_path / f"{stem}.png"
+        else:
+            mask_file = pipe_mask_path
 
-    cv2.imwrite(str(output_dir / "junction_mask.png"), junction_mask)
-    cv2.imwrite(str(output_dir / "bridge_mask.png"), bridge_mask)
+        pipe_mask = cv2.imread(str(mask_file), cv2.IMREAD_GRAYSCALE)
+        if pipe_mask is None:
+            logger.warning("Cannot read pipe mask: %s — skipping", mask_file)
+            failed.append(stem)
+            continue
 
-    # Save points JSON
-    points_data = {
-        "image": args.image,
-        "width": w,
-        "height": h,
-        "junction_threshold": j_thr,
-        "bridge_threshold": b_thr,
-        "junctions": junctions,
-        "bridges": bridges,
-        "n_tiles": result["n_tiles"],
-        "time_sec": round(result["time_sec"], 2),
-    }
-    with open(output_dir / "points.json", "w") as f:
-        json.dump(points_data, f, indent=2)
+        # Load or generate skeleton
+        if skeleton_path is not None:
+            if skeleton_path.is_dir():
+                skel_file = skeleton_path / f"{stem}.png"
+            else:
+                skel_file = skeleton_path
 
-    # Visualization
-    if args.visualize:
-        vis = create_visualization(img_rgb, skeleton, junctions, bridges, args.square_size)
-        vis_bgr = cv2.cvtColor(vis, cv2.COLOR_RGB2BGR)
-        cv2.imwrite(str(output_dir / "visualization.png"), vis_bgr)
-        logger.info("Visualization saved")
+            skeleton = cv2.imread(str(skel_file), cv2.IMREAD_GRAYSCALE)
+            if skeleton is None:
+                logger.warning("Cannot read skeleton: %s — generating from pipe mask", skel_file)
+                skeleton = skeletonize_mask(pipe_mask)
+        else:
+            logger.info("  Generating skeleton from pipe mask...")
+            skeleton = skeletonize_mask(pipe_mask)
 
+        # Output directory: batch → subdir per image, single → flat output_dir
+        if batch_mode:
+            img_out = output_dir / stem
+            img_out.mkdir(parents=True, exist_ok=True)
+        else:
+            img_out = output_dir
+
+        # Run inference
+        result = run_inference(
+            model, img_rgb, pipe_mask, skeleton, device,
+            tile_size=cfg.tile_size,
+            overlap=cfg.val_tile_overlap,
+            batch_size=args.batch_size,
+            junction_threshold=j_thr,
+            bridge_threshold=b_thr,
+            nms_kernel=cfg.nms_kernel,
+            use_amp=cfg.amp,
+        )
+
+        junctions = result["junction_points"]
+        bridges = result["bridge_points"]
+        total_j += len(junctions)
+        total_b += len(bridges)
+
+        logger.info("  Found %d junctions, %d bridges in %.1fs (%d tiles)",
+                    len(junctions), len(bridges), result["time_sec"], result["n_tiles"])
+
+        # Save binary masks
+        junction_mask = create_binary_mask(h, w, junctions, args.square_size)
+        bridge_mask = create_binary_mask(h, w, bridges, args.square_size)
+        cv2.imwrite(str(img_out / "junction_mask.png"), junction_mask)
+        cv2.imwrite(str(img_out / "bridge_mask.png"), bridge_mask)
+
+        # Save points JSON
+        points_data = {
+            "image": str(img_file),
+            "width": w,
+            "height": h,
+            "junction_threshold": j_thr,
+            "bridge_threshold": b_thr,
+            "junctions": junctions,
+            "bridges": bridges,
+            "n_tiles": result["n_tiles"],
+            "time_sec": round(result["time_sec"], 2),
+        }
+        with open(img_out / "points.json", "w") as f:
+            json.dump(points_data, f, indent=2)
+
+        # Visualization
+        if args.visualize:
+            vis = create_visualization(img_rgb, skeleton, junctions, bridges, args.square_size)
+            vis_bgr = cv2.cvtColor(vis, cv2.COLOR_RGB2BGR)
+            cv2.imwrite(str(img_out / "visualization.png"), vis_bgr)
+
+        logger.info("  Saved → %s", img_out)
+
+    # ── Summary ────────────────────────────────────────────────────────────────
+    processed = len(image_files) - len(failed)
+    logger.info("══════════════════════════════════════")
+    logger.info("Done: %d/%d images processed", processed, len(image_files))
+    logger.info("Total junctions: %d  bridges: %d", total_j, total_b)
+    if failed:
+        logger.warning("Skipped (%d): %s", len(failed), ", ".join(failed))
     logger.info("Output: %s", output_dir)
-    logger.info("  junction_mask.png: %d points", len(junctions))
-    logger.info("  bridge_mask.png:   %d points", len(bridges))
-    logger.info("  points.json")
 
 
 if __name__ == "__main__":

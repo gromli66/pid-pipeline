@@ -112,6 +112,10 @@ class BaseGraphEditor(QGraphicsView):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setBackgroundBrush(QBrush(QColor(30, 30, 30)))
+
+        # Фоновая подложка и её затемнение (0..1). 0.6 ≈ прежний вид (alpha 153).
+        self._bg_item: QGraphicsPixmapItem | None = None
+        self._bg_darkness: float = 0.6
         self.setMouseTracking(True)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
 
@@ -207,12 +211,12 @@ class BaseGraphEditor(QGraphicsView):
         if self.original_image and not self.original_image.isNull():
             darkened = self.original_image.copy().convertToFormat(QImage.Format.Format_ARGB32)
             painter = QPainter(darkened)
-            painter.fillRect(darkened.rect(), QColor(0, 0, 0, 153))
+            painter.fillRect(darkened.rect(), QColor(0, 0, 0, int(self._bg_darkness * 255)))
             painter.end()
 
-            bg_item = QGraphicsPixmapItem(QPixmap.fromImage(darkened))
-            bg_item.setZValue(0)
-            self.scene.addItem(bg_item)
+            self._bg_item = QGraphicsPixmapItem(QPixmap.fromImage(darkened))
+            self._bg_item.setZValue(0)
+            self.scene.addItem(self._bg_item)
 
         # Z=1: Edges
         self._draw_all_edges()
@@ -294,6 +298,22 @@ class BaseGraphEditor(QGraphicsView):
         tx, ty = target_point[1], target_point[0]
         path.lineTo(tx, ty)
         return path
+
+    def set_background_darkness(self, darkness: float):
+        """Затемнение фоновой подложки. darkness 0..1 (0 — оригинал, 1 — чёрный)."""
+        self._bg_darkness = max(0.0, min(1.0, float(darkness)))
+        if self.original_image is None or self.original_image.isNull() or self._bg_item is None:
+            return
+        darkened = self.original_image.copy().convertToFormat(QImage.Format.Format_ARGB32)
+        painter = QPainter(darkened)
+        painter.fillRect(darkened.rect(), QColor(0, 0, 0, int(self._bg_darkness * 255)))
+        painter.end()
+        self._bg_item.setPixmap(QPixmap.fromImage(darkened))
+
+    def set_edge_color(self, color: QColor):
+        """Цвет обычных рёбер графа."""
+        self.COLOR_EDGE = QColor(color)
+        self._redraw_all()
 
     def _get_edge_color(self, edge_data: dict, key: tuple = None) -> QColor:
         """Виртуальный. Base: стандартный цвет. Advanced: подсветка по диаметру/перпендикулярности."""

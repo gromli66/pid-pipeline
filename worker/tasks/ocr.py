@@ -44,6 +44,10 @@ def task_run_ocr(self, diagram_uid: str):
     Не меняет DiagramStatus — готовность определяется по наличию
     артефакта OCR_RESULT.
     """
+    # Surya читает TORCH_DEVICE из окружения — проставляем по PID_DEVICE
+    from worker.utils.device import apply_torch_device_env
+    apply_torch_device_env()
+
     import importlib
 
     from app.db.session import SessionLocal

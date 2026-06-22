@@ -145,15 +145,79 @@ class CVATClient:
 
         return response.json()["id"]
 
+    def get_project_labels(self, project_id: int) -> List[dict]:
+        """Получить все лейблы проекта (с учётом пагинации)."""
+        labels: List[dict] = []
+        page = 1
+        while True:
+            response = self._client.get(
+                "/api/labels",
+                headers=self._get_headers(),
+                params={"project_id": project_id, "page": page, "page_size": 100},
+            )
+            response.raise_for_status()
+            data = response.json()
+            labels.extend(data.get("results", []))
+            if not data.get("next"):
+                break
+            page += 1
+        return labels
+
+    def ensure_project_labels(
+        self,
+        project_id: int,
+        labels: List[CVATLabel],
+    ) -> int:
+        """
+        Добавить в существующий проект недостающие лейблы (по имени).
+
+        Существующие лейблы не трогаются, ничего не удаляется. Возвращает
+        количество добавленных лейблов.
+        """
+        existing_names = {lbl.get("name") for lbl in self.get_project_labels(project_id)}
+        missing = [lbl for lbl in labels if lbl.name not in existing_names]
+        if not missing:
+            return 0
+
+        labels_data = []
+        for label in missing:
+            label_dict = {"name": label.name}
+            if label.color:
+                label_dict["color"] = label.color
+            if label.attributes:
+                label_dict["attributes"] = label.attributes
+            labels_data.append(label_dict)
+
+        # CVAT v2: PATCH проекта с labels без "id" → добавляет новые лейблы
+        response = self._client.patch(
+            f"/api/projects/{project_id}",
+            headers={**self._get_headers(), "Content-Type": "application/json"},
+            json={"labels": labels_data},
+        )
+        response.raise_for_status()
+        return len(missing)
+
     def get_or_create_project(
         self,
         name: str,
         labels: List[CVATLabel],
     ) -> int:
-        """Получить существующий проект или создать новый."""
+        """
+        Получить существующий проект или создать новый.
+
+        Если проект уже существует — синхронизирует лейблы: добавляет
+        недостающие (например, новые классы детекции), не трогая существующие.
+        """
         existing = self.get_project_by_name(name)
         if existing:
-            return existing["id"]
+            project_id = existing["id"]
+            try:
+                added = self.ensure_project_labels(project_id, labels)
+                if added:
+                    print(f"[CVAT] Added {added} missing label(s) to project {project_id}")
+            except Exception as exc:
+                print(f"[CVAT][WARN] Could not sync labels for project {project_id}: {exc}")
+            return project_id
         return self.create_project(name, labels)
 
     def create_task(
@@ -186,7 +250,10 @@ class CVATClient:
                 f"/api/tasks/{task_id}/data",
                 headers=headers,
                 files=files,
-                data={"image_quality": 70},
+                # use_cache=true — чанки генерируются лениво, по запросу,
+                # а не все сразу при создании задачи. Для больших цветных схем
+                # (~15000x7000) это резко ускоряет создание task.
+                data={"image_quality": 70, "use_cache": "true"},
                 timeout=self.timeout * 2,
             )
             response.raise_for_status()

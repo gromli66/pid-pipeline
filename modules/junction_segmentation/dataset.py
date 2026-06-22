@@ -132,14 +132,52 @@ def augment_geometric(
 
 
 def augment_color(rgb: np.ndarray, cfg: Config) -> np.ndarray:
-    """Color augmentations applied ONLY to RGB channels."""
+    """
+    Color augmentations applied ONLY to RGB channels.
+
+    Order emulates a real scan/print pipeline:
+      brightness → contrast → gamma   (sensor electronics / paper aging)
+        → gaussian noise              (sensor noise)
+        → JPEG compression            (storage artifacts)
+
+    Each effect is independent (own probability) so the model sees
+    a roughly uniform mix of: clean tiles, single-effect tiles,
+    and multi-effect tiles.
+    """
+    # Brightness — multiplicative
     if random.random() < cfg.aug_brightness:
         factor = 1.0 + random.uniform(-cfg.aug_brightness_limit, cfg.aug_brightness_limit)
         rgb = np.clip(rgb.astype(np.float32) * factor, 0, 255).astype(np.uint8)
 
+    # Contrast — scaling around per-channel mean
+    # (per-channel rather than global: handles slight color casts on aged paper)
+    if random.random() < cfg.aug_contrast:
+        factor = 1.0 + random.uniform(-cfg.aug_contrast_limit, cfg.aug_contrast_limit)
+        mean = rgb.mean(axis=(0, 1), keepdims=True)
+        rgb_f = (rgb.astype(np.float32) - mean) * factor + mean
+        rgb = np.clip(rgb_f, 0, 255).astype(np.uint8)
+
+    # Gamma correction via LUT (fast, exact for uint8)
+    # gamma > 1 → darker (over-copied), gamma < 1 → lighter (faded)
+    if random.random() < cfg.aug_gamma:
+        gamma = random.uniform(cfg.aug_gamma_min, cfg.aug_gamma_max)
+        table = (np.linspace(0, 1, 256) ** gamma * 255).astype(np.uint8)
+        rgb = cv2.LUT(rgb, table)
+
+    # Gaussian noise (sensor noise)
     if random.random() < cfg.aug_noise:
         noise = np.random.normal(0, cfg.aug_noise_var, rgb.shape).astype(np.float32)
         rgb = np.clip(rgb.astype(np.float32) + noise, 0, 255).astype(np.uint8)
+
+    # JPEG compression artifacts
+    # cv2 expects BGR for correct YCrCb chroma subsampling → swap explicitly
+    if random.random() < cfg.aug_jpeg:
+        q = random.randint(cfg.aug_jpeg_quality_min, cfg.aug_jpeg_quality_max)
+        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        ok, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, q])
+        if ok:
+            bgr_dec = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+            rgb = cv2.cvtColor(bgr_dec, cv2.COLOR_BGR2RGB)
 
     return rgb
 

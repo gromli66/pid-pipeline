@@ -57,6 +57,8 @@ CLASS_NAMES = {
     37: 'unknow',
     38: 'strelka',
     39: 'background',
+    40: 'napravlenie',
+    41: 'vozdushnik',
 }
 
 # Специальные классы
@@ -65,7 +67,8 @@ CONNECTOR_CLASS_NAME = 'connector'
 UNKNOWN_CLASS_ID = 37
 UNKNOWN_CLASS_NAME = 'unknow'
 
-# Классы которые исключаем из поиска (annotation, truba)
+# Классы которые исключаем из поиска (annotation, truba, strelka, background).
+# napravlenie (40) и vozdushnik (41) — узлы графа, НЕ исключаются.
 EXCLUDED_CLASS_IDS = {34, 36, 38, 39}
 
 
@@ -167,7 +170,8 @@ def load_coco_annotations(coco_path: str, image_filename: str, image_shape: Tupl
             'class_name': CLASS_NAMES.get(class_id, UNKNOWN_CLASS_NAME),
             'bbox': (x_min, y_min, x_max, y_max),
             'center': (int(x + w/2), int(y + h/2)),
-            'segmentation': polygon  # Добавляем полигон
+            'segmentation': polygon,  # Добавляем полигон
+            'attributes': ann.get('attributes', {}),  # direction и пр. (для direction-узлов)
         })
     
     return labels
@@ -299,7 +303,10 @@ def identify_node_by_point(
                 'bbox': best_match['bbox'],
                 'ann_idx': best_match['idx'],
                 'label_id': eq_label_id,
-                'segmentation': best_match.get('segmentation')  # Полигон из COCO
+                'segmentation': best_match.get('segmentation'),  # Полигон из COCO
+                # Направление от direction-классификатора (up/right/down/left).
+                # Используется в FXML для разворота скина (nasos/shaiba).
+                'direction': (best_match.get('attributes') or {}).get('direction'),
             }
         else:
             # Полигон — unknown, bbox из маски компоненты
@@ -637,10 +644,11 @@ def prepare_tracing_data(skeleton: np.ndarray,
                         valid_bridges_mask: np.ndarray,
                         bridge_routing: Dict,
                         dilation: int = 1,
+                        direction_axis: Dict = None,
                         debug: bool = False) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Подготовить данные для трассировки рёбер.
-    
+
     Args:
         skeleton: Бинарная маска скелета
         labeled_equipment: Нумерованная маска equipment (label_id: 1..N)
@@ -649,6 +657,10 @@ def prepare_tracing_data(skeleton: np.ndarray,
         valid_bridges_mask: Маска валидных мостов
         bridge_routing: Словарь routing для мостов
         dilation: Дилатация для поиска контактов
+        direction_axis: {label_id: 'V'/'H'} — для боксов napravlenie ось трубы,
+            которую бокс ИМЕЕТ ПРАВО цеплять. Осевые контакты → к боксу; сквозной
+            перпендикуляр (обе стороны) → телепорт мимо бокса; перпендикуляр-поворот
+            (одна сторона) → не цепляется (повиснет у грани → cap повесит connector).
         debug: Режим отладки
     
     Returns:
@@ -666,6 +678,13 @@ def prepare_tracing_data(skeleton: np.ndarray,
     contact_map = np.zeros((height, width), dtype=np.int32)
     total_contacts = 0
 
+    direction_axis = direction_axis or {}
+    # синтетические телепорты для сквозных перпендикуляров через бокс napravlenie
+    # (как мост: труба проходит насквозь, бокса не касаясь)
+    _synth_bid = (max(bridge_routing.keys()) if bridge_routing else 0) + 1000
+    _synth_through = 0
+    _perp_dropped = 0
+
     # Контакты для equipment (label_id: 1..num_equipment)
     num_equipment = labeled_equipment.max()
     for label_id in range(1, num_equipment + 1):
@@ -677,9 +696,98 @@ def prepare_tracing_data(skeleton: np.ndarray,
         skeleton_uint8 = (skeleton.astype(np.uint8)) * 255
         contact_mask = cv2.bitwise_and(skeleton_uint8, boundary_mask)
         contact_coords = np.argwhere(contact_mask > 0)
+
+        axis = direction_axis.get(label_id)
+        if axis is None:
+            # обычное оборудование: все контакты → на узел
+            for y, x in contact_coords:
+                contact_map[y, x] = label_id  # Equipment: 1..N
+                total_contacts += 1
+            continue
+
+        # ===== БОКС NAPRAVLENIE: цепляем только осевые трубы =====
+        ys, xs = np.where(labeled_equipment == label_id)
+        bx1, by1, bx2, by2 = int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
+        bcy, bcx = ys.mean(), xs.mean()
+
+        def _pipe_dir(cy, cx, steps=14):
+            """Направление трубы у контакта: идём по скелету наружу, держа КУРС от
+            центра бокса и предпочитая прямое продолжение. Устойчиво к мостам и
+            пересечениям, где жадный ход свернул бы на поперечный рукав (из-за чего
+            осевая труба бокса на мосту терялась)."""
+            hy, hx = cy - bcy, cx - bcx
+            n = (hy * hy + hx * hx) ** 0.5 or 1.0
+            hy, hx = hy / n, hx / n
+            seen = {(cy, cx)}
+            y0, x0 = cy, cx
+            yc, xc = cy, cx
+            for _ in range(steps):
+                best, bscore = None, -9.0
+                for dyy in (-1, 0, 1):
+                    for dxx in (-1, 0, 1):
+                        if dyy == 0 and dxx == 0:
+                            continue
+                        ny, nx = yc + dyy, xc + dxx
+                        if not (0 <= ny < height and 0 <= nx < width):
+                            continue
+                        if not skeleton[ny, nx] or (ny, nx) in seen:
+                            continue
+                        seg = (dyy * dyy + dxx * dxx) ** 0.5
+                        score = (dyy * hy + dxx * hx) / seg  # косинус с текущим курсом
+                        if not (bx1 <= nx <= bx2 and by1 <= ny <= by2):
+                            score += 0.5  # бонус за выход наружу из бокса
+                        if score > bscore:
+                            bscore, best = score, (ny, nx, dyy, dxx)
+                if best is None or bscore < -0.5:  # резкий разворот → стоп
+                    break
+                ny, nx, dyy, dxx = best
+                seg = (dyy * dyy + dxx * dxx) ** 0.5
+                hy, hx = 0.5 * hy + 0.5 * dyy / seg, 0.5 * hx + 0.5 * dxx / seg
+                nn = (hy * hy + hx * hx) ** 0.5 or 1.0
+                hy, hx = hy / nn, hx / nn
+                seen.add((ny, nx))
+                yc, xc = ny, nx
+            return ('V' if abs(yc - y0) >= abs(xc - x0) else 'H'), (yc - y0), (xc - x0)
+
+        perp = []
         for y, x in contact_coords:
-            contact_map[y, x] = label_id  # Equipment: 1..N
-            total_contacts += 1
+            orient, ody, odx = _pipe_dir(int(y), int(x))
+            if orient == axis:
+                contact_map[y, x] = label_id  # осевая труба → контакт бокса
+                total_contacts += 1
+            else:
+                # точка СНАРУЖИ бокса на этой трубе (примыкает к выжившему скелету)
+                perp.append((int(y) + ody, int(x) + odx, ody, odx))
+        # перпендикуляр: группируем по поперечной координате (одна труба), и для
+        # сквозной (есть выход в обе стороны) ставим ОДИН телепорт между крайними
+        # точками снаружи бокса. Одиночная сторона (поворот-выход) → не трогаем →
+        # труба повиснет у грани → cap_dangling_ends повесит connector снаружи.
+        if perp:
+            kidx = 0 if axis == 'V' else 1   # вдоль какой коорд группировать трубы
+            perp.sort(key=lambda t: t[kidx])
+            clusters = []
+            for t in perp:
+                if clusters and abs(t[kidx] - clusters[-1][-1][kidx]) <= 12:
+                    clusters[-1].append(t)
+                else:
+                    clusters.append([t])
+            for cl in clusters:
+                if axis == 'V':   # перпендикуляр горизонтальный: влево(odx<0)/вправо(odx>0)
+                    neg = [(py, px) for (py, px, ody, odx) in cl if odx < 0]
+                    pos = [(py, px) for (py, px, ody, odx) in cl if odx > 0]
+                    a = min(neg, key=lambda p: p[1]) if neg else None   # крайний левый
+                    b = max(pos, key=lambda p: p[1]) if pos else None   # крайний правый
+                else:             # перпендикуляр вертикальный: вверх(ody<0)/вниз(ody>0)
+                    neg = [(py, px) for (py, px, ody, odx) in cl if ody < 0]
+                    pos = [(py, px) for (py, px, ody, odx) in cl if ody > 0]
+                    a = min(neg, key=lambda p: p[0]) if neg else None
+                    b = max(pos, key=lambda p: p[0]) if pos else None
+                if a and b and a != b:
+                    bridge_routing[_synth_bid] = {tuple(a): 'pipe1', tuple(b): 'pipe1'}
+                    _synth_bid += 1
+                    _synth_through += 1
+                else:
+                    _perp_dropped += 1
 
     # Контакты для connectors (label_id: N+1..N+M)
     num_connectors = labeled_connectors.max()
@@ -696,6 +804,43 @@ def prepare_tracing_data(skeleton: np.ndarray,
             # Connector: N+1..N+M (со сдвигом)
             contact_map[y, x] = label_id + connector_offset
             total_contacts += 1
+
+    # ===== Мост под узлом: перенос «проглоченных» routing-точек на контакт узла =====
+    # Если routing-точка моста попала ВНУТРЬ узла (напр. бокс napravlenie сидит на
+    # пересечении труб), её скелет затирается и контакт узла оказывается отрезанным
+    # от телепорта → труба-насквозь теряется. Переносим такую точку на ближайший
+    # контакт оборудования (в радиусе), чтобы трасса от контакта телепортировалась
+    # через мост — ровно как у обычного оборудования, стоящего над мостом.
+    _RELOC_R = 25
+    if direction_axis:
+        # контакты по боксам НАПРАВЛЕНИЯ (label → его осевые контакты)
+        box_contacts = {}
+        for y, x in np.argwhere(contact_map > 0):
+            lab = int(contact_map[y, x])
+            if lab in direction_axis:
+                box_contacts.setdefault(lab, []).append((int(y), int(x)))
+        relocated = 0
+        for bridge_id, routing in list(bridge_routing.items()):
+            for p, ptype in list(routing.items()):
+                py, px = p
+                if not (0 <= py < height and 0 <= px < width):
+                    continue
+                lab_here = int(labeled_equipment[py, px])
+                if lab_here not in direction_axis:
+                    continue  # точка моста НЕ под боксом направления — не трогаем
+                # переносим только на контакт ТОГО ЖЕ бокса (не чужого оборудования)
+                best, best_d = None, _RELOC_R + 1.0
+                for (cy, cx) in box_contacts.get(lab_here, []):
+                    d = ((cy - py) ** 2 + (cx - px) ** 2) ** 0.5
+                    if d < best_d:
+                        best_d, best = d, (cy, cx)
+                if best is None or best == p or best in routing:
+                    continue
+                del routing[p]
+                routing[best] = ptype
+                relocated += 1
+        if debug and relocated:
+            print(f"  Мост→бокс napravlenie: перенесено проглоченных точек: {relocated}")
 
     bridge_contact_map = np.zeros((height, width), dtype=np.int32)
     for bridge_id, routing in bridge_routing.items():
@@ -731,6 +876,8 @@ def prepare_tracing_data(skeleton: np.ndarray,
         print(f"  Контакты валидных мостов: {bridge_contacts}")
         print(f"  Контактные точки восстановлены: {node_contacts_restored}")
         print(f"  Контактные точки мостов восстановлены: {bridge_contacts_restored}")
+        print(f"  Боксы napravlenie: сквозных перпендикуляров (телепорт) {_synth_through}, "
+              f"поворотов-выходов (→cap) {_perp_dropped}")
 
     return skeleton_cleaned, contact_map, bridge_contact_map
 

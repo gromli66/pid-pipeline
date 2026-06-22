@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Signal, Slot, Qt, QThread, QObject
 
 from ui.services.api_client import APIClient, APIError
+from ui.widgets.appearance_panel import AppearanceMixin
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,12 @@ class _JunctionArtifactDownloader(QObject):
             return ("skeleton", dest)
         return None
 
+    def _dl_coco(self):
+        dest = self.temp_dir / "coco_validated.json"
+        if self._dl("coco_validated", dest):
+            return ("coco_validated", dest)
+        return None
+
     def run(self):
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -74,12 +81,13 @@ class _JunctionArtifactDownloader(QObject):
             self.progress.emit("Загрузка артефактов...")
             artifacts = {}
 
-            with ThreadPoolExecutor(max_workers=4) as pool:
+            with ThreadPoolExecutor(max_workers=5) as pool:
                 futures = [
                     pool.submit(self._dl_original),
                     pool.submit(self._dl_junction_mask),
                     pool.submit(self._dl_bridge_mask),
                     pool.submit(self._dl_skeleton),
+                    pool.submit(self._dl_coco),
                 ]
                 for future in as_completed(futures):
                     result = future.result()
@@ -93,7 +101,7 @@ class _JunctionArtifactDownloader(QObject):
             self.error.emit(str(exc))
 
 
-class JunctionTab(QWidget):
+class JunctionTab(AppearanceMixin, QWidget):
     """Вкладка валидации junction/bridge масок."""
 
     confirmed = Signal()          # Подтверждено
@@ -133,48 +141,69 @@ class JunctionTab(QWidget):
         toolbar.setContentsMargins(8, 4, 8, 4)
         toolbar.setSpacing(8)
 
-        self.btn_class1 = QPushButton("⬜ Junction (1)")
+        self.btn_class1 = QPushButton("⬜ Перекрёсток")
         self.btn_class1.setCheckable(True)
         self.btn_class1.setChecked(True)
+        self.btn_class1.setToolTip(
+            "Перекрёсток — разветвление или поворот труб (белая маска).\n"
+            "Ctrl+ЛКМ — поставить квадрат, Ctrl+ПКМ — удалить.\n"
+            "Shift+протяжка — обвести и выделить пятна, Esc — снять выделение.\n"
+            "Горячая клавиша: 1."
+        )
         self.btn_class1.setStyleSheet(
-            "QPushButton:checked { background-color: #4CAF50; color: white; }"
+            "QPushButton { border: 2px solid transparent; border-radius: 6px; padding: 4px 10px; }"
+            "QPushButton:checked { background-color: #FFFFFF; color: #1b1b1b; "
+            "border: 2px solid #555; }"
         )
         self.btn_class1.clicked.connect(lambda: self._set_class(1))
         toolbar.addWidget(self.btn_class1)
 
-        self.btn_class2 = QPushButton("🟥 Bridge (2)")
+        self.btn_class2 = QPushButton("🟥 Мост")
         self.btn_class2.setCheckable(True)
+        self.btn_class2.setToolTip(
+            "Мост — труба проходит над другой трубой без соединения (красная маска).\n"
+            "Ctrl+ЛКМ — поставить квадрат, Ctrl+ПКМ — удалить.\n"
+            "Shift+протяжка — обвести и выделить пятна, Esc — снять выделение.\n"
+            "Горячая клавиша: 2."
+        )
         self.btn_class2.setStyleSheet(
-            "QPushButton:checked { background-color: #F44336; color: white; }"
+            "QPushButton { border: 2px solid transparent; border-radius: 6px; padding: 4px 10px; }"
+            "QPushButton:checked { background-color: #F44336; color: white; "
+            "border: 2px solid #555; }"
         )
         self.btn_class2.clicked.connect(lambda: self._set_class(2))
         toolbar.addWidget(self.btn_class2)
 
-        toolbar.addWidget(QLabel(" Размер:"))
+        self.size_title = QLabel(" Размер:")
+        self.size_title.setToolTip("Размер квадрата-кисти (px) для текущего класса")
+        toolbar.addWidget(self.size_title)
         self.square_slider = QSlider(Qt.Horizontal)
         self.square_slider.setRange(3, 15)
         self.square_slider.setValue(15)
         self.square_slider.setMaximumWidth(120)
+        self.square_slider.setToolTip("Размер квадрата-кисти (px)")
         self.square_slider.valueChanged.connect(self._on_square_size_changed)
         toolbar.addWidget(self.square_slider)
         self.square_label = QLabel("15px")
         toolbar.addWidget(self.square_label)
 
-        toolbar.addWidget(
-            QLabel("  |  Ctrl+ЛКМ: квадрат | Shift+drag: обводка | Ctrl+ПКМ: удалить | 1/2: класс | Esc: отмена")
-        )
-
         toolbar.addStretch()
 
-        btn_undo = QPushButton("↩ Undo")
+        btn_undo = QPushButton("Undo")
+        btn_undo.setToolTip("Отменить последнее действие (Ctrl+Z)")
         btn_undo.clicked.connect(self._undo)
         toolbar.addWidget(btn_undo)
 
-        btn_save = QPushButton("💾 Сохранить")
+        btn_save = QPushButton("Сохранить")
+        btn_save.setToolTip("Сохранить маски перекрёстков и мостов на сервер (Ctrl+S)")
         btn_save.clicked.connect(self._save_masks)
         toolbar.addWidget(btn_save)
 
         self.btn_confirm = QPushButton("✅ Подтвердить")
+        self.btn_confirm.setToolTip(
+            "Сохранить и подтвердить валидацию.\n"
+            "Запускает построение графа схемы."
+        )
         self.btn_confirm.setStyleSheet("""
             QPushButton {
                 background-color: #4CAF50;
@@ -192,7 +221,7 @@ class JunctionTab(QWidget):
         layout.addLayout(toolbar)
 
         # === Editor placeholder ===
-        self.loading_label = QLabel("⏳ Загрузка артефактов...")
+        self.loading_label = QLabel("Загрузка артефактов...")
         self.loading_label.setAlignment(Qt.AlignCenter)
         self.loading_label.setStyleSheet("font-size: 18px; color: #666;")
         layout.addWidget(self.loading_label)
@@ -223,6 +252,33 @@ class JunctionTab(QWidget):
         )
         self._download_thread.start()
 
+    def _appearance_editor(self):
+        return self._editor
+
+    def _build_appearance_controls(self, panel):
+        from PySide6.QtGui import QColor
+        self._add_bg_darkness_slider(panel)
+        self._add_color_setting(
+            panel, "Цвет скелета", "skeleton_color", QColor(0, 255, 0),
+            lambda c: self._editor and self._editor.set_skeleton_color(c),
+        )
+
+    def apply_saved_appearance(self):
+        super().apply_saved_appearance()
+        ed = self._editor
+        if ed is None:
+            return
+        from PySide6.QtGui import QColor
+        self._apply_saved_color("skeleton_color", QColor(0, 255, 0), ed.set_skeleton_color)
+
+    def apply_default_appearance(self):
+        super().apply_default_appearance()
+        ed = self._editor
+        if ed is None:
+            return
+        from PySide6.QtGui import QColor
+        ed.set_skeleton_color(QColor(0, 255, 0))
+
     @Slot(dict)
     def _on_downloaded(self, artifacts: dict):
         self._download_thread.quit()
@@ -239,12 +295,14 @@ class JunctionTab(QWidget):
                 mask1_path=str(artifacts["junction_mask"]),
                 mask2_path=str(artifacts.get("bridge_mask", "")),
                 skeleton_path=str(artifacts.get("skeleton", "")),
+                coco_path=str(artifacts.get("coco_validated", "")),
             )
             # Вставляем перед status_label (последний виджет)
             self._editor_layout.insertWidget(
                 self._editor_layout.count() - 1, self._editor
             )
             self._undo_baseline = len(self._editor.undo_stack)
+            self.apply_saved_appearance()
             self.status_label.setText("Артефакты загружены")
         except Exception as exc:
             logger.error("Failed to init junction editor: %s", exc, exc_info=True)
@@ -257,7 +315,7 @@ class JunctionTab(QWidget):
     def _on_download_error(self, error_msg: str):
         self._download_thread.quit()
         self._download_thread.wait()
-        self.loading_label.setText(f"❌ Ошибка: {error_msg}")
+        self.loading_label.setText(f"Ошибка: {error_msg}")
 
     # === Tools ===
 
@@ -307,7 +365,7 @@ class JunctionTab(QWidget):
 
             self._saved = True
             self._undo_baseline = len(self._editor.undo_stack)
-            self.status_label.setText("✅ Junction/Bridge маски сохранены")
+            self.status_label.setText("Маски перекрёстков и мостов сохранены")
             return True
 
         except Exception as exc:
@@ -326,7 +384,7 @@ class JunctionTab(QWidget):
         if self._save_masks():
             self._confirmed = True
             logger.info("Junction masks saved, emitting confirmed")
-            self.status_message.emit("✅ Junction/Bridge маски подтверждены")
+            self.status_message.emit("Маски перекрёстков и мостов подтверждены")
             self.confirmed.emit()
         else:
             logger.warning("Junction _save_masks returned False")

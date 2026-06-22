@@ -57,13 +57,18 @@ class ContourTab(BaseGraphTab):
 
     def _setup_toolbar(self, toolbar: QHBoxLayout):
         # Edit polygon mode (toggle: checked=edit, unchecked=apply_contour)
-        self.btn_edit_polygon = QPushButton("✏ Редактировать")
+        self.btn_edit_polygon = QPushButton("Редактировать реальную форму")
         self.btn_edit_polygon.setCheckable(True)
         self.btn_edit_polygon.setToolTip(
-            "Ctrl+Click на equipment → редактировать вершины / нарисовать.\n"
-            "Drag вершину, Click ребро = добавить, Ctrl+RMB = удалить.\n"
-            "Delete = удалить полигон и нарисовать заново.\n"
-            "Повторный клик — выход из режима."
+            "Правка реальной формы (контура) оборудования.\n"
+            "Ctrl+ЛКМ по центроиду узла — выбрать его для редактирования формы.\n"
+            "• тянуть вершину — двигать её;\n"
+            "• клик по линии между вершинами — добавить новую вершину;\n"
+            "• Ctrl+ПКМ по вершине — удалить вершину;\n"
+            "• Ctrl+ПКМ по центроиду узла — удалить форму целиком и обвести заново;\n"
+            "• Delete — стереть форму и нарисовать с нуля.\n"
+            "Ctrl+ЛКМ по центроиду другого узла — перейти к нему.\n"
+            "Esc или повторное нажатие кнопки — выйти из режима."
         )
         self.btn_edit_polygon.setStyleSheet(
             "QPushButton:checked { background-color: #FF8F00; color: white; }"
@@ -74,9 +79,10 @@ class ContourTab(BaseGraphTab):
         self._add_separator(toolbar)
 
         # Apply all (high confidence)
-        btn_apply_all = QPushButton("✅ Применить все")
+        btn_apply_all = QPushButton("Применить все")
         btn_apply_all.setToolTip(
-            "Применить SAM2 контуры ко всем узлам с confidence >= 0.85"
+            "Применить распознанную форму ко всем узлам, где программа "
+            "уверена в результате.\nОстальные узлы можно обвести вручную."
         )
         btn_apply_all.setStyleSheet(
             "QPushButton { background-color: #4CAF50; color: white; }"
@@ -86,19 +92,10 @@ class ContourTab(BaseGraphTab):
         toolbar.addWidget(btn_apply_all)
 
         # Remove all
-        btn_remove_all = QPushButton("❌ Снять все")
-        btn_remove_all.setToolTip("Снять все применённые контуры")
+        btn_remove_all = QPushButton("Снять все")
+        btn_remove_all.setToolTip("Убрать все применённые формы со всех узлов")
         btn_remove_all.clicked.connect(self._remove_all_contours)
         toolbar.addWidget(btn_remove_all)
-
-        self._add_separator(toolbar)
-
-        # Contour stats (separate from graph stats)
-        self.contour_stats_label = QLabel("⬡ —")
-        self.contour_stats_label.setStyleSheet(
-            "color: #aaa; font-size: 11px;"
-        )
-        toolbar.addWidget(self.contour_stats_label)
 
     @Slot()
     def _toggle_edit_mode(self):
@@ -137,13 +134,13 @@ class ContourTab(BaseGraphTab):
         except APIError as exc:
             logger.warning("Failed to download contours_auto: %s", exc)
             self.status_label.setText(
-                "⚠ SAM2 контуры недоступны — извлечение ещё не завершено?"
+                "Контуры пока недоступны — распознавание формы ещё не завершено."
             )
             self._update_contour_stats()
             return
 
         if not editor.load_contours(str(contours_path)):
-            self.status_label.setText("⚠ Ошибка загрузки контуров")
+            self.status_label.setText("Не удалось загрузить контуры")
             self._update_contour_stats()
             return
 
@@ -152,7 +149,7 @@ class ContourTab(BaseGraphTab):
 
         self._update_contour_stats()
         self.status_label.setText(
-            "Готово — кликайте на узлы для применения SAM2 контуров"
+            "Готово — Ctrl+ЛКМ по центроиду узла применяет или снимает форму"
         )
 
     # =================================================================
@@ -165,16 +162,8 @@ class ContourTab(BaseGraphTab):
         self._update_contour_stats()
 
     def _update_contour_stats(self):
-        """Update contour-specific stats label."""
-        editor: ContourEditor = self._editor
-        if not editor:
-            self.contour_stats_label.setText("⬡ —")
-            return
-
-        cs = editor.get_contour_stats()
-        self.contour_stats_label.setText(
-            f"⬡ {cs['applied']}/{cs['has_contour']} применено"
-        )
+        """Счётчик контуров в toolbar убран — метод оставлен для совместимости."""
+        return
 
     # =================================================================
     # Apply all / Remove all

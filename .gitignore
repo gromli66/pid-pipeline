@@ -46,7 +46,6 @@ logs/
 *.sqlite3
 
 # Docker
-docker-compose.override.yml
 
 # OS
 .DS_Store
@@ -69,3 +68,11 @@ cvat_webview_data/
 # OS
 .DS_Store
 Thumbs.db
+
+# deploy/test артефакты
+wheels_linux/
+*.tar
+stages.txt
+diag_status.txt
+.venv_ui/
+docker-compose.gpu.yml

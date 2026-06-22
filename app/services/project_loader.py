@@ -28,12 +28,21 @@ class YoloConfig:
 
 
 @dataclass
+class EnsembleMemberConfig:
+    """Одна модель внутри ансамбля (type: ensemble)."""
+    weights: str = ""                   # Путь к весам
+    tile_size: int = 1280               # Размер тайла, на котором обучена (= SAHI slice)
+    weight: float = 1.0                 # Вес модели при слиянии
+    sahi_overlap: float = 0.25          # Overlap для SAHI
+
+
+@dataclass
 class DetectionModelConfig:
     """Конфигурация одной модели детекции."""
     name: str = ""                      # Human-readable name (для UI)
-    type: str = "yolo"                  # Тип модели: "yolo"
-    weights: str = ""                   # Путь к весам
-    num_classes: int = 36
+    type: str = "yolo"                  # Тип модели: "yolo" | "ensemble"
+    weights: str = ""                   # Путь к весам (для type=yolo)
+    num_classes: int = 39
     confidence: float = 0.8             # Глобальный порог confidence
     class_mapping: Dict[int, int] = field(default_factory=dict)
     description: str = ""               # Описание для UI tooltip
@@ -42,8 +51,18 @@ class DetectionModelConfig:
     #       Классы без записи используют глобальный `confidence`.
     #       Пример: {"strelka": 0.6, "datchik": 0.5}
     per_class_confidence: Dict[str, float] = field(default_factory=dict)
+    # Адаптивный ансамбль: per-class веса моделей.
+    #   Ключ — class_id (int, в финальной нумерации модели),
+    #   значение — {model_label: weight}, где model_label = "tile{tile_size}".
+    #   Пусто → обычный WBF с равными весами (текущее поведение).
+    per_class_weights: Dict[int, Dict[str, float]] = field(default_factory=dict)
     sahi_slice_size: int = 1280
     sahi_overlap_ratio: float = 0.25
+    # ─── Поля ансамбля (type: ensemble) ─────────────────────
+    ensemble_models: List[EnsembleMemberConfig] = field(default_factory=list)
+    merge_strategy: str = "wbf"         # "wbf" | "nms" | "soft_nms"
+    iou_threshold: float = 0.5          # Порог IoU при слиянии боксов
+    skip_box_thr: float = 0.01          # Минимальный confidence для WBF
 
 
 @dataclass
@@ -77,6 +96,13 @@ class SegmentationConfig:
     # ─── Чекпоинты (оба обязательны) ─────────────────────
     weights: str = ""                 # Чекпоинт A: plain UNet++
     weights_b: str = ""               # Чекпоинт B: DualHeadModel
+
+    # ─── Архитектура модели (для одиночной модели) ───
+    architecture: str = "UnetPlusPlus"
+    encoder_name: str = "efficientnet-b3"
+    in_channels: int = 3              # A_600 = 3 (RGB)
+    classes: int = 1
+    decoder_attention_type: Optional[str] = None
 
     # ─── Параметры модели ─────────────────────────────────
     dual_head_a: bool = False         # Model A — DualHeadModel?
@@ -192,6 +218,28 @@ class ContourExtractionConfig:
 
 
 @dataclass
+class DirectionClassificationConfig:
+    """Конфигурация классификатора направления (↑ → ↓ ←).
+
+    Отдельный worker-шаг после валидации детекции: классифицирует направление
+    указанных классов и пишет direction/confidence в coco_validated.json.
+    """
+    enabled: bool = False
+    weights: str = ""                       # путь к best.pt (YOLOv8-cls)
+    device: str = "cuda"
+    img_size: int = 128                     # должен совпадать с обучением
+    pad_frac: float = 0.20                  # паддинг кропа (как extract_crops.py)
+    # Имена классов объектов, для которых проставляем направление.
+    # napravlenie — треугольник по потоку; nasos/rashodomernaya_shaiba —
+    # разворот скина в FXML по направлению. strelka исключена из графа.
+    classes: list = field(default_factory=lambda: [
+        "napravlenie", "nasos", "rashodomernaya_shaiba",
+    ])
+    # Ниже этого порога direction записывается, но помечается low_confidence.
+    confidence_threshold: float = 0.5
+
+
+@dataclass
 class OcrConfig:
     """Конфигурация OCR из project YAML (Phase B)."""
     profile_module: str = ""              # Legacy: importlib module path (пустой = не используется)
@@ -219,6 +267,7 @@ class ProjectConfig:
     skeleton: SkeletonConfig
     junction_seg: JunctionSegConfig
     contour_extraction: ContourExtractionConfig
+    direction_classification: DirectionClassificationConfig
     ocr: OcrConfig
     config_path: str
     save_visualizations: bool = False
@@ -277,7 +326,7 @@ class ProjectLoader:
                     name=mdata.get("name", mid),
                     type=mdata.get("type", "yolo"),
                     weights=mdata.get("weights", ""),
-                    num_classes=mdata.get("num_classes", 36),
+                    num_classes=mdata.get("num_classes", 39),
                     confidence=mdata.get("confidence", 0.8),
                     class_mapping={
                         int(k): int(v)
@@ -288,8 +337,26 @@ class ProjectLoader:
                         str(k): float(v)
                         for k, v in mdata.get("per_class_confidence", {}).items()
                     },
+                    per_class_weights={
+                        int(cls_id): {
+                            str(label): float(w) for label, w in model_w.items()
+                        }
+                        for cls_id, model_w in mdata.get("per_class_weights", {}).items()
+                    },
                     sahi_slice_size=mdata.get("sahi_slice_size", 1280),
                     sahi_overlap_ratio=mdata.get("sahi_overlap_ratio", 0.25),
+                    ensemble_models=[
+                        EnsembleMemberConfig(
+                            weights=em.get("weights", ""),
+                            tile_size=int(em.get("tile_size", 1280)),
+                            weight=float(em.get("weight", 1.0)),
+                            sahi_overlap=float(em.get("sahi_overlap", 0.25)),
+                        )
+                        for em in mdata.get("ensemble_models", [])
+                    ],
+                    merge_strategy=mdata.get("merge_strategy", "wbf"),
+                    iou_threshold=float(mdata.get("iou_threshold", 0.5)),
+                    skip_box_thr=float(mdata.get("skip_box_thr", 0.01)),
                 )
             detection = DetectionConfig(
                 default_model=detection_data.get("default_model", "default"),
@@ -329,6 +396,11 @@ class ProjectLoader:
         segmentation = SegmentationConfig(
             weights=seg_data.get("weights", ""),
             weights_b=seg_data.get("weights_b", ""),
+            architecture=seg_data.get("architecture", "UnetPlusPlus"),
+            encoder_name=seg_data.get("encoder_name", "efficientnet-b3"),
+            in_channels=seg_data.get("in_channels", 3),
+            classes=seg_data.get("classes", 1),
+            decoder_attention_type=seg_data.get("decoder_attention_type", None),
             dual_head_a=seg_data.get("dual_head_a", False),
             dual_head_b=seg_data.get("dual_head_b", True),
             ensemble_strategy=seg_data.get("ensemble_strategy", "or"),
@@ -423,6 +495,20 @@ class ProjectLoader:
             skip_classes=ce_data.get("skip_classes", []),
         )
 
+        dc_data = data.get("direction_classification", {})
+        direction_classification = DirectionClassificationConfig(
+            enabled=dc_data.get("enabled", False),
+            weights=dc_data.get("weights", ""),
+            device=dc_data.get("device", "cuda"),
+            img_size=dc_data.get("img_size", 128),
+            pad_frac=dc_data.get("pad_frac", 0.20),
+            classes=dc_data.get(
+                "classes",
+                ["napravlenie", "nasos", "rashodomernaya_shaiba"],
+            ),
+            confidence_threshold=dc_data.get("confidence_threshold", 0.5),
+        )
+
         return ProjectConfig(
             code=project.get("code", yaml_path.stem),
             name=project.get("name", yaml_path.stem),
@@ -435,6 +521,7 @@ class ProjectLoader:
             skeleton=skeleton,
             junction_seg=junction_seg,
             contour_extraction=contour_extraction,
+            direction_classification=direction_classification,
             ocr=ocr,
             config_path=str(yaml_path),
             save_visualizations=project.get("save_visualizations", False),

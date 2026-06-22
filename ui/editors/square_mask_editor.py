@@ -10,6 +10,7 @@ Ctrl+ЛКМ: добавить квадрат, Ctrl+ПКМ: flood-fill удале
 - Grayscale 8-bit подложка (28 MB vs 112 MB на 7000×4000)
 """
 
+import json
 import numpy as np
 from collections import deque
 from pathlib import Path
@@ -20,7 +21,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import (
     QPixmap, QImage, QPainter, QColor, QPen, QBrush,
-    QWheelEvent, QMouseEvent, QKeyEvent,
+    QPainterPath, QWheelEvent, QMouseEvent, QKeyEvent,
 )
 from PySide6.QtCore import Qt, QRectF
 
@@ -174,6 +175,15 @@ class SquareMaskEditor(QGraphicsView):
         self.mask1_item: QGraphicsPixmapItem | None = None
         self.mask2_item: QGraphicsPixmapItem | None = None
         self.skeleton_item: QGraphicsPixmapItem | None = None
+        self.bbox_frames_item: QGraphicsPixmapItem | None = None
+        self.bg_item: QGraphicsPixmapItem | None = None
+
+        # Скелет: исходник (для перекраски) и текущий цвет — меняются в «Вид»
+        self._skel_raw: QImage | None = None
+        self._skeleton_color = QColor(0, 255, 0)
+
+        # COCO annotations (для рамок узлов оборудования)
+        self.coco_annotations: list[dict] = []
 
         # Current class (1 = white/junction, 2 = red/bridge)
         self.current_class = 1
@@ -226,6 +236,7 @@ class SquareMaskEditor(QGraphicsView):
         mask1_path: str,
         mask2_path: str = "",
         skeleton_path: str = "",
+        coco_path: str = "",
     ) -> bool:
         """
         Загрузить изображения.
@@ -235,6 +246,7 @@ class SquareMaskEditor(QGraphicsView):
             mask1_path: junction_mask.png (белый)
             mask2_path: bridge_mask.png (красный, опционально)
             skeleton_path: skeleton.png (зелёный, опционально)
+            coco_path: coco_validated.json (рамки узлов, опционально)
         """
         self.original_image = QImage(original_path)
         if self.original_image.isNull():
@@ -243,11 +255,18 @@ class SquareMaskEditor(QGraphicsView):
         self.img_width = self.original_image.width()
         self.img_height = self.original_image.height()
 
+        # COCO annotations (рамки узлов оборудования)
+        if coco_path and Path(coco_path).exists():
+            self._load_coco(coco_path)
+        else:
+            self.coco_annotations = []
+
         # Skeleton — GREEN (optional)
         if skeleton_path and Path(skeleton_path).exists():
-            skel_raw = QImage(skeleton_path)
-            self.skeleton_image = _make_mask_rgba_fast(skel_raw, QColor(0, 255, 0))
+            self._skel_raw = QImage(skeleton_path)
+            self.skeleton_image = _make_mask_rgba_fast(self._skel_raw, self._skeleton_color)
         else:
+            self._skel_raw = None
             self.skeleton_image = None
 
         # Mask1 — WHITE (junction)
@@ -269,6 +288,58 @@ class SquareMaskEditor(QGraphicsView):
         self._setup_scene()
         return True
 
+    def _load_coco(self, path: str) -> bool:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                coco_data = json.load(f)
+            self.coco_annotations = coco_data.get("annotations", [])
+            return True
+        except Exception:
+            self.coco_annotations = []
+            return False
+
+    def _render_bbox_frames(self) -> QImage:
+        """Отрисовать рамки узлов из COCO (bbox/полигоны) красным контуром."""
+        frames = QImage(
+            self.img_width, self.img_height, QImage.Format.Format_ARGB32
+        )
+        frames.fill(QColor(0, 0, 0, 0))
+
+        if not self.coco_annotations:
+            return frames
+
+        painter = QPainter(frames)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+
+        pen = QPen(QColor(255, 0, 0, 255))
+        pen.setWidth(2)
+        pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        for ann in self.coco_annotations:
+            drawn = False
+
+            # Сегментация-полигон (приоритет)
+            if "segmentation" in ann and ann["segmentation"]:
+                for poly_coords in ann["segmentation"]:
+                    if len(poly_coords) >= 6:
+                        path = QPainterPath()
+                        path.moveTo(poly_coords[0], poly_coords[1])
+                        for i in range(2, len(poly_coords), 2):
+                            path.lineTo(poly_coords[i], poly_coords[i + 1])
+                        path.closeSubpath()
+                        painter.drawPath(path)
+                        drawn = True
+
+            # Fallback на bbox
+            if not drawn and "bbox" in ann and ann["bbox"]:
+                x, y, w, h = ann["bbox"]
+                painter.drawRect(round(x), round(y), round(w), round(h))
+
+        painter.end()
+        return frames
+
     def _setup_scene(self):
         self.scene.clear()
         self.squares_white.clear()
@@ -277,9 +348,18 @@ class SquareMaskEditor(QGraphicsView):
 
         # Z=0: Grayscale darkened background
         darkened = _make_grayscale_darkened(self.original_image, brightness=0.4)
-        bg_item = QGraphicsPixmapItem(QPixmap.fromImage(darkened))
-        bg_item.setZValue(0)
-        self.scene.addItem(bg_item)
+        self.bg_item = QGraphicsPixmapItem(QPixmap.fromImage(darkened))
+        self.bg_item.setZValue(0)
+        self.scene.addItem(self.bg_item)
+
+        # Z=0.5: рамки узлов из COCO (красные контуры)
+        if self.coco_annotations:
+            bbox_img = self._render_bbox_frames()
+            self.bbox_frames_item = QGraphicsPixmapItem(QPixmap.fromImage(bbox_img))
+            self.bbox_frames_item.setZValue(0.5)
+            self.scene.addItem(self.bbox_frames_item)
+        else:
+            self.bbox_frames_item = None
 
         # Z=1: Skeleton (green, 50%)
         if self.skeleton_image:
@@ -317,6 +397,22 @@ class SquareMaskEditor(QGraphicsView):
     def _update_mask2_display(self):
         if self.mask2_item:
             self.mask2_item.setPixmap(QPixmap.fromImage(self.mask2_image))
+
+    def set_background_darkness(self, darkness: float):
+        """Затемнение фоновой подложки. darkness 0..1 (0 — оригинал, 1 — чёрный)."""
+        if self.original_image is None or self.bg_item is None:
+            return
+        brightness = max(0.05, min(1.0, 1.0 - float(darkness)))
+        darkened = _make_grayscale_darkened(self.original_image, brightness=brightness)
+        self.bg_item.setPixmap(QPixmap.fromImage(darkened))
+
+    def set_skeleton_color(self, color: QColor):
+        """Цвет отображения скелета труб."""
+        self._skeleton_color = QColor(color)
+        if self._skel_raw is None or self.skeleton_item is None:
+            return
+        self.skeleton_image = _make_mask_rgba_fast(self._skel_raw, self._skeleton_color)
+        self.skeleton_item.setPixmap(QPixmap.fromImage(self.skeleton_image))
 
     def set_square_size(self, size: int):
         """Установить размер квадратов."""

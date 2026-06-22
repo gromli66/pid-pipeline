@@ -14,6 +14,10 @@ celery[redis]>=5.3.0
 ultralytics>=8.3.0
 sahi>=0.11.0
 
+# Ensemble merging (WBF/NMS/Soft-NMS) — ставится отдельным слоем
+# в Dockerfile.worker ПОСЛЕ этого файла (см. комментарий там);
+# добавление сюда раздувает граф зависимостей до resolution-too-deep
+
 # Segmentation
 segmentation-models-pytorch>=0.3.3
 albumentations>=2.0.0
@@ -32,5 +36,7 @@ matplotlib>=3.8.0
 
 fastapi>=0.109.0
 
-# SAM2 contour extraction
-sam2
+# SAM2 contour extraction — ставится отдельным слоем в Dockerfile.worker
+# (RUN pip install --no-build-isolation sam2), здесь НЕ указывать:
+# иначе pip пересобирает его с изолированной сборкой и качает torch заново
+# sam2

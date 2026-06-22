@@ -48,10 +48,23 @@ RUN python -m pip install --upgrade pip
 # PyTorch с CUDA 12.4
 RUN pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
 
-# Python зависимости
+# sam2 отдельным слоем: --no-build-isolation использует уже установленный torch
+# (иначе pip скачивает torch ~2.5GB заново в изолированную сборку).
+# Слой кешируется — изменения requirements не пересобирают sam2.
+RUN pip install --no-cache-dir --no-build-isolation sam2
+
+# Python зависимости.
+# worker.lock.txt — pip freeze из рабочего образа: с точными версиями
+# резолверу pip нечего перебирать (иначе resolution-too-deep)
 COPY requirements/base.txt requirements/base.txt
 COPY requirements/worker.txt requirements/worker.txt
-RUN pip install --no-cache-dir -r requirements/worker.txt
+COPY requirements/worker.lock.txt requirements/worker.lock.txt
+RUN pip install --no-cache-dir -r requirements/worker.txt -c requirements/worker.lock.txt
+
+# ensemble-boxes отдельным слоем: добавление в worker.txt раздувает
+# граф зависимостей pip до ошибки resolution-too-deep.
+# numba/llvmlite запинены под numpy<2.0 / python3.11.
+RUN pip install --no-cache-dir ensemble-boxes==1.0.9 numba==0.60.0 llvmlite==0.43.0
 
 # Копируем worker
 COPY worker/ /app/worker/

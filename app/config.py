@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     
     # Storage
     STORAGE_PATH: str = Field(default="./storage/diagrams")
+
+    # === PDF rendering (upload) ===
+    # Модели обучались на 300 DPI сканах (~4900x3500 px). PDF рендерим в 300 DPI.
+    PDF_RENDER_DPI: int = Field(default=300)
+    # Защитный лимит: если длинная сторона при 300 DPI > этого, масштабируем вниз
+    # (большие форматы A0/A1 иначе дают гигантские растры и превышают UI-лимит).
+    PDF_MAX_SIDE: int = Field(default=16000)
     
     # Projects
     PROJECTS_CONFIG_DIR: str = Field(default="./configs/projects")

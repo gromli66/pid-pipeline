@@ -71,7 +71,7 @@ services:
       - CVAT_URL=http://cvat_server:8080
       - CVAT_USERNAME=${CVAT_SUPERUSER:-admin}
       - CVAT_PASSWORD=${CVAT_SUPERUSER_PASSWORD:-admin123}
-      - CVAT_TOKEN=${CVAT_TOKEN:-52db370470e5ed7ab05fecae5cc716859271c3d3}
+      - CVAT_TOKEN=${CVAT_TOKEN}
       - STORAGE_PATH=/storage/diagrams
       - PROJECTS_CONFIG_DIR=/app/configs/projects
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -108,11 +108,12 @@ services:
       - CVAT_URL=http://cvat_server:8080
       - CVAT_USERNAME=${CVAT_SUPERUSER:-admin}
       - CVAT_PASSWORD=${CVAT_SUPERUSER_PASSWORD:-admin123}
-      - CVAT_TOKEN=52db370470e5ed7ab05fecae5cc716859271c3d3
+      - CVAT_TOKEN=${CVAT_TOKEN}
       - STORAGE_PATH=/storage/diagrams
       - PROJECTS_CONFIG_DIR=/app/configs/projects
       - YOLO_WEIGHTS=${YOLO_WEIGHTS:-/models/yolo/best.pt}
       - YOLO_DEVICE=${YOLO_DEVICE:-cuda}
+      - PID_DEVICE=${PID_DEVICE:-auto}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - HF_HOME=/models/.hf_cache
     volumes:
@@ -157,6 +158,7 @@ services:
       - HF_HOME=/models/ocr/hf_cache
       - RECOGNITION_BATCH_SIZE=64
       - DETECTOR_BATCH_SIZE=4
+      - PID_DEVICE=${PID_DEVICE:-auto}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - SKIP_SURYA_CROPS=${SKIP_SURYA_CROPS:-0}
     volumes:
@@ -287,6 +289,7 @@ services:
     container_name: cvat_worker_import
     command: run worker.import
     environment:
+      NUMPROCS: 1
       CVAT_POSTGRES_HOST: cvat_db
       CVAT_REDIS_INMEM_HOST: cvat_redis_inmem
       CVAT_REDIS_INMEM_PORT: 6379
@@ -309,6 +312,7 @@ services:
     container_name: cvat_worker_export
     command: run worker.export
     environment:
+      NUMPROCS: 1
       CVAT_POSTGRES_HOST: cvat_db
       CVAT_REDIS_INMEM_HOST: cvat_redis_inmem
       CVAT_REDIS_INMEM_PORT: 6379
@@ -325,27 +329,10 @@ services:
     networks:
       - cvat
 
-  # CVAT Worker - Annotation
-  cvat_worker_annotation:
-    image: cvat/server:v2.25.0
-    container_name: cvat_worker_annotation
-    command: run worker.annotation
-    environment:
-      CVAT_POSTGRES_HOST: cvat_db
-      CVAT_REDIS_INMEM_HOST: cvat_redis_inmem
-      CVAT_REDIS_INMEM_PORT: 6379
-      CVAT_REDIS_ONDISK_HOST: cvat_redis_ondisk
-      CVAT_REDIS_ONDISK_PORT: 6666
-      SMOKESCREEN_OPTS: ""
-    volumes:
-      - cvat_data:/home/django/data
-      - cvat_keys:/home/django/keys
-      - cvat_logs:/home/django/logs
-    depends_on:
-      - cvat_server
-    restart: unless-stopped
-    networks:
-      - cvat
+  # CVAT Worker - Annotation: УДАЛЁН.
+  # Очередь worker.annotation обслуживает только авто-аннотацию (serverless/Nuclio),
+  # которая отключена (CVAT_SERVERLESS_ENABLED=false, Nuclio нет). Ручная разметка
+  # bbox сохраняется напрямую через REST, импорт/экспорт — через свои воркеры.
 
   # CVAT Worker - Chunks (для обработки изображений)
   cvat_worker_chunks:
@@ -353,6 +340,7 @@ services:
     container_name: cvat_worker_chunks
     command: run worker.chunks
     environment:
+      NUMPROCS: 1
       CVAT_POSTGRES_HOST: cvat_db
       CVAT_REDIS_INMEM_HOST: cvat_redis_inmem
       CVAT_REDIS_INMEM_PORT: 6379

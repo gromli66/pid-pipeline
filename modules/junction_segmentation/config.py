@@ -40,13 +40,36 @@ class Config:
     amp: bool = True
 
     # ── Augmentations ────────────────────────────────────────────────
+    # Geometric
     aug_hflip: float = 0.5
     aug_vflip: float = 0.5
     aug_rotate90: float = 0.5
+
+    # Brightness — multiplicative: out = in * (1 + uniform(-limit, +limit))
     aug_brightness: float = 0.3
-    aug_brightness_limit: float = 0.2
+    aug_brightness_limit: float = 0.3
+
+    # Contrast — scaling around per-channel mean:
+    #   out = (in - mean) * (1 + uniform(-limit, +limit)) + mean
+    aug_contrast: float = 0.3
+    aug_contrast_limit: float = 0.3
+
+    # Gamma — power-law: out = (in/255)^gamma * 255
+    # gamma < 1 → lighter (faded scans)
+    # gamma > 1 → darker (over-copied scans)
+    # asymmetric range: darkening is more common for P&ID xerox copies
+    aug_gamma: float = 0.3
+    aug_gamma_min: float = 0.7
+    aug_gamma_max: float = 1.4
+
+    # Gaussian noise — N(0, sigma=aug_noise_var) added to RGB in [0..255] space
     aug_noise: float = 0.2
-    aug_noise_var: float = 10.0
+    aug_noise_var: float = 15.0
+
+    # JPEG compression artifacts — quality drawn uniformly from [min, max]
+    aug_jpeg: float = 0.3
+    aug_jpeg_quality_min: int = 50
+    aug_jpeg_quality_max: int = 95
 
     # ── Validation / metrics ─────────────────────────────────────────
     val_tile_overlap: int = 128

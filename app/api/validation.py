@@ -181,19 +181,23 @@ def _generate_node_mask_from_coco(coco_data: dict, height: int, width: int) -> n
 
     categories = {cat["id"]: cat["name"] for cat in coco_data.get("categories", [])}
 
-    pipe_id = None
-    annotation_id = None
-    for cat_id, cat_name in categories.items():
-        if cat_name.lower() == "truba":
-            pipe_id = cat_id
-        elif cat_name.lower() == "annotation":
-            annotation_id = cat_id
+    # Исключаем из node_mask: truba, annotation, napravlenie.
+    # napravlenie — стрелка направления НА трубе: труба должна проходить сквозь
+    # её bbox, поэтому bbox не вырезаем из pipe_mask (направление обрабатывается
+    # как атрибут спец-узла в графе). ВАЖНО держать список синхронным с
+    # worker/tasks/segmentation.py::generate_node_mask, иначе правка теряется
+    # при ревалидации детекции. strelka НЕ исключаем.
+    excluded_names = {"truba", "annotation", "napravlenie"}
+    excluded_ids = {
+        cat_id for cat_id, cat_name in categories.items()
+        if cat_name.lower() in excluded_names
+    }
 
     mask = np.zeros((height, width), dtype=np.uint8)
 
     for ann in coco_data.get("annotations", []):
         cat_id = ann.get("category_id")
-        if cat_id in (pipe_id, annotation_id):
+        if cat_id in excluded_ids:
             continue
 
         ann_mask = np.zeros((height, width), dtype=np.uint8)

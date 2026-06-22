@@ -260,7 +260,7 @@ def train(cfg: Config, resume_path: str = None):
     best_metric = 0.0
 
     if resume_path:
-        ckpt = torch.load(resume_path, map_location=device, weights_only=True)
+        ckpt = torch.load(resume_path, map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model_state_dict"])
         optimizer.load_state_dict(ckpt["optimizer_state_dict"])
         if "scheduler_state_dict" in ckpt:

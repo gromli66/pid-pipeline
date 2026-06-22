@@ -35,6 +35,26 @@ def main():
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
 
+    # Общий GL-контекст для QWebEngineView (CVAT) — безопасно на всех ОС,
+    # рекомендация Qt. Ставится всегда.
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
+
+    # GL-бэкенд рендеринга. Дефолт gles (ANGLE): аппаратное ускорение без
+    # мигания оверлея CVAT на этой машине (на desktop OpenGL боксы мерцали).
+    # Переключается БЕЗ правки кода через переменную окружения PID_GL_BACKEND:
+    #   gles     — ANGLE, аппаратное ускорение (дефолт, без мигания)
+    #   desktop  — нативный OpenGL (быстро, но на части GPU мигает оверлей)
+    #   software — софт-рендер, универсально но медленно
+    #   auto     — дефолт ОС (на Windows может вернуть мигание)
+    _gl = os.environ.get("PID_GL_BACKEND", "gles").lower()
+    _gl_attr = {
+        "desktop": Qt.ApplicationAttribute.AA_UseDesktopOpenGL,
+        "gles": Qt.ApplicationAttribute.AA_UseOpenGLES,
+        "software": Qt.ApplicationAttribute.AA_UseSoftwareOpenGL,
+    }.get(_gl)
+    if _gl_attr is not None:
+        QApplication.setAttribute(_gl_attr)
+
     app = QApplication(sys.argv)
     app.setApplicationName("P&ID Pipeline")
     app.setOrganizationName("PID")

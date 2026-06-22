@@ -10,6 +10,7 @@ from pathlib import Path
 from worker.celery_app import celery_app
 from celery.exceptions import SoftTimeLimitExceeded
 from worker.utils.db_helpers import set_diagram_error, check_deleted, upsert_artifact, start_stage, complete_stage, fail_stage
+from worker.utils.device import resolve_device
 
 
 def detections_to_yolo_txt(detections: list) -> str:
@@ -41,13 +42,13 @@ def detections_to_yolo_txt(detections: list) -> str:
     name="worker.tasks.detection.task_detect_yolo",
     max_retries=2,
     default_retry_delay=60,
-    time_limit=1800,
-    soft_time_limit=1740,  # 29 min - 1 min for cleanup before hard kill
+    time_limit=5400,
+    soft_time_limit=5340,  # 89 min - 1 min for cleanup before hard kill
     acks_late=True,
 )
 def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydraulics", model_id: str = None):
     """
-    YOLO детекция с SAHI.
+    Ансамблевая YOLO детекция с SAHI (3 модели на разных tile_size + WBF).
 
     Этапы:
     1. Загрузить изображение из storage
@@ -81,7 +82,7 @@ def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydrauli
             detections_to_cvat_detections,
             create_exporter_from_config,
         )
-        from modules.yolo_detector import NodeDetector
+        from modules.yolo_detector import EnsembleDetector
 
         # ===== 1. Загрузка конфигурации проекта =====
         project_loader = get_project_loader()
@@ -129,15 +130,21 @@ def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydrauli
 
         print(f"[FILE] Image path: {image_path}")
 
-        # ===== 4. YOLO детекция =====
+        # ===== 4. Ансамблевая YOLO детекция =====
         model_cfg = project_config.detection.get_model(model_id)
         effective_model_id = model_id or project_config.detection.default_model
         print(f"[MODEL] Using detection model: '{effective_model_id}' ({model_cfg.name})")
 
-        weights_path = Path(model_cfg.weights)
-        if not weights_path.is_absolute():
-            # Относительный путь - относительно /app
-            weights_path = Path("/app") / weights_path
+        if model_cfg.type != "ensemble" or not model_cfg.ensemble_models:
+            raise ValueError(
+                f"Detection model '{effective_model_id}' must have type 'ensemble' "
+                f"with non-empty 'ensemble_models' (got type='{model_cfg.type}')"
+            )
+
+        def _abs_weights(path_str: str) -> Path:
+            """Относительный путь - относительно /app."""
+            p = Path(path_str)
+            return p if p.is_absolute() else Path("/app") / p
 
         # Per-class confidence: инференс с min(thresholds), потом фильтрация
         base_confidence = model_cfg.confidence
@@ -149,19 +156,36 @@ def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydrauli
         else:
             min_conf = base_confidence
 
-        detector = NodeDetector(
-            weights=weights_path,
-            confidence=min_conf,
-            device=os.getenv("YOLO_DEVICE", "cuda"),
-            use_sahi=True,
-            sahi_slice_size=model_cfg.sahi_slice_size,
-            sahi_overlap_ratio=model_cfg.sahi_overlap_ratio,
-            apply_preprocessing=False,
+        detector = EnsembleDetector(
+            models=[
+                {
+                    "weights": _abs_weights(m.weights),
+                    "tile_size": m.tile_size,
+                    "weight": m.weight,
+                    "sahi_overlap": m.sahi_overlap,
+                    "confidence": min_conf,
+                }
+                for m in model_cfg.ensemble_models
+            ],
+            merge_strategy=model_cfg.merge_strategy,
+            iou_threshold=model_cfg.iou_threshold,
+            confidence_threshold=min_conf,
+            skip_box_thr=model_cfg.skip_box_thr,
+            device=resolve_device(),
+            per_class_weights=model_cfg.per_class_weights or None,
         )
+
+        for info in detector.get_model_info():
+            print(f"[MODEL]   tile={info['tile_size']}, weight={info['weight']}, "
+                  f"weights={info['weights']}")
+        print(f"[MODEL] Merge strategy: {model_cfg.merge_strategy}")
+        if model_cfg.per_class_weights:
+            print(f"[MODEL] Adaptive ensemble: per-class weights for "
+                  f"{len(model_cfg.per_class_weights)} classes")
 
         detections = detector.detect(
             image=image_path,
-            return_absolute=False,
+            apply_grayscale=True,  # бинаризация как при обучении ансамбля
             apply_reverse_mapping=True,  # 34->35, 35->38
         )
 
@@ -308,8 +332,8 @@ def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydrauli
 
     except SoftTimeLimitExceeded:
         print(f"[TIMEOUT] Detection timed out for {diagram_uid}")
-        fail_stage(stage, "Detection timed out (29 min limit)")
-        set_diagram_error(db, diagram_uid, "Detection timed out (29 min limit)", "detecting")
+        fail_stage(stage, "Detection timed out (89 min limit)")
+        set_diagram_error(db, diagram_uid, "Detection timed out (89 min limit)", "detecting")
         raise
 
     except Exception as exc:

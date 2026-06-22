@@ -19,10 +19,15 @@ router = APIRouter()
 
 # error_stage → (celery task name, target status)
 _STAGE_DISPATCH = {
+    "direction_classification": ("worker.tasks.segmentation.task_segment_pipes", DiagramStatus.SEGMENTING),
     "segmenting": ("worker.tasks.segmentation.task_segment_pipes", DiagramStatus.SEGMENTING),
     "skeletonizing": ("worker.tasks.skeleton.task_skeletonize", DiagramStatus.SKELETONIZING),
     "detecting_junctions": ("worker.tasks.junction.task_detect_junctions", DiagramStatus.DETECTING_JUNCTIONS),
 }
+
+# Имена задач цепочки «направление → сегментация».
+_DIRECTION_TASK = "worker.tasks.direction.task_classify_direction"
+_SEGMENT_TASK = "worker.tasks.segmentation.task_segment_pipes"
 
 # Статусы, допускающие запуск сегментации
 _ALLOWED_STATUSES = {
@@ -81,11 +86,23 @@ async def start_segmentation(
 
     # Dispatch task через send_task (без импорта worker модулей)
     from worker.celery_app import celery_app
+    from celery import chain
 
-    async_result = celery_app.send_task(
-        task_name,
-        args=[str(uid), diagram.project_code],
-    )
+    # Полный запуск (и retry с шага сегментации/направления) начинается с
+    # классификации направления, затем сегментация. Направление пишет
+    # direction в coco_validated.json ДО генерации node_mask — единый источник
+    # правды для node_mask и графа. На частичных retry (skeleton/junction)
+    # цепочка не нужна — диспетчим один таск как раньше.
+    if restart_from in ("segmenting", "direction_classification"):
+        async_result = chain(
+            celery_app.signature(_DIRECTION_TASK, args=[str(uid)], immutable=True),
+            celery_app.signature(_SEGMENT_TASK, args=[str(uid), diagram.project_code], immutable=True),
+        ).apply_async()
+    else:
+        async_result = celery_app.send_task(
+            task_name,
+            args=[str(uid), diagram.project_code],
+        )
 
     return {
         "status": target_status.value,

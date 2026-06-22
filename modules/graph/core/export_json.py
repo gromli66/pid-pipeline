@@ -87,7 +87,24 @@ def export_node_link_format(nodes: List[Dict],
         # Добавить segmentation (полигон) если есть
         if node.get('segmentation'):
             node_data['segmentation'] = node['segmentation']
-            
+
+        # Направление от direction-классификатора (up/right/down/left).
+        # Для napravlenie направление дублируется в flow_direction ниже;
+        # для nasos/rashodomernaya_shaiba это поле — единственный источник
+        # ориентации скина в graph_to_fxml.
+        if node.get('direction'):
+            node_data['direction'] = node['direction']
+
+        # Узел направления (napravlenie): остаётся equipment (UI рисует бокс),
+        # направление — метаданные. Помечен флагом direction_node.
+        if node.get('direction_node') or node.get('flow_direction'):
+            node_data['direction_node'] = True
+            node_data['flow_axis'] = node.get('flow_axis')
+            node_data['flow_direction'] = node.get('flow_direction')
+            node_data['pass_through'] = node.get('pass_through', False)
+            if node.get('ann_id') is not None:
+                node_data['ann_id'] = node['ann_id']
+
         graph_data["nodes"].append(node_data)
 
     # Экспорт рёбер
@@ -106,6 +123,10 @@ def export_node_link_format(nodes: List[Dict],
             "is_terminal": edge['is_terminal'],
             "color": edge.get('color')
         }
+
+        # Направление потока (от спец-узла napravlenie) — атрибут осевого ребра
+        if edge.get('direction'):
+            edge_data['direction'] = edge['direction']
 
         if include_paths:
             edge_data['path'] = edge['path']

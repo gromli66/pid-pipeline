@@ -37,10 +37,10 @@ async def start_detection(
     if not diagram:
         raise HTTPException(status_code=404, detail="Diagram not found")
     
-    if diagram.status != DiagramStatus.UPLOADED:
+    if diagram.status != DiagramStatus.FRAME_CLEANED:
         raise HTTPException(
             status_code=400,
-            detail=f"Cannot start detection: status is '{diagram.status.value}', expected 'uploaded'"
+            detail=f"Cannot start detection: status is '{diagram.status.value}', expected 'frame_cleaned'"
         )
     
     # Валидация model_id (если указан) — проверяем что модель существует в конфиге

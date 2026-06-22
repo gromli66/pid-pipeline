@@ -153,7 +153,8 @@ def task_detect_junctions(
             raise FileNotFoundError(f"Cannot read skeleton: {skeleton_path}")
 
         # ===== 5. Load model =====
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        from worker.utils.device import resolve_device
+        device = torch.device(resolve_device())
         weights = Path(jcfg.weights)
         if not weights.is_absolute():
             weights = Path("/app") / weights

@@ -474,9 +474,13 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None):
                 with open(contours_path, 'r', encoding='utf-8') as f:
                     contours_data = json.load(f)
 
+                # ТОЛЬКО узлы, выбранные оператором в бусине «Контуры»
+                # (polygon_validated). polygon_auto НЕ применяем — иначе SAM2-контур
+                # лёг бы на все подходящие узлы, включая невыбранные. Для невыбранных
+                # узлов граница останется по bbox (CVAT / добавленные боксы).
                 contour_nodes = [
                     n for n in contours_data.get("nodes", [])
-                    if n.get("polygon_validated") or n.get("polygon_auto")
+                    if n.get("polygon_validated")
                 ]
 
                 merged = 0
@@ -512,7 +516,7 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None):
 
                         if iou > best_iou:
                             best_iou = iou
-                            best_poly = cn.get("polygon_validated") or cn.get("polygon_auto")
+                            best_poly = cn.get("polygon_validated")
 
                     if best_iou > 0.5 and best_poly:
                         # Write to 'segmentation' — graph_to_fxml reads this
@@ -521,7 +525,8 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None):
                         merged += 1
 
                 logger.info(
-                    "Merged %d contour polygons into graph (%d available)",
+                    "Merged %d validated contour polygons into graph "
+                    "(%d selected by operator); остальные узлы — по bbox",
                     merged, len(contour_nodes),
                 )
             except Exception as e:

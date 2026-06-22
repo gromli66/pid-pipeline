@@ -380,7 +380,11 @@ class OcrBindingTab(QWidget):
             "QPushButton:hover { background-color: #45a049; }"
         )
         self.btn_confirm_all.clicked.connect(self._on_confirm)
-        self.other_toolbar.custom_layout.addWidget(self.btn_confirm_all)
+        # Кнопка финального подтверждения — в правом верхнем углу (как на других
+        # стадиях), видна на всех подвкладках
+        self.sub_tabs.setCornerWidget(
+            self.btn_confirm_all, Qt.Corner.TopRightCorner
+        )
 
         self.other_toolbar.add_clicked.connect(lambda: self._toggle_add_mode(self.other_toolbar))
         self.other_toolbar.delete_clicked.connect(lambda: self._toggle_del_mode(self.other_toolbar))

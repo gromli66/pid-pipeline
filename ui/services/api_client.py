@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 class DiagramStatus(str, Enum):
     """Статусы диаграммы (зеркало backend)."""
     UPLOADED = "uploaded"
+    CLEANING_FRAME = "cleaning_frame"
+    FRAME_CLEANED = "frame_cleaned"
     DETECTING = "detecting"
     DETECTED = "detected"
     VALIDATING_BBOX = "validating_bbox"
@@ -203,23 +205,35 @@ class APIClient:
 
     # === Diagrams ===
 
+    _MIME_BY_EXT = {
+        ".pdf": "application/pdf",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".tiff": "image/tiff",
+        ".tif": "image/tiff",
+    }
+
     def upload_diagram(
         self,
         file_path: Path,
         project_code: str = "thermohydraulics",
+        page: int = 1,
     ) -> DiagramInfo:
-        """Загрузить диаграмму."""
+        """Загрузить диаграмму (PDF рендерится на сервере; page — страница PDF, 1-based)."""
         file_path = Path(file_path)
+        mime = self._MIME_BY_EXT.get(file_path.suffix.lower(), "application/octet-stream")
 
         with open(file_path, "rb") as f:
-            files = {"file": (file_path.name, f, "image/png")}
-            data = {"project_code": project_code}
+            files = {"file": (file_path.name, f, mime)}
+            data = {"project_code": project_code, "page": str(page)}
 
             result = self._request(
                 "POST",
                 "/api/diagrams/upload",
                 files=files,
                 data=data,
+                timeout=180.0,
             )
 
         return DiagramInfo(
@@ -330,6 +344,29 @@ class APIClient:
         dest_path.write_bytes(response.content)
 
         return dest_path
+
+    # === Frame removal (Phase 0) ===
+
+    def start_frame_removal(self, uid: str) -> Dict[str, Any]:
+        """Начать очистку рамки (UPLOADED → CLEANING_FRAME)."""
+        return self._request("POST", f"/api/frame/{uid}/start")
+
+    def save_cleaned_image(self, uid: str, file_path: Path) -> Dict[str, Any]:
+        """Загрузить очищенный PNG (становится каноническим original/image.png)."""
+        file_path = Path(file_path)
+        with open(file_path, "rb") as f:
+            files = {"file": (file_path.name, f, "image/png")}
+            return self._request(
+                "POST", f"/api/frame/{uid}/save", files=files, timeout=120.0
+            )
+
+    def complete_frame_removal(self, uid: str) -> Dict[str, Any]:
+        """Завершить очистку рамки (→ FRAME_CLEANED)."""
+        return self._request("POST", f"/api/frame/{uid}/complete")
+
+    def skip_frame_removal(self, uid: str) -> Dict[str, Any]:
+        """Пропустить очистку («рамки нет», → FRAME_CLEANED)."""
+        return self._request("POST", f"/api/frame/{uid}/skip")
 
     # === Detection ===
 

@@ -23,20 +23,20 @@ class ApplyContourHandler(ModeHandler):
             return True
 
         if node.get("type") != "equipment":
-            editor.update_status("Контуры только для equipment-узлов")
+            editor.update_status("Форму можно задать только для узлов оборудования")
             return True
 
         ann_idx = node.get("ann_idx")
         if ann_idx is None:
             editor.update_status(
-                f"{clicked}: нет ann_idx (ручной или unknown узел)"
+                "Для этого узла нет автоматически распознанной формы"
             )
             return True
 
         cn = editor._ann_to_contour.get(ann_idx)
         if cn is None:
             editor.update_status(
-                f"{clicked}: SAM2 контур не найден (skip_class?)"
+                "Для этого узла форма не распознана"
             )
             return True
 
@@ -45,15 +45,11 @@ class ApplyContourHandler(ModeHandler):
         if clicked in editor._applied_nodes:
             cmd = ToggleContourCommand(editor, clicked, apply=False)
             editor.undo_mgr.execute(cmd)
-            editor.update_status(f"Контур снят: {clicked}")
+            editor.update_status("Форма снята с узла")
         else:
-            conf = cn.get("confidence", 0)
             cmd = ToggleContourCommand(editor, clicked, apply=True)
             editor.undo_mgr.execute(cmd)
-            editor.update_status(
-                f"Контур применён: {clicked} (conf={conf:.2f}, "
-                f"{cn.get('n_points', '?')} pts)"
-            )
+            editor.update_status("Форма применена к узлу")
 
         # Notify stats callback
         editor.update_statistics()

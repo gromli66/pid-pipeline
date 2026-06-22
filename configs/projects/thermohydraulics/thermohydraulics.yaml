@@ -54,12 +54,14 @@ classes:
   - {id: 38, name: "unknow"}
   - {id: 39, name: "strelka"}
   - {id: 40, name: "background"}
+  - {id: 41, name: "napravlenie"}
+  - {id: 42, name: "vozdushnik"}
 
 # =============================================================================
 # Детекция (мульти-модель)
 # =============================================================================
 detection:
-  default_model: "thermo"
+  default_model: "ensemble_v1"
 
   # class_id (после reverse_reindex) → CVAT category_id (1-based)
   # Общий для всех моделей с 36 классами:
@@ -101,58 +103,77 @@ detection:
     32: 33
     33: 34
     35: 36  # output (class_id 35 → CVAT category 36)
+    37: 38  # unknow (class_id 37 → CVAT category 38)
     38: 39  # strelka (class_id 38 → CVAT category 39)
+    40: 41  # napravlenie (class_id 40 → CVAT category 41)
+    41: 42  # vozdushnik (class_id 41 → CVAT category 42)
 
   models:
-    thermo:
-      name: "Термогидравлика"
-      weights: "/models/yolo/best.pt"
-      num_classes: 36
-      confidence: 0.8
-      description: "Основная модель (термогидравлика)"
+    ensemble_v1:
+      name: "Ансамбль 640/1280/2048"
+      type: "ensemble"
+      num_classes: 39
+      # Порог ПОСЛЕ слияния WBF (conf_type=avg усредняет уверенности,
+      # поэтому порог ниже, чем у одиночной модели)
+      confidence: 0.5
+      merge_strategy: "wbf"     # wbf | nms | soft_nms
+      iou_threshold: 0.5
+      description: "WBF-ансамбль трёх YOLO на разных tile_size"
       class_mapping: *class_mapping
-
-    paksh:
-      name: "Пакш"
-      weights: "/models/yolo/best_pakh.pt"
-      num_classes: 36
-      confidence: 0.8
-      description: "Проект Пакш"
-      class_mapping: *class_mapping
+      # ─── Адаптивный ансамбль (опционально) ──────────────────────
+      # Пусто → обычный WBF (текущее поведение). Заполнить из
+      # adaptive_ensemble.py после расчёта диагностики (per-class F1).
+      #   per_class_confidence: {strelka: 0.6, datchik: 0.3, ...}   # имя класса → порог
+      #   per_class_weights:    {12: {tile640: 3.0, tile1280: 0.1, tile2048: 0.1}}  # class_id → {модель: вес}
+      per_class_confidence: {}
+      per_class_weights: {}
+      # weight/sahi_overlap — перенести из <experiment>_ensemble.yaml,
+      # который генерирует ensemble-train
+      ensemble_models:
+        - weights: "/models/yolo/ensemble_v1/tile640/best.pt"
+          tile_size: 640
+          weight: 1.0
+          sahi_overlap: 0.25
+        - weights: "/models/yolo/ensemble_v1/tile1280/best.pt"
+          tile_size: 1280
+          weight: 1.0
+          sahi_overlap: 0.25
+        - weights: "/models/yolo/ensemble_v1/tile2048/best.pt"
+          tile_size: 2048
+          weight: 1.0
+          sahi_overlap: 0.25
 
 # =============================================================================
 # U2-Net++ сегментация труб (Phase 3)
 # =============================================================================
 segmentation:
-  # ─── Два чекпоинта (оба обязательны) ───
-  weights: "/models/segmentation/best.pth"                # Model A: plain UNet++
-  weights_b: "/models/segmentation/best_dual.pth"        # Model B: DualHeadModel
+  # ─── Одна модель A_600 (3 канала, RGB) ───
+  weights: "/models/segmentation/a600_best.pth"   # чекпоинт A_600
 
-  # ─── Ensemble параметры ───
+  # ─── Архитектура (совпадает с обучением A_600) ───
+  architecture: "UnetPlusPlus"
+  encoder_name: "efficientnet-b3"
+  in_channels: 3
+  classes: 1
   dual_head_a: false
-  dual_head_b: true
-  ensemble_strategy: "or"              # OR даёт +4% recall
 
-  # ─── Тайлинг ───
+  # ─── Тайлинг (совпадает с A_600) ───
   tile_size: 1024
   overlap: 128
   batch_size: 4
   threshold: 0.5
   use_tta: true
-  binarize: true
+  binarize: false                      # A_600 обучена на сыром RGB — НЕ бинаризовать
   binarize_method: "adaptive"
   postprocess: true
 
-  # ─── Постобработка v3 ───
+  # ─── Постобработка: оригинальная реализация, урезанный конфиг ───
   postprocess_config:
+    remove_small_objects: 100
     skeleton_gap_fill:
-      enabled: true
-      max_gap: 40
-      direction_tolerance: 20
-      verify_path: true
+      enabled: false                   # роняет precision (0.9186 vs 0.9271)
     remove_border_frame:
-      enabled: true
-      margin: 30
+      enabled: false                   # не нужен
     fill_holes:
       enabled: true
       max_hole_size: 500
@@ -221,6 +242,31 @@ contour_extraction:
     - annotation
     - strelka
     - connector
+
+# =============================================================================
+# Классификатор направления (↑ → ↓ ←)
+# =============================================================================
+# Отдельный worker-шаг после валидации детекции: классифицирует направление
+# для перечисленных классов и пишет direction/confidence в coco_validated.json
+# (единый источник правды для сегментации и графа).
+direction_classification:
+  enabled: true
+  # Веса YOLOv8-cls (обучены пакетом pid_direction_classifier, best.pt).
+  # Положи файл и пропиши путь (в Docker модели монтируются в /models).
+  weights: "/models/direction/best.pt"
+  device: "cuda"
+  img_size: 128          # должен совпадать с обучением
+  pad_frac: 0.20         # паддинг кропа (как в extract_crops.py)
+  confidence_threshold: 0.5
+  # Классы объектов, которым проставляем направление.
+  # Классификатор обучен на napravlenie/nasos/rashodomernaya_shaiba/strelka.
+  # napravlenie — рисуется треугольником по направлению потока;
+  # nasos/rashodomernaya_shaiba — разворот скина в FXML по направлению.
+  # strelka исключена из графа (EXCLUDED_CLASS_IDS) — здесь не нужна.
+  classes:
+    - napravlenie
+    - nasos
+    - rashodomernaya_shaiba
 
 # =============================================================================
 # OCR Pipeline (Phase B) — 3-проходный Surya OCR

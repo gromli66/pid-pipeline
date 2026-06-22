@@ -60,6 +60,8 @@ STATUS_COLORS = {
 
 STATUS_LABELS = {
     DiagramStatus.UPLOADED: "Загружено",
+    DiagramStatus.CLEANING_FRAME: "🖼️ Очистка рамки",
+    DiagramStatus.FRAME_CLEANED: "✓ Рамка очищена",
     DiagramStatus.DETECTING: "⏳ Детекция...",
     DiagramStatus.DETECTED: "🔍 Детекция завершена",
     DiagramStatus.VALIDATING_BBOX: "🏷️ Валидация bbox",

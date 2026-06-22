@@ -22,6 +22,7 @@ class ArtifactType(str, enum.Enum):
 
     # Original
     ORIGINAL_IMAGE = "original_image"
+    ORIGINAL_CLEANED = "original_cleaned"
 
     # Detection (YOLO)
     YOLO_PREDICTED = "yolo_predicted"

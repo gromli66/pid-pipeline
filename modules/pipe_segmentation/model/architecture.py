@@ -125,6 +125,15 @@ def create_model(
             in_channels, classes, activation, decoder_attention_type
         )
         _print_model_summary(model, verbose)
+        
+        if dual_head:
+            if verbose:
+                print("\n[Wrapping in DualHeadModel: mask + skeleton heads]")
+            model = DualHeadModel(model)
+            if verbose:
+                skel_params = sum(p.numel() for p in model.skeleton_head.parameters())
+                print(f"  Skeleton head params: {skel_params:,}")
+        
         return model
     
     # 4-канальная модель
@@ -395,7 +404,7 @@ def load_checkpoint(
     if not path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {path}")
     
-    checkpoint = torch.load(path, map_location=device, weights_only=True)
+    checkpoint = torch.load(path, map_location=device, weights_only=False)
     
     # Загружаем веса модели (с поддержкой single→dual head миграции)
     try:

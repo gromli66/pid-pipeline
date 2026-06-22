@@ -21,6 +21,7 @@ from app.schemas.diagram import (
 )
 from app.services.storage import StorageService
 from app.services.project_loader import get_project_loader, ProjectLoader
+from app.config import settings
 
 router = APIRouter()
 
@@ -42,6 +43,7 @@ def sanitize_filename(filename: str) -> str:
 async def upload_diagram(
     file: UploadFile = File(...),
     project_code: str = Form(..., description="Код проекта"),
+    page: int = Form(1, description="Страница PDF (1-based); игнорируется для изображений"),
     db: AsyncSession = Depends(get_async_db),
     loader: ProjectLoader = Depends(get_project_loader),
 ):
@@ -69,10 +71,16 @@ async def upload_diagram(
         db.add(project)
         await db.flush()
 
-    # Проверка типа файла
-    allowed_types = {"image/png", "image/jpeg", "image/tiff"}
-    if file.content_type not in allowed_types:
-        raise HTTPException(status_code=400, detail=f"Invalid file type. Allowed: {allowed_types}")
+    # Проверка типа файла по РАСШИРЕНИЮ (UI-клиент шлёт content_type=image/png
+    # для всех файлов, поэтому ориентируемся на имя файла).
+    ext = (Path(file.filename).suffix.lower() if file.filename else "")
+    ALLOWED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".tiff", ".tif"}
+    is_pdf = ext == ".pdf"
+    if not is_pdf and ext not in ALLOWED_IMAGE_EXTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file type '{ext}'. Allowed: {sorted(ALLOWED_IMAGE_EXTS)} or .pdf",
+        )
 
     # Проверка размера файла (чанками, без загрузки всего в RAM)
     size = 0
@@ -120,20 +128,69 @@ async def upload_diagram(
     db.add(diagram)
     await db.flush()
 
-    # Сохраняем файл
+    # Сохраняем файл. PDF → рендерим выбранную страницу в PNG @300 DPI
+    # (модели обучались на 300 DPI сканах); изображение сохраняем как есть.
     storage = StorageService()
-    file_path, file_size, dimensions = await storage.save_upload(diagram.uid, file, "original")
+    if is_pdf:
+        # Ленивый импорт: отсутствие PyMuPDF не должно ронять весь API на старте —
+        # ошибка проявится только при загрузке PDF.
+        try:
+            from app.services.pdf_render import render_pdf_page_to_png
+        except ImportError:
+            raise HTTPException(
+                status_code=500,
+                detail="PDF upload requires PyMuPDF on the server (pip install PyMuPDF).",
+            )
+        pdf_bytes = await file.read()
+        try:
+            png_bytes, dimensions, _n_pages = render_pdf_page_to_png(
+                pdf_bytes,
+                page=page,
+                dpi=settings.PDF_RENDER_DPI,
+                max_side=settings.PDF_MAX_SIDE,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"PDF render failed: {exc}")
+
+        # PNG — основное изображение pipeline (downstream читает original/image.png)
+        file_path, file_size = await storage.save_file(
+            diagram.uid, "original", "image.png", png_bytes
+        )
+        # Исходный PDF сохраняем рядом (на случай перерендера в другом DPI)
+        await storage.save_file(diagram.uid, "original", "source.pdf", pdf_bytes)
+        mime_type = "image/png"
+    else:
+        # Нормализуем любое изображение в канонический original/image.png,
+        # чтобы этап рамки и все downstream-этапы работали с одним именем файла
+        # (раньше JPG/TIFF сохранялись как image.jpg и часть читателей их не находила).
+        import io as _io
+        from PIL import Image as _Image
+        img_bytes = await file.read()
+        try:
+            im = _Image.open(_io.BytesIO(img_bytes))
+            dimensions = im.size
+            if im.mode not in ("RGB", "L"):
+                im = im.convert("RGB")
+            buf = _io.BytesIO()
+            im.save(buf, format="PNG")
+            png_bytes = buf.getvalue()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid image: {exc}")
+        file_path, file_size = await storage.save_file(
+            diagram.uid, "original", "image.png", png_bytes
+        )
+        mime_type = "image/png"
 
     diagram.image_width = dimensions[0] if dimensions else None
     diagram.image_height = dimensions[1] if dimensions else None
 
-    # Артефакт
+    # Артефакт (для PDF указывает на отрендеренный PNG)
     artifact = Artifact(
         diagram_uid=diagram.uid,
         artifact_type=ArtifactType.ORIGINAL_IMAGE,
         file_path=file_path,
         file_size=file_size,
-        mime_type=file.content_type,
+        mime_type=mime_type,
     )
     db.add(artifact)
 
@@ -329,7 +386,7 @@ async def retry_operation(
     # Маппинг error_stage → предыдущий статус для retry
     stage_to_status = {
         # Phase 1: Detection
-        "detecting": DiagramStatus.UPLOADED,
+        "detecting": DiagramStatus.FRAME_CLEANED,
         "creating_cvat_task": DiagramStatus.DETECTED,
         "fetching_annotations": DiagramStatus.VALIDATING_BBOX,
         # Phase 2: Segmentation + skeleton #1
@@ -372,10 +429,16 @@ async def reupload_original(
     if not diagram:
         raise HTTPException(status_code=404, detail="Diagram not found")
 
-    # Проверка типа файла
-    allowed_types = {"image/png", "image/jpeg", "image/tiff"}
-    if file.content_type not in allowed_types:
-        raise HTTPException(status_code=400, detail=f"Invalid file type. Allowed: {allowed_types}")
+    # Проверка типа файла по РАСШИРЕНИЮ (UI-клиент шлёт content_type=image/png
+    # для всех файлов, поэтому ориентируемся на имя файла).
+    ext = (Path(file.filename).suffix.lower() if file.filename else "")
+    ALLOWED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".tiff", ".tif"}
+    is_pdf = ext == ".pdf"
+    if not is_pdf and ext not in ALLOWED_IMAGE_EXTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file type '{ext}'. Allowed: {sorted(ALLOWED_IMAGE_EXTS)} or .pdf",
+        )
 
     # Проверка размера файла (чанками, без загрузки всего в RAM)
     size = 0

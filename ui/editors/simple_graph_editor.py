@@ -9,6 +9,7 @@ import math
 from typing import Optional
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QPen, QBrush
 
 from ui.editors.base_graph_editor import BaseGraphEditor
 from ui.editors.mode_handlers.simple_handlers import (
@@ -53,6 +54,10 @@ class SimpleGraphEditor(BaseGraphEditor):
 
         # Pending equipment class for AddNodeFromList
         self._pending_node_class: dict | None = None
+
+        # Рисование bbox узла (как в сегментации): протяжка Ctrl+ЛКМ
+        self._node_bbox_start: tuple | None = None
+        self._node_bbox_preview = None  # QGraphicsRectItem
 
         # Default mode
         self.set_mode("idle")
@@ -187,16 +192,80 @@ class SimpleGraphEditor(BaseGraphEditor):
 
     def add_equipment_node(self, x: float, y: float,
                            class_id: int, class_name: str,
-                           width: float = 40, height: float = 40) -> str:
-        """Добавить equipment-узел."""
+                           width: float = 40, height: float = 40,
+                           enter_resize: bool = True) -> str:
+        """Добавить equipment-узел.
+
+        enter_resize=False — размер уже задан (узел нарисован рамкой), шаг с
+        угловыми ручками пропускается.
+        """
         node = self.model.create_equipment_node(x, y, width, height, class_id, class_name)
         cmd = AddEquipmentNodeCommand(self.model, self, node)
         self.undo_mgr.execute(cmd)
         self.update_statistics()
         self.update_status(f"Добавлено оборудование: {class_name}")
-        # Переключиться в resize для задания размера
-        self._enter_resize_mode(node['id'])
+        if enter_resize:
+            # Переключиться в resize для задания размера
+            self._enter_resize_mode(node['id'])
         return node['id']
+
+    # =================================================================
+    # Добавление узла рамкой (как в сегментации Вал. pipe)
+    # =================================================================
+
+    NODE_BBOX_MIN_PX = 5  # как в PolylineMaskEditor: меньше — отмена
+
+    def start_node_bbox(self, x: float, y: float):
+        """Начать рисование рамки нового узла (Ctrl+ЛКМ нажат)."""
+        if not self._pending_node_class:
+            self.update_status("Сначала выберите класс оборудования")
+            return
+        self._node_bbox_start = (x, y)
+        pen = QPen(QColor(0, 200, 0, 220))
+        pen.setWidth(2)
+        pen.setStyle(Qt.PenStyle.DashLine)
+        pen.setCosmetic(True)
+        brush = QBrush(QColor(0, 200, 0, 40))
+        self._node_bbox_preview = self.scene.addRect(x, y, 0, 0, pen, brush)
+        self._node_bbox_preview.setZValue(50)
+
+    def update_node_bbox(self, x: float, y: float):
+        """Обновить превью рамки во время протяжки."""
+        if not self._node_bbox_preview or not self._node_bbox_start:
+            return
+        sx, sy = self._node_bbox_start
+        self._node_bbox_preview.setRect(min(sx, x), min(sy, y), abs(x - sx), abs(y - sy))
+
+    def finish_node_bbox(self, x: float, y: float):
+        """Завершить рисование рамки → создать узел (или отменить, если мелко)."""
+        if self._node_bbox_start is None:
+            return
+        cls = self._pending_node_class
+        sx, sy = self._node_bbox_start
+        self._cancel_node_bbox()  # убрать превью + сбросить старт
+
+        if not cls:
+            return
+
+        w, h = abs(x - sx), abs(y - sy)
+        if w < self.NODE_BBOX_MIN_PX or h < self.NODE_BBOX_MIN_PX:
+            self.update_status("Слишком маленький bbox — отменено")
+            return
+
+        x1, y1 = min(sx, x), min(sy, y)
+        cx, cy = x1 + w / 2.0, y1 + h / 2.0
+        self.add_equipment_node(
+            cx, cy, cls['id'], cls['name'],
+            width=w, height=h, enter_resize=False,
+        )
+        # класс остаётся выбранным — можно рисовать ещё узлы того же класса
+
+    def _cancel_node_bbox(self):
+        """Убрать превью рамки и сбросить состояние рисования."""
+        if self._node_bbox_preview is not None:
+            self.scene.removeItem(self._node_bbox_preview)
+            self._node_bbox_preview = None
+        self._node_bbox_start = None
 
     # =================================================================
     # Resize — 4 corner handles для equipment-узлов

@@ -11,9 +11,9 @@ waypoints, batch delete, auto-fix, perp stats.
 import logging
 
 from PySide6.QtWidgets import (
-    QHBoxLayout, QPushButton, QLabel,
+    QHBoxLayout, QPushButton, QLabel, QCheckBox,
 )
-from PySide6.QtCore import Slot
+from PySide6.QtCore import Slot, Qt
 
 from ui.services.api_client import APIClient
 from ui.editors.advanced_graph_editor import AdvancedGraphEditor
@@ -53,10 +53,12 @@ class AdvancedGraphTab(SimpleGraphTab):
         self._add_separator(toolbar)
 
         # --- optimize_edge ---
-        self.btn_optimize_edge = QPushButton("📐 Оптимизировать")
+        self.btn_optimize_edge = QPushButton("Оптимизировать")
         self.btn_optimize_edge.setCheckable(True)
         self.btn_optimize_edge.setToolTip(
-            "Клик на оранжевое ребро → оптимизировать перпендикулярность"
+            "Выравнивание одного ребра под прямой угол.\n"
+            "Ctrl+ЛКМ по оранжевому (неперпендикулярному) ребру — выровнять его под 90°.\n"
+            "Повторное нажатие кнопки или Esc — выйти из режима."
         )
         self.btn_optimize_edge.setStyleSheet(
             "QPushButton:checked { background-color: #9C27B0; color: white; }"
@@ -66,20 +68,24 @@ class AdvancedGraphTab(SimpleGraphTab):
         toolbar.addWidget(self.btn_optimize_edge)
 
         # --- optimize_all (не переключатель) ---
-        btn_optimize_all = QPushButton("📐 Все")
-        btn_optimize_all.setToolTip("Оптимизировать все неперпендикулярные рёбра")
+        btn_optimize_all = QPushButton("Оптимизировать все")
+        btn_optimize_all.setToolTip(
+            "Выровнять под прямой угол сразу все неперпендикулярные рёбра."
+        )
+        btn_optimize_all.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         btn_optimize_all.clicked.connect(self._optimize_all_edges)
         toolbar.addWidget(btn_optimize_all)
 
         self._add_separator(toolbar)
 
         # --- edit_waypoint ---
-        self.btn_waypoints = QPushButton("◆ Waypoints")
+        self.btn_waypoints = QPushButton("Точки изгиба")
         self.btn_waypoints.setCheckable(True)
         self.btn_waypoints.setToolTip(
-            "Ctrl+Click на waypoint — перетащить (snap к сетке).\n"
-            "Ctrl+Click на сегмент ребра — добавить waypoint.\n"
-            "Маркеры видны только в этом режиме."
+            "Изломы ребра (точки изгиба трубы).\n"
+            "Ctrl+ЛКМ по сегменту ребра — добавить точку изгиба.\n"
+            "Ctrl+ЛКМ по точке и тянуть — двигать её (примагничивание к сетке).\n"
+            "Маркеры точек видны только в этом режиме."
         )
         self.btn_waypoints.setStyleSheet(
             "QPushButton:checked { background-color: #00BCD4; color: white; }"
@@ -91,22 +97,37 @@ class AdvancedGraphTab(SimpleGraphTab):
         self._add_separator(toolbar)
 
         # --- auto_fix (не переключатель) ---
-        btn_auto_fix = QPushButton("⚡ Auto-Fix")
+        btn_auto_fix = QPushButton("Авто-выравнивание")
         btn_auto_fix.setToolTip(
-            "Выровнять коннекторы по осям трубопроводов.\n"
-            "Enter — применить, Escape — отмена."
+            "Автоматически выровнять цепочки узлов по горизонтали и вертикали "
+            "и спрямить рёбра.\nCtrl+Z — отменить."
         )
         btn_auto_fix.setStyleSheet(
             "QPushButton { background-color: #FF9800; color: white; font-weight: bold; }"
             "QPushButton:hover { background-color: #F57C00; }"
         )
+        btn_auto_fix.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         btn_auto_fix.clicked.connect(self._auto_fix)
         toolbar.addWidget(btn_auto_fix)
+
+        self._add_separator(toolbar)
+
+        # --- галочка подсветки привязки OCR ---
+        self.chk_ocr_highlight = QCheckBox("Подсветка привязки OCR")
+        self.chk_ocr_highlight.setChecked(True)
+        self.chk_ocr_highlight.setToolTip(
+            "Подсветка узлов и рёбер по привязке OCR:\n"
+            "зелёный/красный узел — есть/нет KKS, красное ребро — нет диаметра, "
+            "плюс KKS-подписи.\nСнимите галочку, чтобы показать нейтральные цвета графа."
+        )
+        self.chk_ocr_highlight.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.chk_ocr_highlight.toggled.connect(self._on_toggle_ocr_highlight)
+        toolbar.addWidget(self.chk_ocr_highlight)
 
         # --- perp stats (добавится после stretch из Base) ---
         # Создаём здесь, Base добавит stretch + stats_label + sep
         # Поэтому perp_stats_label добавляем через _on_editor_ready
-        self.perp_stats_label = QLabel("⊥: —")
+        self.perp_stats_label = QLabel("Перпендикулярность: —")
         self.perp_stats_label.setStyleSheet("color: #aaa; font-size: 11px;")
         toolbar.addWidget(self.perp_stats_label)
 
@@ -126,6 +147,53 @@ class AdvancedGraphTab(SimpleGraphTab):
         """После загрузки — обновить perp stats + config dir для KKS."""
         self._update_perp_stats()
         self._sync_editor_config_dir()
+        # Применить состояние галочки подсветки к редактору
+        if self._editor and hasattr(self._editor, "set_ocr_highlight"):
+            self._editor.set_ocr_highlight(self.chk_ocr_highlight.isChecked())
+
+    @Slot(bool)
+    def _on_toggle_ocr_highlight(self, checked: bool):
+        """Галочка «Подсветка привязки OCR» → вкл/выкл подсветку в редакторе."""
+        if self._editor and hasattr(self._editor, "set_ocr_highlight"):
+            self._editor.set_ocr_highlight(checked)
+
+    # =================================================================
+    # Оформление: + цвета рёбер по стадиям
+    # =================================================================
+
+    def _build_appearance_controls(self, panel):
+        from PySide6.QtGui import QColor
+        super()._build_appearance_controls(panel)
+        self._add_color_setting(
+            panel, "Ребро без диаметра", "edge_no_diam_color", QColor(255, 60, 40),
+            lambda c: self._editor and self._editor.set_edge_no_diameter_color(c),
+        )
+        self._add_color_setting(
+            panel, "Неперпенд. ребро", "edge_bad_color", QColor("#e67e22"),
+            lambda c: self._editor and self._editor.set_edge_bad_color(c),
+        )
+
+    def apply_saved_appearance(self):
+        super().apply_saved_appearance()
+        ed = self._editor
+        if ed is None:
+            return
+        from PySide6.QtGui import QColor
+        if hasattr(ed, "set_edge_no_diameter_color"):
+            self._apply_saved_color("edge_no_diam_color", QColor(255, 60, 40),
+                                    ed.set_edge_no_diameter_color)
+            self._apply_saved_color("edge_bad_color", QColor("#e67e22"),
+                                    ed.set_edge_bad_color)
+
+    def apply_default_appearance(self):
+        super().apply_default_appearance()
+        ed = self._editor
+        if ed is None:
+            return
+        from PySide6.QtGui import QColor
+        if hasattr(ed, "set_edge_no_diameter_color"):
+            ed.set_edge_no_diameter_color(QColor(255, 60, 40, 180))
+            ed.set_edge_bad_color(QColor("#e67e22"))
 
     def set_project_code(self, project_code: str):
         """Установить код проекта + передать config dir в editor."""
@@ -154,7 +222,7 @@ class AdvancedGraphTab(SimpleGraphTab):
         if self._editor and hasattr(self._editor, "get_perpendicularity_stats"):
             s = self._editor.get_perpendicularity_stats()
             self.perp_stats_label.setText(
-                f"⊥: {s['good']}/{s['total']} ({s['avg_score']:.0%})"
+                f"Перпендикулярность: {s['good']}/{s['total']} ({s['avg_score']:.0%})"
             )
 
     # =================================================================
@@ -168,6 +236,7 @@ class AdvancedGraphTab(SimpleGraphTab):
             count = self._editor.optimize_all_edges()
             self._update_perp_stats()
             self.status_label.setText(f"Оптимизировано {count} рёбер")
+            self._editor.setFocus()  # вернуть фокус — чтобы Ctrl+Z работал
 
     @Slot()
     def _batch_delete(self):
@@ -181,6 +250,8 @@ class AdvancedGraphTab(SimpleGraphTab):
         if self._editor and hasattr(self._editor, "auto_fix"):
             try:
                 self._editor.auto_fix()
+                # Вернуть фокус редактору, иначе Ctrl+Z не дойдёт и не отменит Auto-Fix
+                self._editor.setFocus()
             except Exception as exc:
                 import traceback
                 traceback.print_exc()

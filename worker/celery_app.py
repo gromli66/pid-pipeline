@@ -16,6 +16,7 @@ celery_app = Celery(
     backend=CELERY_RESULT_BACKEND,
     include=[
         "worker.tasks.detection",
+        "worker.tasks.direction",
         "worker.tasks.segmentation",
         "worker.tasks.skeleton",
         "worker.tasks.junction",
@@ -31,19 +32,19 @@ celery_app.conf.update(
     task_serializer="json",
     accept_content=["json"],
     result_serializer="json",
-    
+
     # Временная зона
     timezone="UTC",
     enable_utc=True,
-    
+
     # Таймауты
     task_time_limit=3600,  # 1 час максимум на задачу
     task_soft_time_limit=3300,  # Мягкий лимит 55 минут
-    
+
     # Retry
     task_acks_late=True,  # Подтверждение после выполнения
     task_reject_on_worker_lost=True,
-    
+
     # Очереди
     task_default_queue="default",
     task_queues={
@@ -52,7 +53,7 @@ celery_app.conf.update(
         "ocr": {},   # OCR worker (separate container)
         "sam2": {},  # SAM2 contour extraction (same worker as gpu)
     },
-    
+
     # Worker
     worker_prefetch_multiplier=1,  # Для GPU задач лучше 1
     worker_concurrency=2,
@@ -61,6 +62,7 @@ celery_app.conf.update(
 # Роутинг задач по очередям
 celery_app.conf.task_routes = {
     "worker.tasks.detection.*": {"queue": "gpu"},
+    "worker.tasks.direction.*": {"queue": "gpu"},
     "worker.tasks.segmentation.*": {"queue": "gpu"},
     "worker.tasks.skeleton.*": {"queue": "default"},
     "worker.tasks.junction.*": {"queue": "gpu"},

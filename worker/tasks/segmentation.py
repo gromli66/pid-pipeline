@@ -32,6 +32,12 @@ logger = logging.getLogger(__name__)
 # Категории, исключаемые из node_mask (эталон: pipe_segmentation.config.defaults)
 COCO_PIPE_CATEGORY = "truba"
 COCO_ANNOTATION_CATEGORY = "annotation"
+# napravlenie — стрелка направления НА трубе: труба проходит сквозь её bbox.
+# НЕ должна попадать в node_mask, иначе bbox вырезается из pipe_mask и
+# раздувается постобработкой → труба под боксом пропадает. Направление —
+# атрибут спец-узла в графе (см. napravlenie_integration_plan #3/#4).
+# ВАЖНО: strelka НЕ исключаем — для неё поведение не меняем.
+COCO_DIRECTION_CATEGORY = "napravlenie"
 
 
 def _polygon_to_mask(segmentation, height: int, width: int) -> np.ndarray:
@@ -141,9 +147,12 @@ def generate_node_mask(
     Создать бинарную маску узлов из COCO JSON.
 
     Логика:
-    - Исключаются ТОЛЬКО 'truba' и 'annotation'
+    - Исключаются 'truba', 'annotation' и 'napravlenie'
     - Все остальные категории (включая background) → node_mask
     - Поддерживает polygon, RLE, bbox (с fallback)
+
+    napravlenie исключается, чтобы труба под её bbox не вырезалась из pipe_mask
+    (направление обрабатывается отдельно как атрибут спец-узла в графе).
 
     Returns:
         node_mask [H, W] uint8, 0 | 255
@@ -153,29 +162,29 @@ def generate_node_mask(
 
     categories = {cat["id"]: cat["name"] for cat in coco.get("categories", [])}
 
-    # Поиск ID категорий truba и annotation
-    pipe_id = None
-    annotation_id = None
-
-    for cat_id, cat_name in categories.items():
-        if cat_name.lower() == COCO_PIPE_CATEGORY:
-            pipe_id = cat_id
-        elif cat_name.lower() == COCO_ANNOTATION_CATEGORY:
-            annotation_id = cat_id
+    # ID категорий, исключаемых из node_mask: truba, annotation, napravlenie.
+    excluded_names = {
+        COCO_PIPE_CATEGORY,
+        COCO_ANNOTATION_CATEGORY,
+        COCO_DIRECTION_CATEGORY,
+    }
+    excluded_ids = {
+        cat_id for cat_id, cat_name in categories.items()
+        if cat_name.lower() in excluded_names
+    }
 
     mask = np.zeros((image_height, image_width), dtype=np.uint8)
 
     for ann in coco.get("annotations", []):
         cat_id = ann.get("category_id")
 
-        if cat_id == pipe_id:
-            continue  # truba → pipe_mask, не node_mask
-        elif cat_id == annotation_id:
-            continue  # текстовые аннотации игнорируются
-        else:
-            # Все остальные категории = узлы оборудования
-            ann_mask = _process_annotation(ann, image_height, image_width)
-            mask = np.maximum(mask, ann_mask)
+        if cat_id in excluded_ids:
+            # truba → pipe_mask; annotation → текст; napravlenie → труба насквозь
+            continue
+
+        # Все остальные категории = узлы оборудования
+        ann_mask = _process_annotation(ann, image_height, image_width)
+        mask = np.maximum(mask, ann_mask)
 
     return mask * 255
 
@@ -217,7 +226,8 @@ def task_segment_pipes(
         from app.models import Diagram, DiagramStatus, Artifact, ArtifactType
         from app.services.project_loader import get_project_loader
 
-        from pipe_segmentation.inference.ensemble import EnsembleInference
+        from pipe_segmentation.model.architecture import create_model, load_checkpoint
+        from pipe_segmentation.inference.engine import TiledInference
 
         # ===== 1. Project config =====
         project_loader = get_project_loader()
@@ -305,31 +315,35 @@ def task_segment_pipes(
         node_mask_path = seg_dir / "node_mask.png"
         cv2.imwrite(str(node_mask_path), node_mask)
 
-        # ===== 5. Ensemble inference (две модели) =====
+        # ===== 5. Single-model inference (A_600, 3-канальная RGB) =====
         weights_a = Path(seg_cfg.weights)
-        if not seg_cfg.weights_b:
-            raise ValueError("seg_cfg.weights_b is not set — check project YAML")
-        weights_b = Path(seg_cfg.weights_b)
         if not weights_a.is_absolute():
             weights_a = Path("/app") / weights_a
-        if not weights_b.is_absolute():
-            weights_b = Path("/app") / weights_b
         if not weights_a.exists():
-            raise FileNotFoundError(f"Checkpoint A not found: {weights_a}")
-        if not weights_b.exists():
-            raise FileNotFoundError(f"Checkpoint B not found: {weights_b}")
+            raise FileNotFoundError(f"Checkpoint not found: {weights_a}")
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        from worker.utils.device import resolve_device
+        device = resolve_device()
         logger.info(
-            "Loading ensemble (A=%s, B=%s, strategy=%s) on %s ...",
-            weights_a.name, weights_b.name, seg_cfg.ensemble_strategy, device,
+            "Loading model (%s, %s/%s, in_ch=%d) on %s ...",
+            weights_a.name, seg_cfg.architecture, seg_cfg.encoder_name,
+            seg_cfg.in_channels, device,
         )
 
-        engine = EnsembleInference(
-            checkpoint_a=str(weights_a),
-            checkpoint_b=str(weights_b),
-            dual_head_a=seg_cfg.dual_head_a,
-            dual_head_b=seg_cfg.dual_head_b,
+        model = create_model(
+            architecture=seg_cfg.architecture,
+            encoder_name=seg_cfg.encoder_name,
+            encoder_weights=None,
+            in_channels=seg_cfg.in_channels,
+            classes=seg_cfg.classes,
+            decoder_attention_type=seg_cfg.decoder_attention_type,
+            dual_head=seg_cfg.dual_head_a,
+            verbose=False,
+        )
+        load_checkpoint(str(weights_a), model, device=device, verbose=False)
+
+        engine = TiledInference(
+            model=model,
             device=device,
             tile_size=seg_cfg.tile_size,
             overlap=seg_cfg.overlap,
@@ -338,12 +352,11 @@ def task_segment_pipes(
             use_tta=seg_cfg.use_tta,
             binarize=seg_cfg.binarize,
             binarize_method=seg_cfg.binarize_method,
-            strategy=seg_cfg.ensemble_strategy,
-            verbose=False,
+            in_channels=seg_cfg.in_channels,
         )
 
         logger.info(
-            "Running ensemble tiled inference (tile=%d, overlap=%d) ...",
+            "Running tiled inference (tile=%d, overlap=%d) ...",
             seg_cfg.tile_size, seg_cfg.overlap,
         )
         result = engine.predict(
@@ -352,9 +365,8 @@ def task_segment_pipes(
             postprocess_config=seg_cfg.postprocess_config or None,
         )
 
-        # Освобождение GPU
-        engine.free_memory()
-        del engine
+        # Освобождение GPU (у TiledInference нет free_memory())
+        del engine, model
         if device == "cuda":
             torch.cuda.empty_cache()
 

@@ -202,15 +202,55 @@ class GraphBuilder:
                 print(f"\n  Загружено COCO аннотаций: {len(annotations)}")
                 print(f"    - с полигонами (segmentation): {num_with_seg}")
                 print(f"    - только bbox: {len(annotations) - num_with_seg}")
-        
+
         # ===== ЭТАП 1: ИЗВЛЕЧЕНИЕ КОМПОНЕНТ (для геометрии) =====
         if self.verbose:
             print("\n[3/6] Извлечение компонент маски...")
-        
-        # РАЗДЕЛЬНАЯ нумерация equipment и connectors
-        # Это предотвращает слияние касающихся масок в одну компоненту
+
+        # ===== NAPRAVLENIE → ОТДЕЛЬНЫЕ узлы =====
+        # Боксы napravlenie нельзя сливать с касающимся оборудованием в одну
+        # компоненту (иначе оборудование наследует «ось» бокса и его перпендикуляр
+        # ошибочно уносится телепортом). Поэтому:
+        #  1) размечаем оборудование БЕЗ боксов;
+        #  2) красим боксы в equipment-маску (нужно, чтобы identify_node_by_point
+        #     опознал контакт как оборудование и сматчил с COCO napravlenie);
+        #  3) присваиваем КАЖДОМУ боксу СОБСТВЕННУЮ метку в labeled_equipment
+        #     (перекрывая оверлап), строим direction_axis по этим меткам;
+        #  4) вырезаем боксы из connection-маски (нет конкурирующего connector).
         from scipy import ndimage
-        labeled_equipment, num_equipment = ndimage.label(equipment_mask)
+        labeled_equipment, num_eq = ndimage.label(equipment_mask)
+
+        direction_axis = {}
+        if annotations:
+            from .direction_nodes import (
+                paint_direction_boxes_on_mask, carve_boxes_from_mask,
+                _napr_anns, _ann_direction, _ann_box,
+            )
+            paint_direction_boxes_on_mask(equipment_mask, annotations, debug=self.debug)
+            _c = carve_boxes_from_mask(updated_connections_mask, annotations, debug=self.debug)
+            H_eq, W_eq = labeled_equipment.shape
+            next_lab = int(num_eq)
+            for a in _napr_anns(annotations):
+                box = _ann_box(a)
+                if not box:
+                    continue
+                x1, y1, x2, y2 = box
+                x1 = max(0, x1); y1 = max(0, y1); x2 = min(W_eq, x2); y2 = min(H_eq, y2)
+                if x2 <= x1 or y2 <= y1:
+                    continue
+                next_lab += 1
+                labeled_equipment[y1:y2, x1:x2] = next_lab  # собственная метка бокса
+                d = _ann_direction(a)
+                if d:
+                    direction_axis[next_lab] = 'V' if d in ('up', 'down') else 'H'
+            num_equipment = next_lab
+            if self.verbose:
+                print(f"  Napravlenie → отдельных узлов: {len(direction_axis)} "
+                      f"(вырезано из connection: {_c})")
+        else:
+            num_equipment = int(num_eq)
+
+        # РАЗДЕЛЬНАЯ нумерация equipment и connectors
         labeled_connectors, num_connectors = ndimage.label(updated_connections_mask)
         
         # Для обратной совместимости создаём unified labeled_nodes
@@ -226,11 +266,11 @@ class GraphBuilder:
             print(f"  Компонент connectors: {num_connectors}")
             print(f"  Всего компонент: {num_components}")
             print(f"  Найдено компонент: {num_components}")
-        
+
         # ===== ПОДГОТОВКА ДАННЫХ ДЛЯ ТРАССИРОВКИ =====
         if self.verbose:
             print("\n[4/6] Подготовка данных для трассировки...")
-        
+
         skeleton_cleaned, contact_map, bridge_contact_map = prepare_tracing_data(
             skeleton=skeleton,
             labeled_equipment=labeled_equipment,
@@ -239,6 +279,7 @@ class GraphBuilder:
             valid_bridges_mask=valid_bridges_mask,
             bridge_routing=bridge_routing,
             dilation=self.node_dilation,
+            direction_axis=direction_axis,
             debug=self.debug
         )
         
@@ -268,33 +309,92 @@ class GraphBuilder:
         # Обновить degree узлов
         update_node_degrees(nodes, edges, debug=self.debug)
         
-        # ===== ЭТАП 3: ФИЛЬТРАЦИЯ =====
-        if self.verbose:
-            print("\n[6/7] Фильтрация коротких шпор...")
-        
-        edges_before = len(edges)
-        edges = [e for e in edges if not (e['is_terminal'] and e['length'] < self.min_spur_length)]
-        removed = edges_before - len(edges)
-        
-        if self.verbose:
-            print(f"  Удалено коротких шпор: {removed}")
-        
-        # Обновить degree после фильтрации
+        # ===== ЭТАП 3: ФИЛЬТРАЦИЯ КОРОТКИХ ШПОР — ОТКЛЮЧЕНА =====
+        # По требованию: не теряем трубы. Висячие концы вместо удаления
+        # закрываются connector'ами ниже (cap_dangling_ends).
         update_node_degrees(nodes, edges, debug=self.debug)
-        
+
         # ===== ЭТАП 4: ФИЛЬТРАЦИЯ ИЗОЛИРОВАННЫХ CONNECTOR'ОВ =====
         if self.verbose:
             print("\n[7/7] Фильтрация изолированных connector'ов...")
         
         nodes, edges, filter_stats = filter_isolated_connectors(nodes, edges, debug=self.debug)
-        
+
         if self.verbose:
             print(f"  Удалено connector'ов: {filter_stats['removed_connectors']}")
             print(f"  Удалено рёбер: {filter_stats['removed_edges']}")
-        
+
         # Обновить degree после фильтрации connector'ов
         update_node_degrees(nodes, edges, debug=self.debug)
-        
+
+        # ===== DEBUG: дамп СЫРОГО графа ДО пост-процесса napravlenie =====
+        # Чтобы можно было отлаживать stitch/drop/absorb/cap/collapse офлайн на
+        # реальных данных. Пишется рядом с graph.json: graph/graph_raw_preprocess.json.
+        try:
+            import json as _json
+            from pathlib import Path as _Path
+            _gdir = _Path(equipment_mask_path).resolve().parent.parent / "graph"
+            _gdir.mkdir(parents=True, exist_ok=True)
+            def _np_default(o):
+                if hasattr(o, "item"):
+                    return o.item()      # numpy scalar
+                if hasattr(o, "tolist"):
+                    return o.tolist()    # numpy array
+                return str(o)
+            with open(_gdir / "graph_raw_preprocess.json", "w", encoding="utf-8") as _f:
+                _json.dump({"nodes": nodes, "edges": edges}, _f,
+                           ensure_ascii=False, default=_np_default)
+            if self.verbose:
+                print(f"  [debug] сырой граф до пост-процесса: {_gdir / 'graph_raw_preprocess.json'}")
+        except Exception as _e:
+            print(f"  [debug] не удалось дампнуть сырой граф: {_e}")
+
+        # ===== ЭТАП 5: NAPRAVLENIE =====
+        # Ось/перпендикуляр боксов разрулены на этапе ТРАССИРОВКИ
+        # (prepare_tracing_data: осевые контакты → к боксу, низ осевой через мост,
+        #  сквозной перпендикуляр → телепорт мимо бокса). Здесь:
+        #  1) annotate — пометить боксы napravlenie (type=equipment) + направление;
+        #  2) cap_dangling_ends — общий: висячий конец трубы → connector на эндпоинт
+        #     (перпендикуляр-поворот у бокса повисает снаружи → connector снаружи);
+        #  3) пересчёт degree + pass_through.
+        from .direction_nodes import (
+            annotate_direction_nodes, drop_degenerate_stubs,
+            drop_duplicate_contact_stubs, cap_dangling_ends,
+            collapse_straight_connectors, set_direction_pass_through,
+        )
+        if annotations:
+            annotate_direction_nodes(nodes, edges, annotations, debug=self.debug)
+        # Ось/перпендикуляр боксов разрулены на этапе трассировки (осевые контакты +
+        # телепорт сквозного перпендикуляра в prepare_tracing_data). Здесь:
+        #  1) drop_degenerate_stubs — выбросить вырожденные огрызки ≤3px (дубль-контакты
+        #     у границ узлов: труба пересекает границу, детектор метит несколько соседних
+        #     пикселей, один берёт реальное ребро, соседний остаётся огрызком 1px).
+        #     ВАЖНО до cap, иначе cap вешает на эти огрызки лишние connector'ы.
+        #  2) cap_dangling_ends — реальный висячий конец трубы → connector на эндпоинт
+        #     (перпендикуляр-поворот у бокса повисает снаружи → connector снаружи).
+        #  3) collapse_straight_connectors — универсально схлопнуть проходной connector
+        #     степени 2 на ПРЯМОЙ (рёбра на противоположных сторонах) в одно ребро;
+        #     connector'ы на ПОВОРОТЕ и junction'ы (степень ≥3) остаются.
+        d_stats = drop_degenerate_stubs(nodes, edges, debug=self.debug)
+        # дубль-контактные «огрызки вникуда» (параллельная короткая ветка у того же
+        # узла) — убрать ДО cap, иначе станут лишним connector'ом и заблокируют collapse
+        dup_stats = drop_duplicate_contact_stubs(nodes, edges, debug=self.debug)
+        c_stats = cap_dangling_ends(nodes, edges, debug=self.debug)
+        col_stats = collapse_straight_connectors(nodes, edges, debug=self.debug)
+        update_node_degrees(nodes, edges, debug=self.debug)
+        set_direction_pass_through(nodes, edges)
+        s_stats = {"stitched": 0}
+        r_stats = {"axis_kept": 0, "through_merged": 0, "perp_capped": 0, "noise_dropped": 0}
+        if self.verbose:
+            print(
+                f"\n  Трубы: сшито разрывов {s_stats['stitched']}, "
+                f"убрано хвостиков {d_stats['dropped']}, схлопнуто connector'ов "
+                f"{col_stats['collapsed']}; napravlenie: осевых рёбер "
+                f"{r_stats['axis_kept']}, перп-сшито {r_stats['through_merged']}, "
+                f"перп→connector {r_stats['perp_capped']}, огрызков у грани "
+                f"{r_stats['noise_dropped']}, закрыто висячих {c_stats['capped']}"
+            )
+
         elapsed = time.time() - start_time
         
         # ===== РЕЗУЛЬТАТ =====

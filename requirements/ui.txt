@@ -24,3 +24,5 @@ opencv-python>=4.9.0
 
 # Async Qt
 qasync>=0.27.0
+# PDF page count for upload dialog
+PyMuPDF>=1.24.0

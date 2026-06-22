@@ -170,6 +170,7 @@ def trace_edges_v3(skeleton: np.ndarray,
                 'class_name': node_info['class_name'],
                 'bbox': list(node_info['bbox']) if node_info['bbox'] else None,
                 'segmentation': node_info.get('segmentation'),  # Полигон из COCO
+                'direction': node_info.get('direction'),  # от direction-классификатора
                 'ann_idx': node_info.get('ann_idx'),
                 'label_id': (node_info.get('label_id') + connector_offset) if (node_info['class_name'] == 'connector' and node_info.get('label_id') is not None) else node_info.get('label_id'),
                 'centroid': [centroid_y, centroid_x],
@@ -260,6 +261,7 @@ def trace_edges_v3(skeleton: np.ndarray,
             'class_name': label['class_name'],
             'bbox': list(label['bbox']),
             'segmentation': label.get('segmentation'),  # Полигон из COCO
+            'direction': (label.get('attributes') or {}).get('direction'),  # от direction-классификатора
             'ann_idx': label['idx'],
             'label_id': None,
             'centroid': [centroid_y, centroid_x],

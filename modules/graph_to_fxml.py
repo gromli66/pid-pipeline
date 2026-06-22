@@ -53,10 +53,19 @@ from xml.sax.saxutils import escape
 #   - ButtonSkinType         (ButtonControl)
 #   - IndicationSkinType     (FunctionControl с indication)
 # ---------------------------------------------------------------------------
+#
+# 3-й элемент tuple — equipmentType (дефолт по типу оборудования):
+#   MOV — электрическая задвижка
+#   VLV — ручная задвижка / ручной регулятор
+#   PMP — насос / вентилятор
+#   CNT — регулятор (с приводом)
+#   XMA — датчик
+# Для классов без явного указания equipmentType не ставится.
+# ---------------------------------------------------------------------------
 CLASS_NAME_TO_SKIN = {
     # --- Арматура / задвижки ---
-    'armatura_ruchn':       ('ValveControl', 'HANDLE_VLV'),
-    'armatura_electro':     ('ValveControl', 'ELECTRIC_VLV'),
+    'armatura_ruchn':       ('ValveControl', 'HANDLE_VLV', 'VLV'),
+    'armatura_electro':     ('ValveControl', 'ELECTRIC_VLV', 'MOV'),
     'armatura_seroprivod':  ('ValveControl', 'AOC_VLV'),
     'armatura_membr_electro': ('ValveControl', 'ELECTROMAGNETIC_VLV'),
 
@@ -65,9 +74,9 @@ CLASS_NAME_TO_SKIN = {
     'klapan_obratn_seroprivod': ('ValveControl', 'CHECK_HYDRO_VLV'),
 
     # --- Регуляторы ---
-    'regulator_electro':    ('ValveControl', 'CTRL_VLV_ELEC'),
-    'regulator_ruchn':      ('ValveControl', 'CTRL_VLV_HANDLE'),
-    'regulator_seroprivod': ('ValveControl', 'AOC_CTRL_VLV'),
+    'regulator_electro':    ('ValveControl', 'CTRL_VLV_ELEC', 'CNT'),
+    'regulator_ruchn':      ('ValveControl', 'CTRL_VLV_HANDLE', 'VLV'),
+    'regulator_seroprivod': ('ValveControl', 'AOC_CTRL_VLV', 'CNT'),
 
     # drossel — НЕ маппим на скин, нет аналога в библиотеке
 
@@ -75,19 +84,21 @@ CLASS_NAME_TO_SKIN = {
     'predohran':            ('ValveControl', 'RELIEF_VLV'),
 
     # --- Насос ---
-    'nasos':                ('PumpControl', 'PUMP'),
-    'vodostruiniy_nasos':   ('PumpControl', 'PUMP'),
+    'nasos':                ('PumpControl', 'PUMP', 'PMP'),
+    'vodostruiniy_nasos':   ('PumpControl', 'PUMP', 'PMP'),
 
     # --- Вентилятор ---
-    'ventilaytor':          ('PumpControl', 'FAN'),
+    'ventilaytor':          ('PumpControl', 'FAN', 'PMP'),
 
     # --- Теплообмен / нагрев ---
-    'teploobmen':           ('HeaterControl', 'HEATER'),
-    'electronagrevat':      ('HeaterControl', 'HEATER'),
+    'teploobmen':           ('HeaterControl', 'HEATER_VOL_TUBE'),  # теплообменник (кожухотрубный)
+    'electronagrevat':      ('HeaterControl', 'HEATER'),           # электронагреватель
     # dearator — НЕ маппим на скин, используется Polygon из segmentation
 
     # --- Датчики ---
-    'datchik':              ('DetectorControl', 'MINSK'),
+    # Param/Unit НЕ ставим: тип датчика (T/P/F/L) из графа не определить,
+    # остаются библиотечные дефолты ("T:" / "°C")
+    'datchik':              ('DetectorControl', 'MINSK', 'XMA'),
 
     # --- Расходомерная шайба ---
     'rashodomernaya_shaiba': ('FunctionControl', 'FLOWMETER'),
@@ -107,17 +118,17 @@ CLASS_NAME_TO_SKIN = {
 
 # СТАРЫЙ маппинг class_id -> skin (fallback, если class_name не найден)
 CLASS_ID_TO_SKIN = {
-    0:  ('ValveControl', 'HANDLE_VLV'),
+    0:  ('ValveControl', 'HANDLE_VLV', 'VLV'),
     1:  ('ValveControl', 'CHECK_VLV'),
-    2:  ('ValveControl', 'CTRL_VLV_HANDLE'),
-    3:  ('ValveControl', 'ELECTRIC_VLV'),
-    4:  ('ValveControl', 'CTRL_VLV_ELEC'),
+    2:  ('ValveControl', 'CTRL_VLV_HANDLE', 'VLV'),
+    3:  ('ValveControl', 'ELECTRIC_VLV', 'MOV'),
+    4:  ('ValveControl', 'CTRL_VLV_ELEC', 'CNT'),
     6:  ('FunctionControl', 'ARROW'),
     7:  ('ValveControl', 'CHECK_HYDRO_VLV'),
     8:  ('ValveControl', 'AOC_VLV_V2_NPP'),
     10: ('ValveControl', 'ELECTROMAGNETIC_VLV'),
-    11: ('PumpControl', 'PUMP'),
-    12: ('PumpControl', 'FAN_NVART'),
+    11: ('PumpControl', 'PUMP', 'PMP'),
+    12: ('PumpControl', 'FAN_NVART', 'PMP'),
     13: ('ValveControl', 'SAFETY_VLV_NPP'),
     15: ('FunctionControl', 'FLOWMETER'),
     17: ('HeaterControl', 'HEATER_VOL_TUBE'),
@@ -125,7 +136,7 @@ CLASS_ID_TO_SKIN = {
     26: ('ValveControl', 'CTRL_VLV_REDUCING'),
     31: ('HeaterControl', 'HEATER'),
     32: ('ValveControl', 'STOP_CTRL_VLV'),
-    33: ('DetectorControl', 'MINSK'),
+    33: ('DetectorControl', 'MINSK', 'XMA'),
     35: ('ButtonControl', 'TEXT_BUTTON', 'TRANSITION_BUTTON'),
 }
 
@@ -134,6 +145,102 @@ CLASS_ID_TO_SKIN = {
 SKIP_CLASS_NAMES = {
     'connector', 'voronka', 'annotation', 'truba', 'background',
 }
+
+# Контролы, которые всегда рисуются HORIZONTAL,
+# независимо от ориентации трубы (датчики)
+FORCE_HORIZONTAL_CONTROLS = {'DetectorControl'}
+
+# ---------------------------------------------------------------------------
+# Направление потока (от direction-классификатора) → orientation скина.
+#
+# `orientation` у контролов библиотеки — это BlockOrientation с 4 значениями:
+#   HORIZONTAL, HORIZONTAL_REVERSE, VERTICAL, VERTICAL_REVERSE.
+# Дефолт отрисовки скинов в библиотеке: вертикаль = «вверх», горизонталь =
+# «вправо». Отсюда соответствие 4 направлений классификатора:
+#   up    → VERTICAL          (скин как нарисован по умолчанию)
+#   down  → VERTICAL_REVERSE  (разворот на 180°)
+#   right → HORIZONTAL        (скин как нарисован по умолчанию)
+#   left  → HORIZONTAL_REVERSE
+# Если при визуальной проверке REVERSE окажется перепутан — правится здесь,
+# в одном месте, после чего FXML перегенерируется.
+# ---------------------------------------------------------------------------
+DIRECTION_TO_ORIENTATION = {
+    'up':    'VERTICAL',
+    'down':  'VERTICAL_REVERSE',
+    'right': 'HORIZONTAL',
+    'left':  'HORIZONTAL_REVERSE',
+}
+
+# Базовая ось направления — нужна для геометрии (swap width/height и пересчёт
+# layout выполняется так же, как для обычной VERTICAL-ориентации).
+_DIRECTION_TO_AXIS = {
+    'up': 'VERTICAL', 'down': 'VERTICAL',
+    'left': 'HORIZONTAL', 'right': 'HORIZONTAL',
+}
+
+# Классы оборудования, чей скин разворачиваем по направлению классификатора.
+# (Совпадает с direction_classification.classes минус napravlenie, который
+#  рисуется треугольником, и strelka, исключённой из графа.)
+DIRECTION_ORIENT_CLASSES = {
+    'nasos', 'rashodomernaya_shaiba',
+}
+
+# Класс «направление» — рисуется треугольником по направлению потока,
+# а не библиотечным скином.
+NAPRAVLENIE_CLASS_NAME = 'napravlenie'
+NAPRAVLENIE_COLOR = '#E1BEE7'
+
+# ---------------------------------------------------------------------------
+# Поправка оси контакта скинов.
+#
+# У части скинов визуальная точка контакта (талия «бабочки») не совпадает
+# с центром бокса контрола, т.к. сверху в канве скина нарисован привод
+# (мотор/мембрана). Геометрия вычислена из fxml-ресурсов внутри jar
+# (напр. electricVlv.fxml: канва 100x90, мотор 40px + тело 50px,
+# талия на 65/90 = 0.72 высоты) и сверена по скриншотам SceneBuilder.
+#
+# Формат: skin -> (h_frac, v_frac) — доля ПОПЕРЕЧНОГО размера контрола:
+#   h_frac: HORIZONTAL — талия НИЖЕ центра на h_frac*height
+#           → поправка layoutY -= h_frac * height
+#   v_frac: VERTICAL — после rotate(90) талия ЛЕВЕЕ центра на v_frac*height
+#           → поправка layoutX += v_frac * height
+# Значения подбираются по калибровочному листу (skin_calibration.fxml).
+# ---------------------------------------------------------------------------
+# Значения откалиброваны вручную по skin_calibration_v3_ladder.fxml
+SKIN_CONTACT_OFFSET = {
+    'ELECTRIC_VLV':     (0.222, 0.20),
+    'AOC_VLV':          (0.336, 0.336),
+    'AOC_VLV_V2_NPP':   (0.20,  0.20),
+    'CHECK_HYDRO_VLV':  (0.15,  0.15),
+    'CTRL_VLV_ELEC':    (0.15,  0.15),
+    'RELIEF_VLV':       (0.15,  0.15),
+    'CTRL_VLV_HANDLE':  (0.10,  0.111),
+    'AOC_CTRL_VLV':     (0.15,  0.111),
+}
+
+
+def apply_contact_offset(skin_type, orientation, layout_x, layout_y, height):
+    """Сдвигает layout так, чтобы ось контакта скина легла на трубу."""
+    offs = SKIN_CONTACT_OFFSET.get(skin_type)
+    if not offs:
+        return layout_x, layout_y
+    h_frac, v_frac = offs
+    if orientation == 'HORIZONTAL':
+        layout_y -= h_frac * height
+    else:
+        layout_x += v_frac * height
+    return layout_x, layout_y
+
+
+# Дефолтные Param/Unit датчиков
+# Обычный датчик — датчик давления
+DETECTOR_DEFAULT_PARAM = 'P'
+DETECTOR_DEFAULT_UNIT = 'кПа'
+# Дефолтный KKS датчика (если у узла нет kks_full)
+DETECTOR_DEFAULT_KKS = 'fff'
+# Авто-датчик у расходомерной шайбы — датчик расхода
+FLOW_DETECTOR_PARAM = 'G'
+FLOW_DETECTOR_UNIT = 'м3/ч'
 
 
 def get_skin_info(node):
@@ -187,6 +294,7 @@ CLASS_COLORS = {
     'datchik': '#C8E6C9',
     'output': '#FFE0B2',
     'strelka': '#E1BEE7',
+    'napravlenie': NAPRAVLENIE_COLOR,
     'unknow': '#CCCCCC',
     'klapan_obratn_seroprivod': '#45B7D1',
     'armatura_seroprivod': '#4ECDC4',
@@ -205,6 +313,9 @@ CLASS_COLORS = {
 }
 
 DEFAULT_COLOR = '#AAAAAA'
+
+# Фон подложки (style AnchorPane)
+PANE_BACKGROUND = 'linear-gradient(to bottom right, #d4d4d4, #d4d4d4)'
 
 # Цвет линий (единый для всех)
 DEFAULT_LINE_COLOR = '#333333'
@@ -530,6 +641,157 @@ def calculate_diameter_stroke(diameter_value, base_stroke, graph_scale=1.0):
 
 
 # ============================================================================
+# АВТО-ДАТЧИК РАСХОДА ДЛЯ РАСХОДОМЕРНОЙ ШАЙБЫ
+# ============================================================================
+
+# Размер авто-датчика, если на схеме нет других датчиков (px до масштабирования)
+FLOW_DETECTOR_DEFAULT_SIZE = 50.0
+# Зазор между шайбой и датчиком = factor * высота датчика
+FLOW_DETECTOR_GAP_FACTOR = 0.8
+# Радиус поиска существующего датчика рядом с шайбой
+# (factor * max(width, height) шайбы)
+FLOW_DETECTOR_SEARCH_FACTOR = 1.0
+
+
+def shaiba_has_detector(shaiba, nodes, adjacency):
+    """
+    True, если у расходомерной шайбы уже есть привязанный датчик:
+    - прямое ребро к узлу class_name='datchik', либо
+    - свободный датчик рядом: центроид в радиусе
+      FLOW_DETECTOR_SEARCH_FACTOR от размера шайбы И датчик
+      не привязан рёбрами ни к какому другому узлу.
+    """
+    for nb_id in adjacency.get(shaiba['id'], ()):
+        nb = nodes.get(nb_id)
+        if nb and nb.get('class_name') == 'datchik':
+            return True
+
+    b = parse_bbox(shaiba.get('bbox'))
+    if not b:
+        return False
+    cx = (b['x1'] + b['x2']) / 2
+    cy = (b['y1'] + b['y2']) / 2
+    max_dist = max(b['width'], b['height']) * FLOW_DETECTOR_SEARCH_FACTOR
+
+    for nid, n in nodes.items():
+        if n.get('class_name') != 'datchik':
+            continue
+        # Датчик уже привязан к другому узлу — не считается
+        if adjacency.get(nid):
+            continue
+        db = parse_bbox(n.get('bbox'))
+        if not db:
+            continue
+        ncx = (db['x1'] + db['x2']) / 2
+        ncy = (db['y1'] + db['y2']) / 2
+        if ((ncx - cx) ** 2 + (ncy - cy) ** 2) ** 0.5 <= max_dist:
+            return True
+    return False
+
+
+def generate_flow_detectors(nodes, edges, graph_scale=1.0):
+    """
+    Для каждой расходомерной шайбы без привязанного датчика генерирует
+    DetectorControl (датчик расхода) и линию связи к шайбе.
+
+    Размещение: над шайбой (горизонтальная труба) или справа
+    (вертикальная труба). Возвращает (control_elements, line_elements).
+    """
+    adjacency = {}
+    for e in edges:
+        adjacency.setdefault(e['source'], []).append(e['target'])
+        adjacency.setdefault(e['target'], []).append(e['source'])
+
+    # Типовой размер датчика — среднее по существующим датчикам схемы
+    det_sizes = []
+    for n in nodes.values():
+        if n.get('class_name') == 'datchik':
+            db = parse_bbox(n.get('bbox'))
+            if db:
+                det_sizes.append((db['width'], db['height']))
+    if det_sizes:
+        det_w = sum(w for w, _ in det_sizes) / len(det_sizes)
+        det_h = sum(h for _, h in det_sizes) / len(det_sizes)
+    else:
+        det_w = det_h = FLOW_DETECTOR_DEFAULT_SIZE * graph_scale
+
+    # Авто-датчик шайбы тоже в 3 раза меньше оригинала
+    det_w /= 3.0
+    det_h /= 3.0
+
+    line_stroke = max(0.3, 1.0 * graph_scale) if graph_scale < 1.0 else 1.0
+
+    controls, lines = [], []
+    for node_id, node in nodes.items():
+        if node.get('class_name') != 'rashodomernaya_shaiba':
+            continue
+        b = parse_bbox(node.get('bbox'))
+        if not b:
+            continue
+        if shaiba_has_detector(node, nodes, adjacency):
+            continue
+
+        cx = (b['x1'] + b['x2']) / 2
+        cy = (b['y1'] + b['y2']) / 2
+        gap = det_h * FLOW_DETECTOR_GAP_FACTOR
+
+        # Ориентация трубы у шайбы — по сторонам подключения рёбер
+        conns = get_node_connections(node_id, edges, nodes)
+        sides = {c.side for c in conns}
+        vertical_pipe = bool(sides) and not ({'LEFT', 'RIGHT'} & sides)
+
+        if vertical_pipe:
+            # Датчик справа от шайбы
+            det_x = b['x2'] + gap
+            det_y = cy - det_h / 2
+            line_start = (b['x2'], cy)
+        else:
+            # Датчик над шайбой
+            det_x = cx - det_w / 2
+            det_y = b['y1'] - gap - det_h
+            line_start = (cx, b['y1'])
+
+        det_x = max(0.0, det_x)
+        det_y = max(0.0, det_y)
+        det_cx = det_x + det_w / 2
+        det_cy = det_y + det_h / 2
+
+        det_id = f"{node_id}_fm_det"
+        comment = f'<!-- auto: датчик расхода для шайбы {node_id} -->'
+        attrs = [
+            f'fx:id="{escape(det_id)}"',
+            f'layoutX="{det_x:.1f}"',
+            f'layoutY="{det_y:.1f}"',
+            f'prefWidth="{det_w:.1f}"',
+            f'prefHeight="{det_h:.1f}"',
+            'skinType="MINSK"',
+            'orientation="HORIZONTAL"',
+            'equipmentType="XMA"',
+            f'param="{FLOW_DETECTOR_PARAM}"',
+            f'unit="{FLOW_DETECTOR_UNIT}"',
+            f'kks="{DETECTOR_DEFAULT_KKS}"',
+            'kksVisible="true"',
+            f'kksFontSize="{max(3.0, min(det_w, det_h) * 0.35):.1f}"',
+            'kksTextOffset="1.0"',
+            'valueVisible="false"',
+        ]
+        controls.append(f'        {comment}\n        <DetectorControl {" ".join(attrs)} />')
+
+        line_attrs = [
+            f'fx:id="{escape(det_id)}_link"',
+            f'startX="{line_start[0]:.1f}"',
+            f'startY="{line_start[1]:.1f}"',
+            f'endX="{det_cx:.1f}"',
+            f'endY="{det_cy:.1f}"',
+            f'stroke="{DEFAULT_LINE_COLOR}"',
+            f'strokeWidth="{line_stroke:.2f}"',
+        ]
+        lines.append(f'        {comment}\n        <Line {" ".join(line_attrs)} />')
+
+    return controls, lines
+
+
+# ============================================================================
 # ГЕНЕРАЦИЯ FXML
 # ============================================================================
 
@@ -547,6 +809,55 @@ def generate_fxml_control(node, geometry: SkinGeometry, node_id: str,
     control_class = skin_info[0]
     skin_type = skin_info[1]
     equipment_type = skin_info[2] if len(skin_info) > 2 else None
+
+    # Датчик всегда горизонтально, независимо от направления трубы.
+    # Геометрия — по исходному bbox (без растяжки между точками подключения).
+    if control_class in FORCE_HORIZONTAL_CONTROLS and geometry.orientation == 'VERTICAL':
+        bbox = parse_bbox(node.get('bbox'))
+        if bbox:
+            geometry = SkinGeometry(
+                orientation='HORIZONTAL',
+                width=bbox['width'],
+                height=bbox['height'],
+                layout_x=bbox['x1'],
+                layout_y=bbox['y1'],
+            )
+        else:
+            geometry = SkinGeometry(
+                orientation='HORIZONTAL',
+                width=geometry.height,
+                height=geometry.width,
+                layout_x=geometry.layout_x,
+                layout_y=geometry.layout_y,
+            )
+
+    # --- Переопределение ориентации по направлению классификатора ---
+    # Для nasos/rashodomernaya_shaiba направление от классификатора важнее
+    # геометрии рёбер: оно задаёт и ось (горизонт/вертикаль), и разворот
+    # (REVERSE). Геометрию пересчитываем строго из bbox по оси направления,
+    # чтобы swap/layout ниже отработал согласованно.
+    emit_orientation = geometry.orientation
+    _dir = node.get('direction') or node.get('flow_direction')
+    if node.get('class_name') in DIRECTION_ORIENT_CLASSES and _dir in DIRECTION_TO_ORIENTATION:
+        axis = _DIRECTION_TO_AXIS[_dir]
+        emit_orientation = DIRECTION_TO_ORIENTATION[_dir]
+        bbox = parse_bbox(node.get('bbox'))
+        if bbox:
+            geometry = SkinGeometry(
+                orientation=axis,
+                width=bbox['width'],
+                height=bbox['height'],
+                layout_x=bbox['x1'],
+                layout_y=bbox['y1'],
+            )
+        elif axis != geometry.orientation:
+            geometry = SkinGeometry(
+                orientation=axis,
+                width=geometry.height,
+                height=geometry.width,
+                layout_x=geometry.layout_x,
+                layout_y=geometry.layout_y,
+            )
 
     width = geometry.width
     height = geometry.height
@@ -566,6 +877,18 @@ def generate_fxml_control(node, geometry: SkinGeometry, node_id: str,
         # Swap размеров
         width, height = height, width
 
+    # --- Поправка оси контакта (привод смещает талию от центра бокса) ---
+    layout_x, layout_y = apply_contact_offset(
+        skin_type, geometry.orientation, layout_x, layout_y, height)
+
+    # --- Датчик в 3 раза меньше оригинала (сжатие вокруг центра) ---
+    if control_class == 'DetectorControl':
+        new_w = width / 3.0
+        new_h = height / 3.0
+        layout_x += (width - new_w) / 2.0
+        layout_y += (height - new_h) / 2.0
+        width, height = new_w, new_h
+
     # --- Базовые атрибуты ---
     layout_x = max(0.0, layout_x)
     layout_y = max(0.0, layout_y)
@@ -576,7 +899,7 @@ def generate_fxml_control(node, geometry: SkinGeometry, node_id: str,
         f'prefWidth="{width:.1f}"',
         f'prefHeight="{height:.1f}"',
         f'skinType="{skin_type}"',
-        f'orientation="{geometry.orientation}"',
+        f'orientation="{emit_orientation}"',
     ]
 
     if equipment_type:
@@ -584,13 +907,18 @@ def generate_fxml_control(node, geometry: SkinGeometry, node_id: str,
 
     # --- KKS привязка ---
     kks = node.get('kks_full')
+    # У датчиков KKS по дефолту, даже если не распознан
+    if not kks and control_class == 'DetectorControl':
+        kks = DETECTOR_DEFAULT_KKS
     if kks:
         attrs.append(f'kks="{escape(str(kks))}"')
         attrs.append('kksVisible="true"')
         # Размер шрифта KKS: пропорционален размеру элемента,
         # но с scale-aware минимумом чтобы текст оставался читаемым
-        vis_w = geometry.width
-        vis_h = geometry.height
+        # Используем итоговые (уменьшенные для датчика) размеры,
+        # чтобы шрифт KKS масштабировался вместе с элементом
+        vis_w = width
+        vis_h = height
         kks_font = min(vis_w, vis_h) * 0.35
         # При сильном масштабировании (A4) элементы маленькие →
         # min clamp обеспечивает читаемость (не менее 40% высоты элемента)
@@ -600,9 +928,14 @@ def generate_fxml_control(node, geometry: SkinGeometry, node_id: str,
         # KKS ближе к узлу
         attrs.append('kksTextOffset="1.0"')
 
-    # Скрыть дефолтное значение "0" только у DetectorControl
-    # (у других контролов valueVisible="false" ломает рендеринг скина)
+    # Дефолтные Param/Unit для датчиков (датчик давления)
     if control_class == 'DetectorControl':
+        attrs.append(f'param="{DETECTOR_DEFAULT_PARAM}"')
+        attrs.append(f'unit="{DETECTOR_DEFAULT_UNIT}"')
+
+    # Скрыть дефолтное значение "0" / "0%" (valueText скина).
+    # Проверено по skin_calibration_novalue.fxml: рендеринг не ломается.
+    if control_class in ('DetectorControl', 'ValveControl'):
         attrs.append('valueVisible="false"')
 
     # --- Комментарий ---
@@ -685,6 +1018,74 @@ def generate_fxml_polygon(node, node_id: str, graph_scale: float = 1.0) -> str:
     kks_comment = f' kks={kks}' if kks else ''
     comment = f'<!-- {class_name}{kks_comment} -->'
 
+    return f'        {comment}\n        <Polygon {" ".join(attrs)} />'
+
+
+def generate_fxml_triangle(node, node_id: str, graph_scale: float = 1.0) -> Optional[str]:
+    """
+    Генерирует FXML Polygon-треугольник для узла `napravlenie`.
+
+    Треугольник = стрелка потока: ВЕРШИНА смотрит в сторону направления
+    (flow_direction / direction), ОСНОВАНИЕ лежит на противоположной
+    («входной») грани bbox. Так входящее ребро упирается в основание, а
+    исходящее выходит из вершины (а не из пустоты), если граф так построен.
+
+    Соответствие грани входа берётся тем же правилом, что и в
+    direction_nodes._IN_FACE:
+        right → основание слева,  вершина справа
+        left  → основание справа, вершина слева
+        down  → основание сверху, вершина снизу
+        up    → основание снизу,  вершина сверху
+
+    Возвращает строку FXML или None, если нет bbox/направления.
+    """
+    direction = node.get('flow_direction') or node.get('direction')
+    if direction not in ('up', 'down', 'left', 'right'):
+        return None
+
+    b = parse_bbox(node.get('bbox'))
+    if not b:
+        return None
+
+    x1, y1, x2, y2 = b['x1'], b['y1'], b['x2'], b['y2']
+    cx = (x1 + x2) / 2.0
+    cy = (y1 + y2) / 2.0
+
+    # Абсолютные вершины треугольника (две точки основания + вершина).
+    if direction == 'right':
+        pts = [(x1, y1), (x1, y2), (x2, cy)]
+    elif direction == 'left':
+        pts = [(x2, y1), (x2, y2), (x1, cy)]
+    elif direction == 'down':
+        pts = [(x1, y1), (x2, y1), (cx, y2)]
+    else:  # up
+        pts = [(x1, y2), (x2, y2), (cx, y1)]
+
+    # Polygon points в JavaFX задаём ОТНОСИТЕЛЬНО layoutX/layoutY.
+    layout_x = min(p[0] for p in pts)
+    layout_y = min(p[1] for p in pts)
+    rel = []
+    for px, py in pts:
+        rel.append(px - layout_x)
+        rel.append(py - layout_y)
+    points_str = ",".join(f"{v:.1f}" for v in rel)
+
+    color = CLASS_COLORS.get(NAPRAVLENIE_CLASS_NAME, NAPRAVLENIE_COLOR)
+    kks = node.get('kks_full')
+    elem_stroke = max(0.3, 1.0 * graph_scale) if graph_scale < 1.0 else 1.0
+
+    attrs = [
+        f'fx:id="{escape(str(node_id))}"',
+        f'layoutX="{max(0.0, layout_x):.1f}"',
+        f'layoutY="{max(0.0, layout_y):.1f}"',
+        f'points="{points_str}"',
+        f'fill="{color}"',
+        f'stroke="#333333"',
+        f'strokeWidth="{elem_stroke:.2f}"',
+    ]
+
+    kks_comment = f' kks={kks}' if kks else ''
+    comment = f'<!-- napravlenie dir={direction}{kks_comment} -->'
     return f'        {comment}\n        <Polygon {" ".join(attrs)} />'
 
 
@@ -890,6 +1291,7 @@ def generate_fxml(graph_data: dict, stroke_width: float = LINE_STROKE_WIDTH,
         'rectangles': 0,
         'rectangles_with_kks': 0,
         'polygons': 0,
+        'napravlenie_triangles': 0,
         'lines_with_diameter': 0,
     }
 
@@ -897,6 +1299,17 @@ def generate_fxml(graph_data: dict, stroke_width: float = LINE_STROKE_WIDTH,
     for node_id, node in nodes.items():
         if node['type'] != 'equipment':
             continue
+
+        # napravlenie → треугольник по направлению потока (приоритет над
+        # скином/полигоном/прямоугольником). Если направления нет —
+        # проваливаемся в обычную обработку (прямоугольник).
+        if node.get('class_name') == NAPRAVLENIE_CLASS_NAME or node.get('direction_node'):
+            tri = generate_fxml_triangle(node, node_id, graph_scale)
+            if tri:
+                polygon_elements.append(tri)
+                stats['polygons'] += 1
+                stats['napravlenie_triangles'] = stats.get('napravlenie_triangles', 0) + 1
+                continue
 
         # Получаем подключения
         connections = get_node_connections(node_id, edges, nodes)
@@ -961,6 +1374,13 @@ def generate_fxml(graph_data: dict, stroke_width: float = LINE_STROKE_WIDTH,
                 if node.get('kks_full'):
                     stats['rectangles_with_kks'] += 1
 
+    # Авто-датчики расхода для шайб без привязанного датчика
+    auto_det_controls, auto_det_lines = generate_flow_detectors(
+        nodes, edges, graph_scale)
+    control_elements.extend(auto_det_controls)
+    line_elements.extend(auto_det_lines)
+    stats['auto_flow_detectors'] = len(auto_det_controls)
+
     # Обрабатываем рёбра
     for edge in edges:
         fxml = generate_fxml_line(edge, nodes, edge['id'], stroke_width,
@@ -979,7 +1399,8 @@ def generate_fxml(graph_data: dict, stroke_width: float = LINE_STROKE_WIDTH,
         '<?import ru.get.common.controls.*?>',
         '',
         f'<AnchorPane fx:id="root" xmlns="http://javafx.com/javafx/17" xmlns:fx="http://javafx.com/fxml/1"',
-        f'    prefWidth="{pane_width}" prefHeight="{pane_height}">',
+        f'    prefWidth="{pane_width}" prefHeight="{pane_height}"',
+        f'    style="-fx-background-color: {PANE_BACKGROUND};">',
         '    <children>',
         '',
         '        <!-- ======================================== -->',
@@ -1139,7 +1560,9 @@ def main():
     print(f"  Rectangles (fallback):         {stats.get('rectangles', 0)}")
     print(f"    ↳ with KKS in comment: {stats.get('rectangles_with_kks', 0)}")
     print(f"  Polygons:                      {stats.get('polygons', 0)}")
+    print(f"    ↳ napravlenie triangles:     {stats.get('napravlenie_triangles', 0)}")
     print(f"  Lines with diameter scaling:   {stats.get('lines_with_diameter', 0)}")
+    print(f"  Auto flow detectors (шайбы):   {stats.get('auto_flow_detectors', 0)}")
 
     # Показываем маппинг class_name → skin
     print("\n  Skin mapping applied:")

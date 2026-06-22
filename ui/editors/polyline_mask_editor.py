@@ -119,6 +119,34 @@ def _make_grayscale_darkened(original: QImage, brightness: float = 0.4) -> QImag
     return _numpy_to_qimage(result)
 
 
+def _estimate_median_thickness(mask_qimage: QImage) -> int | None:
+    """Оценить медианную толщину труб (px) по бинарной маске сегментации.
+
+    Метод: distanceTransform даёт расстояние до фона; на скелете значение ≈
+    половина локальной толщины. Медиана(2 × dist по скелету) → типичная ширина.
+    Возвращает int или None, если посчитать нельзя.
+    """
+    try:
+        arr = _qimage_to_numpy(mask_qimage)
+        binary = (arr[:, :, :3].mean(axis=2) >= 128).astype(np.uint8)
+        if binary.sum() < 10:
+            return None
+
+        import cv2
+        from skimage.morphology import skeletonize
+
+        dist = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
+        skel = skeletonize(binary > 0)
+        vals = dist[skel]
+        if vals.size == 0:
+            return None
+
+        thickness = int(round(float(np.median(vals)) * 2.0))
+        return max(1, thickness)
+    except Exception:
+        return None
+
+
 class PolylineMaskEditor(QGraphicsView):
     """
     Редактор масок полилиниями.
@@ -153,9 +181,18 @@ class PolylineMaskEditor(QGraphicsView):
         self._mask_tile_cols = 0
         self.bbox_frames_item: QGraphicsPixmapItem | None = None
 
+        # Отображение маски: цвет, яркость, прозрачность (живо меняются в «Вид»)
+        self._mask_color = QColor(255, 255, 255)
+        self._mask_brightness = 1.0
+        self._mask_opacity = 0.5
+
         # Current tool
         self.current_tool = PolylineTool.POLYLINE
         self.line_width = 3
+        self.median_thickness: int | None = None  # медианная толщина труб (px)
+        self.width_changed_callback = None         # вызывается при Ctrl+колесо
+        self.min_line_width = 2
+        self.max_line_width = 12
 
         # Polyline state
         self.current_polyline_points: list[QPointF] = []
@@ -181,6 +218,11 @@ class PolylineMaskEditor(QGraphicsView):
         # COCO annotations
         self.coco_annotations: list[dict] = []
         self.coco_full_data: dict | None = None  # Full COCO JSON for saving
+
+        # Live-эндпоинты (разрывы цепи бокс→бокс)
+        self.endpoint_overlay = None
+        self._endpoints_visible = True
+        self._erase_bbox = None
 
         # Add node mode
         self._pending_node_class: dict | None = None  # {"id": N, "name": "..."}
@@ -247,10 +289,13 @@ class PolylineMaskEditor(QGraphicsView):
 
         # Pipe mask (segmentation) — полупрозрачный синий слой
         self.pipe_mask_image = None
+        self.median_thickness = None
         if pipe_mask_path and Path(pipe_mask_path).exists():
             pipe_raw = QImage(pipe_mask_path)
             if not pipe_raw.isNull():
                 self.pipe_mask_image = _make_mask_colored(pipe_raw, QColor(0, 120, 255))
+                # Медианная толщина труб для стартовой ширины линии
+                self.median_thickness = _estimate_median_thickness(pipe_raw)
 
         # Mask
         if mask_path and Path(mask_path).exists():
@@ -356,10 +401,10 @@ class PolylineMaskEditor(QGraphicsView):
                 w = min(ts, self.img_width - x0)
                 h = min(ts, self.img_height - y0)
                 region = self.mask_image.copy(x0, y0, w, h)
-                item = QGraphicsPixmapItem(QPixmap.fromImage(region))
+                item = QGraphicsPixmapItem(self._tile_pixmap(region))
                 item.setPos(x0, y0)
                 item.setZValue(1)
-                item.setOpacity(0.5)
+                item.setOpacity(self._mask_opacity)
                 self.scene.addItem(item)
                 tile_row.append(item)
             self._mask_tiles.append(tile_row)
@@ -374,8 +419,63 @@ class PolylineMaskEditor(QGraphicsView):
         self.eraser_cursor.hide()
         self.scene.addItem(self.eraser_cursor)
 
+        from ui.editors.endpoint_overlay import EndpointOverlay, build_node_region
+        self.endpoint_overlay = EndpointOverlay(self.scene, self.img_width, self.img_height)
+        self.endpoint_overlay.set_node_region(
+            build_node_region(self.coco_full_data, self.img_width, self.img_height)
+        )
+        self.endpoint_overlay.set_visible(self._endpoints_visible)
+        self._ep_refresh()
+
         self.setSceneRect(QRectF(0, 0, self.img_width, self.img_height))
         self.fitInView(self.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
+    # ==================== APPEARANCE ====================
+
+    def set_background_darkness(self, darkness: float):
+        """Затемнение фоновой подложки. darkness 0..1 (0 — оригинал, 1 — чёрный)."""
+        if self.original_image is None or self.original_item is None:
+            return
+        brightness = max(0.05, min(1.0, 1.0 - float(darkness)))
+        darkened = _make_grayscale_darkened(self.original_image, brightness=brightness)
+        self.original_item.setPixmap(QPixmap.fromImage(darkened))
+
+    def _tile_pixmap(self, region: QImage) -> QPixmap:
+        """Перекрасить регион маски (белый+alpha) в текущий цвет×яркость."""
+        if (self._mask_color.red() == 255 and self._mask_color.green() == 255
+                and self._mask_color.blue() == 255 and self._mask_brightness >= 1.0):
+            return QPixmap.fromImage(region)  # быстрый путь: белый без изменений
+        arr = _qimage_to_numpy(region)  # BGRA
+        alpha = arr[:, :, 3]
+        b = min(255, int(self._mask_color.blue() * self._mask_brightness))
+        g = min(255, int(self._mask_color.green() * self._mask_brightness))
+        r = min(255, int(self._mask_color.red() * self._mask_brightness))
+        out = np.zeros_like(arr)
+        m = alpha > 0
+        out[m, 0] = b
+        out[m, 1] = g
+        out[m, 2] = r
+        out[:, :, 3] = alpha
+        return QPixmap.fromImage(_numpy_to_qimage(out))
+
+    def set_mask_color(self, color: QColor):
+        """Цвет отображения маски труб (данные не меняются — только вид)."""
+        self._mask_color = QColor(color)
+        if self._mask_tiles:
+            self.update_mask_display()
+
+    def set_mask_brightness(self, pct: float):
+        """Яркость цвета маски, % (множитель цвета)."""
+        self._mask_brightness = max(0.0, float(pct) / 100.0)
+        if self._mask_tiles:
+            self.update_mask_display()
+
+    def set_mask_opacity(self, pct: float):
+        """Прозрачность слоя маски, % (100 — непрозрачно)."""
+        self._mask_opacity = max(0.0, min(1.0, float(pct) / 100.0))
+        for row in self._mask_tiles:
+            for item in row:
+                item.setOpacity(self._mask_opacity)
 
     # ==================== TOOL SWITCHING ====================
 
@@ -427,7 +527,7 @@ class PolylineMaskEditor(QGraphicsView):
                 w = min(ts, self.img_width - x0)
                 h = min(ts, self.img_height - y0)
                 region = self.mask_image.copy(x0, y0, w, h)
-                self._mask_tiles[row][col].setPixmap(QPixmap.fromImage(region))
+                self._mask_tiles[row][col].setPixmap(self._tile_pixmap(region))
 
     def _update_mask_region(self, x: int, y: int, radius: int):
         """Обновить только тайлы, задетые областью (x±radius, y±radius)."""
@@ -446,7 +546,7 @@ class PolylineMaskEditor(QGraphicsView):
                 w = min(ts, self.img_width - x0)
                 h = min(ts, self.img_height - y0)
                 region = self.mask_image.copy(x0, y0, w, h)
-                self._mask_tiles[row][col].setPixmap(QPixmap.fromImage(region))
+                self._mask_tiles[row][col].setPixmap(self._tile_pixmap(region))
 
     # ==================== POLYLINE ====================
 
@@ -463,10 +563,7 @@ class PolylineMaskEditor(QGraphicsView):
             self.scene.addItem(self.current_path_item)
 
         self._update_polyline_path()
-        self._update_status(
-            f"Точка {len(self.current_polyline_points)}. "
-            "2x клик / ПКМ / Enter — завершить"
-        )
+        self._update_status(f"Точка {len(self.current_polyline_points)}")
 
     def _update_polyline_path(self):
         if not self.current_path_item or not self.current_polyline_points:
@@ -525,6 +622,12 @@ class PolylineMaskEditor(QGraphicsView):
             f"Полилиния завершена ({len(self.current_polyline_points)} точек)"
         )
 
+        if self.endpoint_overlay is not None and self.polylines:
+            _it = self.polylines[-1]
+            br = _it.path().boundingRect()
+            pad = _it.pen().width()
+            self._ep_refresh((br.left() - pad, br.top() - pad, br.right() + pad, br.bottom() + pad))
+
         self.current_path_item = None
         self.current_polyline_points.clear()
 
@@ -548,6 +651,16 @@ class PolylineMaskEditor(QGraphicsView):
             return
 
         count = len(self.polylines)
+
+        _ep_rect = None
+        for _it in self.polylines:
+            br = _it.path().boundingRect()
+            pad = _it.pen().width()
+            r = (br.left() - pad, br.top() - pad, br.right() + pad, br.bottom() + pad)
+            _ep_rect = r if _ep_rect is None else (
+                min(_ep_rect[0], r[0]), min(_ep_rect[1], r[1]),
+                max(_ep_rect[2], r[2]), max(_ep_rect[3], r[3]),
+            )
 
         painter = QPainter(self.mask_image)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -573,6 +686,8 @@ class PolylineMaskEditor(QGraphicsView):
         )
 
         self.update_mask_display()
+        if _ep_rect is not None:
+            self._ep_refresh(_ep_rect)
         self._update_status(f"{count} полилиний объединены с маской")
 
     def _erase_at(self, pos: QPointF):
@@ -596,8 +711,17 @@ class PolylineMaskEditor(QGraphicsView):
         # Обновляем только задетые тайлы (~512×512 вместо 14K×10K)
         self._update_mask_region(x, y, radius + 1)
 
+        r = (x - radius - 1, y - radius - 1, x + radius + 1, y + radius + 1)
+        self._erase_bbox = r if self._erase_bbox is None else (
+            min(self._erase_bbox[0], r[0]), min(self._erase_bbox[1], r[1]),
+            max(self._erase_bbox[2], r[2]), max(self._erase_bbox[3], r[3]),
+        )
+
     def _stop_erasing(self):
         self._erasing = False
+        if self._erase_bbox is not None:
+            self._ep_refresh(self._erase_bbox)
+        self._erase_bbox = None
 
     # ==================== RECTANGLE ERASE (Shift+LMB) ====================
 
@@ -656,6 +780,7 @@ class PolylineMaskEditor(QGraphicsView):
 
         # Обновить только задетые тайлы
         self._update_mask_rect(x1, y1, x2, y2)
+        self._ep_refresh((x1, y1, x2, y2))
         self._update_status(f"Область {x2-x1}×{y2-y1} px стёрта")
 
         self._cancel_rect_erase()
@@ -759,6 +884,10 @@ class PolylineMaskEditor(QGraphicsView):
         # Undo support
         self.undo_stack.append(("add_node", annotation, node_item))
 
+        if self.endpoint_overlay is not None:
+            self.endpoint_overlay.add_node_box(x1, y1, w, h)
+            self._ep_refresh((x1 - 8, y1 - 8, x2 + 8, y2 + 8))
+
         self._node_drawing = False
         self._node_rect_start = None
         self._update_status(
@@ -804,6 +933,17 @@ class PolylineMaskEditor(QGraphicsView):
 
     # ==================== UNDO ====================
 
+    def _ep_refresh(self, rect=None):
+        if self.endpoint_overlay is None:
+            return
+        strokes = [(it.path(), it.pen().width()) for it in self.polylines]
+        self.endpoint_overlay.refresh(self.mask_image, rect, strokes)
+
+    def set_endpoints_visible(self, visible: bool):
+        self._endpoints_visible = visible
+        if self.endpoint_overlay is not None:
+            self.endpoint_overlay.set_visible(visible)
+
     def undo(self):
         if not self.undo_stack:
             self._update_status("Нечего отменять")
@@ -839,6 +979,14 @@ class PolylineMaskEditor(QGraphicsView):
             self._refresh_bbox_frames()
             self._coco_dirty = True
             self._update_status("Undo: узел удалён")
+
+        if self.endpoint_overlay is not None:
+            if action[0] == "add_node":
+                from ui.editors.endpoint_overlay import build_node_region
+                self.endpoint_overlay.set_node_region(
+                    build_node_region(self.coco_full_data, self.img_width, self.img_height)
+                )
+            self._ep_refresh()
 
     # ==================== SAVE ====================
 
@@ -880,6 +1028,20 @@ class PolylineMaskEditor(QGraphicsView):
             self.status_callback(msg)
 
     def wheelEvent(self, event: QWheelEvent):
+        # Ctrl+колесо — менять толщину линии/кисти (а не зумить)
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            delta = 1 if event.angleDelta().y() > 0 else -1
+            new_width = max(
+                self.min_line_width,
+                min(self.max_line_width, self.line_width + delta),
+            )
+            if new_width != self.line_width:
+                self.set_line_width(new_width)
+                if self.width_changed_callback:
+                    self.width_changed_callback(new_width)
+            event.accept()
+            return
+
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
         self.scale(factor, factor)
 
