@@ -16,9 +16,10 @@
 - OS: Ubuntu 22.04/24.04 (или другой Linux с Docker). RAM **16–20 ГБ**, диск **80–120 ГБ**, CPU (GPU не нужен), **публичный/доступный по сети IP**.
 - Открыть входящие порты: **22** (SSH), **8000** (API), **8080** (CVAT). БД/Redis наружу НЕ открывать.
 
-## A2. Docker (по SSH на сервере)
+## A2. Docker и git (по SSH на сервере)
 ```bash
 ssh root@<IP-сервера>
+apt-get update && apt-get install -y git
 curl -fsSL https://get.docker.com | sudo sh
 docker --version && docker compose version
 ```
@@ -30,8 +31,8 @@ cd ~/pid
 ```
 **Модели не в git** (~3 ГБ) — перенести отдельно с машины, где они есть:
 ```bash
-# с машины с моделями:
-scp -r <путь>/models/* root@<IP-сервера>:~/pid/models/
+# с машины с моделями (папка models целиком кладётся в ~/pid/):
+scp -r <путь>/models root@<IP-сервера>:~/pid/
 ```
 Проверка: `ls ~/pid/models/yolo/ensemble_v1/tile640/best.pt` (~50 МБ).
 
@@ -95,6 +96,7 @@ curl http://localhost:8000/health
 
 ## B1. Код клиента
 ```bash
+sudo apt-get install -y git
 git clone -b deploy https://github.com/gromli66/pid-pipeline.git ~/pid_client
 cd ~/pid_client
 ```
