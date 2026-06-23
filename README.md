@@ -30,23 +30,7 @@
 - **Инфраструктура:** Docker Compose, Alembic
 
 ## Быстрый старт
-
-```bash
-# 1. Клонировать и настроить
-git clone <repository-url> && cd pid_pipeline
-cp .env.example .env  # отредактировать
-
-# 2. Запустить инфраструктуру
-docker-compose up -d
-
-# 3. Инициализировать БД
-python scripts/init_db.py
-
-# 4. Запустить UI (в моменте виртуалка .venv311\Scripts\activate.bat)
-.\run_ui.bat
-```
-
-Подробнее: [DEV_SETUP.md](docs/DEV_SETUP.md), [DEPLOYMENT.md](docs/DEPLOYMENT.md).
+Подробнее: [DEPLOY_README.md](https://github.com/gromli66/pid-pipeline/blob/deploy/DEPLOY_README.md).
 
 ## Структура проекта
 
