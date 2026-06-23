@@ -55,3 +55,24 @@ class ApplyContourHandler(ModeHandler):
         editor.update_statistics()
 
         return True
+
+
+class SelectRecognizeHandler(ModeHandler):
+    """Click on equipment node -> toggle selection for on-demand contour
+    recognition (used before contours are computed)."""
+
+    def on_press(self, editor, x, y, event):
+        clicked = editor.find_node_at(x, y)
+        if not clicked:
+            return True
+        node = editor.nodes.get(clicked)
+        if not node:
+            return True
+        if node.get("type") != "equipment":
+            editor.update_status("Выбирать можно только узлы оборудования")
+            return True
+        if node.get("ann_idx") is None:
+            editor.update_status("У этого узла нет ann_idx — распознать нельзя")
+            return True
+        editor.toggle_recog_node(clicked)
+        return True

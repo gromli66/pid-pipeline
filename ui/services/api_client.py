@@ -632,6 +632,14 @@ class APIClient:
         """Проверить наличие контуров и статистику."""
         return self._request("GET", f"/api/contours/{uid}/status")
 
+    def extract_contours(self, uid: str, ann_ids=None) -> Dict[str, Any]:
+        """Запустить распознавание контуров по требованию.
+
+        ann_ids: список COCO id выбранных элементов (None = все подходящие).
+        Возвращает {"status": "started", "task_id": ...}.
+        """
+        return self._request("POST", f"/api/contours/{uid}/extract", json={"ann_ids": ann_ids})
+
     def download_contours_auto(self, uid: str, dest: Path) -> Path:
         """Скачать contours_auto.json."""
         response = self._request_raw("GET", f"/api/contours/{uid}/auto", timeout=60.0)

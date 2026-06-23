@@ -174,10 +174,10 @@ class BaseGraphTab(AppearanceMixin, QWidget):
         toolbar.addWidget(btn_undo)
 
         # --- Save ---
-        btn_save = QPushButton("Сохранить")
-        btn_save.setToolTip("Сохранить граф на сервер")
-        btn_save.clicked.connect(self._save_graph)
-        toolbar.addWidget(btn_save)
+        self.btn_save = QPushButton("Сохранить")
+        self.btn_save.setToolTip("Сохранить граф на сервер")
+        self.btn_save.clicked.connect(self._save_graph)
+        toolbar.addWidget(self.btn_save)
 
         # --- Confirm ---
         self.btn_confirm = QPushButton("✅ Подтвердить")

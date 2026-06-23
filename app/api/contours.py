@@ -17,7 +17,9 @@ from copy import deepcopy
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from typing import List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Body
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +29,59 @@ from app.models import Diagram, DiagramStatus, Artifact, ArtifactType
 from app.services.storage import StorageService
 
 router = APIRouter()
+
+
+def _ocr_enabled(project_code: str) -> bool:
+    """True if OCR is enabled for the project (defaults to True / fail-open)."""
+    try:
+        from app.services.project_loader import get_project_loader
+        pc = get_project_loader().load(project_code)
+        return bool(pc and getattr(pc.ocr, "enabled", True))
+    except Exception:
+        return True
+
+
+@router.post("/{uid}/extract")
+async def extract_contours(
+    uid: UUID,
+    ann_ids: Optional[List[int]] = Body(default=None, embed=True),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Trigger SAM2 contour extraction on demand.
+
+    If ann_ids is given, only those annotation ids are processed (selective
+    recognition); otherwise all eligible nodes are processed. Does NOT change
+    diagram.status -- readiness is polled via GET /{uid}/status (CONTOURS_AUTO).
+    """
+    result = await db.execute(select(Diagram).where(Diagram.uid == uid))
+    diagram = result.scalar_one_or_none()
+    if not diagram:
+        raise HTTPException(status_code=404, detail="Diagram not found")
+
+    # Invalidate previous auto result so GET /status reflects re-processing.
+    old = await db.execute(
+        select(Artifact).where(
+            Artifact.diagram_uid == uid,
+            Artifact.artifact_type == ArtifactType.CONTOURS_AUTO,
+        )
+    )
+    old_art = old.scalar_one_or_none()
+    if old_art:
+        await db.delete(old_art)
+        await db.commit()
+
+    from worker.celery_app import celery_app
+    async_result = celery_app.send_task(
+        "worker.tasks.contours.task_extract_contours",
+        args=[str(uid)],
+        kwargs={"ann_ids": ann_ids},
+        queue="sam2",
+    )
+    return {
+        "status": "started",
+        "task_id": async_result.id,
+        "selected": len(ann_ids) if ann_ids else None,
+    }
 
 
 @router.get("/{uid}/status")
@@ -271,8 +326,12 @@ async def auto_accept_contours(
         )
         db.add(artifact)
 
-    # Status -> CONTOURS_VALIDATED
+    # Status -> CONTOURS_VALIDATED (auto-skip OCR if disabled)
     diagram.status = DiagramStatus.CONTOURS_VALIDATED
+    if not _ocr_enabled(diagram.project_code):
+        # OCR off: jump to OCR_BOUND so OCR + binding beads show completed
+        # and edit_graph / export unlock without running OCR.
+        diagram.status = DiagramStatus.OCR_BOUND
     diagram.error_message = None
     diagram.error_stage = None
     await db.commit()
@@ -306,8 +365,12 @@ async def complete_contour_validation(
         # Auto-accept if no validated contours
         return await auto_accept_contours(uid, db)
 
-    # Status -> CONTOURS_VALIDATED
+    # Status -> CONTOURS_VALIDATED (auto-skip OCR if disabled)
     diagram.status = DiagramStatus.CONTOURS_VALIDATED
+    if not _ocr_enabled(diagram.project_code):
+        # OCR off: jump to OCR_BOUND so OCR + binding beads show completed
+        # and edit_graph / export unlock without running OCR.
+        diagram.status = DiagramStatus.OCR_BOUND
     diagram.error_message = None
     diagram.error_stage = None
     await db.commit()

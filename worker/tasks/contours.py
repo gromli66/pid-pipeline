@@ -55,7 +55,7 @@ class _NumpyEncoder(json.JSONEncoder):
     soft_time_limit=540,   # 9 min warning
     acks_late=True,
 )
-def task_extract_contours(self, diagram_uid: str):
+def task_extract_contours(self, diagram_uid: str, ann_ids=None):
     """
     SAM2 batch inference for eligible P&ID nodes.
 
@@ -95,7 +95,7 @@ def task_extract_contours(self, diagram_uid: str):
             Artifact.diagram_uid == diagram_uid,
             Artifact.artifact_type == ArtifactType.CONTOURS_AUTO,
         ).first()
-        if existing:
+        if existing and not ann_ids:
             logger.info(
                 "Contours already extracted for %s, skipping", diagram_uid
             )
@@ -196,6 +196,12 @@ def task_extract_contours(self, diagram_uid: str):
                 continue
             eligible_anns.append(ann)
 
+        if ann_ids:
+            _sel = set(ann_ids)
+            eligible_anns = [a for a in eligible_anns if a.get("id") in _sel]
+            logger.info("[%s] Selective extraction: %d of selected requested",
+                        diagram_uid, len(eligible_anns))
+
         logger.info(
             "[%s] Annotations: %d total, %d eligible, %d skipped",
             diagram_uid,
@@ -217,11 +223,11 @@ def task_extract_contours(self, diagram_uid: str):
             )
             return {"status": "empty", "diagram_uid": diagram_uid}
 
-        # ===== 8. Run SAM2 inference =====
-        from modules.sam2_contour import ContourExtractor
+        # ===== 8. Run SAM2 inference (model is process-cached) =====
+        from modules.sam2_contour import get_contour_extractor
 
         from worker.utils.device import resolve_device
-        extractor = ContourExtractor(
+        extractor = get_contour_extractor(
             checkpoint=ce_cfg.checkpoint,
             checkpoint_v8=None,
             device=resolve_device(),
@@ -242,8 +248,9 @@ def task_extract_contours(self, diagram_uid: str):
             "[%s] SAM2 inference done: %d results", diagram_uid, len(raw_results)
         )
 
-        # ===== 9. Release GPU memory =====
-        del extractor
+        # ===== 9. Release transient memory (keep cached model alive) =====
+        # NOTE: do NOT delete the extractor -- it is process-cached and reused
+        # across task runs. empty_cache() only frees unused allocator blocks.
         import torch
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

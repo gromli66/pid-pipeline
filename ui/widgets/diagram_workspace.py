@@ -1582,19 +1582,8 @@ class DiagramWorkspace(QWidget):
         if not self._uid:
             return
 
-        # Проверить наличие контуров
-        try:
-            contours_info = self.api_client.get_contours_status(self._uid)
-            if not contours_info.get("has_auto"):
-                QMessageBox.information(
-                    self, "Контуры",
-                    "SAM2 контуры ещё не готовы.\n"
-                    "Дождитесь завершения извлечения контуров.",
-                )
-                return
-        except APIError:
-            pass  # вкладка сама покажет ошибку
-
+        # Контуры распознаются ПО ТРЕБОВАНИЮ внутри вкладки — открываем её
+        # всегда, даже если результата ещё нет (там кнопки распознавания).
         try:
             from ui.tabs.contour_tab import ContourTab
 

@@ -658,6 +658,50 @@ class ContourExtractor:
 
 
 # ================================================================
+# Cached factory (avoids reloading SAM2 weights on every task run)
+# ================================================================
+
+_EXTRACTOR_CACHE = {}
+
+
+def get_contour_extractor(
+    checkpoint,
+    checkpoint_v8=None,
+    device='cuda',
+    target_size=1024,
+    snap_dp_eps=0.15,
+    snap_threshold=0.08,
+    snap_min_edge=0.03,
+    confidence_threshold=0.85,
+):
+    """Return a process-cached ContourExtractor.
+
+    The SAM2 base model (hiera-small + LoRA) is heavy to build, so we keep
+    one instance per unique parameter set alive in the worker process and
+    reuse it across task invocations instead of rebuilding it on every call.
+    """
+    key = (
+        str(checkpoint), str(checkpoint_v8), str(device), int(target_size),
+        float(snap_dp_eps), float(snap_threshold), float(snap_min_edge),
+        float(confidence_threshold),
+    )
+    ext = _EXTRACTOR_CACHE.get(key)
+    if ext is None:
+        ext = ContourExtractor(
+            checkpoint=checkpoint,
+            checkpoint_v8=checkpoint_v8,
+            device=device,
+            target_size=target_size,
+            snap_dp_eps=snap_dp_eps,
+            snap_threshold=snap_threshold,
+            snap_min_edge=snap_min_edge,
+            confidence_threshold=confidence_threshold,
+        )
+        _EXTRACTOR_CACHE[key] = ext
+    return ext
+
+
+# ================================================================
 # CLI Interface
 # ================================================================
 

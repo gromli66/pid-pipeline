@@ -85,6 +85,13 @@ def task_run_ocr(self, diagram_uid: str):
             )
             return
 
+        # OCR disabled in project config -> skip cleanly (defense-in-depth).
+        from app.services.project_loader import get_project_loader as _gpl
+        _pc = _gpl().load(diagram.project_code)
+        if _pc and not getattr(_pc.ocr, "enabled", True):
+            logger.info("OCR disabled for project '%s', skipping", diagram.project_code)
+            return {"status": "disabled", "diagram_uid": diagram_uid}
+
         # ===== Processing Stage tracking =====
         from app.models.stage import StageType
         stage = start_stage(db, diagram_uid, StageType.OCR, celery_task_id=self.request.id)

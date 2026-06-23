@@ -242,6 +242,7 @@ class DirectionClassificationConfig:
 @dataclass
 class OcrConfig:
     """Конфигурация OCR из project YAML (Phase B)."""
+    enabled: bool = True                  # можно отключить OCR целиком (ocr.enabled: false)
     profile_module: str = ""              # Legacy: importlib module path (пустой = не используется)
     profile_class: str = "KKSProfile"
     profile_path: Optional[str] = None    # 1.x: путь к .py файлу профиля (приоритет над profile_module)
@@ -471,6 +472,7 @@ class ProjectLoader:
                 domain_profile_path = str(candidate)
 
         ocr = OcrConfig(
+            enabled=ocr_data.get("enabled", True),
             profile_module=ocr_data.get("profile_module", ""),
             profile_class=ocr_data.get("profile_class", "KKSProfile"),
             profile_path=ocr_data.get("profile_path", None),

@@ -644,19 +644,21 @@ async def complete_junction_validation(
             queue="gpu",
         )
 
-        # SAM2 contour extraction (parallel, independent)
-        contour_task_id = await async_safe_dispatch(
-            "worker.tasks.contours.task_extract_contours",
-            args=[str(uid)],
-            queue="sam2",
-        )
+        # SAM2 contours are NOT auto-run anymore -- they are triggered on
+        # demand from the contours step (optionally for a selected subset of
+        # elements) via POST /api/contours/{uid}/extract.
+        contour_task_id = None
 
-        # OCR -- parallel with graph and SAM2 (separate worker, queue "ocr")
-        ocr_task_id = await async_safe_dispatch(
-            "worker.tasks.ocr.task_run_ocr",
-            args=[str(uid)],
-            queue="ocr",
-        )
+        # OCR -- parallel with graph and SAM2 (separate worker, queue "ocr").
+        # Skip entirely if disabled in project config (ocr.enabled: false).
+        from app.services.project_loader import get_project_loader as _gpl
+        _pc_ocr = _gpl().load(diagram.project_code)
+        if _pc_ocr and getattr(_pc_ocr.ocr, "enabled", True):
+            ocr_task_id = await async_safe_dispatch(
+                "worker.tasks.ocr.task_run_ocr",
+                args=[str(uid)],
+                queue="ocr",
+            )
 
     return {
         "status": "validated_junctions",
@@ -737,22 +739,29 @@ async def complete_simple_graph_validation(
         db.add(artifact)
         await db.flush()
 
-    # Статус → VALIDATED_GRAPH
+    # Статус → VALIDATED_GRAPH. Контуры идут СЛЕДУЮЩИМ шагом; авто-пропуск
+    # OCR (если отключён) происходит ПОСЛЕ контуров — в complete_contour_validation.
     diagram.status = DiagramStatus.VALIDATED_GRAPH
     diagram.error_message = None
     diagram.error_stage = None
+
+    from app.services.project_loader import get_project_loader as _gpl
+    _pc = _gpl().load(diagram.project_code)
+    _ocr_on = bool(_pc and getattr(_pc.ocr, "enabled", True))
     await db.commit()
 
-    # Auto-dispatch OCR (NOT FXML!)
-    task_id = await async_safe_dispatch(
-        "worker.tasks.ocr.task_run_ocr",
-        args=[str(uid)],
-        queue="ocr",
-    )
+    task_id = None
+    if _ocr_on:
+        # Auto-dispatch OCR (NOT FXML!)
+        task_id = await async_safe_dispatch(
+            "worker.tasks.ocr.task_run_ocr",
+            args=[str(uid)],
+            queue="ocr",
+        )
 
     return {
-        "status": "validated_graph",
-        "message": "Simple validation completed, OCR started",
+        "status": diagram.status.value,
+        "message": "Simple validation completed" + ("" if _ocr_on else ", OCR disabled (skipped after contours)"),
         "task_id": task_id,
         "uid": str(uid),
     }

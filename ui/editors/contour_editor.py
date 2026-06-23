@@ -69,6 +69,55 @@ class ContourEditor(SimpleGraphEditor):
         self.register_mode("apply_contour", ApplyContourHandler())
         self.register_mode("edit_polygon", EditPolygonHandler())
 
+        # On-demand recognition selection
+        from ui.editors.mode_handlers.contour_handler import SelectRecognizeHandler
+        self._recog_selection: set[str] = set()
+        self.register_mode("select_recognize", SelectRecognizeHandler())
+
+    # =================================================================
+    # On-demand recognition selection
+    # =================================================================
+
+    def toggle_recog_node(self, node_id: str):
+        """Toggle node selection for recognition (refreshes 3-state colors)."""
+        if node_id in self._recog_selection:
+            self._recog_selection.discard(node_id)
+        else:
+            self._recog_selection.add(node_id)
+        self._refresh_equipment_brushes()
+        self.update_status(
+            f"Выбрано для распознавания: {len(self._recog_selection)}"
+        )
+
+    def clear_recog_selection(self):
+        self._recog_selection.clear()
+        self._refresh_equipment_brushes()
+
+    def get_recog_ann_idx(self) -> list:
+        ids = []
+        for nid in self._recog_selection:
+            node = self.nodes.get(nid)
+            if node and node.get("ann_idx") is not None:
+                ids.append(node["ann_idx"])
+        return ids
+
+    def _on_shift_lmb_press(self, x: float, y: float):
+        """Shift+ЛКМ — отметить/снять узел (только в режиме «Выбрать»)."""
+        if self._current_mode != "select_recognize":
+            return
+        node_id = self.find_node_at(x, y)
+        if not node_id:
+            return
+        node = self.nodes.get(node_id)
+        if not node:
+            return
+        if node.get("type") != "equipment" or node.get("ann_idx") is None:
+            self.update_status(
+                "Распознавать можно только узлы оборудования с ann_idx"
+            )
+            return
+        self.toggle_recog_node(node_id)
+
     # =================================================================
     # Loading
     # =================================================================
@@ -174,6 +223,7 @@ class ContourEditor(SimpleGraphEditor):
         # Recalculate edges connected to this node
         self._recalculate_edges_for_node(node_id)
 
+        self._refresh_equipment_brushes()
         return True
 
     def remove_contour(self, node_id: str) -> bool:
@@ -197,6 +247,7 @@ class ContourEditor(SimpleGraphEditor):
         # Recalculate edges
         self._recalculate_edges_for_node(node_id)
 
+        self._refresh_equipment_brushes()
         return True
 
     # =================================================================
@@ -327,24 +378,18 @@ class ContourEditor(SimpleGraphEditor):
 
         In edit_polygon mode: transparent (normal graph colors).
         """
-        if self._current_mode != "apply_contour":
+        if self._current_mode not in ("apply_contour", "select_recognize"):
             return QBrush(QColor(0, 0, 0, 0))
-
-        # Need node_id to check applied status
         node_id = node.get("id")
-        ann_idx = node.get("ann_idx")
-
+        if node_id in self._recog_selection:
+            return QBrush(QColor(241, 196, 15, 140))   # жёлтый — выбран для распознавания
         if node_id and node_id in self._applied_nodes:
-            return QBrush(self.COLOR_CONTOUR_APPLIED)
-
-        if ann_idx is not None:
-            cn = self._ann_to_contour.get(ann_idx)
-            if cn and cn.get("polygon_auto"):
-                if cn.get("confidence", 0) < 0.85:
-                    return QBrush(self.COLOR_CONTOUR_REVIEW)
-                return QBrush(self.COLOR_CONTOUR_AVAILABLE)
-
-        return QBrush(self.COLOR_CONTOUR_NONE)
+            return QBrush(QColor(46, 204, 113, 140))    # зелёный — форма применена
+        ann_idx = node.get("ann_idx")
+        cn = self._ann_to_contour.get(ann_idx) if ann_idx is not None else None
+        if cn and cn.get("polygon_auto"):
+            return QBrush(QColor(52, 152, 219, 140))    # синий — распознан SAM2
+        return QBrush(QColor(149, 165, 166, 80))        # серый — ничего
 
     # =================================================================
     # Stats
@@ -426,16 +471,30 @@ class ContourEditor(SimpleGraphEditor):
         if (old_mode == "apply_contour") != (name == "apply_contour"):
             self._refresh_equipment_brushes()
 
+    def _get_equipment_pen(self, node_id: str):
+        from PySide6.QtGui import QPen
+        if node_id in self._recog_selection:
+            return QPen(QColor(241, 196, 15), 3)   # жёлтый — выбран
+        if node_id in self._applied_nodes:
+            return QPen(QColor(46, 204, 113), 2)   # зелёный — применён
+        node = self.nodes.get(node_id)
+        ann_idx = node.get("ann_idx") if node else None
+        cn = self._ann_to_contour.get(ann_idx) if ann_idx is not None else None
+        if cn and cn.get("polygon_auto"):
+            return QPen(QColor(52, 152, 219), 2)   # синий — распознан
+        return QPen(QColor(149, 165, 166), 2)      # серый
+
     def _refresh_equipment_brushes(self):
-        """Update fill brush on all equipment polygon/bbox items."""
+        """Update fill brush + border pen on all equipment items (3-state)."""
         for node_id, node in self.nodes.items():
             if node.get("type") != "equipment":
                 continue
             brush = self._get_equipment_brush(node)
-            if node_id in self.polygon_items:
-                self.polygon_items[node_id].setBrush(brush)
-            elif node_id in self.bbox_items:
-                self.bbox_items[node_id].setBrush(brush)
+            pen = self._get_equipment_pen(node_id)
+            item = self.polygon_items.get(node_id) or self.bbox_items.get(node_id)
+            if item is not None:
+                item.setBrush(brush)
+                item.setPen(pen)
 
     # =================================================================
     # Polygon editing -- shared mutation
