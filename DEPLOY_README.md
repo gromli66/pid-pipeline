@@ -106,10 +106,17 @@ cd ~/pid_client
 
 **Astra с интернетом:**
 ```bash
-sudo apt-get install -y python3-venv python3-pip libgl1-mesa-glx libegl1 libxkbcommon0 libdbus-1-3 libnss3
+sudo apt-get install -y python3-venv python3-pip libgl1 libegl1 libxkbcommon0 libdbus-1-3 libnss3
 python3 -m venv .venv_ui && source .venv_ui/bin/activate
 pip install -r requirements/ui.txt
 ```
+> На свежей Astra 1.8 `apt` по умолчанию видит только установочный DVD, где нет
+> `python3-venv`/`python3-pip`. Подключи онлайн-репозитории и закомментируй cdrom:
+> создай `/etc/apt/sources.list.d/astra-online.list` со строками
+> `deb https://download.astralinux.ru/astra/stable/1.8_x86-64/repository-main/ 1.8_x86-64 main contrib non-free`
+> и `.../repository-extended/ ...`, закомментируй `deb cdrom:` в `/etc/apt/sources.list`,
+> затем `sudo apt-get update`. Пакет называется `libgl1` (не `libgl1-mesa-glx`).
+> Отдельный `PySide6-WebEngine` ставить не нужно — WebEngine входит в `PySide6_Addons`.
 
 **Astra в закрытом контуре (без интернета)** — офлайн-колёса:
 ```bash

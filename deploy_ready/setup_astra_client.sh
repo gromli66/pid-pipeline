@@ -6,6 +6,10 @@
 # =============================================================================
 set -e
 
+# Перейти в корень репозитория (скрипт лежит в deploy_ready/), чтобы пути
+# requirements/ui.txt, ui/, app/ резолвились независимо от места запуска.
+cd "$(dirname "$0")/.."
+
 SERVER_IP="192.168.1.9"     # при необходимости поменяй на адрес сервера
 
 echo "== 0. Проверка Python =="
@@ -17,7 +21,7 @@ echo "== 1. Системные библиотеки Qt + WebEngine (Chromium) ==
 sudo apt-get update
 sudo apt-get install -y \
   python3 python3-venv python3-pip \
-  libgl1-mesa-glx libegl1 libxkbcommon0 libdbus-1-3 \
+  libgl1 libegl1 libxkbcommon0 libdbus-1-3 \
   libnss3 libxcomposite1 libxdamage1 libxrandr2 libxtst6 libasound2 \
   || echo "ВНИМАНИЕ: часть пакетов не встала — запиши какие, имена в Astra могут отличаться."
 
@@ -26,7 +30,8 @@ python3 -m venv .venv_ui
 source .venv_ui/bin/activate
 pip install --upgrade pip
 pip install -r requirements/ui.txt
-pip install "PySide6-WebEngine>=6.6.0"
+# WebEngine отдельным пакетом ставить НЕ нужно — он входит в PySide6_Addons,
+# который тянется как зависимость PySide6 из requirements/ui.txt.
 
 echo "== 3. Запуск клиента =="
 export PID_API_URL="http://${SERVER_IP}:8000"
