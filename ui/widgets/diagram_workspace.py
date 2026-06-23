@@ -488,6 +488,7 @@ class DiagramWorkspace(QWidget):
         self._pipe_confirmed = False
         self._stop_ocr_poll()
         self._ocr_notified = False
+        self._fxml_save_prompted = True
         self._last_status = DiagramStatus.UPLOADED
 
         self.title_label.setText(f"Диаграмма — {name}")
@@ -548,10 +549,18 @@ class DiagramWorkspace(QWidget):
 
     def _apply_status(self, status: DiagramStatus, error_stage: str = None):
         """Применить статус к бусинам и кнопкам."""
+        _prev_status = self._last_status
         self._last_status = status
         self._update_beads(status)
         self._update_buttons(status, error_stage=error_stage)
         self._update_gif(status)
+
+        # Авто-сохранение FXML на компьютер пользователя сразу после генерации
+        if (status == DiagramStatus.COMPLETED
+                and _prev_status != DiagramStatus.COMPLETED
+                and not getattr(self, "_fxml_save_prompted", True)):
+            self._fxml_save_prompted = True
+            self._download_fxml()
 
         # B6.4: При параллельных статусах — проверить готовность OCR по артефакту
         if not self._ocr_notified and status in (
@@ -1195,13 +1204,12 @@ class DiagramWorkspace(QWidget):
             )
 
     def _start_fxml(self):
-        # Выбор размера страницы (всегда)
-        page_size = self._ask_page_size()
-        if page_size is False:
-            return  # отмена
+        # Без диалога размера — всегда оригинальные пиксели изображения.
+        page_size = None
 
         # Запускаем генерацию (перегенерация если уже COMPLETED)
         try:
+            self._fxml_save_prompted = False
             self.api_client.generate_fxml(self._uid, page_size=page_size)
             self.status_provider.watch(self._uid)
             size_label = page_size or "оригинал"
@@ -1242,9 +1250,12 @@ class DiagramWorkspace(QWidget):
         return mapping.get(item)
 
     def _download_fxml(self):
-        """Скачать сгенерированный FXML файл."""
+        """Скачать сгенерированный FXML на компьютер пользователя."""
+        import os
+        base = (self._diagram_name or "diagram").strip()
+        default_name = (os.path.splitext(base)[0] or "diagram") + ".fxml"
         save_path, _ = QFileDialog.getSaveFileName(
-            self, "Сохранить FXML", "diagram.fxml",
+            self, "Сохранить FXML", default_name,
             "FXML files (*.fxml);;XML files (*.xml);;All files (*)",
         )
         if not save_path:
