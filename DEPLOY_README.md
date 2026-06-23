@@ -1,8 +1,8 @@
-# Развёртывание P&ID Pipeline (Linux-сервер + Astra-клиент)
+# Развёртывание P&ID Pipeline (Linux-сервер + Astra/Windows-клиент)
 
 Проверено на боевом прогоне: облачный Linux-сервер + клиент на Astra Linux, несколько клиентов одновременно.
 
-**Архитектура:** один **сервер** (Docker-стек: PostgreSQL, Redis, FastAPI `api`, CVAT, воркеры) + **клиенты** (десктоп-UI на Astra Linux), подключаются по сети. Все данные (схемы, артефакты, БД) — **на сервере**; клиент тонкий, тянет/отдаёт всё по HTTP.
+**Архитектура:** один **сервер** (Docker-стек: PostgreSQL, Redis, FastAPI `api`, CVAT, воркеры) + **клиенты** (десктоп-UI на Astra Linux или Windows), подключаются по сети. Все данные (схемы, артефакты, БД) — **на сервере**; клиент тонкий, тянет/отдаёт всё по HTTP.
 
 Ветка `deploy` — для **CPU-сервера** (GPU в `docker-compose.yml` отключён). Если на сервере есть NVIDIA GPU — раскомментируй блок `deploy.resources...devices` у `worker`/`worker_ocr` в `docker-compose.yml` и поставь в `.env` `PID_DEVICE=auto`.
 
@@ -162,6 +162,55 @@ cd ~/pid_client && git pull
 - Загрузить схему → детекция → вкладка **CVAT** (логин `admin` / пароль из A7) → разметка → **Сохранить**.
 - Несколько клиентов работают с одним сервером одновременно, видят общие данные.
 
+# ЧАСТЬ C. КЛИЕНТ (Windows)
+
+На клиент ставится **только UI** (как в части B). Модели и Docker не нужны. Скрипт запуска — `deploy_ready/run_ui_client.bat`.
+
+## C1. Код клиента
+Поставь **Git для Windows** (https://git-scm.com) и **Python 3.11** (https://www.python.org — при установке отметь «Add python.exe to PATH»). Затем:
+```bat
+git clone -b deploy https://github.com/gromli66/pid-pipeline.git pid_client
+cd pid_client
+```
+(используются `ui\ app\ modules\ configs\ requirements\`).
+
+## C2. Python 3.11 и зависимости
+```bat
+py -3.11 -m venv .venv_ui
+.venv_ui\Scripts\activate
+pip install -r requirements\ui.txt
+```
+> На Windows отдельные системные библиотеки не нужны (в отличие от Astra) — PySide6 ставит всё через pip, WebEngine входит в `PySide6_Addons`. `scipy` уже в `requirements/ui.txt` (нужен для пересчёта формы контуров).
+
+## C3. Запуск
+
+**Способ 1 — готовый скрипт (рекомендуется).** Один раз вписать IP сервера, дальше просто запускать:
+```bat
+notepad deploy_ready\run_ui_client.bat   :: заменить REPLACE_WITH_SERVER_IP на IP сервера
+deploy_ready\run_ui_client.bat           :: запуск (или двойной клик в Проводнике)
+```
+Скрипт сам переходит в корень репо, активирует `.venv_ui`, выставляет `PID_API_URL`/`PID_GL_BACKEND` и стартует UI.
+
+**Способ 2 — вручную:**
+```bat
+cd pid_client
+.venv_ui\Scripts\activate
+set PID_API_URL=http://<IP-сервера>:8000
+python -m ui.main
+```
+
+**Обновление клиента** (когда вышли правки в ветке `deploy`):
+```bat
+cd pid_client
+git pull
+:: если менялся requirements/ui.txt — обнови зависимости:
+.venv_ui\Scripts\activate && pip install -r requirements\ui.txt
+```
+После `git pull` IP в `run_ui_client.bat` сохраняется (если его не трогали в репозитории); при необходимости впиши заново.
+
+## C4. Работа
+То же, что в B4: список диаграмм слева → клиент подключён к серверу; загрузка схемы → этапы → CVAT-разметка → сохранение. Клиенты Astra и Windows работают с одним сервером одновременно.
+
 ---
 
 # Примечания и эксплуатация
@@ -172,3 +221,4 @@ cd ~/pid_client && git pull
 - **Бэкап:** `docker exec pid_postgres pg_dump -U pid_user pid_pipeline > backup.sql` + `rsync ./storage`. Подробнее — `docs/DEPLOYMENT.md` §11.
 - **Закрытый контур (офлайн):** образы переносить `docker save/load`, модели и колёса — файлами. Скелет упаковки — `deploy_ready/offline_package.sh`.
 - **Остановить/удалить тестовый сервер:** `docker compose down` (данные в томах остаются) или удалить ВМ в панели провайдера.
+- **OCR и контуры (после обновления `deploy`).** OCR по умолчанию **выключен** (`configs/projects/thermohydraulics/thermohydraulics.yaml` → `ocr.enabled: false`): этап пропускается, бусины авто-проматываются. Включить — `true` + `docker compose restart api worker_ocr`. Контуры SAM2 **не считаются автоматически** — распознавание запускается во вкладке контуров кнопками «Распознать выбранные» (Shift+ЛКМ по узлам) / «Распознать все»; на CPU тяжёлый этап, удобнее точечно.
