@@ -132,13 +132,24 @@ python3 -m pip install --user --break-system-packages --no-index --find-links ~/
 Готовый скрипт установки клиента — `deploy_ready/setup_astra_client.sh`.
 
 ## B3. Запуск
-На рабочем столе Astra (в терминале, не по SSH — нужен экран):
+
+Запускать на **рабочем столе Astra** (не по SSH — нужен экран).
+
+**Способ 1 — готовый скрипт (рекомендуется).** Один раз вписать IP сервера, дальше просто запускать:
 ```bash
+nano ~/pid_client/deploy_ready/run_ui_client.sh   # заменить REPLACE_WITH_SERVER_IP на IP сервера
+chmod +x ~/pid_client/deploy_ready/run_ui_client.sh
+~/pid_client/deploy_ready/run_ui_client.sh        # запуск клиента
+```
+Скрипт сам переходит в корень репо, активирует `.venv_ui`, выставляет `PID_API_URL`/`PID_GL_BACKEND` и стартует UI. Для повторных запусков достаточно последней строки (или двойной клик в файловом менеджере → «Запустить»).
+
+**Способ 2 — вручную:**
+```bash
+cd ~/pid_client && source .venv_ui/bin/activate
 export PID_API_URL=http://<IP-сервера>:8000
 export PID_GL_BACKEND=software
 python3 -m ui.main
 ```
-Удобно завернуть в ярлык/скрипт — см. `deploy_ready/run_ui_client.sh` (впиши IP сервера).
 
 ## B4. Работа
 - Список диаграмм слева загрузился → клиент подключён к серверу.
