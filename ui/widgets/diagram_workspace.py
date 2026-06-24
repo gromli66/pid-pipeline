@@ -489,6 +489,7 @@ class DiagramWorkspace(QWidget):
         self._stop_ocr_poll()
         self._ocr_notified = False
         self._fxml_save_prompted = True
+        self._awaiting_fxml_save = False
         self._last_status = DiagramStatus.UPLOADED
 
         self.title_label.setText(f"Диаграмма — {name}")
@@ -555,11 +556,14 @@ class DiagramWorkspace(QWidget):
         self._update_buttons(status, error_stage=error_stage)
         self._update_gif(status)
 
-        # Авто-сохранение FXML на компьютер пользователя сразу после генерации
+        # Армируем сохранение, как только началась генерация FXML
+        if status == DiagramStatus.GENERATING_FXML:
+            self._awaiting_fxml_save = True
+        # Диалог сохранения — надёжно по завершении генерации (Экспорт или авто),
+        # не завязан на переход статуса (на готовой схеме перехода нет).
         if (status == DiagramStatus.COMPLETED
-                and _prev_status != DiagramStatus.COMPLETED
-                and not getattr(self, "_fxml_save_prompted", True)):
-            self._fxml_save_prompted = True
+                and getattr(self, "_awaiting_fxml_save", False)):
+            self._awaiting_fxml_save = False
             self._download_fxml()
 
         # B6.4: При параллельных статусах — проверить готовность OCR по артефакту
@@ -1209,7 +1213,7 @@ class DiagramWorkspace(QWidget):
 
         # Запускаем генерацию (перегенерация если уже COMPLETED)
         try:
-            self._fxml_save_prompted = False
+            self._awaiting_fxml_save = True
             self.api_client.generate_fxml(self._uid, page_size=page_size)
             self.status_provider.watch(self._uid)
             size_label = page_size or "оригинал"
