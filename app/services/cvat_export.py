@@ -42,6 +42,9 @@ class CVATExporter:
         )
     """
     
+    # Возможные имена класса "unknown" в конфигах (есть опечатка 'unknow')
+    _UNKNOWN_NAMES = ("unknow", "unknown")
+
     def __init__(
         self,
         class_names: List[str],
@@ -55,6 +58,13 @@ class CVATExporter:
         """
         self.class_names = class_names
         self.class_mapping = class_mapping or {i: i for i in range(len(class_names))}
+
+    def _unknown_cvat_id(self) -> Optional[int]:
+        """CVAT class_id (0-based) класса unknown, или None если его нет."""
+        for idx, name in enumerate(self.class_names):
+            if name.strip().lower() in self._UNKNOWN_NAMES:
+                return idx
+        return None
     
     def _map_class_id(self, yolo_class_id: int) -> int:
         """Преобразовать YOLO class_id в CVAT class_id."""
@@ -118,12 +128,34 @@ class CVATExporter:
         return "\n".join(self.class_names) + "\n"
     
     def _generate_annotations(self, detections: List[Detection]) -> str:
-        """Генерировать файл аннотаций."""
-        lines = []
-        for det in detections:
-            cvat_class_id = self._map_class_id(det.class_id)
-            line = f"{cvat_class_id} {det.x_center:.6f} {det.y_center:.6f} {det.width:.6f} {det.height:.6f}"
-            lines.append(line)
+        """
+        Генерировать файл аннотаций.
+
+        Порядок строк: сначала узлы unknown, затем остальные, отсортированные
+        по CVAT class_id (по возрастанию). Внутри одного класса сохраняется
+        исходный порядок (стабильная сортировка). Это нужно для удобства
+        валидации в CVAT.
+        """
+        unknown_id = self._unknown_cvat_id()
+
+        # Считаем CVAT class_id один раз, сохраняем исходный индекс для стабильности
+        mapped = [
+            (self._map_class_id(det.class_id), i, det)
+            for i, det in enumerate(detections)
+        ]
+
+        def sort_key(item):
+            cvat_class_id, orig_idx, _ = item
+            is_unknown = unknown_id is not None and cvat_class_id == unknown_id
+            # unknown -> группа 0 (первыми), остальные -> группа 1 и сортировка по классу
+            return (0 if is_unknown else 1, cvat_class_id, orig_idx)
+
+        mapped.sort(key=sort_key)
+
+        lines = [
+            f"{cvat_class_id} {det.x_center:.6f} {det.y_center:.6f} {det.width:.6f} {det.height:.6f}"
+            for cvat_class_id, _, det in mapped
+        ]
         return "\n".join(lines) + "\n" if lines else ""
     
     def export_coco(

@@ -115,6 +115,25 @@ class AdvancedGraphTab(SimpleGraphTab):
 
         self._add_separator(toolbar)
 
+        # --- Размер объектов (режим, открывает левую панель) ---
+        self.btn_resize_objects = QPushButton("Размер объектов")
+        self.btn_resize_objects.setCheckable(True)
+        self.btn_resize_objects.setToolTip(
+            "Массовое изменение размеров объектов одного класса.\n"
+            "Слева открывается панель: выбор класса, набор экземпляров, "
+            "ширина/высота (боксы) или масштаб (полигоны).\n"
+            "Ctrl+ЛКМ — добавить экземпляр в набор, Ctrl+ПКМ — убрать, "
+            "Shift+рамка — добавить группу."
+        )
+        self.btn_resize_objects.setStyleSheet(
+            "QPushButton:checked { background-color: #16a085; color: white; }"
+        )
+        self.btn_resize_objects.clicked.connect(lambda: self._set_mode("resize_objects"))
+        self.mode_group.addButton(self.btn_resize_objects)
+        toolbar.addWidget(self.btn_resize_objects)
+
+        self._add_separator(toolbar)
+
         # --- Режимы отображения/правки (взаимоисключающие) ---
         self.regime_group = QButtonGroup(self)
         self.regime_group.setExclusive(True)
@@ -186,8 +205,50 @@ class AdvancedGraphTab(SimpleGraphTab):
             "edit_waypoint": self.btn_waypoints,
             "edit_edge_color": self.btn_edge_color,
             "edit_edge_size": self.btn_edge_size,
+            "resize_objects": self.btn_resize_objects,
         })
         return btn_map
+
+    # =================================================================
+    # Панель «Размер объектов»
+    # =================================================================
+
+    def _ensure_resize_panel(self):
+        if getattr(self, "_resize_panel", None) is None:
+            from ui.widgets.object_resize_panel import ObjectResizePanel
+            p = ObjectResizePanel(self)
+            p.on_class_changed = lambda name: self._editor and self._editor.set_resize_class(name)
+            p.on_select_all = lambda: self._editor and self._editor.resize_select_all()
+            p.on_select_one = lambda: self._editor and self._editor.resize_select_one_mode()
+            p.on_filter = lambda kind: self._editor and self._editor.resize_filter(kind)
+            p.on_preview = lambda w, h, s: self._editor and self._editor.preview_resize(w, h, s)
+            p.on_apply = lambda w, h, s: self._editor and self._editor.apply_resize(w, h, s)
+            self._resize_panel = p
+        return self._resize_panel
+
+    def _update_resize_panel_bounds(self):
+        p = getattr(self, "_resize_panel", None)
+        if p is None or self._editor is None:
+            return
+        try:
+            geo = self._editor.geometry()
+            p.set_bounds(geo.top(), geo.height())
+        except Exception:
+            pass
+
+    def _show_resize_panel(self, visible: bool):
+        p = self._ensure_resize_panel()
+        self._update_resize_panel_bounds()
+        if visible:
+            p.show_panel()
+        else:
+            p.hide_panel()
+
+    def _resize_classes_cb(self, names, current):
+        self._ensure_resize_panel().set_classes(names, current)
+
+    def _resize_state_cb(self, kind, count, mw, mh):
+        self._ensure_resize_panel().set_state(kind, count, mw, mh)
 
     # =================================================================
     # Второй ряд тулбара: изменение ребра (цвет / размер)
@@ -384,6 +445,11 @@ class AdvancedGraphTab(SimpleGraphTab):
             self._editor.regime_callback = self._on_regime_changed
             self._editor.set_display_regime("ocr")
         self._apply_regime_ui("ocr")
+        # Колбэки панели «Размер объектов»
+        if self._editor is not None and hasattr(self._editor, "resize_panel_show_cb"):
+            self._editor.resize_panel_show_cb = self._show_resize_panel
+            self._editor.resize_panel_classes_cb = self._resize_classes_cb
+            self._editor.resize_panel_state_cb = self._resize_state_cb
 
     # =================================================================
     # Оформление: + цвета рёбер по стадиям

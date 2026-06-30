@@ -242,3 +242,30 @@ class EditWaypointHandler(ModeHandler):
         elif ed._dragging_endpoint:
             ed._end_endpoint_drag()
         return True
+
+
+class ResizeObjectsHandler(ModeHandler):
+    """Режим массового изменения размеров объектов одного класса.
+
+    Набор экземпляров правится жестами (перехватываются в редакторе):
+      • Ctrl+ЛКМ по экземпляру класса — добавить в набор;
+      • Ctrl+ПКМ по экземпляру — убрать из набора;
+      • Shift+рамка — добавить все экземпляры класса из рамки.
+    Сами контролы (класс, размеры, масштаб) — в левой панели вкладки.
+    """
+
+    def on_enter(self, ed):
+        ed._enter_resize_objects()
+
+    def on_exit(self, ed):
+        ed._exit_resize_objects()
+
+    def on_press(self, ed, x, y, event):
+        # Ctrl+ЛКМ по пустому месту попадает сюда — игнорируем.
+        return True
+
+    def on_move(self, ed, x, y, event):
+        return True
+
+    def on_release(self, ed, x, y, event):
+        return True

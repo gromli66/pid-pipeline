@@ -996,6 +996,80 @@ def bbox_side_midpoint(bbox: List[float], side: str) -> Tuple[float, float]:
     return (mid_x, mid_y)
 
 
+def _project_point_to_segment(
+    px: float, py: float, ax: float, ay: float, bx: float, by: float
+) -> Tuple[float, float, float]:
+    """Ближайшая точка на отрезке AB к точке P.
+
+    Returns:
+        (x, y, dist2) — координаты проекции и квадрат расстояния до неё.
+    """
+    abx, aby = bx - ax, by - ay
+    ab2 = abx * abx + aby * aby
+    if ab2 == 0.0:
+        t = 0.0
+    else:
+        t = ((px - ax) * abx + (py - ay) * aby) / ab2
+        t = max(0.0, min(1.0, t))
+    cx, cy = ax + t * abx, ay + t * aby
+    d2 = (px - cx) ** 2 + (py - cy) ** 2
+    return cx, cy, d2
+
+
+def project_point_to_bbox_border(bbox: List[float], x: float, y: float) -> Tuple[float, float]:
+    """Ближайшая точка на периметре прямоугольника к точке (x, y).
+
+    Позволяет свободно «скользить» точкой прикрепления вдоль границы bbox,
+    а не только по центрам сторон.
+
+    Args:
+        bbox: [x1, y1, x2, y2]
+        x, y: исходная точка
+
+    Returns:
+        (x, y) на периметре bbox
+    """
+    x1, y1, x2, y2 = bbox
+    edges = [
+        (x1, y1, x2, y1),  # top
+        (x2, y1, x2, y2),  # right
+        (x2, y2, x1, y2),  # bottom
+        (x1, y2, x1, y1),  # left
+    ]
+    best = None
+    for ax, ay, bx, by in edges:
+        cx, cy, d2 = _project_point_to_segment(x, y, ax, ay, bx, by)
+        if best is None or d2 < best[2]:
+            best = (cx, cy, d2)
+    return best[0], best[1]
+
+
+def project_point_to_polygon_border(
+    poly_flat: List[float], x: float, y: float
+) -> Tuple[float, float]:
+    """Ближайшая точка на периметре полигона к точке (x, y).
+
+    Args:
+        poly_flat: плоский список координат [x1, y1, x2, y2, ...]
+        x, y: исходная точка
+
+    Returns:
+        (x, y) на периметре полигона (или исходная точка, если полигон вырожден)
+    """
+    pts = [(poly_flat[i], poly_flat[i + 1]) for i in range(0, len(poly_flat) - 1, 2)]
+    if len(pts) < 2:
+        return x, y
+    best = None
+    n = len(pts)
+    for i in range(n):
+        ax, ay = pts[i]
+        bx, by = pts[(i + 1) % n]  # замыкаем контур
+        cx, cy, d2 = _project_point_to_segment(x, y, ax, ay, bx, by)
+        if best is None or d2 < best[2]:
+            best = (cx, cy, d2)
+    return best[0], best[1]
+
+
 def get_node_geometry(node: dict) -> dict:
     """Геометрия узла: приоритет polygon > bbox > point.
 

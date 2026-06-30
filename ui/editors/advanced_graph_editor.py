@@ -26,7 +26,7 @@ from ui.editors.simple_graph_editor import SimpleGraphEditor
 from ui.editors.mode_handlers.advanced_handlers import (
     AddEdgeWithWaypointsHandler,
     OptimizeEdgeHandler, DragNodeHandler, MultiSelectHandler, EditWaypointHandler,
-    EditEdgeColorHandler, EditEdgeSizeHandler,
+    EditEdgeColorHandler, EditEdgeSizeHandler, ResizeObjectsHandler,
 )
 from ui.editors.commands.advanced_commands import (
     OptimizeEdgeCommand, DragNodeCommand, BatchDragCommand,
@@ -35,6 +35,7 @@ from ui.editors.commands.advanced_commands import (
 )
 from ui.editors.graph_geometry import (
     bbox_exit_side, bbox_side_midpoint, closest_bbox_side,
+    project_point_to_bbox_border, project_point_to_polygon_border,
     get_node_geometry, compute_edge_perpendicularity,
     connect_bbox_bbox, connect_bbox_polygon, connect_polygon_polygon,
     connect_point_bbox, connect_point_polygon,
@@ -66,6 +67,7 @@ class AdvancedGraphEditor(SimpleGraphEditor):
         self.register_mode("edit_waypoint", EditWaypointHandler())
         self.register_mode("edit_edge_color", EditEdgeColorHandler())
         self.register_mode("edit_edge_size", EditEdgeSizeHandler())
+        self.register_mode("resize_objects", ResizeObjectsHandler())
 
         # ── Режим изменения ребра (цвет / размер) ──
         # Текущий «кисточный» цвет и размер, которыми красятся/масштабируются рёбра.
@@ -137,6 +139,20 @@ class AdvancedGraphEditor(SimpleGraphEditor):
         self.display_regime: str = "ocr"
         # Callback в таб для синхронизации кнопок-флагов режима.
         self.regime_callback: Optional[callable] = None
+
+        # ── Режим «Размер объектов» ──
+        self._resize_class: str | None = None      # выбранный класс
+        self._resize_sel: set[str] = set()         # node_id экземпляров в наборе
+        self._resize_frames: list = []             # QGraphicsItem жёлтых рамок
+        # Базлайн для живого превью (геометрия до изменения + снимок модели для undo).
+        self._resize_base: dict = {}               # node_id → исходная геометрия
+        self._resize_model_base = None             # snapshot модели до превью
+        # Колбэки в таб (назначаются при готовности редактора):
+        self.resize_panel_show_cb: Optional[callable] = None     # (visible: bool)
+        self.resize_panel_classes_cb: Optional[callable] = None  # (names, current)
+        self.resize_panel_state_cb: Optional[callable] = None     # (kind, count, mw, mh)
+        # Зазор при расталкивании наслоившихся боксов (px).
+        self.RESIZE_SPREAD_GAP: int = 8
 
     # =================================================================
     # Overrides — Base/Simple hooks
@@ -709,6 +725,16 @@ class AdvancedGraphEditor(SimpleGraphEditor):
 
         Полная логика из graph_editor.py:2497-2595.
         """
+        # Ручной режим: точки прикрепления заданы пользователем вручную.
+        # Не пересчитываем маршрут к ортогональности — только удерживаем
+        # точки на границе узла (на случай, если узел подвинули).
+        if edge_data.get('_manual_route'):
+            self._reproject_manual_endpoints(edge_data)
+            key = self.model.edge_key(edge_data['source'], edge_data['target'])
+            self._update_edge_path(key)
+            self.edge_perp_scores[key] = {'is_good': True, 'score': 1.0, 'source_angle': 0}
+            return
+
         src_id, tgt_id = edge_data['source'], edge_data['target']
         src = self.nodes[src_id]
         tgt = self.nodes[tgt_id]
@@ -786,6 +812,24 @@ class AdvancedGraphEditor(SimpleGraphEditor):
             self.edge_perp_scores[edge_key] = perp_info
         else:
             self.edge_perp_scores[edge_key] = {'is_good': True, 'score': 1.0, 'source_angle': 0}
+
+    def _reproject_manual_endpoints(self, edge_data: dict):
+        """Удержать вручную заданные точки прикрепления на границе узлов.
+
+        Вызывается при пересчёте ребра в ручном режиме (_manual_route): если
+        узел сдвинули/изменили, точка перепроецируется на новый периметр, но
+        маршрут остаётся прямым (waypoints не трогаем)."""
+        for endpoint, point_key, side_key in (
+            ('source', 'source_point', '_src_side'),
+            ('target', 'target_point', '_tgt_side'),
+        ):
+            pt = edge_data.get(point_key)
+            if not pt:
+                continue
+            node_id = edge_data['source'] if endpoint == 'source' else edge_data['target']
+            px, py = self._project_to_node_border(node_id, pt[1], pt[0])
+            edge_data[point_key] = [py, px]
+            edge_data[side_key] = closest_bbox_side(self._get_node_bbox(node_id), px, py)
 
     # =================================================================
     # Multi-select
@@ -876,6 +920,17 @@ class AdvancedGraphEditor(SimpleGraphEditor):
 
     def _on_shift_lmb_press(self, x: float, y: float):
         """Shift+ЛКМ — toggle узел/ребро или начать rubber band."""
+        # Режим «Размер объектов»: Shift по экземпляру класса добавляет его,
+        # по пустому месту — начинает рамку (рамка добавит экземпляры класса).
+        if self._current_mode == "resize_objects":
+            nid = self.find_node_at(x, y)
+            if nid and self.nodes.get(nid, {}).get('class_name') == self._resize_class \
+                    and self.nodes[nid].get('type') == 'equipment':
+                self._resize_sel.add(nid)
+                self._update_resize_panel()
+                return
+            self._start_rubber_band(x, y)
+            return
         # В режиме style — только рёбра (узлы не трогаем)
         if not self._edge_only_selection():
             clicked = self.find_node_at(x, y)
@@ -921,6 +976,19 @@ class AdvancedGraphEditor(SimpleGraphEditor):
     def _rubber_band_select(self, x1, y1, x2, y2, extend=False):
         rx, ry = min(x1, x2), min(y1, y2)
         rw, rh = abs(x2 - x1), abs(y2 - y1)
+
+        # Режим «Размер объектов»: рамка добавляет в набор только экземпляры
+        # выбранного класса, чьи центроиды попали внутрь.
+        if self._current_mode == "resize_objects":
+            for nid in self._instances_of_class(self._resize_class):
+                node = self.nodes.get(nid)
+                if not node:
+                    continue
+                cx, cy = node['centroid'][1], node['centroid'][0]
+                if rx <= cx <= rx + rw and ry <= cy <= ry + rh:
+                    self._resize_sel.add(nid)
+            self._update_resize_panel()
+            return
 
         if not extend:
             self.selected_nodes.clear()
@@ -1071,6 +1139,17 @@ class AdvancedGraphEditor(SimpleGraphEditor):
 
         В режимах изменения ребра Ctrl+ПКМ НЕ удаляет, а убирает ребро из обводки.
         """
+        # Режим «Размер объектов»: Ctrl+ПКМ убирает экземпляр из набора (не удаляет узел).
+        if self._current_mode == "resize_objects":
+            nid = self.find_node_at(x, y)
+            if nid and nid in self._resize_sel:
+                self._resize_sel.discard(nid)
+                self._update_resize_panel()
+                self.update_status(f"Убран {nid} (в наборе {len(self._resize_sel)})")
+            else:
+                self.update_status("Под курсором нет экземпляра из набора")
+            return
+
         if self._current_mode in ("edit_edge_color", "edit_edge_size"):
             edge_key, _ = self.find_nearest_edge(x, y, threshold=20.0)
             if edge_key and edge_key in self.selected_edges:
@@ -1407,6 +1486,8 @@ class AdvancedGraphEditor(SimpleGraphEditor):
         affected = [e for e in self.edges_data if e['source'] == node_id or e['target'] == node_id]
 
         for e in affected:
+            if e.get('_manual_route'):
+                continue  # ручные точки прикрепления не пересчитываем
             sid, tid = e['source'], e['target']
             s, t = self.nodes[sid], self.nodes[tid]
             s_cx, s_cy = s['centroid'][1], s['centroid'][0]
@@ -1565,6 +1646,7 @@ class AdvancedGraphEditor(SimpleGraphEditor):
             idx = sides_cycle.index(current_side) if current_side in sides_cycle else 0
             new_side = sides_cycle[(idx + 1) % 4]
             edge_data[side_key] = new_side
+            edge_data.pop('_manual_route', None)  # явный пересчёт сбрасывает ручной режим
             self._recalculate_edge(edge_data, keep_sides=True)
             self._refresh_waypoint_markers_for_edge(key)
 
@@ -1578,6 +1660,7 @@ class AdvancedGraphEditor(SimpleGraphEditor):
         if not edge_data:
             return
         old_wp = [wp.copy() for wp in edge_data.get('waypoints', [])]
+        edge_data.pop('_manual_route', None)  # явный авто-роутинг сбрасывает ручной режим
         self._recalculate_edge(edge_data)
 
         cmd = AutoLRouteCommand(self.model, self, edge_key, old_wp)
@@ -1647,21 +1730,51 @@ class AdvancedGraphEditor(SimpleGraphEditor):
             snap_cmd.execute()
             self._ep_snap_cmd = snap_cmd
 
+    def _project_to_node_border(self, node_id: str, x: float, y: float):
+        """Спроецировать точку (x, y) на периметр узла (полигон, иначе bbox).
+
+        Используется для свободного перемещения точки прикрепления вдоль
+        границы узла, не ограничиваясь центрами сторон.
+        """
+        node = self.nodes.get(node_id)
+        geom = get_node_geometry(node) if node else None
+        if geom and geom['type'] == 'polygon':
+            return project_point_to_polygon_border(geom['data'], x, y)
+        bbox = self._get_node_bbox(node_id)
+        return project_point_to_bbox_border(bbox, x, y)
+
     def _drag_endpoint_to(self, x: float, y: float):
+        """Ручное перемещение точки прикрепления.
+
+        Точка свободно скользит по периметру узла (bbox/полигон). Линия НЕ
+        пересчитывается к ортогональности: промежуточные waypoints убираются,
+        остаётся прямой отрезок до другого конца. Ставится флаг _manual_route,
+        чтобы последующие пересчёты не возвращали точку в центр стороны.
+        """
         if not self._dragging_endpoint:
             return
         edge_key, endpoint = self._dragging_endpoint
         edge_data = self.model.find_edge_data(edge_key)
-        if edge_data:
-            node_id = edge_data['source'] if endpoint == 'source' else edge_data['target']
-            bbox = self._get_node_bbox(node_id)
-            new_side = closest_bbox_side(bbox, x, y)
-            side_key = '_src_side' if endpoint == 'source' else '_tgt_side'
-            if edge_data.get(side_key) != new_side:
-                edge_data[side_key] = new_side
-                self._recalculate_edge(edge_data, keep_sides=True)
-                self._refresh_waypoint_markers_for_edge(edge_key)
-                self._refresh_endpoint_markers()
+        if not edge_data:
+            return
+
+        node_id = edge_data['source'] if endpoint == 'source' else edge_data['target']
+        px, py = self._project_to_node_border(node_id, x, y)
+
+        point_key = 'source_point' if endpoint == 'source' else 'target_point'
+        side_key = '_src_side' if endpoint == 'source' else '_tgt_side'
+
+        edge_data[point_key] = [py, px]  # формат [y, x]
+        # сторону держим в синхроне для прочей логики, но маршрут не считаем
+        edge_data[side_key] = closest_bbox_side(self._get_node_bbox(node_id), px, py)
+        edge_data['waypoints'] = []          # ручной режим → прямая линия
+        edge_data['_manual_route'] = True
+
+        key = self.model.edge_key(edge_data['source'], edge_data['target'])
+        self._update_edge_path(key)
+        self.edge_perp_scores[key] = {'is_good': True, 'score': 1.0, 'source_angle': 0}
+        self._refresh_waypoint_markers_for_edge(key)
+        self._refresh_endpoint_markers()
 
     def _end_endpoint_drag(self):
         if hasattr(self, '_ep_snap_cmd') and self._ep_snap_cmd:
@@ -1765,6 +1878,418 @@ class AdvancedGraphEditor(SimpleGraphEditor):
         self.update_statistics()
 
     # =================================================================
+    # Режим «Размер объектов» — массовое изменение размеров класса
+    # =================================================================
+
+    @staticmethod
+    def _node_geom_kind(node: dict) -> str:
+        """'poly' если у узла есть полигон (segmentation), иначе 'box'."""
+        seg = node.get('segmentation')
+        if seg and isinstance(seg, list) and len(seg) >= 6:
+            return 'poly'
+        return 'box'
+
+    def get_present_equipment_classes(self) -> list:
+        """Классы equipment, реально присутствующие на схеме (отсортировано)."""
+        names = {
+            n.get('class_name') for n in self.nodes.values()
+            if n.get('type') == 'equipment' and n.get('class_name')
+        }
+        return sorted(names)
+
+    def _instances_of_class(self, name: str | None) -> list:
+        """node_id всех equipment-экземпляров класса name."""
+        if not name:
+            return []
+        return [
+            nid for nid, n in self.nodes.items()
+            if n.get('type') == 'equipment' and n.get('class_name') == name
+        ]
+
+    # ── вход/выход в режим ──
+
+    def _enter_resize_objects(self):
+        classes = self.get_present_equipment_classes()
+        if self._resize_class not in classes:
+            self._resize_class = classes[0] if classes else None
+        if callable(self.resize_panel_classes_cb):
+            self.resize_panel_classes_cb(classes, self._resize_class)
+        if callable(self.resize_panel_show_cb):
+            self.resize_panel_show_cb(True)
+        if self._resize_class:
+            self.resize_select_all()
+        else:
+            self._update_resize_panel()
+            self.update_status("На схеме нет узлов оборудования")
+
+    def _exit_resize_objects(self):
+        self._clear_resize_frames()
+        self._resize_sel = set()
+        if callable(self.resize_panel_show_cb):
+            self.resize_panel_show_cb(False)
+
+    # ── управление набором (вызывается из панели / жестами) ──
+
+    def set_resize_class(self, name: str):
+        """Выбран класс в панели → по умолчанию выделить все его экземпляры."""
+        self._resize_class = name
+        self.resize_select_all()
+
+    def resize_select_all(self):
+        self._resize_sel = set(self._instances_of_class(self._resize_class))
+        self._update_resize_panel()
+        self.update_status(
+            f"Класс «{self._resize_class}»: в наборе {len(self._resize_sel)}"
+        )
+
+    def resize_select_one_mode(self):
+        """Сброс набора — дальше добавлять Ctrl+ЛКМ / Shift+рамкой."""
+        self._resize_sel = set()
+        self._update_resize_panel()
+        self.update_status("Набор пуст — добавляйте Ctrl+ЛКМ или Shift+рамкой")
+
+    def resize_filter(self, kind: str):
+        """Оставить в наборе только боксы ('box') или только полигоны ('poly')."""
+        keep = 'poly' if kind == 'poly' else 'box'
+        self._resize_sel = {
+            nid for nid in self._resize_sel
+            if self.nodes.get(nid) and self._node_geom_kind(self.nodes[nid]) == keep
+        }
+        self._update_resize_panel()
+        self.update_status(f"Оставлены только {'полигоны' if keep == 'poly' else 'боксы'}: "
+                           f"{len(self._resize_sel)}")
+
+    def _resize_handle_ctrl_click(self, x: float, y: float):
+        """Ctrl+ЛКМ — добавить экземпляр класса под курсором в набор."""
+        nid = self.find_node_at(x, y)
+        if not nid:
+            return
+        node = self.nodes.get(nid, {})
+        if node.get('type') == 'equipment' and node.get('class_name') == self._resize_class:
+            self._resize_sel.add(nid)
+            self._update_resize_panel()
+            self.update_status(f"Добавлен {nid} (в наборе {len(self._resize_sel)})")
+        else:
+            self.update_status("Это не экземпляр выбранного класса")
+
+    # ── геометрия набора / медианы / панель ──
+
+    def _resize_kind(self) -> str:
+        """Геометрия текущего набора: 'box' | 'poly' | 'mixed' | 'empty'."""
+        if not self._resize_sel:
+            return 'empty'
+        has_box = has_poly = False
+        for nid in self._resize_sel:
+            n = self.nodes.get(nid)
+            if not n:
+                continue
+            if self._node_geom_kind(n) == 'poly':
+                has_poly = True
+            else:
+                has_box = True
+        if has_box and has_poly:
+            return 'mixed'
+        return 'poly' if has_poly else 'box'
+
+    def _resize_medians(self):
+        """Медианы по боксам набора в ориентационно-нормированных осях.
+
+        Возвращает (short, long): short → поле «Ширина», long → поле «Высота».
+        Длинная/короткая ось берётся от текущих размеров каждого бокса, чтобы
+        смесь вертикальных и горизонтальных экземпляров не «усреднялась» в кашу.
+        """
+        shorts, longs = [], []
+        for nid in self._resize_sel:
+            n = self.nodes.get(nid)
+            if not n or self._node_geom_kind(n) == 'poly':
+                continue
+            bb = n.get('bbox')
+            if bb and len(bb) == 4:
+                w, h = bb[2] - bb[0], bb[3] - bb[1]
+                shorts.append(min(w, h))
+                longs.append(max(w, h))
+        if not shorts:
+            return (None, None)
+        return (int(round(statistics.median(shorts))),
+                int(round(statistics.median(longs))))
+
+    def _update_resize_panel(self):
+        """Перерисовать рамки + обновить контролы панели под текущий набор."""
+        # Набор изменился → базлайн пересоберётся при следующем превью.
+        self._resize_model_base = None
+        self._resize_base = {}
+        self._redraw_resize_frames()
+        if not callable(self.resize_panel_state_cb):
+            return
+        kind = self._resize_kind()
+        mw, mh = self._resize_medians() if kind == 'box' else (None, None)
+        self.resize_panel_state_cb(kind, len(self._resize_sel), mw, mh)
+
+    # ── живое превью размеров ──
+
+    def _capture_resize_base(self):
+        """Зафиксировать базовую геометрию набора + снимок модели (для undo)."""
+        self._resize_model_base = self.model.snapshot()
+        self._resize_base = {}
+        for nid in self._resize_sel:
+            n = self.nodes.get(nid)
+            if not n:
+                continue
+            self._resize_base[nid] = {
+                'centroid': list(n['centroid']),
+                'bbox': list(n['bbox']) if n.get('bbox') else None,
+                'segmentation': list(n['segmentation']) if n.get('segmentation') else None,
+                'area': n.get('area'),
+            }
+
+    def _apply_sizes_from_base(self, width, height, scale, kind):
+        """Применить размеры к набору, отталкиваясь от зафиксированного базлайна.
+
+        Идемпотентно: повторные вызовы (живой бегунок) не накапливают масштаб.
+        """
+        for nid, base in self._resize_base.items():
+            n = self.nodes.get(nid)
+            if not n:
+                continue
+            if kind == 'box' and width and height:
+                n['centroid'] = list(base['centroid'])
+                if base['bbox']:
+                    n['bbox'] = list(base['bbox'])
+                self._resize_node_box(n, float(width), float(height))
+            elif kind == 'poly' and scale and base['segmentation']:
+                n['centroid'] = list(base['centroid'])
+                n['segmentation'] = list(base['segmentation'])
+                n['area'] = base['area']
+                self._resize_node_poly(n, float(scale))
+
+    def _refresh_node_visual(self, node_id: str):
+        """Обновить визуал узла (bbox/полигон/маркер) по текущим данным."""
+        node = self.nodes.get(node_id)
+        if not node:
+            return
+        bb = node.get('bbox')
+        if node_id in self.bbox_items and bb and len(bb) == 4:
+            self.bbox_items[node_id].setRect(bb[0], bb[1], bb[2] - bb[0], bb[3] - bb[1])
+        seg = node.get('segmentation')
+        if node_id in self.polygon_items and seg and len(seg) >= 6:
+            path = QPainterPath()
+            path.moveTo(seg[0], seg[1])
+            for i in range(2, len(seg) - 1, 2):
+                path.lineTo(seg[i], seg[i + 1])
+            path.closeSubpath()
+            self.polygon_items[node_id].setPath(path)
+        if node_id in self.node_items:
+            cx, cy = node['centroid'][1], node['centroid'][0]
+            r = (self.EQUIPMENT_MARKER_RADIUS if node.get('type') == 'equipment'
+                 else self.CONNECTOR_MARKER_RADIUS)
+            self.node_items[node_id].setRect(cx - r, cy - r, r * 2, r * 2)
+
+    def preview_resize(self, width=None, height=None, scale=None):
+        """Живое превью: визуально меняет размеры набора без перестройки связей.
+
+        Связи/соседи пересчитываются только по кнопке «Применить» (apply_resize).
+        """
+        if not self._resize_sel:
+            return
+        kind = self._resize_kind()
+        if kind in ('mixed', 'empty'):
+            return
+        if self._resize_model_base is None:
+            self._capture_resize_base()
+        self._apply_sizes_from_base(width, height, scale, kind)
+        for nid in self._resize_sel:
+            self._refresh_node_visual(nid)
+        self._redraw_resize_frames()
+
+    # ── жёлтые рамки ──
+
+    def _clear_resize_frames(self):
+        for it in self._resize_frames:
+            try:
+                self.scene.removeItem(it)
+            except Exception:
+                pass
+        self._resize_frames.clear()
+
+    def _redraw_resize_frames(self):
+        self._clear_resize_frames()
+        pen = QPen(QColor(255, 215, 0), 2.5)
+        for nid in self._resize_sel:
+            node = self.nodes.get(nid)
+            if not node:
+                continue
+            seg = node.get('segmentation')
+            if seg and isinstance(seg, list) and len(seg) >= 6:
+                path = QPainterPath()
+                path.moveTo(seg[0], seg[1])
+                for i in range(2, len(seg) - 1, 2):
+                    path.lineTo(seg[i], seg[i + 1])
+                path.closeSubpath()
+                item = QGraphicsPathItem(path)
+            else:
+                bb = node.get('bbox')
+                if not bb or len(bb) != 4:
+                    cx, cy = node['centroid'][1], node['centroid'][0]
+                    r = self.EQUIPMENT_MARKER_RADIUS
+                    bb = [cx - r, cy - r, cx + r, cy + r]
+                item = QGraphicsRectItem(bb[0], bb[1], bb[2] - bb[0], bb[3] - bb[1])
+            item.setPen(pen)
+            item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+            item.setZValue(9)
+            self.scene.addItem(item)
+            self._resize_frames.append(item)
+
+    # ── применение размеров ──
+
+    def _resize_node_box(self, node: dict, short: float, long_: float):
+        """Задать боксу размер вокруг центроида с сохранением ориентации.
+
+        short — короткая ось (поле «Ширина»), long_ — длинная (поле «Высота»).
+        Длинное значение кладётся на ту экранную ось, что у бокса сейчас длиннее:
+        вертикальный/квадрат → long_ по высоте; горизонтальный → long_ по ширине.
+        """
+        cy, cx = node['centroid'][0], node['centroid'][1]
+        bb = node.get('bbox')
+        cur_w = (bb[2] - bb[0]) if (bb and len(bb) == 4) else 0
+        cur_h = (bb[3] - bb[1]) if (bb and len(bb) == 4) else 0
+        if cur_h >= cur_w:          # вертикальный или квадрат
+            new_w, new_h = short, long_
+        else:                        # горизонтальный
+            new_w, new_h = long_, short
+        node['bbox'] = [cx - new_w / 2, cy - new_h / 2, cx + new_w / 2, cy + new_h / 2]
+        node['area'] = new_w * new_h
+
+    def _resize_node_poly(self, node: dict, scale: float):
+        """Масштабировать полигон вокруг центроида с сохранением формы."""
+        seg = node.get('segmentation')
+        if not seg or len(seg) < 6:
+            return
+        cy, cx = node['centroid'][0], node['centroid'][1]
+        new, xs, ys = [], [], []
+        for i in range(0, len(seg) - 1, 2):
+            nx = cx + (seg[i] - cx) * scale
+            ny = cy + (seg[i + 1] - cy) * scale
+            new.extend((nx, ny))
+            xs.append(nx)
+            ys.append(ny)
+        node['segmentation'] = new
+        node['bbox'] = [min(xs), min(ys), max(xs), max(ys)]
+        if node.get('area'):
+            node['area'] = node['area'] * (scale * scale)
+
+    def _move_node_geom(self, node_id: str, dx: float, dy: float):
+        """Сдвинуть узел (centroid + bbox + segmentation) на (dx, dy)."""
+        node = self.nodes.get(node_id)
+        if not node:
+            return
+        node['centroid'] = [node['centroid'][0] + dy, node['centroid'][1] + dx]
+        bb = node.get('bbox')
+        if bb and len(bb) == 4:
+            node['bbox'] = [bb[0] + dx, bb[1] + dy, bb[2] + dx, bb[3] + dy]
+        seg = node.get('segmentation')
+        if seg and len(seg) >= 6:
+            node['segmentation'] = [
+                seg[i] + (dx if i % 2 == 0 else dy) for i in range(len(seg))
+            ]
+
+    def _spread_overlaps(self, grower_ids: list):
+        """Расталкивание наслоений: соседи изменённых боксов «отплывают».
+
+        Направление — по доминирующей оси взаимного расположения центроидов
+        (сосед снизу → вниз, справа → вправо). Сдвиг = глубина пересечения по
+        этой оси + зазор. Растущие узлы — якоря (не двигаются). Каскадно.
+        """
+        gap = self.RESIZE_SPREAD_GAP
+        growers = set(grower_ids)
+
+        def real_bbox(nid):
+            n = self.nodes.get(nid)
+            bb = n.get('bbox') if n else None
+            return bb if (bb and len(bb) == 4) else None
+
+        active = list(grower_ids)
+        MAX_PASSES = 50
+        for _ in range(MAX_PASSES):
+            any_push = False
+            for gid in list(active):
+                gb = real_bbox(gid)
+                if not gb:
+                    continue
+                gcx, gcy = (gb[0] + gb[2]) / 2, (gb[1] + gb[3]) / 2
+                for nid, node in self.nodes.items():
+                    if nid == gid or nid in growers:
+                        continue  # якоря не двигаем
+                    nb = real_bbox(nid)
+                    if not nb:
+                        continue
+                    ox = min(gb[2], nb[2]) - max(gb[0], nb[0])
+                    oy = min(gb[3], nb[3]) - max(gb[1], nb[1])
+                    if ox <= 0 or oy <= 0:
+                        continue  # нет наслоения
+                    ncx, ncy = (nb[0] + nb[2]) / 2, (nb[1] + nb[3]) / 2
+                    ddx, ddy = ncx - gcx, ncy - gcy
+                    if abs(ddy) >= abs(ddx):
+                        sign = 1 if ddy >= 0 else -1
+                        self._move_node_geom(nid, 0, sign * (oy + gap))
+                    else:
+                        sign = 1 if ddx >= 0 else -1
+                        self._move_node_geom(nid, sign * (ox + gap), 0)
+                    if nid not in active:
+                        active.append(nid)
+                    any_push = True
+            if not any_push:
+                break
+
+    def apply_resize(self, width=None, height=None, scale=None):
+        """Применить размеры к набору + расталкивание + auto_fix рёбер."""
+        if not self._resize_sel:
+            self.update_status("Набор пуст")
+            return
+        kind = self._resize_kind()
+        if kind == 'mixed':
+            self.update_status("Смешанный набор — оставьте только боксы или только полигоны")
+            return
+        if kind == 'empty':
+            return
+
+        from ui.editors.undo_manager import SnapshotCommand
+        # Базлайн = состояние ДО живого превью (чтобы Ctrl+Z вернул и размеры тоже).
+        if self._resize_model_base is None:
+            self._capture_resize_base()
+        cmd = SnapshotCommand(self.model, self._redraw_all)
+        cmd._before = self._resize_model_base
+        cmd.description = "Размер объектов"
+
+        # Применить размеры из базлайна (идемпотентно — итог совпадает с превью).
+        self._apply_sizes_from_base(width, height, scale, kind)
+        grower_ids = [nid for nid in self._resize_sel if self.nodes.get(nid)]
+
+        # развести наслоившихся соседей, затем довести рёбра до ортогональности
+        self._spread_overlaps(grower_ids)
+        auto_fix_graph(
+            self.nodes, self.edges_data,
+            equip_max_shift=self.EQUIP_MAX_SHIFT,
+            conn_max_shift=self.CONN_MAX_SHIFT,
+        )
+
+        self._redraw_all()
+        self.model.rebuild_edge_data_index()
+        cmd.finalize()
+        self.undo_mgr.push_executed(cmd)
+
+        # Сбросить базлайн и обновить панель/рамки от нового состояния.
+        self._update_resize_panel()
+        self.update_statistics()
+        if kind == 'box':
+            self.update_status(
+                f"Размер применён к {len(grower_ids)} ({int(width)}×{int(height)})"
+            )
+        else:
+            self.update_status(
+                f"Масштаб ×{scale:.2f} применён к {len(grower_ids)} полигонам"
+            )
+
+    # =================================================================
     # Static helpers for obstacle avoidance
     # =================================================================
 
@@ -1806,6 +2331,10 @@ class AdvancedGraphEditor(SimpleGraphEditor):
 
     def _on_ctrl_lmb_click(self, x: float, y: float, node_id: str):
         """Ctrl+ЛКМ клик (без drag) на узле."""
+        # Режим «Размер объектов»: Ctrl+ЛКМ добавляет экземпляр в набор.
+        if self._current_mode == "resize_objects":
+            self._resize_handle_ctrl_click(x, y)
+            return
         # В режиме «Размер и цвет» клик по узлу ничего не красит — узлы только тащим.
         if self._current_mode in ("edit_edge_color", "edit_edge_size"):
             return
@@ -1816,8 +2345,11 @@ class AdvancedGraphEditor(SimpleGraphEditor):
     def _start_ctrl_drag(self, node_id: str):
         """Ctrl+ЛКМ drag → начать перетаскивание узла.
 
-        Перетаскивание доступно во всех режимах, включая «Размер и цвет».
+        Перетаскивание доступно во всех режимах, кроме «Размер объектов»
+        (там Ctrl+ЛКМ только набирает экземпляры, узлы двигать нельзя).
         """
+        if self._current_mode == "resize_objects":
+            return
         self.start_drag_node(node_id)
 
     def _update_ctrl_drag(self, x: float, y: float):
