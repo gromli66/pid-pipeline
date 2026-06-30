@@ -31,6 +31,7 @@ python graph_to_fxml_v2.py input.json -o output.fxml
 """
 
 import json
+import math
 import argparse
 from pathlib import Path
 from dataclasses import dataclass
@@ -344,6 +345,20 @@ PX_PER_MM = 72 / 25.4  # ≈ 2.835
 
 # Отступы в мм
 PAGE_MARGIN_MM = 10
+
+# ---------------------------------------------------------------------------
+# Мост (bridge) — отрисовка как разрыв линии: — | —
+# ---------------------------------------------------------------------------
+# Мост определяется ГЕОМЕТРИЧЕСКИ: две трубы пересекаются, но узла в точке
+# пересечения нет (если бы соединялись — там был бы узел). Это устойчиво к
+# потере/порче поля color (раньше его затирала ручная покраска).
+# В точке пересечения рвётся БОЛЕЕ ГОРИЗОНТАЛЬНАЯ труба, вертикальная проходит
+# сверху через разрыв (символ «— | —»).
+BRIDGE_GAP_STROKE_FACTOR = 3.0  # ширина разрыва ≈ k × strokeWidth верхней трубы
+BRIDGE_GAP_MIN_MM = 2.0         # минимум разрыва (всегда виден на любом листе)
+# Узел ближе этого расстояния к пересечению ⇒ это соединение (узел), не мост.
+# В исходных пикселях; масштабируется вместе с листом (× graph_scale).
+BRIDGE_NODE_CLEARANCE_PX = 15.0
 
 
 # ============================================================================
@@ -1089,10 +1104,187 @@ def generate_fxml_triangle(node, node_id: str, graph_scale: float = 1.0) -> Opti
     return f'        {comment}\n        <Polygon {" ".join(attrs)} />'
 
 
+def _edge_polyline_xy(edge, nodes):
+    """Полилиния ребра в (x, y): start + waypoints + end (масштабированные)."""
+    endpoints = get_line_endpoints(edge, nodes)
+    if not endpoints:
+        return None
+    start, end = endpoints
+    pts = [start]
+    for wp in edge.get('waypoints', []):
+        c = convert_point(wp)
+        if c:
+            pts.append(c)
+    pts.append(end)
+    return pts
+
+
+def _edge_stroke_width(edge, base_stroke, use_diameter, graph_scale):
+    """Толщина линии ребра — та же логика, что в generate_fxml_line."""
+    rw = edge.get('render_width')
+    if rw:
+        return max(0.3, float(rw) * graph_scale)
+    dv = edge.get('diameter_value')
+    if use_diameter and dv:
+        return calculate_diameter_stroke(dv, base_stroke, graph_scale)
+    return base_stroke
+
+
+def _segment_intersection(p1, p2, p3, p4):
+    """Точка пересечения отрезков p1p2 и p3p4 или None."""
+    x1, y1 = p1
+    x2, y2 = p2
+    x3, y3 = p3
+    x4, y4 = p4
+    denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+    if abs(denom) < 1e-9:
+        return None
+    t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom
+    u = ((x1 - x3) * (y1 - y2) - (y1 - y3) * (x1 - x2)) / denom
+    if 0.0 <= t <= 1.0 and 0.0 <= u <= 1.0:
+        return (x1 + t * (x2 - x1), y1 + t * (y2 - y1))
+    return None
+
+
+def _cumulative_lengths(points):
+    """Накопленная длина вдоль полилинии в каждой вершине."""
+    cum = [0.0]
+    for i in range(len(points) - 1):
+        ax, ay = points[i]
+        bx, by = points[i + 1]
+        cum.append(cum[-1] + math.hypot(bx - ax, by - ay))
+    return cum
+
+
+def _horizontality(a, b):
+    """0..1: насколько отрезок горизонтален (1 — горизонталь, 0 — вертикаль)."""
+    dx = abs(b[0] - a[0])
+    dy = abs(b[1] - a[1])
+    tot = dx + dy
+    return 0.5 if tot < 1e-9 else dx / tot
+
+
+def compute_bridge_cuts(edges, nodes, base_stroke, use_diameter, graph_scale):
+    """Найти мосты геометрически и вычислить разрывы.
+
+    Мост = пересечение двух рёбер без узла рядом (рёбра не делят общий узел).
+    Рвётся более горизонтальное ребро; вертикальное проходит сверху (— | —).
+
+    Returns:
+        dict edge_id -> list[(s, gap)] — позиция разрыва по длине ребра и ширина.
+    """
+    node_xy = [(n['centroid'][1], n['centroid'][0])
+               for n in nodes.values() if n.get('centroid')]
+    clearance_sq = (BRIDGE_NODE_CLEARANCE_PX * graph_scale) ** 2
+    min_gap = BRIDGE_GAP_MIN_MM * PX_PER_MM
+
+    info = []
+    for e in edges:
+        pl = _edge_polyline_xy(e, nodes)
+        if pl and len(pl) >= 2:
+            info.append((e, pl, _edge_stroke_width(e, base_stroke, use_diameter, graph_scale)))
+
+    def near_node(px, py):
+        for nx, ny in node_xy:
+            dx = px - nx
+            dy = py - ny
+            if dx * dx + dy * dy < clearance_sq:
+                return True
+        return False
+
+    cuts: dict = {}
+    n = len(info)
+    for i in range(n):
+        ea, pa, wa = info[i]
+        a_ends = {ea['source'], ea['target']}
+        for j in range(i + 1, n):
+            eb, pb, wb = info[j]
+            # Рёбра с общим узлом соединены — это не мост
+            if a_ends & {eb['source'], eb['target']}:
+                continue
+            for ai in range(len(pa) - 1):
+                for bj in range(len(pb) - 1):
+                    p = _segment_intersection(pa[ai], pa[ai + 1], pb[bj], pb[bj + 1])
+                    if not p or near_node(p[0], p[1]):
+                        continue
+                    # Рвём более горизонтальную трубу, вертикальная — сверху
+                    if _horizontality(pa[ai], pa[ai + 1]) >= _horizontality(pb[bj], pb[bj + 1]):
+                        under_e, under_pl, seg_idx, over_w = ea, pa, ai, wb
+                    else:
+                        under_e, under_pl, seg_idx, over_w = eb, pb, bj, wa
+                    gap = max(BRIDGE_GAP_STROKE_FACTOR * over_w, min_gap)
+                    ucum = _cumulative_lengths(under_pl)
+                    s = ucum[seg_idx] + math.hypot(
+                        p[0] - under_pl[seg_idx][0], p[1] - under_pl[seg_idx][1])
+                    cuts.setdefault(under_e['id'], []).append((s, gap))
+    return cuts
+
+
+def _point_at_arclen(points, cum, s):
+    """Точка на полилинии на расстоянии s от начала."""
+    for i in range(len(points) - 1):
+        if s <= cum[i + 1] or i == len(points) - 2:
+            seg = cum[i + 1] - cum[i]
+            t = 0.0 if seg < 1e-9 else (s - cum[i]) / seg
+            ax, ay = points[i]
+            bx, by = points[i + 1]
+            return (ax + t * (bx - ax), ay + t * (by - ay))
+    return points[-1]
+
+
+def _split_polyline_with_gaps(points, cuts_s):
+    """Разбить полилинию на под-линии, вырезав интервалы [s-gap/2, s+gap/2].
+
+    Returns: list[list[(x, y)]] — список под-полилиний (без вырезанных кусков).
+    """
+    cum = _cumulative_lengths(points)
+    total = cum[-1]
+    if total < 1e-9:
+        return [points]
+
+    intervals = []
+    for s, gap in cuts_s:
+        a = max(0.0, s - gap / 2.0)
+        b = min(total, s + gap / 2.0)
+        if b > a:
+            intervals.append([a, b])
+    if not intervals:
+        return [points]
+
+    intervals.sort()
+    merged = [intervals[0]]
+    for a, b in intervals[1:]:
+        if a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+
+    subpaths = []
+    cursor = 0.0
+    for a, b in merged:
+        if a > cursor + 1e-6:
+            subpaths.append(_subpath_between(points, cum, cursor, a))
+        cursor = b
+    if cursor < total - 1e-6:
+        subpaths.append(_subpath_between(points, cum, cursor, total))
+    return subpaths
+
+
+def _subpath_between(points, cum, s0, s1):
+    """Под-полилиния между арк-длинами s0 и s1 (с интерполяцией концов)."""
+    pts = [_point_at_arclen(points, cum, s0)]
+    for i in range(len(points)):
+        if s0 < cum[i] < s1:
+            pts.append(points[i])
+    pts.append(_point_at_arclen(points, cum, s1))
+    return pts
+
+
 def generate_fxml_line(edge, nodes, edge_id: str,
                        base_stroke: float = LINE_STROKE_WIDTH,
                        use_diameter: bool = True,
-                       graph_scale: float = 1.0) -> Optional[str]:
+                       graph_scale: float = 1.0,
+                       cuts=None) -> Optional[str]:
     """
     Генерирует FXML Line или Polyline для ребра.
 
@@ -1109,14 +1301,19 @@ def generate_fxml_line(edge, nodes, edge_id: str,
 
     start, end = endpoints
 
-    # Все линии одного цвета
-    line_color = DEFAULT_LINE_COLOR
+    # Цвет: индивидуальный цвет ребра (режим «Размер и цвет») имеет приоритет,
+    # иначе — общий цвет по умолчанию (белый в редакторе ↔ #333333 в FXML).
+    line_color = edge.get('render_color') or DEFAULT_LINE_COLOR
 
-    # Масштабирование толщины по диаметру
+    # Толщина линии.
     diameter_value = edge.get('diameter_value')
     diameter_text = edge.get('diameter_text', '')
+    render_width = edge.get('render_width')
 
-    if use_diameter and diameter_value:
+    if render_width:
+        # Ручной размер (режим «Размер ребра») полностью заменяет авто-толщину.
+        stroke_width = max(0.3, float(render_width) * graph_scale)
+    elif use_diameter and diameter_value:
         stroke_width = calculate_diameter_stroke(diameter_value, base_stroke, graph_scale)
     else:
         stroke_width = base_stroke
@@ -1126,36 +1323,48 @@ def generate_fxml_line(edge, nodes, edge_id: str,
     propagated = ' (propagated)' if edge.get('diameter_propagated') else ''
     comment = f'<!-- {edge_id}{diam_info}{propagated} -->'
 
-    waypoints = edge.get('waypoints', [])
-    if waypoints:
-        # Polyline: start + waypoints + end
-        all_points = [start]
-        for wp in waypoints:
-            converted = convert_point(wp)
-            if converted:
-                all_points.append(converted)
-        all_points.append(end)
-        # Плоский список координат через запятые (совместимый с JavaFX формат)
-        points_str = ",".join(f"{c:.1f}" for x, y in all_points for c in (x, y))
+    # Полный список точек ребра: start + waypoints + end
+    all_points = [start]
+    for wp in edge.get('waypoints', []):
+        converted = convert_point(wp)
+        if converted:
+            all_points.append(converted)
+    all_points.append(end)
 
+    def _emit(points, fid):
+        """<Line> для 2 точек, иначе <Polyline>."""
+        if len(points) <= 2:
+            (sx, sy), (ex, ey) = points[0], points[-1]
+            attrs = [
+                f'fx:id="{escape(str(fid))}"',
+                f'startX="{sx:.1f}"', f'startY="{sy:.1f}"',
+                f'endX="{ex:.1f}"', f'endY="{ey:.1f}"',
+                f'stroke="{line_color}"',
+                f'strokeWidth="{stroke_width:.1f}"',
+            ]
+            return f'<Line {" ".join(attrs)} />'
+        pts_str = ",".join(f"{c:.1f}" for x, y in points for c in (x, y))
         attrs = [
-            f'fx:id="{escape(str(edge_id))}"',
-            f'points="{points_str}"',
+            f'fx:id="{escape(str(fid))}"',
+            f'points="{pts_str}"',
             f'stroke="{line_color}"',
             f'strokeWidth="{stroke_width:.1f}"',
         ]
-        return f'        {comment}\n        <Polyline {" ".join(attrs)} />'
-    else:
-        attrs = [
-            f'fx:id="{escape(str(edge_id))}"',
-            f'startX="{start[0]:.1f}"',
-            f'startY="{start[1]:.1f}"',
-            f'endX="{end[0]:.1f}"',
-            f'endY="{end[1]:.1f}"',
-            f'stroke="{line_color}"',
-            f'strokeWidth="{stroke_width:.1f}"',
-        ]
-        return f'        {comment}\n        <Line {" ".join(attrs)} />'
+        return f'<Polyline {" ".join(attrs)} />'
+
+    # Мост: рвём линию в местах пересечения, каждый сегмент — отдельный элемент
+    if cuts:
+        usable = [sp for sp in _split_polyline_with_gaps(all_points, cuts)
+                  if len(sp) >= 2]
+        if not usable:
+            return None
+        parts = []
+        for k, sp in enumerate(usable):
+            fid = f"{edge_id}_b{k}" if len(usable) > 1 else edge_id
+            parts.append(f'        {_emit(sp, fid)}')
+        return f'        {comment}\n' + "\n".join(parts)
+
+    return f'        {comment}\n        {_emit(all_points, edge_id)}'
 
 
 def scale_graph_to_page(graph_data: dict, page_size: str = None,
@@ -1381,10 +1590,18 @@ def generate_fxml(graph_data: dict, stroke_width: float = LINE_STROKE_WIDTH,
     line_elements.extend(auto_det_lines)
     stats['auto_flow_detectors'] = len(auto_det_controls)
 
+    # Мосты: предрасчёт разрывов (— | —) по пересечениям BLUE×YELLOW
+    bridge_cuts = compute_bridge_cuts(
+        edges, nodes, base_stroke=stroke_width,
+        use_diameter=use_diameter, graph_scale=graph_scale,
+    )
+    stats['bridge_gaps'] = sum(len(v) for v in bridge_cuts.values())
+
     # Обрабатываем рёбра
     for edge in edges:
         fxml = generate_fxml_line(edge, nodes, edge['id'], stroke_width,
-                                  use_diameter=use_diameter, graph_scale=graph_scale)
+                                  use_diameter=use_diameter, graph_scale=graph_scale,
+                                  cuts=bridge_cuts.get(edge['id']))
         if fxml:
             line_elements.append(fxml)
             if edge.get('diameter_value'):

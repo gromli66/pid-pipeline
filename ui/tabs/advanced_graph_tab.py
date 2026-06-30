@@ -1,3 +1,4 @@
+
 """
 Advanced Graph Tab — вкладка продвинутого редактора графа P&ID.
 
@@ -11,9 +12,11 @@ waypoints, batch delete, auto-fix, perp stats.
 import logging
 
 from PySide6.QtWidgets import (
-    QHBoxLayout, QPushButton, QLabel, QCheckBox,
+    QHBoxLayout, QVBoxLayout, QWidget, QPushButton, QLabel,
+    QSpinBox, QMenu, QButtonGroup,
 )
 from PySide6.QtCore import Slot, Qt
+from PySide6.QtGui import QColor, QPixmap, QIcon
 
 from ui.services.api_client import APIClient
 from ui.editors.advanced_graph_editor import AdvancedGraphEditor
@@ -112,23 +115,68 @@ class AdvancedGraphTab(SimpleGraphTab):
 
         self._add_separator(toolbar)
 
-        # --- галочка подсветки привязки OCR ---
-        self.chk_ocr_highlight = QCheckBox("Подсветка привязки OCR")
-        self.chk_ocr_highlight.setChecked(True)
-        self.chk_ocr_highlight.setToolTip(
-            "Подсветка узлов и рёбер по привязке OCR:\n"
-            "зелёный/красный узел — есть/нет KKS, красное ребро — нет диаметра, "
-            "плюс KKS-подписи.\nСнимите галочку, чтобы показать нейтральные цвета графа."
+        # --- Режимы отображения/правки (взаимоисключающие) ---
+        self.regime_group = QButtonGroup(self)
+        self.regime_group.setExclusive(True)
+
+        self.btn_regime_ocr = QPushButton("ОКР привязка")
+        self.btn_regime_ocr.setCheckable(True)
+        self.btn_regime_ocr.setChecked(True)
+        self.btn_regime_ocr.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_regime_ocr.setToolTip(
+            "Режим «ОКР привязка» (по умолчанию).\n"
+            "Подсветка: зелёный/красный узел — есть/нет KKS, красное ребро — нет "
+            "диаметра, KKS-подписи и подсказки.\n"
+            "Двойной клик: по оборудованию — правка KKS, по ребру — правка диаметра.\n"
+            "Перпендикулярность и кисть цвет/размер в этом режиме скрыты."
         )
-        self.chk_ocr_highlight.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.chk_ocr_highlight.toggled.connect(self._on_toggle_ocr_highlight)
-        toolbar.addWidget(self.chk_ocr_highlight)
+        self.btn_regime_ocr.setStyleSheet(
+            "QPushButton:checked { background-color: #2ecc71; color: white; }"
+        )
+        self.btn_regime_ocr.clicked.connect(lambda: self._set_regime("ocr"))
+        self.regime_group.addButton(self.btn_regime_ocr)
+        toolbar.addWidget(self.btn_regime_ocr)
+
+        self.btn_regime_perp = QPushButton("Перпендикулярность")
+        self.btn_regime_perp.setCheckable(True)
+        self.btn_regime_perp.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_regime_perp.setToolTip(
+            "Режим «Перпендикулярность».\n"
+            "Подсветка: оранжевые неперпендикулярные рёбра + утолщение, "
+            "метка перпендикулярности.\n"
+            "Кнопки «Оптимизировать» / «Оптимизировать все» выравнивают рёбра под 90°.\n"
+            "Подсветка KKS/диаметра и двойной клик отключены."
+        )
+        self.btn_regime_perp.setStyleSheet(
+            "QPushButton:checked { background-color: #e67e22; color: white; }"
+        )
+        self.btn_regime_perp.clicked.connect(lambda: self._set_regime("perp"))
+        self.regime_group.addButton(self.btn_regime_perp)
+        toolbar.addWidget(self.btn_regime_perp)
+
+        self.btn_regime_style = QPushButton("Размер и цвет")
+        self.btn_regime_style.setCheckable(True)
+        self.btn_regime_style.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_regime_style.setToolTip(
+            "Режим «Размер и цвет».\n"
+            "Рёбра рисуются своим цветом/размером (по умолчанию белые → чёрные в FXML).\n"
+            "Снизу появляются выбор цвета (палитра) и размер.\n"
+            "Ctrl+ЛКМ — применить; Shift+протяжка — обвести только рёбра; "
+            "Ctrl+ПКМ — убрать из обводки; Ctrl+колесо — размер."
+        )
+        self.btn_regime_style.setStyleSheet(
+            "QPushButton:checked { background-color: #3498db; color: white; }"
+        )
+        self.btn_regime_style.clicked.connect(lambda: self._set_regime("style"))
+        self.regime_group.addButton(self.btn_regime_style)
+        toolbar.addWidget(self.btn_regime_style)
 
         # --- perp stats (добавится после stretch из Base) ---
         # Создаём здесь, Base добавит stretch + stats_label + sep
         # Поэтому perp_stats_label добавляем через _on_editor_ready
         self.perp_stats_label = QLabel("Перпендикулярность: —")
         self.perp_stats_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        self.perp_stats_label.setVisible(False)  # видна только в режиме «Перпендикулярность»
         toolbar.addWidget(self.perp_stats_label)
 
     def _get_mode_button_map(self) -> dict:
@@ -136,8 +184,187 @@ class AdvancedGraphTab(SimpleGraphTab):
         btn_map.update({
             "optimize_edge": self.btn_optimize_edge,
             "edit_waypoint": self.btn_waypoints,
+            "edit_edge_color": self.btn_edge_color,
+            "edit_edge_size": self.btn_edge_size,
         })
         return btn_map
+
+    # =================================================================
+    # Второй ряд тулбара: изменение ребра (цвет / размер)
+    # =================================================================
+
+    # Пресеты палитры цветов рёбер.
+    _EDGE_PALETTE = [
+        ("#e74c3c", "Красный"), ("#e67e22", "Оранжевый"),
+        ("#f1c40f", "Жёлтый"),  ("#2ecc71", "Зелёный"),
+        ("#1abc9c", "Бирюзовый"), ("#3498db", "Синий"),
+        ("#9b59b6", "Фиолетовый"), ("#34495e", "Тёмно-синий"),
+        ("#7f8c8d", "Серый"), ("#333333", "Тёмный"),
+        ("#000000", "Чёрный"), ("#ffffff", "Белый"),
+    ]
+
+    def _setup_secondary_toolbar(self, layout: QVBoxLayout):
+        self._size_sync = False
+        self._current_edge_color = self._EDGE_PALETTE[0][0]
+
+        # Контейнер второго ряда — виден только в режиме «Размер и цвет».
+        container = QWidget()
+        row = QHBoxLayout(container)
+        row.setContentsMargins(8, 0, 8, 4)
+        row.setSpacing(8)
+
+        title = QLabel("Изменение ребра:")
+        title.setStyleSheet("color: #aaa; font-weight: bold;")
+        title.setToolTip(
+            "Отдельный режим правки рёбер схемы.\n"
+            "Обводка: Shift+протяжка — обвести группу рёбер.\n"
+            "Ctrl+ЛКМ по обведённому — применить ко всем; по необведённому — "
+            "только к этому ребру.\n"
+            "Ctrl+ПКМ по обведённому — убрать ребро из обводки. Esc — сброс."
+        )
+        row.addWidget(title)
+
+        # --- Цвет ---
+        self.btn_edge_color = QPushButton("🎨 Цвет")
+        self.btn_edge_color.setCheckable(True)
+        self.btn_edge_color.setToolTip(
+            "Режим изменения цвета ребра.\n"
+            "Ctrl+ЛКМ по ребру — покрасить в текущий цвет палитры.\n"
+            "Обведённые рёбра (Shift+протяжка) красятся все сразу.\n"
+            "Цвет выбирается в палитре справа и сохраняется в FXML."
+        )
+        self.btn_edge_color.setStyleSheet(
+            "QPushButton:checked { background-color: #E91E63; color: white; }"
+        )
+        self.btn_edge_color.clicked.connect(lambda: self._set_mode("edit_edge_color"))
+        self.mode_group.addButton(self.btn_edge_color)
+        row.addWidget(self.btn_edge_color)
+
+        # Образец цвета + скрытая палитра (поповер)
+        self.btn_edge_swatch = QPushButton()
+        self.btn_edge_swatch.setFixedSize(26, 24)
+        self.btn_edge_swatch.setToolTip(
+            "Текущий цвет ребра. Нажмите — открыть палитру (пресеты)."
+        )
+        self._edge_palette_menu = QMenu(self)
+        for hexc, name in self._EDGE_PALETTE:
+            act = self._edge_palette_menu.addAction(self._color_icon(hexc), name)
+            act.triggered.connect(lambda checked=False, c=hexc: self._on_edge_color_selected(c))
+        self.btn_edge_swatch.setMenu(self._edge_palette_menu)
+        row.addWidget(self.btn_edge_swatch)
+        self._update_edge_swatch(self._current_edge_color)
+
+        sep = QLabel(" | ")
+        sep.setStyleSheet("color: #666;")
+        row.addWidget(sep)
+
+        # --- Размер ---
+        self.btn_edge_size = QPushButton("📏 Размер")
+        self.btn_edge_size.setCheckable(True)
+        self.btn_edge_size.setToolTip(
+            "Режим изменения размера (толщины) ребра.\n"
+            "Ctrl+ЛКМ по ребру — задать текущий размер.\n"
+            "Ctrl+колесо в редакторе — менять размер. Обведённым — всем сразу.\n"
+            "Размер виден в редакторе и записывается в FXML."
+        )
+        self.btn_edge_size.setStyleSheet(
+            "QPushButton:checked { background-color: #795548; color: white; }"
+        )
+        self.btn_edge_size.clicked.connect(lambda: self._set_mode("edit_edge_size"))
+        self.mode_group.addButton(self.btn_edge_size)
+        row.addWidget(self.btn_edge_size)
+
+        size_lbl = QLabel("размер:")
+        size_lbl.setStyleSheet("color: #aaa;")
+        row.addWidget(size_lbl)
+        self.spin_edge_size = QSpinBox()
+        self.spin_edge_size.setRange(1, 40)
+        self.spin_edge_size.setValue(4)
+        self.spin_edge_size.setMaximumWidth(60)
+        self.spin_edge_size.setToolTip(
+            "Размер (толщина) ребра числом.\n"
+            "Можно менять здесь или Ctrl+колесом в редакторе."
+        )
+        self.spin_edge_size.valueChanged.connect(self._on_edge_size_spin)
+        row.addWidget(self.spin_edge_size)
+
+        row.addStretch()
+        layout.addWidget(container)
+        self._edge_style_row = container
+        self._edge_style_row.setVisible(False)  # включается режимом «Размер и цвет»
+
+    # =================================================================
+    # Переключение режима отображения/правки
+    # =================================================================
+
+    def _set_regime(self, regime: str):
+        """Клик по кнопке режима → переключить редактор и UI."""
+        if self._editor and hasattr(self._editor, "set_display_regime"):
+            self._editor.set_display_regime(regime)
+        self._apply_regime_ui(regime)
+
+    def _on_regime_changed(self, regime: str):
+        """Callback из редактора → синхронизировать кнопки и UI."""
+        btn = {
+            "ocr": self.btn_regime_ocr,
+            "perp": self.btn_regime_perp,
+            "style": self.btn_regime_style,
+        }.get(regime)
+        if btn:
+            btn.setChecked(True)
+        self._apply_regime_ui(regime)
+
+    def _apply_regime_ui(self, regime: str):
+        """Показать/спрятать элементы под активный режим."""
+        is_style = (regime == "style")
+        if hasattr(self, "_edge_style_row"):
+            self._edge_style_row.setVisible(is_style)
+        if hasattr(self, "perp_stats_label"):
+            self.perp_stats_label.setVisible(regime == "perp")
+        if is_style:
+            # Авто-вход в подрежим «Цвет» для удобства
+            self.btn_edge_color.setChecked(True)
+            self._set_mode("edit_edge_color")
+
+    @staticmethod
+    def _color_icon(hexc: str) -> QIcon:
+        pm = QPixmap(16, 16)
+        pm.fill(QColor(hexc))
+        return QIcon(pm)
+
+    def _update_edge_swatch(self, hexc: str):
+        """Отрисовать образец текущего цвета на кнопке."""
+        self._current_edge_color = hexc
+        border = "#000" if hexc.lower() in ("#ffffff", "#fff") else "#222"
+        self.btn_edge_swatch.setStyleSheet(
+            f"QPushButton {{ background-color: {hexc}; border: 1px solid {border}; "
+            f"border-radius: 3px; }}"
+        )
+
+    @Slot()
+    def _on_edge_color_selected(self, hexc: str):
+        """Выбран цвет в палитре → установить кисть + включить режим цвета."""
+        self._update_edge_swatch(hexc)
+        if self._editor and hasattr(self._editor, "set_edge_brush_color"):
+            self._editor.set_edge_brush_color(QColor(hexc))
+        # Активировать режим цвета для удобства
+        self.btn_edge_color.setChecked(True)
+        self._set_mode("edit_edge_color")
+        self.status_label.setText(f"Цвет кисти рёбер: {hexc}")
+
+    @Slot(int)
+    def _on_edge_size_spin(self, value: int):
+        """Спинбокс размера → передать в редактор (без петли обратного вызова)."""
+        if self._size_sync:
+            return
+        if self._editor and hasattr(self._editor, "edge_brush_size"):
+            self._editor.edge_brush_size = max(1, int(value))
+
+    def _on_editor_size_changed(self, size: int):
+        """Callback из редактора (Ctrl+колесо) → обновить спинбокс."""
+        self._size_sync = True
+        self.spin_edge_size.setValue(int(size))
+        self._size_sync = False
 
     # =================================================================
     # Editor-ready hook
@@ -147,15 +374,16 @@ class AdvancedGraphTab(SimpleGraphTab):
         """После загрузки — обновить perp stats + config dir для KKS."""
         self._update_perp_stats()
         self._sync_editor_config_dir()
-        # Применить состояние галочки подсветки к редактору
-        if self._editor and hasattr(self._editor, "set_ocr_highlight"):
-            self._editor.set_ocr_highlight(self.chk_ocr_highlight.isChecked())
-
-    @Slot(bool)
-    def _on_toggle_ocr_highlight(self, checked: bool):
-        """Галочка «Подсветка привязки OCR» → вкл/выкл подсветку в редакторе."""
-        if self._editor and hasattr(self._editor, "set_ocr_highlight"):
-            self._editor.set_ocr_highlight(checked)
+        # Инициализировать кисть изменения ребра (цвет/размер)
+        if self._editor and hasattr(self._editor, "set_edge_brush_color"):
+            self._editor.set_edge_brush_color(QColor(self._current_edge_color))
+            self._editor.edge_brush_size = self.spin_edge_size.value()
+            self._editor.edge_size_callback = self._on_editor_size_changed
+        # Подключить режимы отображения/правки (по умолчанию — «ОКР привязка»)
+        if self._editor and hasattr(self._editor, "set_display_regime"):
+            self._editor.regime_callback = self._on_regime_changed
+            self._editor.set_display_regime("ocr")
+        self._apply_regime_ui("ocr")
 
     # =================================================================
     # Оформление: + цвета рёбер по стадиям

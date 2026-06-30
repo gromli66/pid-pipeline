@@ -389,7 +389,8 @@ class GraphDataModel:
             "waypoints": [],
             "length": 0,
             "is_terminal": False,
-            "color": None,
+            "render_color": None,   # manual edge color (hex) for "size&color" mode; None -> default
+            "render_width": None,   # manual line width for "size&color" mode; None -> auto
             "straight_line_distance": 0,
             "manual": True,
         }

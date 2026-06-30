@@ -26,11 +26,12 @@ from ui.editors.simple_graph_editor import SimpleGraphEditor
 from ui.editors.mode_handlers.advanced_handlers import (
     AddEdgeWithWaypointsHandler,
     OptimizeEdgeHandler, DragNodeHandler, MultiSelectHandler, EditWaypointHandler,
+    EditEdgeColorHandler, EditEdgeSizeHandler,
 )
 from ui.editors.commands.advanced_commands import (
     OptimizeEdgeCommand, DragNodeCommand, BatchDragCommand,
     MoveWaypointCommand, AddWaypointCommand, DeleteWaypointCommand,
-    AutoLRouteCommand, AutoFixCommand,
+    AutoLRouteCommand, AutoFixCommand, SetEdgeStyleCommand,
 )
 from ui.editors.graph_geometry import (
     bbox_exit_side, bbox_side_midpoint, closest_bbox_side,
@@ -63,6 +64,15 @@ class AdvancedGraphEditor(SimpleGraphEditor):
         self.register_mode("drag_node", DragNodeHandler())
         self.register_mode("multi_select", MultiSelectHandler())
         self.register_mode("edit_waypoint", EditWaypointHandler())
+        self.register_mode("edit_edge_color", EditEdgeColorHandler())
+        self.register_mode("edit_edge_size", EditEdgeSizeHandler())
+
+        # ── Режим изменения ребра (цвет / размер) ──
+        # Текущий «кисточный» цвет и размер, которыми красятся/масштабируются рёбра.
+        self.edge_brush_color: QColor = QColor("#e74c3c")  # по умолчанию красный
+        self.edge_brush_size: int = self.EDGE_WIDTH        # стартовый размер = базовая толщина
+        # Callback в таб для синхронизации числа размера в тулбаре.
+        self.edge_size_callback: Optional[callable] = None
 
         # ── Edge building with waypoints ──
         self._pending_waypoints: list[list] = []  # [[y, x], ...]
@@ -118,13 +128,24 @@ class AdvancedGraphEditor(SimpleGraphEditor):
         self._kks_labels: dict[str, QGraphicsSimpleTextItem] = {}  # node_id → label item
         self._kks_tooltip_visible: bool = False
 
-        # ── Подсветка узлов/рёбер по привязке OCR (KKS-цвет, цвет по диаметру,
-        #    KKS-подписи и hover-подсказка). Выключается галочкой в тулбаре. ──
-        self._ocr_highlight: bool = True
+        # ── Режим отображения/правки: 'ocr' | 'perp' | 'style' ──
+        #   ocr   — подсветка привязки (KKS-цвета узлов, красные рёбра без
+        #           диаметра, KKS-подписи/подсказки, правка диаметра/KKS
+        #           двойным кликом);
+        #   perp  — перпендикулярность (оранжевые рёбра + утолщение);
+        #   style — размер и цвет рёбер (по умолчанию белые, кисть цвет/размер).
+        self.display_regime: str = "ocr"
+        # Callback в таб для синхронизации кнопок-флагов режима.
+        self.regime_callback: Optional[callable] = None
 
     # =================================================================
     # Overrides — Base/Simple hooks
     # =================================================================
+
+    @property
+    def _ocr_highlight(self) -> bool:
+        """Back-compat: подсветка привязки активна только в режиме 'ocr'."""
+        return self.display_regime == "ocr"
 
     def load_data(self, image_path: str, graph_path: str, coco_path: str = "") -> bool:
         """Загрузка + _compute_grid_size()."""
@@ -134,18 +155,28 @@ class AdvancedGraphEditor(SimpleGraphEditor):
         return result
 
     def _get_edge_color(self, edge_data: dict, key: tuple = None) -> QColor:
-        """Цвет ребра: оранжевый если неперпендикулярно, красный если нет диаметра."""
-        waypoints = edge_data.get('waypoints', [])
-        if not waypoints:
-            if self.show_bad_edges and key and key in self.edge_perp_scores:
-                perp_info = self.edge_perp_scores[key]
-                if not perp_info.get('is_good', True):
+        """Цвет ребра — зависит от активного режима.
+
+        style → индивидуальный цвет (render_color) или белый по умолчанию;
+        perp  → оранжевый для неперпендикулярных, иначе белый;
+        ocr   → красный для рёбер без диаметра, иначе белый.
+        Индивидуальный цвет показывается ТОЛЬКО в режиме style
+        (в FXML экспортируется всегда).
+        """
+        if self.display_regime == "style":
+            rc = edge_data.get('render_color')
+            return QColor(rc) if rc else self.COLOR_EDGE
+
+        if self.display_regime == "perp":
+            waypoints = edge_data.get('waypoints', [])
+            if not waypoints and key and key in self.edge_perp_scores:
+                if not self.edge_perp_scores[key].get('is_good', True):
                     return self.COLOR_EDGE_BAD
+            return self.COLOR_EDGE
 
-        # Красная подсветка «нет диаметра» — часть подсветки привязки OCR.
-        if self._ocr_highlight and not edge_data.get('diameter_text'):
+        # ocr
+        if not edge_data.get('diameter_text'):
             return self.COLOR_NO_DIAMETER
-
         return self.COLOR_EDGE
 
     def _get_equipment_brush(self, node: dict) -> QBrush:
@@ -169,24 +200,46 @@ class AdvancedGraphEditor(SimpleGraphEditor):
         self.COLOR_EDGE_BAD = QColor(color)
         self._redraw_all()
 
-    def set_ocr_highlight(self, enabled: bool):
-        """Вкл/выкл подсветку узлов и рёбер по привязке OCR.
+    def set_display_regime(self, regime: str):
+        """Переключить режим отображения/правки: 'ocr' | 'perp' | 'style'.
 
-        Выключение убирает KKS-цвет узлов, красный цвет рёбер без диаметра,
-        KKS-подписи и hover-подсказку — остаются нейтральные цвета графа.
+        Режимы взаимоисключающие — активен ровно один.
         """
-        if self._ocr_highlight == enabled:
+        if regime not in ("ocr", "perp", "style"):
             return
-        self._ocr_highlight = enabled
-        if not enabled:
+        if self.display_regime == regime:
+            return
+        self.display_regime = regime
+        # Выйти из правки цвета/размера, если ушли из режима 'style'
+        if regime != "style" and self._current_mode in ("edit_edge_color", "edit_edge_size"):
+            self.set_mode("idle")
+        # KKS-подписи показываются только в режиме 'ocr'
+        if regime != "ocr":
             self._hide_all_kks_labels()
         self._redraw_all()
+        if self.regime_callback:
+            self.regime_callback(regime)
+
+    def set_ocr_highlight(self, enabled: bool):
+        """Back-compat обёртка: вкл → режим 'ocr', выкл → 'perp'."""
+        self.set_display_regime("ocr" if enabled else "perp")
 
     def _get_edge_pen(self, edge_data: dict, key: tuple = None) -> QPen:
-        """Утолщение для неперпендикулярных рёбер."""
+        """Утолщение для неперпендикулярных рёбер.
+
+        Приоритет — индивидуальная толщина ребра (режим «Размер ребра»).
+        """
         color = self._get_edge_color(edge_data, key)
+
+        # Индивидуальная толщина — только в режиме «Размер и цвет».
+        if self.display_regime == "style":
+            render_width = edge_data.get('render_width')
+            if render_width:
+                return QPen(color, float(render_width))
+            return QPen(color, self.EDGE_WIDTH)
+
         pen_width = self.EDGE_WIDTH
-        if self.show_bad_edges and key and key in self.edge_perp_scores:
+        if self.display_regime == "perp" and key and key in self.edge_perp_scores:
             if not self.edge_perp_scores[key].get('is_good', True):
                 pen_width = self.EDGE_WIDTH + 1
         return QPen(color, pen_width)
@@ -796,9 +849,14 @@ class AdvancedGraphEditor(SimpleGraphEditor):
                 edge_data.get('source_point'),
                 edge_data.get('waypoints', []),
                 edge_data.get('target_point'))
+            # Толщину подсветки берём от фактической толщины ребра, чтобы
+            # обводка была видна и поверх «толстых» кастомных рёбер.
+            base_w = edge_data.get('render_width') or self.EDGE_WIDTH
+            sel_pen = QPen(self.COLOR_SELECTION, float(base_w) + 5,
+                           Qt.PenStyle.DashLine)
             highlight = QGraphicsPathItem(path)
-            highlight.setPen(QPen(self.COLOR_SELECTION, self.EDGE_WIDTH + 2))
-            highlight.setZValue(1.5)
+            highlight.setPen(sel_pen)
+            highlight.setZValue(6)
             self.scene.addItem(highlight)
             self._edge_selection_highlights[edge_key] = highlight
 
@@ -812,13 +870,18 @@ class AdvancedGraphEditor(SimpleGraphEditor):
         self._rubber_band.setZValue(20)
         self.scene.addItem(self._rubber_band)
 
+    def _edge_only_selection(self) -> bool:
+        """В режиме «Размер и цвет» обводка работает только с рёбрами."""
+        return self.display_regime == "style"
+
     def _on_shift_lmb_press(self, x: float, y: float):
         """Shift+ЛКМ — toggle узел/ребро или начать rubber band."""
-        # Клик на узел → toggle selection
-        clicked = self.find_node_at(x, y)
-        if clicked:
-            self.toggle_select_node(clicked)
-            return
+        # В режиме style — только рёбра (узлы не трогаем)
+        if not self._edge_only_selection():
+            clicked = self.find_node_at(x, y)
+            if clicked:
+                self.toggle_select_node(clicked)
+                return
         # Клик на ребро → toggle selection
         edge_key, _ = self.find_nearest_edge(x, y)
         if edge_key:
@@ -863,26 +926,163 @@ class AdvancedGraphEditor(SimpleGraphEditor):
             self.selected_nodes.clear()
             self.selected_edges.clear()
 
-        for node_id, node in self.nodes.items():
-            cx, cy = node['centroid'][1], node['centroid'][0]
-            if rx <= cx <= rx + rw and ry <= cy <= ry + rh:
-                self.selected_nodes.add(node_id)
+        edge_only = self._edge_only_selection()
 
+        # В режиме «Размер и цвет» обводка выделяет только рёбра, не узлы.
+        if not edge_only:
+            for node_id, node in self.nodes.items():
+                cx, cy = node['centroid'][1], node['centroid'][0]
+                if rx <= cx <= rx + rw and ry <= cy <= ry + rh:
+                    self.selected_nodes.add(node_id)
+
+        rect_bbox = [rx, ry, rx + rw, ry + rh]
         for edge in self.edges_data:
             sp, tp = edge.get('source_point'), edge.get('target_point')
-            if sp and tp:
+            if not sp or not tp:
+                continue
+            key = self.model.edge_key(edge['source'], edge['target'])
+            if edge_only:
+                # Рамка «касается» ребра: любой сегмент пересекает рамку
+                # или конец внутри неё.
+                hit = False
+                for (ax, ay), (bx, by) in self._get_edge_segments(edge):
+                    if ((rx <= ax <= rx + rw and ry <= ay <= ry + rh) or
+                            (rx <= bx <= rx + rw and ry <= by <= ry + rh) or
+                            segment_intersects_bbox(ax, ay, bx, by, rect_bbox)):
+                        hit = True
+                        break
+                if hit:
+                    self.selected_edges.add(key)
+            else:
                 sx, sy = sp[1], sp[0]
                 tx, ty = tp[1], tp[0]
                 if (rx <= sx <= rx + rw and ry <= sy <= ry + rh and
                         rx <= tx <= rx + rw and ry <= ty <= ry + rh):
-                    key = self.model.edge_key(edge['source'], edge['target'])
                     self.selected_edges.add(key)
 
         self._update_selection_visuals()
         self.update_status(f"Выделено: {len(self.selected_nodes)} узлов, {len(self.selected_edges)} рёбер")
 
+    # =================================================================
+    # Изменение ребра: цвет / размер
+    # =================================================================
+
+    def set_edge_brush_color(self, color: QColor):
+        """Установить текущий цвет кисти рёбер (из палитры)."""
+        self.edge_brush_color = QColor(color)
+
+    def set_edge_brush_size(self, size: int):
+        """Установить текущий размер кисти рёбер и уведомить тулбар."""
+        self.edge_brush_size = max(1, int(size))
+        if self.edge_size_callback:
+            self.edge_size_callback(self.edge_brush_size)
+
+    def _edges_to_style(self, edge_key: tuple) -> list:
+        """Какие рёбра менять при клике по edge_key.
+
+        Если ребро входит в обводку (selected_edges) — вся пачка,
+        иначе — только это ребро.
+        """
+        if edge_key in self.selected_edges:
+            return list(self.selected_edges)
+        return [edge_key]
+
+    def apply_edge_style_at(self, edge_key: tuple, kind: str):
+        """Применить текущий цвет ('color') или размер ('size') к ребру/обводке."""
+        keys = self._edges_to_style(edge_key)
+        if not keys:
+            return
+
+        desc = "Цвет рёбер" if kind == "color" else "Размер рёбер"
+        cmd = SetEdgeStyleCommand(self.model, self._redraw_all, description=desc)
+        cmd.execute()  # snapshot before
+
+        changed = 0
+        for k in keys:
+            edge_data = self.model.find_edge_data(k)
+            if not edge_data:
+                continue
+            if kind == "color":
+                edge_data['render_color'] = self.edge_brush_color.name()
+            else:
+                edge_data['render_width'] = int(self.edge_brush_size)
+            changed += 1
+
+        cmd.finalize()  # snapshot after
+        self.undo_mgr.push_executed(cmd)
+
+        self._redraw_all()
+        # _redraw_all не восстанавливает подсветку обводки — вернуть её
+        self._update_selection_visuals()
+
+        if kind == "color":
+            self.update_status(
+                f"Цвет {self.edge_brush_color.name()} применён к {changed} рёбрам"
+            )
+        else:
+            self.update_status(
+                f"Размер {self.edge_brush_size} применён к {changed} рёбрам"
+            )
+
+    def update_edge_style_preview(self, mouse_x: float, mouse_y: float):
+        """Превью ребра под курсором кистью текущего режима (не оранжевым).
+
+        Цвет → ребро показывается выбранным цветом;
+        размер → ребро показывается белым выбранной толщины.
+        """
+        if self.edge_highlight:
+            self.scene.removeItem(self.edge_highlight)
+            self.edge_highlight = None
+
+        edge_key, _ = self.find_nearest_edge(mouse_x, mouse_y, threshold=20.0)
+        if not edge_key:
+            return
+        edge_data = self.model.find_edge_data(edge_key)
+        if not edge_data:
+            return
+        path = self._build_edge_path(
+            edge_data.get('source_point'),
+            edge_data.get('waypoints', []),
+            edge_data.get('target_point'))
+
+        if self._current_mode == "edit_edge_size":
+            pen = QPen(QColor(255, 255, 255), float(self.edge_brush_size))
+        else:  # edit_edge_color
+            pen = QPen(QColor(self.edge_brush_color), self.EDGE_WIDTH + 2)
+
+        self.edge_highlight = QGraphicsPathItem(path)
+        self.edge_highlight.setPen(pen)
+        self.edge_highlight.setZValue(10)
+        self.scene.addItem(self.edge_highlight)
+
+    def wheelEvent(self, event):
+        """Ctrl+колесо в режиме «Размер ребра» — менять размер кисти, не зумить."""
+        if (self._current_mode == "edit_edge_size"
+                and (event.modifiers() & Qt.KeyboardModifier.ControlModifier)):
+            step = 1 if event.angleDelta().y() > 0 else -1
+            self.set_edge_brush_size(self.edge_brush_size + step)
+            self.update_status(f"Размер ребра: {self.edge_brush_size}")
+            event.accept()
+            return
+        super().wheelEvent(event)
+
     def _ctrl_right_click_delete(self, x: float, y: float):
-        """Ctrl+ПКМ — удалить под курсором. Если элемент выделен → удалить всю пачку."""
+        """Ctrl+ПКМ — удалить под курсором. Если элемент выделен → удалить всю пачку.
+
+        В режимах изменения ребра Ctrl+ПКМ НЕ удаляет, а убирает ребро из обводки.
+        """
+        if self._current_mode in ("edit_edge_color", "edit_edge_size"):
+            edge_key, _ = self.find_nearest_edge(x, y, threshold=20.0)
+            if edge_key and edge_key in self.selected_edges:
+                self.selected_edges.discard(edge_key)
+                self._update_selection_visuals()
+                self.update_status(
+                    f"Ребро убрано из обводки (осталось {len(self.selected_edges)})"
+                )
+            else:
+                self.update_status("Нет обведённого ребра под курсором")
+            return
+
         node_id = self.find_node_at(x, y)
         if node_id:
             if node_id in self.selected_nodes:
@@ -1605,13 +1805,19 @@ class AdvancedGraphEditor(SimpleGraphEditor):
     # =================================================================
 
     def _on_ctrl_lmb_click(self, x: float, y: float, node_id: str):
-        """Ctrl+ЛКМ клик (без drag) на узле → всегда делегировать handler."""
-        # Ctrl+клик всегда идёт в handler (add_edge, add_connector, delete_node и т.п.)
+        """Ctrl+ЛКМ клик (без drag) на узле."""
+        # В режиме «Размер и цвет» клик по узлу ничего не красит — узлы только тащим.
+        if self._current_mode in ("edit_edge_color", "edit_edge_size"):
+            return
+        # Ctrl+клик идёт в handler (add_edge, add_connector, delete_node и т.п.)
         if self._current_handler:
             self._current_handler.on_press(self, x, y, None)
 
     def _start_ctrl_drag(self, node_id: str):
-        """Ctrl+ЛКМ drag → начать перетаскивание узла."""
+        """Ctrl+ЛКМ drag → начать перетаскивание узла.
+
+        Перетаскивание доступно во всех режимах, включая «Размер и цвет».
+        """
         self.start_drag_node(node_id)
 
     def _update_ctrl_drag(self, x: float, y: float):
@@ -1653,7 +1859,13 @@ class AdvancedGraphEditor(SimpleGraphEditor):
         super().mouseMoveEvent(event)
 
     def mouseDoubleClickEvent(self, event):
-        """DoubleClick: узел → edit KKS; ребро → edit diameter."""
+        """DoubleClick: узел → edit KKS; ребро → edit diameter.
+
+        Правка диаметра/KKS работает только в режиме «ОКР привязка».
+        """
+        if self.display_regime != "ocr":
+            super().mouseDoubleClickEvent(event)
+            return
         if event.button() == Qt.MouseButton.LeftButton:
             pos = self.mapToScene(event.pos())
             x, y = pos.x(), pos.y()

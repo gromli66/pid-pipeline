@@ -131,6 +131,57 @@ class MultiSelectHandler(ModeHandler):
         return True
 
 
+class EditEdgeColorHandler(ModeHandler):
+    """Режим изменения ЦВЕТА ребра.
+
+    Ctrl+ЛКМ по ребру → покрасить в текущий цвет палитры.
+      • если ребро входит в обводку (shift+протяжка) — красятся все обведённые;
+      • иначе — только это ребро.
+    Ctrl+ПКМ по обведённому ребру → убрать его из обводки.
+    """
+
+    def on_enter(self, ed):
+        # Чистый старт: режим работает только с рёбрами
+        ed.clear_multi_select()
+
+    def on_press(self, ed, x, y, event):
+        edge_key, _ = ed.find_nearest_edge(x, y, threshold=20.0)
+        if edge_key:
+            ed.apply_edge_style_at(edge_key, kind="color")
+        else:
+            ed.update_status("Ctrl+ЛКМ по ребру — покрасить. Shift+протяжка — обвести рёбра.")
+        return True
+
+    def on_move(self, ed, x, y, event):
+        ed.update_edge_style_preview(x, y)
+        return True
+
+
+class EditEdgeSizeHandler(ModeHandler):
+    """Режим изменения РАЗМЕРА (толщины) ребра.
+
+    Ctrl+ЛКМ по ребру → присвоить текущий размер (обведённым — всем).
+    Ctrl+колесо → изменить текущий размер.
+    Ctrl+ПКМ по обведённому ребру → убрать его из обводки.
+    """
+
+    def on_enter(self, ed):
+        # Чистый старт: режим работает только с рёбрами
+        ed.clear_multi_select()
+
+    def on_press(self, ed, x, y, event):
+        edge_key, _ = ed.find_nearest_edge(x, y, threshold=20.0)
+        if edge_key:
+            ed.apply_edge_style_at(edge_key, kind="size")
+        else:
+            ed.update_status("Ctrl+ЛКМ по ребру — задать размер. Ctrl+колесо — менять размер.")
+        return True
+
+    def on_move(self, ed, x, y, event):
+        ed.update_edge_style_preview(x, y)
+        return True
+
+
 class EditWaypointHandler(ModeHandler):
     """Режим редактирования waypoints.
 

@@ -273,3 +273,15 @@ class AutoFixCommand(SnapshotCommand):
     def __init__(self, model, redraw_callback):
         super().__init__(model, redraw_callback)
         self.description = "Auto-Fix"
+
+
+class SetEdgeStyleCommand(SnapshotCommand):
+    """Изменение цвета/толщины одного или нескольких рёбер — snapshot.
+
+    Цвет и толщина хранятся прямо в edge_data ('color' / 'render_width'),
+    поэтому snapshot модели корректно отменяет/повторяет изменение.
+    """
+
+    def __init__(self, model, redraw_callback, description: str = "Стиль рёбер"):
+        super().__init__(model, redraw_callback)
+        self.description = description

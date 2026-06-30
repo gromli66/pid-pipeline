@@ -148,6 +148,14 @@ class BaseGraphTab(AppearanceMixin, QWidget):
         """Наполнить toolbar кнопками режимов и инструментов."""
         ...
 
+    def _setup_secondary_toolbar(self, layout: QVBoxLayout) -> None:
+        """Опциональный второй ряд тулбара. По умолчанию ничего не добавляет.
+
+        Потомки могут переопределить и добавить второй QHBoxLayout в layout
+        (он встаёт сразу под основным рядом кнопок).
+        """
+        return
+
     # =================================================================
     # UI Setup
     # =================================================================
@@ -199,6 +207,9 @@ class BaseGraphTab(AppearanceMixin, QWidget):
         toolbar.addWidget(self.btn_confirm)
 
         layout.addLayout(toolbar)
+
+        # Опциональный второй ряд тулбара (потомки могут наполнить)
+        self._setup_secondary_toolbar(layout)
 
         # === Loading placeholder ===
         self.loading_label = QLabel("Загрузка артефактов...")
