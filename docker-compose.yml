@@ -162,6 +162,9 @@ services:
       - PID_DEVICE=${PID_DEVICE:-auto}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - SKIP_SURYA_CROPS=${SKIP_SURYA_CROPS:-0}
+      - TEXT_YOLO_WEIGHTS=${TEXT_YOLO_WEIGHTS:-/models/text_detect/best.pt}
+      - OCR_WHITEN=${OCR_WHITEN:-0}
+      - YOLO_CONFIG_DIR=/tmp/Ultralytics
     volumes:
       - ./worker:/app/worker
       - ./modules:/app/modules
@@ -170,6 +173,7 @@ services:
       - ./storage:/storage
       - ./models/ocr/datalab_cache:/root/.cache/datalab    # Surya models
       - ./models/ocr/hf_cache:/models/ocr/hf_cache
+      - ./models/text_detect:/models/text_detect:ro        # YOLO текст-детектор (П2)
     depends_on:
       postgres:
         condition: service_healthy

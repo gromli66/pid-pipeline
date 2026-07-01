@@ -14,7 +14,7 @@ import asyncio
 import json
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Body
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -494,3 +494,37 @@ async def apply_ocr_binding(
         "total_bindings": len(binding_map),
         "uid": str(uid),
     }
+
+
+@router.post("/{uid}/recognize")
+async def recognize_ocr_boxes(
+    uid: UUID,
+    payload: dict = Body(...),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """П3: распознать переданные вручную боксы через OCR-воркер (батчем).
+
+    Body: {"boxes": [[x0,y0,x1,y1], ...]}.
+    Возврат: {"results": [{"bbox":[...], "text": "...", "confidence": ...}]}.
+    """
+    result = await db.execute(select(Diagram).where(Diagram.uid == uid))
+    diagram = result.scalar_one_or_none()
+    if not diagram:
+        raise HTTPException(status_code=404, detail="Diagram not found")
+
+    boxes = payload.get("boxes", []) if isinstance(payload, dict) else []
+    if not boxes:
+        return {"results": []}
+
+    try:
+        from worker.celery_app import celery_app
+        async_result = celery_app.send_task(
+            "worker.tasks.ocr.task_recognize_boxes",
+            args=[str(uid), boxes],
+            queue="ocr",
+        )
+        items = await asyncio.to_thread(async_result.get, timeout=180)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Recognition failed: {e}")
+
+    return {"results": items}

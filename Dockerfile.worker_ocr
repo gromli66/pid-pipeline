@@ -8,7 +8,7 @@
 FROM nvidia/cuda:12.6.3-runtime-ubuntu22.04
 
 LABEL maintainer="P&ID Pipeline"
-LABEL description="OCR Celery worker: Surya 0.17.1"
+LABEL description="OCR Celery worker: Surya 0.17.1 + YOLO текст-детектор"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -61,6 +61,13 @@ RUN pip install "celery[redis]>=5.3.0"
 
 # ── OpenCV, sklearn, scipy, bidi ──
 RUN pip install opencv-contrib-python-headless Pillow scikit-image scikit-learn scipy python-bidi
+
+# ── Ultralytics (YOLO текст-детектор для чистого OCR, П2) ──
+# ВАЖНО: ultralytics тянет opencv-python и может поднять numpy до 2.x — это ломает
+# Surya 0.17.1. Поэтому после установки принудительно возвращаем numpy<2 и headless-opencv.
+RUN pip install ultralytics \
+ && pip uninstall -y opencv-python opencv-contrib-python opencv-python-headless || true \
+ && pip install --no-cache-dir "numpy<2.0" opencv-contrib-python-headless
 
 # ── Копируем код ──
 COPY worker/ /app/worker/

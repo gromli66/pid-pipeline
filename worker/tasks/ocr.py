@@ -1,10 +1,10 @@
 """
-OCR Tasks — 3-проходный OCR pipeline для P&ID.
+OCR Tasks — чистый OCR pipeline для P&ID (П2).
 
 task_run_ocr:
-    Полный OCR: clean → 3 итерации Surya → regroup → classify → postprocess.
-    Входы: original_image + pipe_mask + node_mask + junction/bridge points
-    Выходы: ocr/ocr_result.json
+    Доменная детекция текста YOLO (тайлинг + merge) -> Surya 0.17.1 (из коробки,
+    расширение бокса/паддинг/опц. выбеление, вертикаль -> вправо) -> cleanup -> фильтр мусора.
+    Входы: original_image. Выходы: ocr/ocr_result.json
 
     ПАРАЛЛЕЛЬНЫЙ ЗАПУСК: может работать одновременно с task_build_graph.
     НЕ МЕНЯЕТ DiagramStatus — готовность определяется по артефакту OCR_RESULT.
@@ -36,23 +36,17 @@ logger = logging.getLogger(__name__)
 )
 def task_run_ocr(self, diagram_uid: str):
     """
-    3-проходный OCR pipeline для одной диаграммы.
+    Чистый OCR pipeline для одной диаграммы.
 
     Запускается параллельно с task_build_graph после complete_junction_validation,
-    или отдельно через start_ocr endpoint.
-
-    Не меняет DiagramStatus — готовность определяется по наличию
-    артефакта OCR_RESULT.
+    или отдельно через start_ocr endpoint. Не меняет DiagramStatus.
     """
     # Surya читает TORCH_DEVICE из окружения — проставляем по PID_DEVICE
     from worker.utils.device import apply_torch_device_env
     apply_torch_device_env()
 
-    import importlib
-
     from app.db.session import SessionLocal
     from app.models import Diagram, Artifact, ArtifactType
-    from app.services.project_loader import get_project_loader
 
     storage_path = Path(os.getenv("STORAGE_PATH", "./storage/diagrams"))
     diagram_dir = storage_path / str(diagram_uid)
@@ -61,11 +55,7 @@ def task_run_ocr(self, diagram_uid: str):
     db = SessionLocal()
     stage = None
     try:
-        # ═══ Проверить существование диаграммы ═══
-        diagram = db.query(Diagram).filter(
-            Diagram.uid == diagram_uid
-        ).first()
-
+        diagram = db.query(Diagram).filter(Diagram.uid == diagram_uid).first()
         if not diagram:
             logger.error("Diagram %s not found", diagram_uid)
             return
@@ -74,150 +64,66 @@ def task_run_ocr(self, diagram_uid: str):
             logger.info("Diagram %s is deleted, aborting OCR", diagram_uid)
             return
 
-        # ═══ Idempotency: проверить нет ли уже результата ═══
+        # Idempotency: уже есть результат?
         existing = db.query(Artifact).filter(
             Artifact.diagram_uid == diagram_uid,
             Artifact.artifact_type == ArtifactType.OCR_RESULT,
         ).first()
         if existing:
-            logger.info(
-                "OCR result already exists for %s, skipping", diagram_uid
-            )
+            logger.info("OCR result already exists for %s, skipping", diagram_uid)
             return
 
-        # OCR disabled in project config -> skip cleanly (defense-in-depth).
+        # OCR disabled в конфиге проекта -> skip (defense-in-depth)
         from app.services.project_loader import get_project_loader as _gpl
         _pc = _gpl().load(diagram.project_code)
         if _pc and not getattr(_pc.ocr, "enabled", True):
             logger.info("OCR disabled for project '%s', skipping", diagram.project_code)
             return {"status": "disabled", "diagram_uid": diagram_uid}
 
-        # ===== Processing Stage tracking =====
         from app.models.stage import StageType
         stage = start_stage(db, diagram_uid, StageType.OCR, celery_task_id=self.request.id)
 
         logger.info("OCR started for %s", diagram_uid)
         ocr_dir.mkdir(parents=True, exist_ok=True)
 
-        # ═══ Загрузка OCR конфига из project YAML ═══
-        loader = get_project_loader()
-        project_config = loader.load(diagram.project_code)
-        if not project_config:
-            raise RuntimeError(
-                f"Project config not found for '{diagram.project_code}'"
-            )
-        ocr_cfg = project_config.ocr
+        # === П2: ЧИСТЫЙ OCR — доменная детекция YOLO (тайлинг+merge) + Surya из коробки ===
+        # Старый путь (профили/конфиг/reclustering/маски/3 итерации) отключён.
+        # Логика: modules/ocr/pipeline_clean.py. Модель детекции — TEXT_YOLO_WEIGHTS.
+        from worker.utils.device import resolve_device
+        from modules.ocr.pipeline_clean import run_ocr_pipeline_clean
 
-        # ═══ Динамический импорт OCR профиля ═══
-        # Приоритет: domain_profile_path (v2.0) → profile_path (v1.x) → profile_module (legacy)
-        if ocr_cfg.domain_profile_path:
-            from modules.ocr.domain_profile import ConfigDrivenProfile
-            dp_path = Path(ocr_cfg.domain_profile_path)
-            if not dp_path.is_absolute():
-                dp_path = Path("/app") / dp_path
-            if not dp_path.exists():
-                raise FileNotFoundError(
-                    f"domain_profile.yaml not found: {dp_path}"
-                )
-            profile = ConfigDrivenProfile(yaml_path=str(dp_path))
-            logger.info(
-                "Loaded ConfigDrivenProfile from: %s (name=%s)",
-                dp_path, profile.name,
-            )
-        elif ocr_cfg.profile_path:
-            import importlib.util
-            profile_file = Path(ocr_cfg.profile_path)
-            if not profile_file.is_absolute():
-                profile_file = Path("/app") / profile_file
-            if not profile_file.exists():
-                raise FileNotFoundError(
-                    f"OCR profile not found: {profile_file}"
-                )
-            spec = importlib.util.spec_from_file_location(
-                "ocr_profile", str(profile_file)
-            )
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            logger.info("Loaded OCR profile from path: %s", profile_file)
-        elif ocr_cfg.profile_module:
-            mod = importlib.import_module(ocr_cfg.profile_module)
-            logger.info("Loaded OCR profile from module: %s", ocr_cfg.profile_module)
-        else:
-            raise RuntimeError(
-                "OCR profile not configured: set 'domain_profile_path', "
-                "'profile_path' or 'profile_module' in project YAML ocr section"
-            )
-
-        # Legacy path: создаём профиль из Python-класса
-        if not ocr_cfg.domain_profile_path:
-            ProfileClass = getattr(mod, ocr_cfg.profile_class)
-            profile = ProfileClass()
-            logger.info(
-                "OCR profile class: %s", ocr_cfg.profile_class,
-            )
-
-        # ═══ Входные данные ═══
         original_image = diagram_dir / "original" / "image.png"
-        pipe_mask = diagram_dir / "segmentation" / "pipe_mask_refined.png"
-        if not pipe_mask.exists():
-            pipe_mask = diagram_dir / "segmentation" / "pipe_mask_validated.png"
-        if not pipe_mask.exists():
-            pipe_mask = diagram_dir / "segmentation" / "pipe_mask.png"
-        node_mask = diagram_dir / "segmentation" / "node_mask.png"
-        junction_points_path = diagram_dir / "junction" / "points.json"
-
         if not original_image.exists():
-            raise FileNotFoundError(
-                f"Original image not found: {original_image}"
-            )
+            raise FileNotFoundError(f"Original image not found: {original_image}")
 
-        # Junction/bridge points (могут отсутствовать — пустые списки)
-        junctions = []
-        bridges = []
-        if junction_points_path.exists():
-            with open(junction_points_path, encoding="utf-8") as f:
-                pts = json.load(f)
-
-            def _pt(p):
-                """dict {"x","y"} or list [y, x] -> (x, y)."""
-                if isinstance(p, dict):
-                    return (int(p["x"]), int(p["y"]))
-                # list/tuple from image coords: [row, col] = [y, x]
-                return (int(p[1]), int(p[0]))
-
-            junctions = [_pt(p) for p in pts.get("junctions", [])]
-            bridges = [_pt(p) for p in pts.get("bridges", [])]
+        model_path = os.getenv("TEXT_YOLO_WEIGHTS", "/models/text_detect/best.pt")
+        device = resolve_device()
+        whiten = os.getenv("OCR_WHITEN", "0") == "1"
+        expand_frac = float(os.getenv("OCR_EXPAND_FRAC", "0.07"))
+        pad_frac = float(os.getenv("OCR_PAD_FRAC", "0.25"))
         logger.info(
-            "[%s] Inputs: junctions=%d, bridges=%d",
-            diagram_uid, len(junctions), len(bridges),
+            "[%s] Clean OCR: model=%s device=%s whiten=%s expand=%.2f pad=%.2f",
+            diagram_uid, model_path, device, whiten, expand_frac, pad_frac,
         )
 
-        # ═══ Запуск pipeline ═══
-        from modules.ocr.pipeline import run_ocr_pipeline
-
-        result = run_ocr_pipeline(
+        result = run_ocr_pipeline_clean(
             image_path=original_image,
-            pipe_mask_path=pipe_mask if pipe_mask.exists() else None,
-            node_mask_path=node_mask if node_mask.exists() else None,
-            junction_points=junctions,
-            bridge_points=bridges,
-            profile=profile,
             output_dir=ocr_dir,
-            no_protection=ocr_cfg.no_protection,
-            tile2_size=ocr_cfg.tile2_size,
-            tile2_overlap=ocr_cfg.tile2_overlap,
-            tile3_size=ocr_cfg.tile3_size,
-            tile3_overlap=ocr_cfg.tile3_overlap,
+            model_path=model_path,
+            device=device,
+            expand_frac=expand_frac,
+            pad_frac=pad_frac,
+            whiten=whiten,
         )
 
-        # ═══ Освободить GPU ═══
+        # === Освободить GPU ===
         logger.info("[%s] Releasing GPU memory", diagram_uid)
         import torch
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         gc.collect()
 
-        # ═══ Сохранить результат ═══
+        # === Сохранить результат ===
         import numpy as np
 
         class _NumpyEncoder(json.JSONEncoder):
@@ -240,10 +146,9 @@ def task_run_ocr(self, diagram_uid: str):
             len(result.get("secondary", [])),
         )
 
-        # ═══ Регистрация артефакта ═══
+        # === Регистрация артефакта ===
         rel_path = str(ocr_result_path.relative_to(storage_path))
 
-        # Удалить старый артефакт если есть (retry case)
         old = db.query(Artifact).filter(
             Artifact.diagram_uid == diagram_uid,
             Artifact.artifact_type == ArtifactType.OCR_RESULT,
@@ -272,18 +177,11 @@ def task_run_ocr(self, diagram_uid: str):
         raise
 
     except Exception as exc:
-        logger.error(
-            "[%s] OCR failed: %s\n%s",
-            diagram_uid, exc, traceback.format_exc(),
-        )
-
-        # BUG-10 fix: retry before giving up
+        logger.error("[%s] OCR failed: %s\n%s", diagram_uid, exc, traceback.format_exc())
         if self.request.retries < self.max_retries:
             fail_stage(stage, str(exc)[:500], traceback.format_exc())
             db.rollback()
             raise self.retry(exc=exc)
-
-        # BUG-11 fix: set ERROR status when all retries exhausted
         fail_stage(stage, str(exc)[:500], traceback.format_exc())
         set_diagram_error(db, diagram_uid, str(exc)[:500], "ocr")
         db.rollback()
@@ -291,3 +189,47 @@ def task_run_ocr(self, diagram_uid: str):
 
     finally:
         db.close()
+
+
+@celery_app.task(
+    name="worker.tasks.ocr.task_recognize_boxes",
+    time_limit=300,
+    soft_time_limit=280,
+)
+def task_recognize_boxes(diagram_uid: str, boxes: list):
+    """П3: распознать переданные ВРУЧНУЮ боксы (ручной режим валидации OCR), батчем.
+
+    boxes: [[x0,y0,x1,y1], ...] или [{"bbox":[...]}, ...].
+    Возврат: [{"bbox":[...], "text": "...", "confidence": ..., "junk": ...}].
+    """
+    from worker.utils.device import apply_torch_device_env, resolve_device
+    apply_torch_device_env()
+
+    from modules.ocr.pipeline_clean import recognize_given_boxes
+
+    storage_path = Path(os.getenv("STORAGE_PATH", "./storage/diagrams"))
+    image = storage_path / str(diagram_uid) / "original" / "image.png"
+    if not image.exists():
+        raise FileNotFoundError(f"Original image not found: {image}")
+
+    bxs = [b.get("bbox") if isinstance(b, dict) else b for b in (boxes or [])]
+    bxs = [b for b in bxs if b]
+    if not bxs:
+        return []
+
+    device = resolve_device()
+    whiten = os.getenv("OCR_WHITEN", "0") == "1"
+    expand_frac = float(os.getenv("OCR_EXPAND_FRAC", "0.07"))
+    pad_frac = float(os.getenv("OCR_PAD_FRAC", "0.25"))
+    items = recognize_given_boxes(
+        image, bxs, device=device,
+        expand_frac=expand_frac, pad_frac=pad_frac, whiten=whiten,
+    )
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
+    except Exception:
+        pass
+    return items

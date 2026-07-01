@@ -24,9 +24,9 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import (
     QImage, QPixmap, QPainter, QColor, QBrush, QPen,
-    QFont, QPainterPath, QFontMetricsF,
+    QFont, QPainterPath, QFontMetricsF, QPolygonF,
 )
-from PySide6.QtCore import Qt, QRectF, Signal
+from PySide6.QtCore import Qt, QRectF, QPointF, Signal
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,16 @@ COLOR_OCR_BORDER_LOW = QColor(255, 140, 0, 200)
 
 COLOR_OCR_BOUND_BORDER = QColor(30, 120, 255, 240)
 OCR_BOUND_BORDER_WIDTH = 2
+
+# П3: единая схема — золото (привязан) / голубой (нет), без заливки
+COLOR_BOUND_GOLD = QColor(255, 200, 0, 255)
+COLOR_UNBOUND_BLUE = QColor(80, 160, 255, 240)
+BOUND_BORDER_WIDTH = 2.5
+COLOR_EQUIP_GREY = QColor(235, 235, 235, 245)     # яркий светло-серый — контур/bbox оборудования
+COLOR_CENTROID = QColor(52, 152, 219, 230)        # синяя закрашенная точка-центроид
+COLOR_CONNECTOR = QColor(150, 150, 150, 200)      # серая точка коннектора (только вид)
+COLOR_SELECT_GREEN = QColor(46, 204, 113, 255)    # выделение рамкой (Shift)
+SELECT_BORDER_WIDTH = 2.5
 
 COLOR_DROP_HIGHLIGHT = QColor(255, 230, 0, 160)
 
@@ -95,13 +105,10 @@ COLOR_KKS_NODE_BOUND_BORDER = QColor(50, 180, 50, 200)
 
 
 def _clean_text(text: str) -> str:
-    """Очистить текст от HTML тегов, курсива, жирного и т.п."""
-    import re
-    # Убрать HTML теги
-    text = re.sub(r'<[^>]+>', '', text)
-    # Убрать markdown-style форматирование
-    text = text.replace('**', '').replace('__', '').replace('*', '').replace('_', '')
-    return text.strip()
+    """Единая нормализация (П5): делегирует modules.ocr.text_clean.cleanup
+    (NFKC, html.unescape, снятие тегов/LaTeX, control-символы, единый вид)."""
+    from modules.ocr.text_clean import cleanup
+    return cleanup(text or "")
 
 
 def _format_kks_display(kks_full: str, block: str = "", system: str = "",
@@ -236,6 +243,20 @@ class OcrBindingEditor(QGraphicsView):
         self._add_mode: bool = False
         self._del_mode: bool = False
         self._move_mode: bool = False
+        self._add_bbox_start = None      # П3: рисование бокса перетаскиванием
+        self._add_bbox_preview = None
+        self._selected_ocr: set = set()  # П3: выделенные боксы (Shift-рамка)
+        self._rb_start = None            # старт rubber-band
+        self._rubber_band = None         # item рамки выделения
+        self._node_contours: dict = {}   # ann_idx -> полигон контура узла
+        # Настраиваемое оформление (панель ⚙)
+        self._c_edge = COLOR_EDGE
+        self._c_equip = COLOR_EQUIP_GREY
+        self._c_textbox = COLOR_UNBOUND_BLUE
+        self._label_pt = self.TEXT_FONT_SIZE
+        self._bg_darkness = 0.47
+        self._bg_item = None
+        self._orig_qimage = None
         self._move_idx: Optional[int] = None  # block being moved
         self._move_origin_bbox: list = []
         self._drag_line = None  # жёлтый пунктир при drag
@@ -283,13 +304,14 @@ class OcrBindingEditor(QGraphicsView):
 
     def load_data(self, image_path: str, ocr_blocks: list[dict],
                   graph_data: dict, bindings: list[dict], coco_data: dict = None,
-                  secondary_blocks: list[dict] = None):
+                  secondary_blocks: list[dict] = None, node_contours: dict = None):
         self._ocr_blocks = ocr_blocks
         self._secondary_blocks = secondary_blocks or []
         self._graph_nodes = graph_data.get("nodes", [])
         self._graph_edges = graph_data.get("links", [])
         self._bindings = bindings
         self._coco_data = coco_data or {}
+        self._node_contours = node_contours or {}
         self._rebuild_bound_indices()
 
         img = QImage(image_path)
@@ -303,6 +325,7 @@ class OcrBindingEditor(QGraphicsView):
         self._ocr_text_bg_items.clear()
         self._ocr_inner_text_items.clear()
         self._node_items.clear()
+        self._connector_items = {}
         self._edge_items.clear()
         self._edge_item_to_idx.clear()
         self._binding_lines.clear()
@@ -311,10 +334,13 @@ class OcrBindingEditor(QGraphicsView):
         # Затемнить изображение — рисуем поверх без копии
         if img.format() != QImage.Format.Format_ARGB32:
             img = img.convertToFormat(QImage.Format.Format_ARGB32)
-        p = QPainter(img)
-        p.fillRect(img.rect(), QColor(0, 0, 0, 120))
+        self._orig_qimage = img.copy()
+        dark = img.copy()
+        p = QPainter(dark)
+        p.fillRect(dark.rect(), QColor(0, 0, 0, int(self._bg_darkness * 255)))
         p.end()
-        self.scene.addPixmap(QPixmap.fromImage(img)).setZValue(0)
+        self._bg_item = self.scene.addPixmap(QPixmap.fromImage(dark))
+        self._bg_item.setZValue(0)
         self.scene.setSceneRect(QRectF(0, 0, self._img_width, self._img_height))
 
         self._draw_equipment_bboxes()
@@ -439,7 +465,7 @@ class OcrBindingEditor(QGraphicsView):
         """Перекрасить OCR-боксы по результатам валидации + обновить подписи."""
         from modules.ocr_validation.result import ConfirmStatus
         cl_by_idx = {cl.block_idx: cl for cl in self._validation_results}
-        font = QFont("DejaVu Sans", self.TEXT_FONT_SIZE)
+        font = QFont("DejaVu Sans", self._label_pt)
         fm = QFontMetricsF(font)
 
         for idx, rect in self._ocr_items.items():
@@ -617,7 +643,7 @@ class OcrBindingEditor(QGraphicsView):
             return
 
         pen = QPen(COLOR_CONFIRMED_BORDER, 1.5, Qt.PenStyle.DashLine)
-        font = QFont("DejaVu Sans", self.TEXT_FONT_SIZE)
+        font = QFont("DejaVu Sans", self._label_pt)
         fm = QFontMetricsF(font)
 
         # Собрать все занятые прямоугольники (OCR-боксы, включая скрытые KKS)
@@ -857,8 +883,18 @@ class OcrBindingEditor(QGraphicsView):
     # Drawing
     # =================================================================
 
+    @staticmethod
+    def _poly_points(poly):
+        """Точки контура из плоского [x0,y0,x1,y1,...] или вложенного [[x,y],...]."""
+        if not poly:
+            return []
+        if isinstance(poly[0], (list, tuple)):
+            return [(float(pt[0]), float(pt[1])) for pt in poly if len(pt) >= 2]
+        return [(float(poly[i]), float(poly[i + 1]))
+                for i in range(0, len(poly) - 1, 2)]
+
     def _draw_equipment_bboxes(self):
-        color = QColor("#3498db")
+        color = self._c_equip
         self._equipment_bbox_items: dict[str, QGraphicsRectItem] = {}
 
         # Проверить: есть ли bbox в graph nodes (авторитетный источник после редактора)
@@ -884,11 +920,20 @@ class OcrBindingEditor(QGraphicsView):
             if node.get("type") == "connector":
                 continue
             nid = node.get("id", "")
+            pts = self._poly_points(self._node_contours.get(node.get("ann_idx")))
+            if len(pts) >= 3:
+                qpoly = QPolygonF([QPointF(px, py) for px, py in pts])
+                item = self.scene.addPolygon(qpoly, QPen(color, 2),
+                                             QBrush(Qt.BrushStyle.NoBrush))
+                item.setZValue(3)
+                self._equipment_bbox_items[nid] = item
+                continue
             nb = node.get("bbox")
             if not nb or len(nb) != 4:
                 continue
             x1, y1, x2, y2 = nb
-            item = self.scene.addRect(x1, y1, x2 - x1, y2 - y1, QPen(color, 2))
+            item = self.scene.addRect(x1, y1, x2 - x1, y2 - y1, QPen(color, 2),
+                                      QBrush(Qt.BrushStyle.NoBrush))
             item.setZValue(3)
             self._equipment_bbox_items[nid] = item
 
@@ -911,7 +956,7 @@ class OcrBindingEditor(QGraphicsView):
                 path.lineTo(wp[1], wp[0])
             path.lineTo(tx, ty)
             ek = f"{min(src_id, tgt_id)}|{max(src_id, tgt_id)}"
-            color = COLOR_EDGE_BOUND if ek in self._bound_edge_keys else COLOR_EDGE
+            color = COLOR_BOUND_GOLD if ek in self._bound_edge_keys else self._c_edge
             item = self.scene.addPath(path, QPen(color, 5))
             item.setZValue(5)
             self._edge_items[idx] = item
@@ -952,8 +997,59 @@ class OcrBindingEditor(QGraphicsView):
                 label.setZValue(9)
                 self._secondary_items.append(label)
 
+    def set_edge_color(self, c):
+        self._c_edge = QColor(c); self._redraw_all_colors()
+
+    def set_box_border_color(self, c):
+        """Цвет рамки/контура оборудования."""
+        self._c_equip = QColor(c); self._redraw_all_colors()
+
+    def set_text_border_color(self, c):
+        """Цвет рамки непривязанного текст-бокса."""
+        self._c_textbox = QColor(c); self._redraw_all_colors()
+
+    def set_label_font_size(self, pt):
+        self._label_pt = max(6, int(pt)); self.refresh_ocr_layer()
+
+    def set_background_darkness(self, frac):
+        self._bg_darkness = max(0.0, min(0.95, float(frac)))
+        self._apply_bg_darkness()
+
+    def _apply_bg_darkness(self):
+        if self._orig_qimage is None or self._bg_item is None:
+            return
+        dark = self._orig_qimage.copy()
+        p = QPainter(dark)
+        p.fillRect(dark.rect(), QColor(0, 0, 0, int(self._bg_darkness * 255)))
+        p.end()
+        self._bg_item.setPixmap(QPixmap.fromImage(dark))
+
+    def refresh_ocr_layer(self):
+        """П3: полностью перерисовать слой OCR (после распознавания/массовых правок).
+        Сначала убираем старые item'ы из сцены — иначе появляются дубли."""
+        for items_dict in (self._ocr_items, self._ocr_text_items,
+                           self._ocr_text_bg_items, self._ocr_inner_text_items):
+            for it in items_dict.values():
+                try:
+                    self.scene.removeItem(it)
+                except Exception:
+                    pass
+            items_dict.clear()
+        self._rebuild_bound_indices()
+        self._draw_ocr_blocks()
+        self._redraw_all_colors()
+        self._redraw_bindings()
+
+    def _ocr_pen(self, idx):
+        """Рамка текст-бокса: зелёный (выделен) / золото (привязан) / голубой (нет)."""
+        if idx in self._selected_ocr:
+            return QPen(COLOR_SELECT_GREEN, SELECT_BORDER_WIDTH)
+        if idx in self._bound_ocr_indices:
+            return QPen(COLOR_BOUND_GOLD, BOUND_BORDER_WIDTH)
+        return QPen(self._c_textbox, BOUND_BORDER_WIDTH)
+
     def _draw_ocr_blocks(self):
-        font = QFont("DejaVu Sans", self.TEXT_FONT_SIZE)
+        font = QFont("DejaVu Sans", self._label_pt)
         fm = QFontMetricsF(font)
         for idx, block in enumerate(self._ocr_blocks):
             if block.get("merged_into") is not None:
@@ -964,11 +1060,8 @@ class OcrBindingEditor(QGraphicsView):
             if not bbox or len(bbox) != 4:
                 continue
             x1, y1, x2, y2 = bbox
-            fill, border = _ocr_colors(conf)
-            is_bound = idx in self._bound_ocr_indices
-            pen = QPen(COLOR_OCR_BOUND_BORDER, OCR_BOUND_BORDER_WIDTH) if is_bound \
-                else QPen(border, self.OCR_BORDER_WIDTH)
-            rect = self.scene.addRect(x1, y1, x2 - x1, y2 - y1, pen, QBrush(fill))
+            rect = self.scene.addRect(x1, y1, x2 - x1, y2 - y1, self._ocr_pen(idx),
+                                      QBrush(Qt.BrushStyle.NoBrush))
             rect.setZValue(10)
             self._ocr_items[idx] = rect
             if text:
@@ -988,57 +1081,35 @@ class OcrBindingEditor(QGraphicsView):
                 self._ocr_text_items[idx] = label
 
     def _draw_graph_nodes(self):
+        if not hasattr(self, "_connector_items"):
+            self._connector_items = {}
+        r = self.NODE_RADIUS
         for node in self._graph_nodes:
-            if node.get("type") == "connector":
-                continue
             node_id = node.get("id", "")
             cx, cy = self._node_center(node)
             if cx is None:
                 continue
-            is_bound = node_id in self._bound_node_ids
-            color = COLOR_NODE_BOUND if is_bound else COLOR_NODE_EQUIPMENT
-            r = self.NODE_RADIUS
+            if node.get("type") == "connector":
+                rr = max(2.0, r * 0.45)
+                e = self.scene.addEllipse(cx - rr, cy - rr, rr * 2, rr * 2,
+                                          QPen(COLOR_CONNECTOR.darker(120), 1.0),
+                                          QBrush(COLOR_CONNECTOR))
+                e.setZValue(18)
+                self._connector_items[node_id] = e
+                continue
+            c = COLOR_BOUND_GOLD if node_id in self._bound_node_ids else COLOR_CENTROID
             e = self.scene.addEllipse(cx - r, cy - r, r * 2, r * 2,
-                                      QPen(color.darker(130), 1.5), QBrush(color))
+                                      QPen(c.darker(130), 1.5), QBrush(c))
             e.setZValue(20)
             self._node_items[node_id] = e
 
     def _draw_bindings(self):
-        """Привязки OCR→узлы: скрыть OCR-бокс, линия от узла, флажок с текстом."""
-        # В режимах KKS / Diameter — не рисовать обычные привязки
-        if self._bind_mode in ("kks", "diameter"):
-            # Только скрыть привязанные OCR-боксы
-            for b in self._bindings:
-                ocr_idx = b.get("ocr_block_idx")
-                if ocr_idx is None or ocr_idx >= len(self._ocr_blocks):
-                    continue
-                if ocr_idx in self._ocr_items:
-                    self._ocr_items[ocr_idx].setVisible(False)
-                if ocr_idx in self._ocr_text_items:
-                    self._ocr_text_items[ocr_idx].setVisible(False)
-                if ocr_idx in self._ocr_text_bg_items:
-                    self._ocr_text_bg_items[ocr_idx].setVisible(False)
-                if ocr_idx in self._ocr_inner_text_items:
-                    self._ocr_inner_text_items[ocr_idx].setVisible(False)
+        """П3: привязка — тонкая золотая линия бокс→цель. Бокс остаётся видимым
+        (золотая рамка ставится в _redraw_all_colors_base), цель золотится."""
+        self._node_binding_label_rects = []
+        if not self._bindings:
             return
-
-        pen = QPen(COLOR_BINDING_LINE, self.BINDING_LINE_WIDTH, Qt.PenStyle.DashLine)
-        font = QFont("DejaVu Sans", self.TEXT_FONT_SIZE)
-        fm = QFontMetricsF(font)
-
-        # Собрать occupied rects (все OCR bbox + уже размещённые KKS флажки)
-        occupied = []
-        for idx, block in enumerate(self._ocr_blocks):
-            if block.get("merged_into") is not None:
-                continue
-            bbox = block.get("bbox")
-            if bbox and len(bbox) == 4:
-                occupied.append(bbox)
-        for lx1, ly1, lx2, ly2, *_ in self._kks_label_rects:
-            occupied.append([lx1, ly1, lx2, ly2])
-
-        self._node_binding_label_rects = []  # для клик-детекции
-
+        pen = QPen(COLOR_BOUND_GOLD, self.BINDING_LINE_WIDTH, Qt.PenStyle.DashLine)
         for b in self._bindings:
             ocr_idx = b.get("ocr_block_idx")
             if ocr_idx is None or ocr_idx >= len(self._ocr_blocks):
@@ -1046,71 +1117,21 @@ class OcrBindingEditor(QGraphicsView):
             block = self._ocr_blocks[ocr_idx]
             if block.get("merged_into") is not None:
                 continue
-
+            bbox = block.get("bbox", [0, 0, 0, 0])
+            bcx, bcy = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
             node_id = b.get("node_id")
             edge_key = b.get("edge_key")
-
             if node_id:
                 tcx, tcy = self._get_node_center(node_id)
-                if tcx is None:
-                    continue
-
-                # Скрыть OCR-бокс
-                if ocr_idx in self._ocr_items:
-                    self._ocr_items[ocr_idx].setVisible(False)
-                if ocr_idx in self._ocr_text_items:
-                    self._ocr_text_items[ocr_idx].setVisible(False)
-                if ocr_idx in self._ocr_text_bg_items:
-                    self._ocr_text_bg_items[ocr_idx].setVisible(False)
-                if ocr_idx in self._ocr_inner_text_items:
-                    self._ocr_inner_text_items[ocr_idx].setVisible(False)
-
-                # Флажок с текстом — позиция = подпись над OCR-боксом
-                label_text = b.get("text", "")[:30]
-                if not label_text:
-                    continue
-                tw = fm.horizontalAdvance(label_text) + 8
-                th = fm.height() + 4
-
-                bbox = block.get("bbox", [0, 0, 0, 0])
-                lx = bbox[0]
-                ly = bbox[1] - th - 2
-                if ly < 0:
-                    ly = bbox[3] + 2
-
-                flag_cx = lx + tw / 2
-                flag_cy = ly + th / 2
-                line = self.scene.addLine(tcx, tcy, flag_cx, flag_cy, pen)
-                line.setZValue(15)
-                self._binding_lines.append(line)
-
-                bg = self.scene.addRect(
-                    lx, ly, tw, th,
-                    QPen(COLOR_BINDING_LINE, 1.0), QBrush(COLOR_TEXT_BG),
-                )
-                bg.setZValue(21)
-                self._flag_items.append(bg)
-
-                label = self.scene.addSimpleText(label_text, font)
-                label.setBrush(QBrush(COLOR_TEXT_LABEL))
-                label.setPos(lx + 4, ly + 2)
-                label.setZValue(22)
-                self._flag_items.append(label)
-
-                self._node_binding_label_rects.append((lx, ly, lx + tw, ly + th, node_id, ocr_idx))
-                occupied.append([lx, ly, lx + tw, ly + th])
-
             elif edge_key:
-                # Edge binding — просто скрытая линия (как раньше)
-                bbox = block.get("bbox", [0, 0, 0, 0])
-                bcx, bcy = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
                 tcx, tcy = self._get_edge_midpoint_by_key(edge_key)
-                if tcx is None:
-                    continue
-                line = self.scene.addLine(bcx, bcy, tcx, tcy, pen)
-                line.setZValue(15)
-                line.setVisible(False)
-                self._binding_lines.append(line)
+            else:
+                continue
+            if tcx is None:
+                continue
+            line = self.scene.addLine(bcx, bcy, tcx, tcy, pen)
+            line.setZValue(15)
+            self._binding_lines.append(line)
 
     def _redraw_bindings(self):
         for l in self._binding_lines:
@@ -1122,125 +1143,46 @@ class OcrBindingEditor(QGraphicsView):
         self._draw_bindings()
 
     def _redraw_all_colors(self):
-        """Перерисовать все цвета. Если есть validation_results — всегда используем pattern-match цвета."""
+        # П3: только схема золото/голубой; цветовая валидация отключена
         self._redraw_all_colors_base()
-        # Всегда применяем validation colors когда есть результаты (не только в _validation_mode)
-        if self._validation_results:
-            self._redraw_validation_colors()
 
     def _redraw_all_colors_base(self):
+        # П3: текст-боксы — только рамка (золото если привязан, голубой если нет), без заливки
         for idx, rect in self._ocr_items.items():
             block = self._ocr_blocks[idx] if idx < len(self._ocr_blocks) else {}
-
-            # Merged/deleted блоки — скрыть всё
-            if block.get("merged_into") is not None:
-                rect.setVisible(False)
-                if idx in self._ocr_text_items:
-                    self._ocr_text_items[idx].setVisible(False)
-                if idx in self._ocr_text_bg_items:
-                    self._ocr_text_bg_items[idx].setVisible(False)
-                if idx in self._ocr_inner_text_items:
-                    self._ocr_inner_text_items[idx].setVisible(False)
+            deleted = block.get("merged_into") is not None
+            visible = (not deleted) and self._is_block_visible(idx)
+            rect.setVisible(visible)
+            for items in (self._ocr_text_items, self._ocr_text_bg_items,
+                          self._ocr_inner_text_items):
+                if idx in items:
+                    items[idx].setVisible(visible)
+            if not visible:
                 continue
+            rect.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+            rect.setPen(self._ocr_pen(idx))
 
-            # Block filter: скрыть если не в фильтре
-            if not self._is_block_visible(idx):
-                rect.setVisible(False)
-                if idx in self._ocr_text_items:
-                    self._ocr_text_items[idx].setVisible(False)
-                if idx in self._ocr_text_bg_items:
-                    self._ocr_text_bg_items[idx].setVisible(False)
-                if idx in self._ocr_inner_text_items:
-                    self._ocr_inner_text_items[idx].setVisible(False)
-                continue
-
-            conf = block.get("confidence", 0)
-            fill, border = _ocr_colors(conf)
-            if idx in self._kks_bound_ocr_indices:
-                # KKS-привязан — скрыть (флажок рисуется в _redraw_kks_bindings)
-                rect.setVisible(False)
-                if idx in self._ocr_text_items:
-                    self._ocr_text_items[idx].setVisible(False)
-                if idx in self._ocr_text_bg_items:
-                    self._ocr_text_bg_items[idx].setVisible(False)
-                if idx in self._ocr_inner_text_items:
-                    self._ocr_inner_text_items[idx].setVisible(False)
-            elif idx in self._diameter_bound_ocr_indices:
-                # Diameter-привязан — скрыть (флажок рисуется в _draw_diameter_bindings)
-                rect.setVisible(False)
-                if idx in self._ocr_text_items:
-                    self._ocr_text_items[idx].setVisible(False)
-                if idx in self._ocr_text_bg_items:
-                    self._ocr_text_bg_items[idx].setVisible(False)
-                if idx in self._ocr_inner_text_items:
-                    self._ocr_inner_text_items[idx].setVisible(False)
-            elif idx in self._bound_ocr_indices:
-                # Node-привязан — скрыть (флажок рисуется в _draw_bindings)
-                rect.setVisible(False)
-                if idx in self._ocr_text_items:
-                    self._ocr_text_items[idx].setVisible(False)
-                if idx in self._ocr_text_bg_items:
-                    self._ocr_text_bg_items[idx].setVisible(False)
-                if idx in self._ocr_inner_text_items:
-                    self._ocr_inner_text_items[idx].setVisible(False)
-            elif idx in self._bound_ocr_indices:
-                rect.setVisible(True)
-                rect.setBrush(QBrush(fill))
-                rect.setPen(QPen(COLOR_OCR_BOUND_BORDER, OCR_BOUND_BORDER_WIDTH))
-                if idx in self._ocr_text_items:
-                    self._ocr_text_items[idx].setVisible(True)
-                if idx in self._ocr_text_bg_items:
-                    self._ocr_text_bg_items[idx].setVisible(True)
-                if idx in self._ocr_inner_text_items:
-                    self._ocr_inner_text_items[idx].setVisible(True)
-            else:
-                rect.setVisible(True)
-                rect.setBrush(QBrush(fill))
-                rect.setPen(QPen(border, self.OCR_BORDER_WIDTH))
-                if idx in self._ocr_text_items:
-                    self._ocr_text_items[idx].setVisible(True)
-                if idx in self._ocr_text_bg_items:
-                    self._ocr_text_bg_items[idx].setVisible(True)
-                if idx in self._ocr_inner_text_items:
-                    self._ocr_inner_text_items[idx].setVisible(True)
+        # Центроид — ЗАКРАШЕННАЯ точка (золото если привязан, иначе синяя)
         for nid, e in self._node_items.items():
-            if nid in self._bound_node_ids:
-                c = COLOR_NODE_BOUND
-                e.setBrush(QBrush(c))
-                e.setPen(QPen(c.darker(130), 1.5))
-            else:
-                c = COLOR_NODE_EQUIPMENT
-                e.setBrush(QBrush(c))
-                e.setPen(QPen(c.darker(130), 1.5))
-        # Equipment bbox: заливка в KKS и Other mode, сброс в diameter
+            c = COLOR_BOUND_GOLD if nid in self._bound_node_ids else COLOR_CENTROID
+            e.setBrush(QBrush(c))
+            e.setPen(QPen(c.darker(130), 1.5))
+
+        # Контур/bbox оборудования — только рамка (серый / золото)
         if hasattr(self, '_equipment_bbox_items'):
             for nid, rect_item in self._equipment_bbox_items.items():
-                if self._bind_mode != "diameter":
-                    if nid in self._kks_bound_node_ids:
-                        rect_item.setBrush(QBrush(COLOR_KKS_NODE_BOUND))
-                        rect_item.setPen(QPen(COLOR_KKS_NODE_BOUND_BORDER, 2.5))
-                    else:
-                        rect_item.setBrush(QBrush(COLOR_KKS_NODE_UNBOUND))
-                        rect_item.setPen(QPen(COLOR_KKS_NODE_UNBOUND_BORDER, 2.0))
-                else:
-                    rect_item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
-                    rect_item.setPen(QPen(QColor("#3498db"), 2))
+                c = COLOR_BOUND_GOLD if nid in self._bound_node_ids else self._c_equip
+                rect_item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+                rect_item.setPen(QPen(c, 2.0))
+
+        # Рёбра — золото если привязан, иначе стандартный цвет
         for i, item in self._edge_items.items():
             if i >= len(self._graph_edges):
                 continue
             ed = self._graph_edges[i]
-            s, t = ed.get('source', ''), ed.get('target', ''); ek = f"{min(s, t)}|{max(s, t)}"
-            # KKS mode: рёбра декоративные — всегда базовый цвет
-            if self._bind_mode == "kks":
-                item.setPen(QPen(COLOR_EDGE, 5))
-            elif ek in self._conflict_edge_keys:
-                item.setPen(QPen(COLOR_CONFLICT_EDGE, 6))
-            elif ek in self._diameter_bound_edge_keys:
-                item.setPen(QPen(COLOR_DIAMETER_BORDER, 5))
-            elif ek in self._bound_edge_keys:
-                item.setPen(QPen(COLOR_EDGE_BOUND, 5))
-            else:
-                item.setPen(QPen(COLOR_EDGE, 5))
+            s_, t_ = ed.get('source', ''), ed.get('target', '')
+            ek = f"{min(s_, t_)}|{max(s_, t_)}"
+            item.setPen(QPen(COLOR_BOUND_GOLD if ek in self._bound_edge_keys else self._c_edge, 5))
 
     def _rebuild_bound_indices(self):
         self._bound_ocr_indices = set()
@@ -1355,7 +1297,7 @@ class OcrBindingEditor(QGraphicsView):
         # Propagated diameters — метка на ребре (полупрозрачная, без скрытия бокса)
         prop_bg = QColor(155, 89, 182, 140)
         prop_border = QColor(155, 89, 182, 180)
-        font_prop = QFont("DejaVu Sans", self.TEXT_FONT_SIZE)
+        font_prop = QFont("DejaVu Sans", self._label_pt)
         fm_prop = QFontMetricsF(font_prop)
 
         for pd in self._propagated_diameters:
@@ -1482,13 +1424,7 @@ class OcrBindingEditor(QGraphicsView):
             # Block filter
             if not self._is_block_visible(idx):
                 continue
-            # Пропустить скрытые (привязанные к узлам/KKS/диаметрам)
-            if idx in self._kks_bound_ocr_indices:
-                continue
-            if idx in self._diameter_bound_ocr_indices:
-                continue
-            if idx in self._bound_ocr_indices:
-                continue
+            # П3: привязанные боксы видимы и кликабельны — не пропускаем
             bbox = block.get("bbox")
             if not bbox or len(bbox) != 4:
                 continue
@@ -1571,7 +1507,7 @@ class OcrBindingEditor(QGraphicsView):
         self._ocr_items[idx] = rect
 
         if text:
-            font = QFont("DejaVu Sans", self.TEXT_FONT_SIZE)
+            font = QFont("DejaVu Sans", self._label_pt)
             fm = QFontMetricsF(font)
             th = fm.height()
             lx, ly = x1, y1 - th - 2
@@ -1799,7 +1735,7 @@ class OcrBindingEditor(QGraphicsView):
             text = block.get("text", "").strip()
 
         # Подпись сверху
-        font = QFont("DejaVu Sans", self.TEXT_FONT_SIZE)
+        font = QFont("DejaVu Sans", self._label_pt)
         fm = QFontMetricsF(font)
         th = fm.height()
         lx, ly = x1, y1 - th - 2
@@ -1890,203 +1826,33 @@ class OcrBindingEditor(QGraphicsView):
     # =================================================================
 
     def _bind_to_node(self, ocr_idx, node_id):
+        # П3: простая привязка текст->узел (без KKS-нормализации/потока)
         self._push_undo()
         block = self._ocr_blocks[ocr_idx]
-        text = block.get("text", "").strip()
+        text = _clean_text(block.get("text", ""))
         n = self._find_node(node_id)
-        node_type = n.get("type", "connector") if n else "connector"
-
-        if node_type == "equipment":
-            # Equipment → KKS binding: text becomes kks_full
-            # Запомнить старый OCR-блок привязанный к этому узлу (чтобы восстановить видимость)
-            old_ocr_idx = None
-            for b in self._kks_bindings:
-                if b["node_id"] == node_id and b["ocr_block_idx"] != ocr_idx:
-                    old_ocr_idx = b["ocr_block_idx"]
-                    break
-            # Remove any prior bindings for this OCR block and this node
-            self._kks_bindings = [
-                b for b in self._kks_bindings
-                if b["ocr_block_idx"] != ocr_idx and b["node_id"] != node_id
-            ]
-            self._bindings = [
-                b for b in self._bindings
-                if b.get("ocr_block_idx") != ocr_idx
-            ]
-            # Восстановить видимость старого OCR-бокса
-            if old_ocr_idx is not None:
-                self._restore_ocr_visibility(old_ocr_idx)
-            # Clean KKS text: normalize via KksMatcher if available (B6.5)
-            kks_clean = text.replace(" ", "")
-            unit_valid = True
-            validation_msg = "manual"
-            if self._project_config_dir:
-                try:
-                    from pathlib import Path
-                    from modules.kks_binding.matcher import KksMatcher
-
-                    matcher = None
-
-                    # v2.0: попробовать domain_profile.yaml
-                    dp_candidates = [
-                        Path(self._project_config_dir) / "domain_profile_cyrillic.yaml",
-                        Path(self._project_config_dir) / "domain_profile.yaml",
-                    ]
-                    # Приоритет: domain_profile_path из project YAML
-                    project_yamls = list(Path(self._project_config_dir).glob("*.yaml"))
-                    project_yamls = [y for y in project_yamls
-                                     if "kks_config" not in y.name
-                                     and "class_to_kks" not in y.name
-                                     and "domain_profile" not in y.name
-                                     and "ocr_profile" not in y.name]
-                    for py in project_yamls:
-                        try:
-                            import yaml as _yaml
-                            with open(py, encoding="utf-8") as _f:
-                                _proj = _yaml.safe_load(_f)
-                            _dp = (_proj.get("ocr", {}) or {}).get("domain_profile_path")
-                            if _dp:
-                                _p = Path(_dp)
-                                if not _p.is_absolute():
-                                    _p = Path(self._project_config_dir) / _dp
-                                if _p.exists():
-                                    dp_candidates.insert(0, _p)
-                        except Exception:
-                            pass
-
-                    for dp_path in dp_candidates:
-                        if dp_path.exists():
-                            try:
-                                from modules.binding.config import DomainBindingConfig
-                                bcfg = DomainBindingConfig.from_yaml(str(dp_path))
-                                if bcfg.code_types:
-                                    matcher = KksMatcher(bcfg)
-                                    logger.debug("Editor: using domain_profile %s", dp_path.name)
-                                    break
-                            except Exception:
-                                pass
-
-                    # Fallback: legacy kks_config.yaml
-                    if matcher is None:
-                        from modules.kks_binding.config import KksConfig
-                        kks_cfg_path = Path(self._project_config_dir) / "kks_config.yaml"
-                        if kks_cfg_path.exists():
-                            kks_cfg = KksConfig.from_yaml(str(kks_cfg_path))
-                            matcher = KksMatcher(kks_cfg)
-
-                    if matcher:
-                        km = matcher.match(text)
-                        if km:
-                            kks_clean = km.full
-                            # Validate unit↔class via domain_profile or legacy
-                            if bcfg and bcfg.class_rules:
-                                cls_name = n.get("class_name", "") if n else ""
-                                rule = bcfg.class_rules.get(cls_name)
-                                if rule and rule.expected_units and km.unit not in rule.expected_units:
-                                    unit_valid = False
-                                    validation_msg = f"unit '{km.unit}' unexpected for '{cls_name}'"
-                            else:
-                                from modules.kks_binding.config import ClassToKksConfig
-                                cls_cfg_path = Path(self._project_config_dir) / "class_to_kks_config.yaml"
-                                if cls_cfg_path.exists():
-                                    cls_cfg = ClassToKksConfig.from_yaml(str(cls_cfg_path))
-                                    rule = cls_cfg.class_to_kks.get(n.get("class_name", "") if n else "")
-                                    if rule and rule.expected_units and km.unit not in rule.expected_units:
-                                        unit_valid = False
-                                        validation_msg = f"unit '{km.unit}' unexpected for '{n.get('class_name', '')}'"
-                except Exception as exc:
-                    logger.warning("KKS normalization failed in editor: %s", exc)
-            self._kks_bindings.append({
-                "ocr_block_idx": ocr_idx,
-                "node_id": node_id,
-                "node_class": n.get("class_name", "") if n else "",
-                "kks_full": kks_clean,
-                "confidence": 1.0,
-                "distance": 0.0,
-                "unit_valid": unit_valid,
-                "validation_msg": validation_msg,
-                "reclassify_to": None,
-            })
-            self._kks_bound_ocr_indices = {b["ocr_block_idx"] for b in self._kks_bindings}
-            self._kks_bound_node_ids = {b["node_id"] for b in self._kks_bindings}
-            self._after_change()
-            cls = n.get("class_name", node_id[:12]) if n else node_id[:12]
-            self.status_message.emit(f"KKS привязан → {cls}: {kks_clean}")
-        else:
-            # Connector or other → regular binding
-            self._bindings = [b for b in self._bindings if b.get("ocr_block_idx") != ocr_idx]
-            self._bindings.append({
-                "node_id": node_id, "text": text,
-                "ocr_block_idx": ocr_idx, "bbox": block.get("bbox", []),
-            })
-            self._after_change()
-            cls = n.get("class_name", node_id[:12]) if n else node_id[:12]
-            self.status_message.emit(f"Привязано → узел {cls}")
+        self._bindings = [b for b in self._bindings if b.get("ocr_block_idx") != ocr_idx]
+        self._bindings.append({
+            "node_id": node_id, "text": text,
+            "ocr_block_idx": ocr_idx, "bbox": block.get("bbox", []),
+        })
+        self._after_change()
+        cls = n.get("class_name", node_id[:12]) if n else node_id[:12]
+        self.status_message.emit(f"Привязано → узел {cls}")
 
     def _bind_to_edge(self, ocr_idx, edge_idx):
-        """Привязать OCR-бокс к ребру. Если текст — диаметр, создать diameter binding."""
+        # П3: простая привязка текст->ребро (как у узла, без диаметра/потока)
         self._push_undo()
         block = self._ocr_blocks[ocr_idx]
         text = _clean_text(block.get("text", ""))
         ek = self._edge_key_str(edge_idx)
-
-        # Lazy-init _diameter_matcher
-        if not self._diameter_matcher and self._project_config_dir:
-            try:
-                from pathlib import Path as _P
-                from modules.text_binding.config import TextRecognitionConfig
-                from modules.text_binding.matcher import DiameterMatcher
-                cfg_dir = _P(self._project_config_dir)
-                for y in cfg_dir.glob("*.yaml"):
-                    if "kks_config" in y.name or "class_to_kks" in y.name:
-                        continue
-                    try:
-                        cfg = TextRecognitionConfig.from_project_yaml(str(y))
-                        if cfg.diameter.patterns:
-                            self._diameter_matcher = DiameterMatcher(cfg.diameter)
-                            break
-                    except Exception:
-                        pass
-            except Exception as exc:
-                logger.warning("Lazy DiameterMatcher init failed: %s", exc)
-
-        # Проверить: текст содержит диаметр?
-        dm = self._diameter_matcher.match(text) if self._diameter_matcher else None
-
-        if dm:
-            # Убрать старую привязку на это ребро (если есть)
-            self._diameter_bindings = [
-                db for db in self._diameter_bindings if db.get("edge_key") != ek
-            ]
-            # Убрать из обычных привязок
-            self._bindings = [
-                b for b in self._bindings if b.get("ocr_block_idx") != ocr_idx
-            ]
-
-            edge = self._graph_edges[edge_idx] if edge_idx < len(self._graph_edges) else {}
-            self._diameter_bindings.append({
-                "ocr_block_idx": ocr_idx,
-                "edge_idx": edge_idx,
-                "edge_id": edge.get("id", ""),
-                "edge_key": ek,
-                "text": dm.text,
-                "prefix": dm.prefix,
-                "diameter": dm.diameter,
-                "suffix": dm.suffix,
-                "confidence": dm.confidence,
-            })
-            self._repropagate_diameters()
-            self._after_change()
-            self.status_message.emit(f"Диаметр {dm.text} → ребро (+ поток)")
-        else:
-            # Обычная привязка к ребру
-            self._bindings = [b for b in self._bindings if b.get("ocr_block_idx") != ocr_idx]
-            self._bindings.append({
-                "edge_key": ek, "text": text,
-                "ocr_block_idx": ocr_idx, "bbox": block.get("bbox", []),
-            })
-            self._after_change()
-            self.status_message.emit(f"Привязано → ребро")
+        self._bindings = [b for b in self._bindings if b.get("ocr_block_idx") != ocr_idx]
+        self._bindings.append({
+            "edge_key": ek, "text": text,
+            "ocr_block_idx": ocr_idx, "bbox": block.get("bbox", []),
+        })
+        self._after_change()
+        self.status_message.emit("Привязано → ребро")
 
     def _unbind(self, ocr_idx):
         self._push_undo()
@@ -2520,6 +2286,22 @@ class OcrBindingEditor(QGraphicsView):
         self.binding_changed.emit()
         self.status_message.emit("↩ Отменено")
 
+    def _add_ocr_block_bbox(self, x1, y1, x2, y2):
+        """П3: добавить ПУСТОЙ OCR-бокс по нарисованному прямоугольнику (без диалога).
+        Текст появится после кнопки «Распознать»."""
+        self._push_undo()
+        idx = len(self._ocr_blocks)
+        self._ocr_blocks.append({
+            "bbox": [x1, y1, x2, y2], "text": "",
+            "confidence": 0.0, "source": "manual",
+        })
+        self._draw_single_ocr_block(idx)
+        if self._block_filter is not None:
+            self._block_filter.add(idx)
+        self._after_change()
+        self.blocks_changed.emit()
+        self.status_message.emit(f"Добавлен пустой блок #{idx} — нажмите «Распознать»")
+
     def _add_ocr_block(self, x: float, y: float):
         """Добавить новый OCR-бокс в позиции (x, y)."""
         self._push_undo()
@@ -2545,7 +2327,7 @@ class OcrBindingEditor(QGraphicsView):
         self._ocr_blocks[idx]["text"] = new_text
 
         # Подогнать размер бокса под текст
-        font = QFont("DejaVu Sans", self.TEXT_FONT_SIZE)
+        font = QFont("DejaVu Sans", self._label_pt)
         fm = QFontMetricsF(font)
         tw = fm.horizontalAdvance(new_text) + 12
         th = fm.height() + 8
@@ -2579,13 +2361,12 @@ class OcrBindingEditor(QGraphicsView):
         if not bbox or len(bbox) != 4:
             return
         x1, y1, x2, y2 = bbox
-        fill, border = _ocr_colors(conf)
-        pen = QPen(border, self.OCR_BORDER_WIDTH)
-        rect = self.scene.addRect(x1, y1, x2 - x1, y2 - y1, pen, QBrush(fill))
+        rect = self.scene.addRect(x1, y1, x2 - x1, y2 - y1, self._ocr_pen(idx),
+                                  QBrush(Qt.BrushStyle.NoBrush))
         rect.setZValue(10)
         self._ocr_items[idx] = rect
         if text:
-            font = QFont("DejaVu Sans", self.TEXT_FONT_SIZE)
+            font = QFont("DejaVu Sans", self._label_pt)
             fm = QFontMetricsF(font)
             th = fm.height()
             lx, ly = x1, y1 - th - 2
@@ -2607,20 +2388,17 @@ class OcrBindingEditor(QGraphicsView):
         self._push_undo()
         # Убрать привязки
         self._bindings = [b for b in self._bindings if b.get("ocr_block_idx") != idx]
-        # Убрать из KKS-привязок
-        self._kks_bindings = [
-            kb for kb in self._kks_bindings if kb.get("ocr_block_idx") != idx
-        ]
-        self._kks_bound_ocr_indices = {b["ocr_block_idx"] for b in self._kks_bindings}
-        self._kks_bound_node_ids = {b["node_id"] for b in self._kks_bindings}
-        # Скрыть визуалы
+        # Полностью удалить визуалы из сцены (не просто скрыть)
         for items in (self._ocr_items, self._ocr_text_items, self._ocr_text_bg_items, self._ocr_inner_text_items):
-            if idx in items:
-                items[idx].setVisible(False)
+            it = items.pop(idx, None)
+            if it is not None:
+                try:
+                    self.scene.removeItem(it)
+                except Exception:
+                    pass
         # Пометить как удалённый
         if idx < len(self._ocr_blocks):
             self._ocr_blocks[idx]["merged_into"] = -1  # -1 = deleted
-        self._repropagate_diameters()
         self._after_change()
         self.blocks_changed.emit()
         self.status_message.emit(f"Удалён блок #{idx}")
@@ -2679,6 +2457,9 @@ class OcrBindingEditor(QGraphicsView):
             self._del_mode = False
             self._move_mode = False
             self.ctrl_pressed = False
+            if self._selected_ocr:
+                self._selected_ocr.clear()
+                self._redraw_all_colors()
             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
             self.setCursor(Qt.CursorShape.ArrowCursor)
             self.mode_changed.emit("idle")
@@ -2705,26 +2486,20 @@ class OcrBindingEditor(QGraphicsView):
         if event.button() == Qt.MouseButton.LeftButton:
             pos = self.mapToScene(event.pos())
             x, y = pos.x(), pos.y()
+            # П3: отменить возможный drag, начатый первым кликом Ctrl+ЛКМ
+            self._drag_idx = None
+            if getattr(self, '_drag_line', None):
+                self.scene.removeItem(self._drag_line)
+                self._drag_line = None
+            self._clear_highlights()
             idx = self._find_ocr_at(x, y)
-
-            # Промотировать secondary блок если основной не найден
             if idx is None:
                 sec_idx = self._find_secondary_at(x, y)
                 if sec_idx is not None:
                     idx = self._promote_secondary_block(sec_idx)
-
-            if idx is not None:
+            # П3: редактирование текста только по Ctrl+2ЛКМ
+            if idx is not None and self.ctrl_pressed:
                 self._edit_text(idx)
-            elif self._bind_mode != "kks":
-                # Диаметры и рёбра — только вне KKS-режима
-                # Проверить: клик по метке диаметра?
-                handled = self._edit_diameter_label_at(x, y)
-                if not handled:
-                    # Проверить: клик по ребру → создать фиктивный бокс
-                    edge_idx = self._find_edge_at(x, y)
-                    if edge_idx is not None:
-                        self._create_diameter_on_edge(x, y, edge_idx)
-            # Сбросить Ctrl-состояние (мог быть отпущен пока диалог открыт)
             self.ctrl_pressed = False
             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
             self.setCursor(Qt.CursorShape.ArrowCursor)
@@ -2744,9 +2519,16 @@ class OcrBindingEditor(QGraphicsView):
         pos = self.mapToScene(event.pos())
         x, y = pos.x(), pos.y()
 
-        # Add mode: клик на сцене → новый бокс
+        # П3: Add mode — начать рисование прямоугольника (как добавление узла)
         if self._add_mode:
-            self._add_ocr_block(x, y)
+            self._add_bbox_start = (x, y)
+            _pen = QPen(QColor(0, 200, 0, 220))
+            _pen.setWidth(2)
+            _pen.setStyle(Qt.PenStyle.DashLine)
+            _pen.setCosmetic(True)
+            self._add_bbox_preview = self.scene.addRect(
+                x, y, 0, 0, _pen, QBrush(QColor(0, 200, 0, 40)))
+            self._add_bbox_preview.setZValue(50)
             event.accept()
             return
 
@@ -2772,15 +2554,21 @@ class OcrBindingEditor(QGraphicsView):
             event.accept()
             return
 
-        # Shift+ЛКМ → подтвердить/отменить блок (когда есть classification)
-        if (self._validation_results
-                and event.modifiers() & Qt.KeyboardModifier.ShiftModifier
-                and not self.ctrl_pressed):
-            pos = self.mapToScene(event.pos())
-            x, y = pos.x(), pos.y()
+        # П3: Shift+ЛКМ — выделение (toggle бокса под курсором или рамка на пустом)
+        if (event.modifiers() & Qt.KeyboardModifier.ShiftModifier) and not self.ctrl_pressed:
             idx = self._find_ocr_at(x, y)
             if idx is not None:
-                self._toggle_confirm(idx)
+                if idx in self._selected_ocr:
+                    self._selected_ocr.discard(idx)
+                else:
+                    self._selected_ocr.add(idx)
+                self._redraw_all_colors()
+            else:
+                self._rb_start = (x, y)
+                _rp = QPen(COLOR_SELECT_GREEN, 1, Qt.PenStyle.DashLine)
+                self._rubber_band = self.scene.addRect(
+                    x, y, 0, 0, _rp, QBrush(QColor(46, 204, 113, 40)))
+                self._rubber_band.setZValue(60)
             event.accept()
             return
 
@@ -2815,6 +2603,23 @@ class OcrBindingEditor(QGraphicsView):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        # П3: Shift rubber-band — тянем рамку выделения
+        if self._rubber_band is not None and self._rb_start is not None:
+            pos = self.mapToScene(event.pos())
+            sx, sy = self._rb_start
+            self._rubber_band.setRect(min(sx, pos.x()), min(sy, pos.y()),
+                                      abs(pos.x() - sx), abs(pos.y() - sy))
+            event.accept()
+            return
+        # П3: Add mode — тянем прямоугольник (рисование бокса)
+        if self._add_mode and self._add_bbox_start is not None and self._add_bbox_preview is not None:
+            pos = self.mapToScene(event.pos())
+            sx, sy = self._add_bbox_start
+            self._add_bbox_preview.setRect(
+                min(sx, pos.x()), min(sy, pos.y()),
+                abs(pos.x() - sx), abs(pos.y() - sy))
+            event.accept()
+            return
         # Move mode: перемещение бокса (без привязки, просто двигаем)
         if self._move_mode and self._move_idx is not None:
             pos = self.mapToScene(event.pos())
@@ -2850,35 +2655,21 @@ class OcrBindingEditor(QGraphicsView):
                 self.scene.removeItem(self._drag_line)
                 self._drag_line = None
 
-            # Найти текущую привязку этого бокса (если есть)
+            # П3: текущая привязка только из обычных _bindings
             current_target = None
-            for db in self._diameter_bindings:
-                if db.get("ocr_block_idx") == self._drag_idx:
-                    ek = db.get("edge_key")
-                    if ek:
-                        current_target = self._get_edge_midpoint_by_key(ek)
+            for b in self._bindings:
+                if b.get("ocr_block_idx") == self._drag_idx:
+                    if b.get("node_id"):
+                        current_target = self._get_node_center(b["node_id"])
+                    elif b.get("edge_key"):
+                        current_target = self._get_edge_midpoint_by_key(b["edge_key"])
                     break
-            if current_target is None or current_target[0] is None:
-                for b in self._bindings:
-                    if b.get("ocr_block_idx") == self._drag_idx:
-                        if b.get("node_id"):
-                            current_target = self._get_node_center(b["node_id"])
-                        elif b.get("edge_key"):
-                            current_target = self._get_edge_midpoint_by_key(b["edge_key"])
-                        break
 
-            # Определяем цель под курсором (новая привязка)
             self._clear_highlights()
             nid = None
             new_target = None
-
-            # Определяем цель: node > edge > OCR merge > пусто
-            # _bind_mode ограничивает допустимые цели:
-            #   "kks"      → только узлы (node) и OCR merge
-            #   "diameter" → только рёбра (edge) и OCR merge
-            #   None       → все цели
-            allow_node = self._bind_mode != "diameter"
-            allow_edge = self._bind_mode != "kks"
+            allow_node = True
+            allow_edge = True
 
             nid = self._find_node_at(x, y) if allow_node else None
             if nid:
@@ -2915,6 +2706,41 @@ class OcrBindingEditor(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        # П3: Shift rubber-band — завершить выделение (боксы внутри рамки → зелёные)
+        if self._rubber_band is not None and self._rb_start is not None:
+            pos = self.mapToScene(event.pos())
+            sx, sy = self._rb_start
+            rx1, ry1 = min(sx, pos.x()), min(sy, pos.y())
+            rx2, ry2 = max(sx, pos.x()), max(sy, pos.y())
+            self.scene.removeItem(self._rubber_band)
+            self._rubber_band = None
+            self._rb_start = None
+            for i, blk in enumerate(self._ocr_blocks):
+                if blk.get("merged_into") is not None:
+                    continue
+                bb = blk.get("bbox")
+                if not bb or len(bb) != 4:
+                    continue
+                if bb[0] <= rx2 and bb[2] >= rx1 and bb[1] <= ry2 and bb[3] >= ry1:
+                    self._selected_ocr.add(i)
+            self._redraw_all_colors()
+            self.status_message.emit(f"Выделено: {len(self._selected_ocr)} (Ctrl+ПКМ — удалить)")
+            event.accept()
+            return
+        # П3: Add mode — завершить рисование → ПУСТОЙ блок (текст по кнопке «Распознать»)
+        if self._add_mode and self._add_bbox_start is not None:
+            pos = self.mapToScene(event.pos())
+            sx, sy = self._add_bbox_start
+            self._add_bbox_start = None
+            if self._add_bbox_preview is not None:
+                self.scene.removeItem(self._add_bbox_preview)
+                self._add_bbox_preview = None
+            if abs(pos.x() - sx) >= 5 and abs(pos.y() - sy) >= 5:
+                self._add_ocr_block_bbox(
+                    min(sx, pos.x()), min(sy, pos.y()),
+                    max(sx, pos.x()), max(sy, pos.y()))
+            event.accept()
+            return
         # Move mode: завершить перемещение
         if self._move_mode and self._move_idx is not None:
             idx = self._move_idx
@@ -2942,106 +2768,47 @@ class OcrBindingEditor(QGraphicsView):
                 self.scene.removeItem(self._drag_line)
                 self._drag_line = None
 
+            pos = self.mapToScene(event.pos())
             if tt == "node":
+                # привязка — это НЕ перемещение: вернуть бокс на место
                 self._restore_ocr_pos(idx)
                 self._bind_to_node(idx, tid)
             elif tt == "edge":
                 self._restore_ocr_pos(idx)
                 self._bind_to_edge(idx, tid)
-            elif tt == "ocr":
-                self._restore_ocr_pos(idx)
-                self._merge_blocks(idx, tid)
             else:
-                # Пустое место — вернуть
-                self._restore_ocr_pos(idx)
-                self._redraw_all_colors()
-                self._redraw_diameter_bindings()
-                self.status_message.emit("Отменено")
+                # перемещение на пустое место — зафиксировать позицию (с undo)
+                self._push_undo()
+                self._commit_drag_pos(idx, pos.x(), pos.y())
+                self._after_change()
+                self.status_message.emit("Бокс перемещён")
 
             event.accept()
             return
 
-        # Ctrl+ПКМ — отвязка / решение конфликта
+        # П3: Ctrl+ПКМ — выделение есть → удалить все выделенные;
+        #     иначе бокс под курсором: привязан → отвязать, не привязан → удалить
         if self.ctrl_pressed and event.button() == Qt.MouseButton.RightButton:
+            if self._selected_ocr:
+                for i in sorted(self._selected_ocr):
+                    self._delete_ocr_block(i)
+                self._selected_ocr.clear()
+                event.accept()
+                return
             pos = self.mapToScene(event.pos())
             x, y = pos.x(), pos.y()
             idx = self._find_ocr_at(x, y)
-
-            # Промотировать secondary блок для удаления
             if idx is None:
                 sec_idx = self._find_secondary_at(x, y)
                 if sec_idx is not None:
                     idx = self._promote_secondary_block(sec_idx)
-
             if idx is not None:
-                if idx in self._kks_bound_ocr_indices:
-                    self._unbind_kks(idx)
-                elif idx in self._bound_ocr_indices:
-                    self._unbind(idx)
-                elif self._validation_mode:
-                    self._delete_ocr_block(idx)
+                if idx in self._bound_ocr_indices:
+                    self._unbind_ocr(idx)
                 else:
-                    self.status_message.emit("Блок не привязан")
+                    self._delete_ocr_block(idx)
             else:
-                handled = False
-                # Проверить клик по KKS-флажку
-                for lx1, ly1, lx2, ly2, node_id, ocr_idx in self._kks_label_rects:
-                    if lx1 <= x <= lx2 and ly1 <= y <= ly2:
-                        self._unbind_kks_by_node(node_id)
-                        handled = True
-                        break
-                # Проверить клик по центроиду узла с KKS
-                if not handled:
-                    nid = self._find_node_at(x, y)
-                    if nid and nid in self._kks_bound_node_ids:
-                        self._unbind_kks_by_node(nid)
-                        handled = True
-                    elif nid and nid in self._bound_node_ids:
-                        # Обычная привязка — отвязать по node_id
-                        removed = [b for b in self._bindings if b.get("node_id") == nid]
-                        if removed:
-                            self._push_undo()
-                            ocr_idx_r = removed[0].get("ocr_block_idx")
-                            self._bindings = [b for b in self._bindings if b.get("node_id") != nid]
-                            if ocr_idx_r is not None:
-                                self._restore_ocr_visibility(ocr_idx_r)
-                            self._after_change()
-                            self.status_message.emit(f"Отвязано от узла")
-                        handled = True
-                # Проверить клик по флажку обычной привязки
-                if not handled and hasattr(self, '_node_binding_label_rects'):
-                    for lx1, ly1, lx2, ly2, nid, ocr_idx in self._node_binding_label_rects:
-                        if lx1 <= x <= lx2 and ly1 <= y <= ly2:
-                            self._push_undo()
-                            self._bindings = [b for b in self._bindings if b.get("node_id") != nid]
-                            self._restore_ocr_visibility(ocr_idx)
-                            self._after_change()
-                            self.status_message.emit("Отвязано от узла")
-                            handled = True
-                            break
-                # Проверить клик по метке диаметра — отвязка или конфликт (не в KKS)
-                if not handled and self._bind_mode != "kks":
-                    for lx1, ly1, lx2, ly2, ek, eidx, is_prop in self._diameter_label_rects:
-                        if lx1 <= x <= lx2 and ly1 <= y <= ly2:
-                            conflict = None
-                            for cf in self._conflict_edges:
-                                if cf.get("edge_key") == ek:
-                                    conflict = cf
-                                    break
-                            if conflict:
-                                self._resolve_conflict(conflict)
-                            else:
-                                self._unbind_diameter_by_edge(ek)
-                            handled = True
-                            break
-                # Проверить клик по ребру с диаметром (не в KKS)
-                if not handled and self._bind_mode != "kks":
-                    eidx = self._find_edge_at(x, y)
-                    if eidx is not None and eidx < len(self._graph_edges):
-                        ed = self._graph_edges[eidx]
-                        s, t = ed.get('source', ''), ed.get('target', ''); ek = f"{min(s, t)}|{max(s, t)}"
-                        if ek in self._diameter_bound_edge_keys:
-                            self._unbind_diameter_by_edge(ek)
+                self.status_message.emit("Нет блока под курсором")
             event.accept()
             return
 
@@ -3052,6 +2819,30 @@ class OcrBindingEditor(QGraphicsView):
             x1, y1, x2, y2 = self._drag_origin_bbox
             self._move_ocr_visuals(idx, x1, y1, x2, y2)
         self._drag_origin_bbox = []
+
+    def _commit_drag_pos(self, idx, x, y):
+        """П3: зафиксировать новое положение бокса после Ctrl+ЛКМ перетаскивания."""
+        if not self._drag_origin_bbox:
+            return
+        ox1, oy1, ox2, oy2 = self._drag_origin_bbox
+        bw, bh = ox2 - ox1, oy2 - oy1
+        offx, offy = self._drag_offset
+        ncx, ncy = x - offx, y - offy
+        nb = [ncx - bw / 2, ncy - bh / 2, ncx + bw / 2, ncy + bh / 2]
+        if idx < len(self._ocr_blocks):
+            self._ocr_blocks[idx]["bbox"] = nb
+        for b in self._bindings:
+            if b.get("ocr_block_idx") == idx:
+                b["bbox"] = nb
+        self._move_ocr_visuals(idx, *nb)
+        self._drag_origin_bbox = []
+
+    def _unbind_ocr(self, idx):
+        """П3: снять привязку текст-блока (рамка снова голубая)."""
+        self._push_undo()
+        self._bindings = [b for b in self._bindings if b.get("ocr_block_idx") != idx]
+        self._after_change()
+        self.status_message.emit("Привязка снята")
 
     def _abort_drag(self):
         if self._drag_idx is not None:

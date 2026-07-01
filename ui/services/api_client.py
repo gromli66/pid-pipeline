@@ -600,6 +600,11 @@ class APIClient:
         """Применить привязки к графу."""
         return self._request("POST", f"/api/ocr/{uid}/binding/apply")
 
+    def recognize_boxes(self, uid: str, boxes: list) -> Dict[str, Any]:
+        """П3: распознать вручную добавленные боксы (батчем). boxes: [[x0,y0,x1,y1], ...]."""
+        return self._request("POST", f"/api/ocr/{uid}/recognize",
+                             json={"boxes": boxes}, timeout=200.0)
+
     def save_ocr_validation(self, uid: str, path: Path) -> Dict[str, Any]:
         """Сохранить результаты валидации OCR-блоков."""
         path = Path(path)

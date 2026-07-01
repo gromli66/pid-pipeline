@@ -25,6 +25,8 @@ from PySide6.QtWidgets import (
     QTabWidget, QTabBar,
 )
 from PySide6.QtCore import Signal, Slot, Qt, QThread, QObject, QTimer
+from PySide6.QtGui import QColor
+from ui.widgets.appearance_panel import AppearanceMixin
 
 from ui.services.api_client import APIClient, APIError
 from ui.editors.ocr_binding_editor import OcrBindingEditor
@@ -144,8 +146,29 @@ class _OcrArtifactDownloader(QObject):
 # Sub-tab toolbar widget (shared toolbar template)
 # =====================================================================
 
+class _RecognizeWorker(QObject):
+    """Фоновое распознавание вручную добавленных боксов (не блокирует UI)."""
+
+    finished = Signal(list)
+    error = Signal(str)
+
+    def __init__(self, api_client, uid, boxes):
+        super().__init__()
+        self.api_client = api_client
+        self.uid = uid
+        self.boxes = boxes
+
+    def run(self):
+        try:
+            resp = self.api_client.recognize_boxes(self.uid, self.boxes)
+            results = resp.get("results", []) if isinstance(resp, dict) else []
+            self.finished.emit(results)
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
 class _SubTabToolbar(QWidget):
-    """Toolbar для одной подвкладки: добавить/удалить/перенести/корректировать + custom buttons."""
+    """Панель OCR: Добавить бокс | Распознать | ...инструкция... | Отменить | Сохранить | Подтвердить."""
 
     add_clicked = Signal()
     delete_clicked = Signal()
@@ -155,49 +178,59 @@ class _SubTabToolbar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(8)
 
-        # Placeholder для custom buttons (будут добавлены дочерними классами)
-        self.custom_layout = QHBoxLayout()
-        layout.addLayout(self.custom_layout)
-
-        layout.addSpacing(12)
-
-        # Common tools
-        self.btn_add = QPushButton("➕ Бокс")
-        self.btn_add.setToolTip("Добавить новый OCR-бокс")
+        # «Добавить бокс» (рисование прямоугольника)
+        self.btn_add = QPushButton("Добавить бокс")
+        self.btn_add.setToolTip(
+            "Добавить бокс для ручного распознавания.\n"
+            "• нажми кнопку — включить режим;\n"
+            "• зажми ЛКМ и обведи прямоугольником текст на схеме;\n"
+            "• повтори для каждого нужного участка;\n"
+            "• затем нажми «Распознать вручную»;\n"
+            "• Esc или повторное нажатие — выйти из режима."
+        )
         self.btn_add.setCheckable(True)
         self.btn_add.clicked.connect(self.add_clicked.emit)
         layout.addWidget(self.btn_add)
 
-        self.btn_del = QPushButton("✕ Удалить")
-        self.btn_del.setToolTip("Удалить OCR-бокс")
+        # левая группа доп. кнопок (Распознать)
+        self.custom_layout = QHBoxLayout()
+        self.custom_layout.setSpacing(4)
+        layout.addLayout(self.custom_layout)
+
+        # скрытые кнопки удаления/перемещения (совместимость с обработчиками)
+        self.btn_del = QPushButton()
         self.btn_del.setCheckable(True)
+        self.btn_del.setVisible(False)
         self.btn_del.clicked.connect(self.delete_clicked.emit)
-        layout.addWidget(self.btn_del)
-
-        self.btn_move = QPushButton("↔ Двигать")
-        self.btn_move.setToolTip("Перемещение OCR-боксов")
+        self.btn_move = QPushButton()
         self.btn_move.setCheckable(True)
+        self.btn_move.setVisible(False)
         self.btn_move.clicked.connect(self.move_clicked.emit)
-        layout.addWidget(self.btn_move)
 
-        layout.addSpacing(8)
-
-        self.btn_undo = QPushButton("↩ Undo")
-        self.btn_undo.setToolTip("Ctrl+Z")
-        self.btn_undo.clicked.connect(self.undo_clicked.emit)
-        layout.addWidget(self.btn_undo)
-
+        # инструкция
         self.hint_label = QLabel("")
         self.hint_label.setStyleSheet("color: #999; font-size: 11px;")
+        self.hint_label.setWordWrap(False)
         layout.addWidget(self.hint_label)
 
         layout.addStretch()
 
         self.stats_label = QLabel("")
-        self.stats_label.setStyleSheet("color: #aaa;")
+        self.stats_label.setStyleSheet("color: #aaa; font-size: 11px;")
         layout.addWidget(self.stats_label)
+
+        # правая группа: Отменить | Сохранить | Подтвердить
+        self.btn_undo = QPushButton("Undo")
+        self.btn_undo.setToolTip("Отменить последнее действие (Ctrl+Z)")
+        self.btn_undo.clicked.connect(self.undo_clicked.emit)
+        layout.addWidget(self.btn_undo)
+
+        self.right_layout = QHBoxLayout()
+        self.right_layout.setSpacing(4)
+        layout.addLayout(self.right_layout)
 
     def reset_modes(self):
         self.btn_add.setChecked(False)
@@ -209,7 +242,7 @@ class _SubTabToolbar(QWidget):
 # Main OcrBindingTab
 # =====================================================================
 
-class OcrBindingTab(QWidget):
+class OcrBindingTab(AppearanceMixin, QWidget):
     """
     Вкладка привязки OCR текста к узлам графа.
 
@@ -284,17 +317,66 @@ class OcrBindingTab(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Loading label
+        # === Тулбар первой строкой (QHBoxLayout) — workspace вставит «← Назад»/⚙
+        #     в этот же ряд, как в базовых вкладках ===
+        toolbar = QHBoxLayout()
+        toolbar.setContentsMargins(8, 4, 8, 4)
+        toolbar.setSpacing(8)
+
+        self.btn_add = QPushButton("Добавить бокс")
+        self.btn_add.setCheckable(True)
+        self.btn_add.setToolTip(
+            "Добавить бокс для ручного распознавания.\n"
+            "• нажми кнопку — включить режим;\n"
+            "• зажми ЛКМ и обведи прямоугольником текст на схеме;\n"
+            "• повтори для каждого нужного участка;\n"
+            "• затем нажми «Распознать вручную»;\n"
+            "• Esc или повторное нажатие — выйти из режима."
+        )
+        self.btn_add.clicked.connect(self._toggle_add_mode_btn)
+        toolbar.addWidget(self.btn_add)
+
+        self.btn_recognize = QPushButton("Распознать вручную")
+        self.btn_recognize.setToolTip(
+            "Распознать текст во всех вручную добавленных (пустых) боксах одним прогоном.\n"
+            "После распознавания режим добавления выключается."
+        )
+        self.btn_recognize.clicked.connect(self._run_recognize)
+        toolbar.addWidget(self.btn_recognize)
+
+        toolbar.addStretch()
+
+        self.stats_label = QLabel("")
+        self.stats_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        toolbar.addWidget(self.stats_label)
+
+        self.btn_undo = QPushButton("Undo")
+        self.btn_undo.setToolTip("Отменить последнее действие (Ctrl+Z)")
+        self.btn_undo.clicked.connect(self._undo)
+        toolbar.addWidget(self.btn_undo)
+
+        self.btn_save = QPushButton("💾 Сохранить")
+        self.btn_save.setToolTip("Сохранить привязки на сервер")
+        self.btn_save.clicked.connect(self._save_binding)
+        toolbar.addWidget(self.btn_save)
+
+        self.btn_confirm_all = QPushButton("Подтвердить")
+        self.btn_confirm_all.setToolTip("Финальное подтверждение — сохранить и применить привязки")
+        self.btn_confirm_all.setStyleSheet(
+            "QPushButton { background-color: #4CAF50; color: white; "
+            "font-weight: bold; padding: 8px 16px; border-radius: 4px; }"
+            "QPushButton:hover { background-color: #45a049; }"
+        )
+        self.btn_confirm_all.clicked.connect(self._on_confirm)
+        toolbar.addWidget(self.btn_confirm_all)
+
+        layout.addLayout(toolbar)
+
+        # Loading label (под тулбаром)
         self.loading_label = QLabel("Загрузка артефактов...")
         self.loading_label.setAlignment(Qt.AlignCenter)
         self.loading_label.setStyleSheet("color: #888; font-size: 14px; padding: 40px;")
         layout.addWidget(self.loading_label)
-
-        # Sub-tabs (hidden until data loaded)
-        self.sub_tabs = QTabWidget()
-        self.sub_tabs.setVisible(False)
-        self.sub_tabs.currentChanged.connect(self._on_sub_tab_changed)
-        layout.addWidget(self.sub_tabs, stretch=0)
 
         # === Sub-tab 1: KKS ===
         self.kks_toolbar = _SubTabToolbar()
@@ -326,7 +408,8 @@ class OcrBindingTab(QWidget):
         self.kks_toolbar.delete_clicked.connect(lambda: self._toggle_del_mode(self.kks_toolbar))
         self.kks_toolbar.move_clicked.connect(lambda: self._toggle_move_mode(self.kks_toolbar))
         self.kks_toolbar.undo_clicked.connect(self._undo)
-        self.sub_tabs.addTab(self.kks_toolbar, "🏷 KKS")
+        # П3: подвкладка KKS убрана
+        # self.sub_tabs.addTab(self.kks_toolbar, "🏷 KKS")
 
         # === Sub-tab 2: Diameter ===
         self.diam_toolbar = _SubTabToolbar()
@@ -357,40 +440,11 @@ class OcrBindingTab(QWidget):
         self.diam_toolbar.delete_clicked.connect(lambda: self._toggle_del_mode(self.diam_toolbar))
         self.diam_toolbar.move_clicked.connect(lambda: self._toggle_move_mode(self.diam_toolbar))
         self.diam_toolbar.undo_clicked.connect(self._undo)
-        self.sub_tabs.addTab(self.diam_toolbar, "Ø Диаметр")
+        # П3: подвкладка Диаметр убрана
+        # self.sub_tabs.addTab(self.diam_toolbar, "Ø Диаметр")
 
-        # === Sub-tab 3: Other ===
-        self.other_toolbar = _SubTabToolbar()
-        self.other_toolbar.hint_label.setText(
-            "Ctrl+drag: привязка | Ctrl+ПКМ: отвязка | Ctrl+2×клик: текст"
-        )
-        self.btn_clear = QPushButton("🗑 Очистить привязки")
-        self.btn_clear.clicked.connect(self._clear_other_bindings)
-        self.other_toolbar.custom_layout.addWidget(self.btn_clear)
+        # kks/diam-тулбары создаются выше (не показываются) — тулбар OCR построен в начале _setup_ui
 
-        self.btn_save = QPushButton("💾 Сохранить")
-        self.btn_save.clicked.connect(self._save_binding)
-        self.other_toolbar.custom_layout.addWidget(self.btn_save)
-
-        self.btn_confirm_all = QPushButton("✅ Подтвердить всё")
-        self.btn_confirm_all.setToolTip("Финальное подтверждение привязки — сохранить и применить")
-        self.btn_confirm_all.setStyleSheet(
-            "QPushButton { background-color: #4CAF50; color: white; "
-            "font-weight: bold; padding: 6px 16px; border-radius: 4px; }"
-            "QPushButton:hover { background-color: #45a049; }"
-        )
-        self.btn_confirm_all.clicked.connect(self._on_confirm)
-        # Кнопка финального подтверждения — в правом верхнем углу (как на других
-        # стадиях), видна на всех подвкладках
-        self.sub_tabs.setCornerWidget(
-            self.btn_confirm_all, Qt.Corner.TopRightCorner
-        )
-
-        self.other_toolbar.add_clicked.connect(lambda: self._toggle_add_mode(self.other_toolbar))
-        self.other_toolbar.delete_clicked.connect(lambda: self._toggle_del_mode(self.other_toolbar))
-        self.other_toolbar.move_clicked.connect(lambda: self._toggle_move_mode(self.other_toolbar))
-        self.other_toolbar.undo_clicked.connect(self._undo)
-        self.sub_tabs.addTab(self.other_toolbar, "📋 Другое")
 
         # Editor (shared across sub-tabs)
         self.editor = OcrBindingEditor(self)
@@ -415,21 +469,119 @@ class OcrBindingTab(QWidget):
 
     @Slot(int)
     def _on_sub_tab_changed(self, index: int):
-        """Переключение подвкладки → фильтрация OCR-блоков."""
+        """П3: подвкладки убраны — всегда простой режим, все блоки видны."""
         self._reset_all_modes()
+        self.editor._bind_mode = None
+        self.editor.set_block_filter(None)
 
-        if index == self.TAB_KKS:
-            self.editor._bind_mode = "kks"
-            self.editor.set_block_filter(self._kks_indices if self._kks_indices else None)
-            self._update_kks_stats()
-        elif index == self.TAB_DIAMETER:
-            self.editor._bind_mode = "diameter"
-            self.editor.set_block_filter(self._diameter_indices if self._diameter_indices else None)
-            self._update_diam_stats()
-        elif index == self.TAB_OTHER:
-            self.editor._bind_mode = None
-            self.editor.set_block_filter(self._other_indices if self._other_indices else None)
-            self._update_other_stats()
+    def _run_recognize(self):
+        """П3: распознать вручную добавленные (пустые) боксы В ФОНЕ — вкладка не блокируется,
+        можно продолжать править/привязывать/удалять."""
+        if getattr(self, "_recog_thread", None) is not None:
+            QMessageBox.information(self, "Распознавание",
+                                    "Распознавание уже идёт, подождите.")
+            return
+        # держим ССЫЛКИ на dict-блоки (устойчиво к сдвигу индексов при правках)
+        pending = [
+            b for b in self.editor._ocr_blocks
+            if b.get("merged_into") != -1
+            and not (b.get("text") or "").strip()
+            and b.get("bbox")
+        ]
+        if not pending:
+            QMessageBox.information(self, "Распознавание",
+                                    "Нет пустых блоков для распознавания.")
+            return
+        self._recog_pending = pending
+        boxes = [[int(v) for v in b["bbox"]] for b in pending]
+
+        # выйти из режима добавления, чтобы можно было сразу править
+        self.editor._add_mode = False
+        self.btn_add.setChecked(False)
+        self.btn_recognize.setEnabled(False)
+        self.status_label.setText(
+            f"Распознавание {len(boxes)} боксов в фоне… можно продолжать править")
+
+        self._recog_thread = QThread()
+        self._recog_worker = _RecognizeWorker(self.api_client, self.uid, boxes)
+        self._recog_worker.moveToThread(self._recog_thread)
+        self._recog_thread.started.connect(self._recog_worker.run)
+        self._recog_worker.finished.connect(self._on_recognize_done)
+        self._recog_worker.error.connect(self._on_recognize_error)
+        self._recog_thread.start()
+
+    def _cleanup_recog_thread(self):
+        t = getattr(self, "_recog_thread", None)
+        if t is not None:
+            t.quit()
+            t.wait()
+        self._recog_thread = None
+        self._recog_worker = None
+
+    @Slot(list)
+    def _on_recognize_done(self, results):
+        self._cleanup_recog_thread()
+        pending = getattr(self, "_recog_pending", [])
+        n = 0
+        for b, r in zip(pending, results):
+            # блок могли удалить за время распознавания
+            if b.get("merged_into") == -1:
+                continue
+            txt = (r.get("text") or "").strip()
+            b["text"] = txt
+            if txt:
+                n += 1
+        self._recog_pending = []
+        self.btn_recognize.setEnabled(True)
+        self.editor.refresh_ocr_layer()
+        self.status_label.setText(f"Распознано {n}/{len(results)} блоков")
+
+    @Slot(str)
+    def _on_recognize_error(self, msg):
+        self._cleanup_recog_thread()
+        self._recog_pending = []
+        self.btn_recognize.setEnabled(True)
+        self.status_label.setText("Ошибка распознавания")
+        QMessageBox.warning(self, "Ошибка", f"Не удалось распознать:\n{msg}")
+
+    # === Панель оформления (⚙) ===
+    def _appearance_editor(self):
+        return getattr(self, "editor", None)
+
+    def _build_appearance_controls(self, panel):
+        self._add_bg_darkness_slider(panel)
+        ed = self._appearance_editor()
+        if ed is None:
+            return
+        self._add_color_setting(panel, "Цвет рамки текста", "text_border",
+                                QColor(80, 160, 255), ed.set_text_border_color)
+        self._add_color_setting(panel, "Цвет рамки бокса", "box_border",
+                                QColor(235, 235, 235), ed.set_box_border_color)
+        self._add_color_setting(panel, "Цвет ребра", "edge_color",
+                                QColor(0, 255, 220), ed.set_edge_color)
+        self._add_pct_setting(panel, "Размер подписи", "label_size",
+                              float(getattr(ed, "_label_pt", 9)),
+                              ed.set_label_font_size, lo=6, hi=24)
+
+    def apply_saved_appearance(self):
+        super().apply_saved_appearance()
+        ed = self._appearance_editor()
+        if ed is None:
+            return
+        self._apply_saved_color("text_border", QColor(80, 160, 255), ed.set_text_border_color)
+        self._apply_saved_color("box_border", QColor(235, 235, 235), ed.set_box_border_color)
+        self._apply_saved_color("edge_color", QColor(0, 255, 220), ed.set_edge_color)
+        self._apply_saved_pct("label_size", 9.0, ed.set_label_font_size)
+
+    def apply_default_appearance(self):
+        super().apply_default_appearance()
+        ed = self._appearance_editor()
+        if ed is None:
+            return
+        ed.set_text_border_color(QColor(80, 160, 255))
+        ed.set_box_border_color(QColor(235, 235, 235))
+        ed.set_edge_color(QColor(0, 255, 220))
+        ed.set_label_font_size(9)
 
     def _classify_blocks_into_groups(self):
         """Разбить classifications на 3 группы по типу для подвкладок.
@@ -493,7 +645,7 @@ class OcrBindingTab(QWidget):
     def _update_other_stats(self):
         other_total = len(self._other_indices)
         bound = len(self._bindings)
-        self.other_toolbar.stats_label.setText(
+        self.stats_label.setText(
             f"Прочих блоков: {other_total} | Привязок: {bound}"
         )
 
@@ -507,41 +659,11 @@ class OcrBindingTab(QWidget):
         self._update_current_stats()
 
     def _on_blocks_changed(self):
+        # П3: подвкладок нет — просто держим все блоки видимыми
         self._ocr_blocks = self.editor._ocr_blocks
         self._saved = False
-
-        # Назначить новые блоки текущей подвкладке
-        current_subtab = {
-            self.TAB_KKS: "kks",
-            self.TAB_DIAMETER: "diameter",
-            self.TAB_OTHER: "other",
-        }.get(self.sub_tabs.currentIndex(), "other")
-
-        changed = False
-        for idx, block in enumerate(self._ocr_blocks):
-            if block.get("merged_into") is not None:
-                # Удалённые/merged — убрать из subtab
-                if idx in self._block_subtab:
-                    del self._block_subtab[idx]
-                    changed = True
-                continue
-            if idx not in self._block_subtab:
-                # Новый блок → текущая подвкладка
-                self._block_subtab[idx] = current_subtab
-                changed = True
-
-        if changed:
-            self._rebuild_indices_from_subtab()
-            # Обновить фильтр текущей вкладки
-            current_idx = self.sub_tabs.currentIndex()
-            if current_idx == self.TAB_KKS:
-                self.editor.set_block_filter(self._kks_indices)
-            elif current_idx == self.TAB_DIAMETER:
-                self.editor.set_block_filter(self._diameter_indices)
-            elif current_idx == self.TAB_OTHER:
-                self.editor.set_block_filter(self._other_indices)
-
-        self._update_current_stats()
+        self.editor.set_block_filter(None)
+        self._update_other_stats()
 
     def _on_editor_status(self, msg: str):
         self.status_label.setText(msg)
@@ -554,13 +676,8 @@ class OcrBindingTab(QWidget):
         self._reset_all_modes()
 
     def _update_current_stats(self):
-        idx = self.sub_tabs.currentIndex()
-        if idx == self.TAB_KKS:
-            self._update_kks_stats()
-        elif idx == self.TAB_DIAMETER:
-            self._update_diam_stats()
-        elif idx == self.TAB_OTHER:
-            self._update_other_stats()
+        # П3: единственная панель — статистика по привязкам
+        self._update_other_stats()
 
     # =================================================================
     # Download
@@ -666,6 +783,21 @@ class OcrBindingTab(QWidget):
                 except Exception as exc:
                     logger.warning("Failed to load ocr_validation: %s", exc)
 
+            # П3: подтянуть контуры узлов (реальная форма после этапа контуров)
+            node_contours = {}
+            try:
+                cpath = self.temp_dir / "contours_validated.json"
+                self.api_client.download_contours_validated(self.uid, cpath)
+                cdata = json.load(open(cpath, encoding="utf-8"))
+                for cn in cdata.get("nodes", []):
+                    ann = cn.get("ann_id")
+                    poly = cn.get("polygon_validated") or cn.get("polygon_auto")
+                    if ann is not None and poly and len(poly) >= 3:
+                        node_contours[ann] = poly
+                logger.info("Контуры узлов подтянуты: %d", len(node_contours))
+            except Exception as exc:
+                logger.info("Контуры не подтянуты (нет/ошибка): %s", exc)
+
             # Загрузить данные в визуальный редактор
             image_path = str(artifacts["original_image"])
             self.editor.load_data(
@@ -675,33 +807,14 @@ class OcrBindingTab(QWidget):
                 self._bindings,
                 coco_data=coco_data,
                 secondary_blocks=secondary_blocks,
+                node_contours=node_contours,
             )
+            self.apply_saved_appearance()
 
-            # Восстановить KKS и diameter привязки из graph_validated
-            self._restore_bindings_from_graph()
-
-            # === АВТО-КЛАССИФИКАЦИЯ при загрузке ===
-            if not self._classifications:
-                self._run_auto_classification()
-            else:
-                self._ensure_kks_config()
-
-            # Разбить на группы для подвкладок
-            self._classify_blocks_into_groups()
-
-            # Передать валидацию в editor (validation_mode = True по умолчанию)
-            if self._classifications:
-                self.editor.set_validation_results(self._classifications)
-                self.editor._ocr_classifier = self._get_classifier()
-
-            # Скрыть loading, показать sub-tabs + editor
+            # П3: авто-классификация KKS/диаметр и цветовая валидация убраны
             self.loading_label.setVisible(False)
-            self.sub_tabs.setVisible(True)
             self.editor.setVisible(True)
-
-            # Начать с KKS подвкладки
-            self.sub_tabs.setCurrentIndex(self.TAB_KKS)
-            self._on_sub_tab_changed(self.TAB_KKS)
+            self._on_sub_tab_changed(0)
 
         except Exception as exc:
             logger.error("Failed to load OCR data: %s", exc, exc_info=True)
@@ -915,7 +1028,7 @@ class OcrBindingTab(QWidget):
         self._update_kks_stats()
         self.status_label.setText("✅ KKS привязка подтверждена")
         # Перейти к следующей подвкладке
-        self.sub_tabs.setCurrentIndex(self.TAB_DIAMETER)
+        pass  # (подвкладки убраны)
 
     # =================================================================
     # Diameter sub-tab actions
@@ -1099,7 +1212,7 @@ class OcrBindingTab(QWidget):
         self._saved = False
         self._update_diam_stats()
         self.status_label.setText("✅ Привязка диаметров подтверждена")
-        self.sub_tabs.setCurrentIndex(self.TAB_OTHER)
+        pass  # (подвкладки убраны)
 
     # =================================================================
     # Other sub-tab / clear / modes
@@ -1150,14 +1263,27 @@ class OcrBindingTab(QWidget):
 
     def _reset_all_modes(self):
         """Сброс всех режимов → idle (pan)."""
-        for tb in (self.kks_toolbar, self.diam_toolbar, self.other_toolbar):
+        for tb in (self.kks_toolbar, self.diam_toolbar):
             tb.reset_modes()
+        self.btn_add.setChecked(False)
         self.editor._add_mode = False
         self.editor._del_mode = False
         self.editor._move_mode = False
         from PySide6.QtWidgets import QGraphicsView
         self.editor.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.editor.setCursor(Qt.CursorShape.ArrowCursor)
+
+    def _toggle_add_mode_btn(self):
+        """Toggle режима «Добавить бокс» (кнопка в главном тулбаре)."""
+        active = self.btn_add.isChecked()
+        self._reset_all_modes()
+        if active:
+            self.btn_add.setChecked(True)
+            self.editor._add_mode = True
+            from PySide6.QtWidgets import QGraphicsView
+            self.editor.setDragMode(QGraphicsView.DragMode.NoDrag)
+            self.editor.setCursor(Qt.CursorShape.CrossCursor)
+            self.status_label.setText("Режим добавления: обведите текст прямоугольником")
 
     def _toggle_add_mode(self, toolbar: _SubTabToolbar):
         active = toolbar.btn_add.isChecked()
@@ -1449,6 +1575,9 @@ class OcrBindingTab(QWidget):
             idx_map = {}
             for i, block in enumerate(ocr_blocks):
                 if block.get("merged_into") is not None:
+                    continue
+                # П3: пустые боксы (без текста) не сохраняем
+                if not (block.get("text") or "").strip():
                     continue
                 idx_map[i] = len(active_blocks)
                 active_blocks.append({

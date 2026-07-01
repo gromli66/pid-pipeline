@@ -272,7 +272,7 @@ direction_classification:
 # OCR Pipeline (Phase B) — 3-проходный Surya OCR
 # =============================================================================
 ocr:
-  enabled: false   # OCR отключён (вернуть true чтобы включить)
+  enabled: true    # OCR включён → нормальная последовательность: контуры → OCR → привязка → правка (без прыжка в OCR_BOUND)
   # ══ 2.0: Переключение OCR-профиля — ОДНА СТРОКА ══
   #  docker-compose restart worker_ocr
   # KKS (Росатом):
