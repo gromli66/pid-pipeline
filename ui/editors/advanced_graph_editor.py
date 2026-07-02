@@ -45,6 +45,7 @@ from ui.editors.graph_geometry import (
     node_orientation_by_edges,
 )
 from ui.editors.edge_routing import distribute_connection_points, route_edge as route_edge_v2, segment_intersects_bbox
+from ui.editors.optimize_core import compute_optimized_route
 from ui.editors.autofix_chains import auto_fix_graph
 from ui.editors.ocr_layer_mixin import (
     OcrLayerMixin, AddOcrBlockHandler, OcrBindHandler,
@@ -596,91 +597,48 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         old_tp = edge_data.get('target_point', []).copy() if edge_data.get('target_point') else None
         old_wp = [wp.copy() for wp in edge_data.get('waypoints', [])]
 
-        # Определяем текущую ось
-        required_axis = None
-        if old_sp and old_tp:
-            old_dx = old_tp[1] - old_sp[1]
-            old_dy = old_tp[0] - old_sp[0]
-            _, required_axis = global_axis_perpendicularity(old_dx, old_dy)
-
-        src = self.nodes[original_source_id]
-        tgt = self.nodes[original_target_id]
-        src_cx, src_cy = src['centroid'][1], src['centroid'][0]
-        tgt_cx, tgt_cy = tgt['centroid'][1], tgt['centroid'][0]
-
-        # Вычисляем новые точки с учётом required_axis (как в оригинале)
-        src_bbox = src.get('bbox')
-        tgt_bbox = tgt.get('bbox')
-        src_poly = src.get('segmentation')
-        tgt_poly = tgt.get('segmentation')
-
-        src_has_bbox = src_bbox and len(src_bbox) == 4
-        tgt_has_bbox = tgt_bbox and len(tgt_bbox) == 4
-        src_has_poly = src_poly and isinstance(src_poly, list) and len(src_poly) >= 6
-        tgt_has_poly = tgt_poly and isinstance(tgt_poly, list) and len(tgt_poly) >= 6
-
-        src_type = src.get('type', 'connector')
-        tgt_type = tgt.get('type', 'connector')
-        src_is_point = src_type == 'connector' and not src_has_bbox and not src_has_poly
-        tgt_is_point = tgt_type == 'connector' and not tgt_has_bbox and not tgt_has_poly
-
-        src_x, src_y, tgt_x, tgt_y = None, None, None, None
-
-        if src_is_point and tgt_is_point:
-            src_x, src_y = src_cx, src_cy
-            tgt_x, tgt_y = tgt_cx, tgt_cy
-        elif src_is_point:
-            if tgt_has_poly:
-                (src_x, src_y), (tgt_x, tgt_y), _ = connect_point_polygon((src_cx, src_cy), tgt_poly, required_axis)
-            elif tgt_has_bbox:
-                (src_x, src_y), (tgt_x, tgt_y), _ = connect_point_bbox((src_cx, src_cy), tgt_bbox, required_axis)
-        elif tgt_is_point:
-            if src_has_poly:
-                (tgt_x, tgt_y), (src_x, src_y), _ = connect_point_polygon((tgt_cx, tgt_cy), src_poly, required_axis)
-            elif src_has_bbox:
-                (tgt_x, tgt_y), (src_x, src_y), _ = connect_point_bbox((tgt_cx, tgt_cy), src_bbox, required_axis)
-        elif src_has_bbox and tgt_has_bbox and not src_has_poly and not tgt_has_poly:
-            (src_x, src_y), (tgt_x, tgt_y), _ = connect_bbox_bbox(src_bbox, tgt_bbox, required_axis)
-        elif src_has_bbox and tgt_has_poly:
-            (src_x, src_y), (tgt_x, tgt_y), _ = connect_bbox_polygon(src_bbox, tgt_poly, required_axis)
-        elif src_has_poly and tgt_has_bbox:
-            (tgt_x, tgt_y), (src_x, src_y), _ = connect_bbox_polygon(tgt_bbox, src_poly, required_axis)
-        elif src_has_poly and tgt_has_poly:
-            (src_x, src_y), (tgt_x, tgt_y), _ = connect_polygon_polygon(src_poly, tgt_poly, required_axis)
-        elif src_has_bbox and tgt_has_bbox:
-            (src_x, src_y), (tgt_x, tgt_y), _ = connect_bbox_bbox(src_bbox, tgt_bbox, required_axis)
-
-        if src_x is None:
-            src_x, src_y = self.get_connection_point(original_source_id, tgt_cx, tgt_cy)
-            tgt_x, tgt_y = self.get_connection_point(original_target_id, src_cx, src_cy)
-
-        new_sp = [src_y, src_x]
-        new_tp = [tgt_y, tgt_x]
+        # Шаг 5 (PLAN_routing_patch): ортогональный маршрут через optimize_core
+        # вместо прямой линии. Ручные точки (_manual_route) сохраняются,
+        # иначе equipment цепляется за центр стороны, коннектор — за центр.
+        route = compute_optimized_route(
+            self.nodes, self.edges_data, edge_data,
+            conn_radius=self.CONNECTOR_MARKER_RADIUS,
+        )
+        new_sp = route['source_point']
+        new_tp = route['target_point']
+        new_wp = route['waypoints']
+        edge_data['_src_side'] = route['src_side']
+        edge_data['_tgt_side'] = route['tgt_side']
 
         cmd = OptimizeEdgeCommand(
             self.model, self,
             original_source_id, original_target_id,
             old_sp, old_tp, old_wp,
-            new_sp, new_tp,
+            new_sp, new_tp, new_waypoints=new_wp,
         )
         self.undo_mgr.execute(cmd)
 
-        # Пересчитываем перпендикулярность
-        source_geom = get_node_geometry(self.nodes[original_source_id])
-        target_geom = get_node_geometry(self.nodes[original_target_id])
-        perp_info = compute_edge_perpendicularity(
-            (src_x, src_y), (tgt_x, tgt_y), source_geom, target_geom)
+        # Перпендикулярность: ортогональный маршрут с изломами всегда «хороший»,
+        # прямое ребро оцениваем по фактическому углу.
+        if new_wp:
+            perp_info = {'is_good': True, 'score': 1.0, 'source_angle': 0}
+        else:
+            source_geom = get_node_geometry(self.nodes[original_source_id])
+            target_geom = get_node_geometry(self.nodes[original_target_id])
+            perp_info = compute_edge_perpendicularity(
+                (new_sp[1], new_sp[0]), (new_tp[1], new_tp[0]),
+                source_geom, target_geom)
         self.edge_perp_scores[key] = perp_info
 
-        # ВАЖНО: перерисовать ребро ПОСЛЕ обновления perp_scores
-        # (cmd.execute уже вызвал _update_edge_path, но с СТАРЫМИ scores)
-        # Как в оригинале: удалить + создать заново с правильным цветом
+        # Перерисовать ребро ПОСЛЕ обновления perp_scores
         self.remove_edge_item(key)
         edge_data = self.model.find_edge_data(key)
         if edge_data:
             self.create_edge_item(key, edge_data)
 
-        self.update_status(f"Оптимизировано: {original_source_id} — {original_target_id} (score: {perp_info['score']:.2f})")
+        self.update_status(
+            f"Оптимизировано: {original_source_id} — {original_target_id} "
+            f"({len(new_wp)} waypoints)")
         return True
 
     def optimize_all_edges(self) -> int:

@@ -17,7 +17,8 @@ class OptimizeEdgeCommand(Command):
                  old_target_point: list | None,
                  old_waypoints: list,
                  new_source_point: list,
-                 new_target_point: list):
+                 new_target_point: list,
+                 new_waypoints: list | None = None):
         self._model = model
         self._editor = editor
         self._source_id = source_id
@@ -27,6 +28,9 @@ class OptimizeEdgeCommand(Command):
         self._old_wp = old_waypoints
         self._new_sp = new_source_point
         self._new_tp = new_target_point
+        # Шаг 5: оптимизация строит ортогональный маршрут, а не прямую —
+        # новые waypoints сохраняются и восстанавливаются при redo.
+        self._new_wp = [wp.copy() for wp in (new_waypoints or [])]
         self._key = model.edge_key(source_id, target_id)
 
     def execute(self):
@@ -34,7 +38,7 @@ class OptimizeEdgeCommand(Command):
         if edge_data:
             edge_data['source_point'] = self._new_sp
             edge_data['target_point'] = self._new_tp
-            edge_data['waypoints'] = []
+            edge_data['waypoints'] = [wp.copy() for wp in self._new_wp]
             self._editor._update_edge_path(self._key)
 
     def undo(self):

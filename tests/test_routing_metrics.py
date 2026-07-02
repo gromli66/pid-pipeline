@@ -405,6 +405,68 @@ def test_step4_router_no_avoidable_violations_on_real_graph():
     assert unavoidable <= 2, f"наложенных концов стало больше: {unavoidable}"
 
 
+# ---------------------------------------------------------------------------
+# 5. Шаг 5: ядро кнопки «Оптимизировать» (optimize_core)
+# ---------------------------------------------------------------------------
+
+def test_step5_core_routes_around_obstacle():
+    from ui.editors.optimize_core import compute_optimized_route
+    nodes = {
+        "e1": {"id": "e1", "type": "equipment",
+               "centroid": [120.0, 70.0], "bbox": [40, 90, 100, 150]},
+        "e2": {"id": "e2", "type": "equipment",
+               "centroid": [120.0, 270.0], "bbox": [240, 90, 300, 150]},
+        "obs": {"id": "obs", "type": "equipment",
+                "centroid": [120.0, 170.0], "bbox": [150, 60, 190, 180]},
+    }
+    edge = {"id": "x", "source": "e1", "target": "e2", "waypoints": []}
+    r = compute_optimized_route(nodes, [edge], edge)
+    # прикрепление к центрам сторон bbox
+    assert r["source_point"] == [120.0, 100.0]
+    assert r["target_point"] == [120.0, 240.0]
+    # маршрут ортогонален и не проходит сквозь препятствие
+    pts = ([(100.0, 120.0)] + [(w[1], w[0]) for w in r["waypoints"]]
+           + [(240.0, 120.0)])
+    for i in range(len(pts) - 1):
+        a, b = pts[i], pts[i + 1]
+        assert abs(a[0] - b[0]) < 0.5 or abs(a[1] - b[1]) < 0.5, "диагональ"
+        assert not er._seg_hits_bbox(a[0], a[1], b[0], b[1],
+                                     nodes["obs"]["bbox"], margin=0), \
+            f"сегмент {a}→{b} сквозь препятствие"
+    assert r["waypoints"], "обход препятствия требует waypoints"
+
+
+def test_step5_core_connector_attaches_at_center():
+    """Перекрёсток: рёбра сходятся в центр узла (нет 8px «пеньков»)."""
+    from ui.editors.optimize_core import compute_optimized_route
+    nodes = {
+        "c1": {"id": "c1", "type": "connector", "centroid": [100.0, 50.0]},
+        "c2": {"id": "c2", "type": "connector", "centroid": [100.0, 200.0]},
+    }
+    edge = {"id": "e", "source": "c1", "target": "c2", "waypoints": []}
+    r = compute_optimized_route(nodes, [edge], edge)
+    assert r["source_point"] == [100.0, 50.0]
+    assert r["target_point"] == [100.0, 200.0]
+    assert r["waypoints"] == []  # соосные центры → прямая без изломов
+
+
+def test_step5_core_manual_endpoints_preserved():
+    """Ручные точки прикрепления не пересчитываются (_manual_route)."""
+    from ui.editors.optimize_core import compute_optimized_route
+    nodes = {
+        "e1": {"id": "e1", "type": "equipment",
+               "centroid": [120.0, 70.0], "bbox": [40, 90, 100, 150]},
+        "c2": {"id": "c2", "type": "connector", "centroid": [95.0, 260.0]},
+    }
+    edge = {"id": "m", "source": "e1", "target": "c2", "waypoints": [],
+            "_manual_route": True,
+            "source_point": [95.0, 100.0],
+            "target_point": [95.0, 260.0]}
+    r = compute_optimized_route(nodes, [edge], edge)
+    assert r["source_point"] == [95.0, 100.0]
+    assert r["target_point"] == [95.0, 260.0]
+
+
 if __name__ == "__main__":
     # Печать метрик всех графов — для заполнения BASELINE.
     for p in _graph_files():
