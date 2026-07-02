@@ -257,13 +257,21 @@ def test_autofix_shift_within_limits_and_not_worse(path):
 #    сознательно переводится в обычный в том же коммите)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True,
-                   reason="O1 (шаг 1): знак в R7 инвертирован — сегмент "
-                          "вдоль стенки СНАРУЖИ не ловится")
 def test_O1_wall_rule_catches_outside_segment():
+    """O1 исправлена шагом 1: R7 ловит сегменты вдоль стенки снаружи."""
     bbox = [100, 100, 200, 200]
-    # Вертикальный сегмент в 5px снаружи от левой стенки, идёт вдоль неё.
+    # Вертикальный сегмент в 5px снаружи от левой стенки, вдоль неё → ловится.
     assert er._seg_near_bbox_wall(95, 100, 95, 200, bbox, margin=15)
+    # В 5px снаружи от правой стенки → ловится.
+    assert er._seg_near_bbox_wall(205, 100, 205, 200, bbox, margin=15)
+    # Горизонтальный в 5px над верхней стенкой → ловится.
+    assert er._seg_near_bbox_wall(100, 95, 200, 95, bbox, margin=15)
+    # ВНУТРИ bbox — зона R4, R7 не срабатывает.
+    assert not er._seg_near_bbox_wall(105, 100, 105, 200, bbox, margin=15)
+    # Дальше margin (20px) → не срабатывает.
+    assert not er._seg_near_bbox_wall(80, 100, 80, 200, bbox, margin=15)
+    # Рядом, но не вдоль (нет перекрытия по параллельной оси) → не срабатывает.
+    assert not er._seg_near_bbox_wall(95, 250, 95, 350, bbox, margin=15)
 
 
 @pytest.mark.xfail(strict=True,

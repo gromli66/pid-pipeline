@@ -56,13 +56,14 @@ segment_intersects_bbox = _seg_hits_bbox
 
 def _seg_near_bbox_wall(ax: float, ay: float, bx: float, by: float,
                         bbox: list, margin: float = WALL_MARGIN) -> bool:
-    """R7: Сегмент параллелен стенке bbox и ближе margin px.
-    Только если сегмент перекрывает bbox по параллельной оси (иначе он просто рядом, не вдоль)."""
+    """R7: Сегмент идёт вдоль стенки bbox СНАРУЖИ ближе margin px.
+    Только если сегмент перекрывает bbox по параллельной оси (иначе он просто рядом, не вдоль).
+    Внутренность bbox — зона R4 (_seg_hits_bbox), здесь не проверяется."""
     x1, y1, x2, y2 = bbox
     if abs(ax - bx) < 0.5:  # Vertical segment at x=ax
-        # Параллелен left/right стенке?
-        near_left = 0 < (ax - x1) < margin
-        near_right = 0 < (x2 - ax) < margin
+        # Параллелен left/right стенке снаружи?
+        near_left = 0 < (x1 - ax) < margin    # слева от левой стенки
+        near_right = 0 < (ax - x2) < margin   # справа от правой стенки
         if near_left or near_right:
             # Перекрытие по y — сегмент должен идти ВДОЛЬ bbox, не просто рядом
             seg_y1, seg_y2 = min(ay, by), max(ay, by)
@@ -70,8 +71,8 @@ def _seg_near_bbox_wall(ax: float, ay: float, bx: float, by: float,
             if overlap > 5:  # значительное перекрытие
                 return True
     if abs(ay - by) < 0.5:  # Horizontal segment at y=ay
-        near_top = 0 < (ay - y1) < margin
-        near_bottom = 0 < (y2 - ay) < margin
+        near_top = 0 < (y1 - ay) < margin     # выше верхней стенки
+        near_bottom = 0 < (ay - y2) < margin  # ниже нижней стенки
         if near_top or near_bottom:
             seg_x1, seg_x2 = min(ax, bx), max(ax, bx)
             overlap = min(seg_x2, x2) - max(seg_x1, x1)
