@@ -202,8 +202,9 @@ def _gen_l_shapes(sx: float, sy: float, tx: float, ty: float) -> list[list[tuple
     return candidates
 
 
-def _gen_z_shapes(sx: float, sy: float, tx: float, ty: float) -> list[list[tuple]]:
-    """Z-shape: 2 поворота. Несколько вариантов mid."""
+def _gen_z_shapes(sx: float, sy: float, tx: float, ty: float,
+                  obstacles: list[list] | None = None) -> list[list[tuple]]:
+    """Z-shape: 2 поворота. Стволы по долям пути + по границам препятствий."""
     candidates = []
     dx = tx - sx
     dy = ty - sy
@@ -219,6 +220,31 @@ def _gen_z_shapes(sx: float, sy: float, tx: float, ty: float) -> list[list[tuple
         for frac in (0.25, 0.5, 0.75):
             mid_y = sy + dy * frac
             candidates.append([(sx, mid_y), (tx, mid_y)])
+
+    # Стволы по «интересным координатам» — границы препятствий в коридоре
+    # ±WALL_MARGIN. Даёт обходы впритык к margin там, где доли 0.25/0.5/0.75
+    # заняты препятствиями.
+    if obstacles:
+        min_x, max_x = min(sx, tx), max(sx, tx)
+        min_y, max_y = min(sy, ty), max(sy, ty)
+        xs: set = set()
+        ys: set = set()
+        for bx1, by1, bx2, by2 in obstacles:
+            if bx1 < max_x + WALL_MARGIN and bx2 > min_x - WALL_MARGIN and \
+               by1 < max_y + WALL_MARGIN and by2 > min_y - WALL_MARGIN:
+                for x in (bx1 - WALL_MARGIN, bx2 + WALL_MARGIN):
+                    if min_x + 1 < x < max_x - 1:
+                        xs.add(round(x, 1))
+                for y in (by1 - WALL_MARGIN, by2 + WALL_MARGIN):
+                    if min_y + 1 < y < max_y - 1:
+                        ys.add(round(y, 1))
+        MAX_COORDS = 20  # защита от взрыва кандидатов в плотных местах
+        if abs(dy) > 1:
+            for mid_x in sorted(xs)[:MAX_COORDS]:
+                candidates.append([(mid_x, sy), (mid_x, ty)])
+        if abs(dx) > 1:
+            for mid_y in sorted(ys)[:MAX_COORDS]:
+                candidates.append([(sx, mid_y), (tx, mid_y)])
 
     return candidates
 
@@ -275,8 +301,8 @@ def generate_candidates(sx: float, sy: float, tx: float, ty: float,
     # L-shapes (1 поворот)
     candidates.extend(_gen_l_shapes(sx, sy, tx, ty))
 
-    # Z-shapes (2 поворота)
-    candidates.extend(_gen_z_shapes(sx, sy, tx, ty))
+    # Z-shapes (2 поворота): доли пути + границы препятствий
+    candidates.extend(_gen_z_shapes(sx, sy, tx, ty, obstacles))
 
     # U-shapes (3 поворота)
     candidates.extend(_gen_u_shapes(sx, sy, tx, ty, obstacles))
@@ -310,16 +336,35 @@ def filter_candidate(route_pts: list[tuple], all_bboxes: list[list],
                 if _seg_near_bbox_wall(a[0], a[1], b[0], b[1], bbox, margin=WALL_MARGIN):
                     return False
 
-    # R4: проверить что СРЕДНИЕ сегменты не через src/tgt bbox
+    # R4: проверить что СРЕДНИЕ сегменты не через src/tgt bbox.
+    # margin=0 (был -1): сегмент ровно ПО стенке своего узла тоже запрещён —
+    # иначе ребро сливается со стенкой (см. AUDIT O10, шаг 4).
     for i, (a, b) in enumerate(segs):
         if i == 0 or i == len(segs) - 1:
             continue  # stubs start/end on bbox — OK
-        if _seg_hits_bbox(a[0], a[1], b[0], b[1], src_bbox, margin=-1):
+        if _seg_hits_bbox(a[0], a[1], b[0], b[1], src_bbox, margin=0):
             return False
-        if _seg_hits_bbox(a[0], a[1], b[0], b[1], tgt_bbox, margin=-1):
+        if _seg_hits_bbox(a[0], a[1], b[0], b[1], tgt_bbox, margin=0):
             return False
 
     return True
+
+
+def _count_violations(pts: list[tuple], all_bboxes: list[list],
+                      src_bbox: list, tgt_bbox: list) -> int:
+    """Число пересечений пути с bbox'ами (margin=0) — для мягкого fallback."""
+    segs = _path_to_segments(pts)
+    violations = 0
+    for i, (a, b) in enumerate(segs):
+        for bbox in all_bboxes:
+            if _seg_hits_bbox(a[0], a[1], b[0], b[1], bbox, margin=0):
+                violations += 1
+        if 0 < i < len(segs) - 1:
+            if _seg_hits_bbox(a[0], a[1], b[0], b[1], src_bbox, margin=0):
+                violations += 1
+            if _seg_hits_bbox(a[0], a[1], b[0], b[1], tgt_bbox, margin=0):
+                violations += 1
+    return violations
 
 
 # =====================================================================
@@ -521,9 +566,32 @@ def route_edge(
             best_score = score
             best_route = full_pts
 
-    # --- Fallback: если ничего не прошло фильтр ---
+    # --- Fallback 1: ничего не прошло жёсткий фильтр — мягкий проход ---
+    # Выбираем наименее нарушающего кандидата: каждое пересечение bbox —
+    # крупный штраф. Маршрут сквозь узел возможен, только если вариантов
+    # без пересечений нет вообще (см. AUDIT O10, шаг 4).
     if best_route is None:
-        # Простой L-shape без фильтрации
+        best_soft_score = float('inf')
+        for route_wps in candidates:
+            full_pts = [(sx, sy), stub_src]
+            if route_wps:
+                full_pts.extend(route_wps)
+            full_pts.append(stub_tgt)
+            full_pts.append((tx, ty))
+            full_pts = clean_collinear(full_pts)
+            # диагональ недопустима даже в мягком режиме (R1 жёсткое)
+            if any(abs(a[0] - b[0]) > 0.5 and abs(a[1] - b[1]) > 0.5
+                   for a, b in _path_to_segments(full_pts)):
+                continue
+            viol = _count_violations(full_pts, obstacle_bboxes,
+                                     src_bbox, tgt_bbox)
+            soft_score = score_candidate(full_pts, existing) + viol * 100_000
+            if soft_score < best_soft_score:
+                best_soft_score = soft_score
+                best_route = full_pts
+
+    # --- Fallback 2 (крайний случай — кандидатов нет вообще): простой L ---
+    if best_route is None:
         full_pts = [(sx, sy), stub_src, (st_x, ss_y), stub_tgt, (tx, ty)]
         full_pts = clean_collinear(full_pts)
         best_route = full_pts

@@ -318,6 +318,93 @@ def test_O6_autofix_preserves_manual_route():
     assert edges[0]["waypoints"] == [[100.0, 400.0]]
 
 
+# ---------------------------------------------------------------------------
+# 4. Шаг 4: полнота кандидатов и честный fallback
+# ---------------------------------------------------------------------------
+
+def test_step4_zshapes_include_obstacle_boundaries():
+    """Z-стволы генерируются по границам препятствий ±WALL_MARGIN."""
+    cands = er._gen_z_shapes(0, 0, 300, 200, obstacles=[[100, 50, 140, 400]])
+    vert_trunks = {round(c[0][0], 1) for c in cands
+                   if abs(c[0][0] - c[1][0]) < 0.5}
+    assert 85.0 in vert_trunks    # 100 - 15
+    assert 155.0 in vert_trunks   # 140 + 15
+
+
+def test_step4_middle_segment_on_own_wall_rejected():
+    """Средний сегмент ровно по стенке своего узла теперь отклоняется."""
+    src_bbox = [0, 0, 40, 40]
+    tgt_bbox = [200, 0, 240, 40]
+    pts = [(40, 20), (60, 20), (60, 0), (30, 0), (30, -20),
+           (220, -20), (220, 0)]
+    # сегмент (60,0)→(30,0) идёт по верхней стенке src (y=0, перекрытие x 30..40)
+    assert not er.filter_candidate(pts, [], src_bbox, tgt_bbox)
+
+
+def test_step4_soft_fallback_picks_least_violating():
+    """Все кандидаты режутся 2px-фильтром (узкая щель) → мягкий проход
+    выбирает маршрут через щель (0 пересечений), а не сквозь стену."""
+    src_bbox = [0, 0, 40, 40]
+    tgt_bbox = [300, 0, 340, 40]
+    # стена с щелью 4px по y (18..22): маршрут y=20 проходит с клиренсом 2
+    walls = [[150, -1000, 170, 18], [150, 22, 170, 1000]]
+    wps = er.route_edge((40, 20), (300, 20), 'right', 'left',
+                        src_bbox, tgt_bbox, walls, [])
+    pts = [(40, 20)] + [(w[1], w[0]) for w in wps] + [(300, 20)]
+    for i in range(len(pts) - 1):
+        a, b = pts[i], pts[i + 1]
+        for w in walls:
+            assert not er._seg_hits_bbox(a[0], a[1], b[0], b[1], w, margin=0), \
+                f"сегмент {a}→{b} прошёл сквозь стену {w}"
+
+
+def _rects_overlap(a, b, m=2.0):
+    return (a[0] - m < b[2] and a[2] + m > b[0]
+            and a[1] - m < b[3] and a[3] + m > b[1])
+
+
+def test_step4_router_no_avoidable_violations_on_real_graph():
+    """Роутер не выдаёт маршрутов сквозь узлы — кроме рёбер, чей конец
+    физически наложен на чужой узел (данные; чинится Auto-Fix, шаг 7d)."""
+    path = next((p for p in GRAPHS
+                 if p.parent.parent.name.startswith("4464be08")), None)
+    if path is None:
+        pytest.skip("нет графа 4464be08")
+    nodes, edges = _load_graph(path)
+
+    def vbbox(n):
+        bb = n.get("bbox")
+        if n.get("type") == "equipment" and bb and len(bb) == 4:
+            return bb
+        cx, cy = n["centroid"][1], n["centroid"][0]
+        return [cx - CONN_R, cy - CONN_R, cx + CONN_R, cy + CONN_R]
+
+    avoidable = 0
+    unavoidable = 0
+    for e in edges:
+        s, t = nodes[e["source"]], nodes[e["target"]]
+        scx, scy = s["centroid"][1], s["centroid"][0]
+        tcx, tcy = t["centroid"][1], t["centroid"][0]
+        s_side = gg.bbox_exit_side(vbbox(s), scx, scy, tcx, tcy)
+        t_side = gg.bbox_exit_side(vbbox(t), tcx, tcy, scx, scy)
+        sxy = gg.bbox_side_midpoint(vbbox(s), s_side)
+        txy = gg.bbox_side_midpoint(vbbox(t), t_side)
+        obstacles = [vbbox(n) for nid, n in nodes.items()
+                     if nid not in (e["source"], e["target"])]
+        wps = er.route_edge(sxy, txy, s_side, t_side,
+                            vbbox(s), vbbox(t), obstacles, [])
+        pts = [sxy] + [(w[1], w[0]) for w in wps] + [txy]
+        if er.validate_path(pts, obstacles, vbbox(s), vbbox(t)):
+            if any(_rects_overlap(vbbox(s), ob) or _rects_overlap(vbbox(t), ob)
+                   for ob in obstacles):
+                unavoidable += 1  # конец ребра наложен на чужой узел
+            else:
+                avoidable += 1
+    assert avoidable == 0, f"избежимых маршрутов сквозь узлы: {avoidable}"
+    # на этом графе известен ровно один случай наложения (edge_69/node_56)
+    assert unavoidable <= 2, f"наложенных концов стало больше: {unavoidable}"
+
+
 if __name__ == "__main__":
     # Печать метрик всех графов — для заполнения BASELINE.
     for p in _graph_files():
