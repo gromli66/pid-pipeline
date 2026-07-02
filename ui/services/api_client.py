@@ -539,7 +539,7 @@ class APIClient:
 
         Args:
             uid: UUID диаграммы
-            page_size: 'A4', 'A3', 'A2', 'A1', 'A0' или None
+            page_size: 'A4'..'A0', '1920x1080' (экран) или None (оригинал)
 
         VALIDATED_GRAPH → GENERATING_FXML → COMPLETED.
         """

@@ -1278,8 +1278,10 @@ class DiagramWorkspace(QWidget):
             )
 
     def _start_fxml(self):
-        # Без диалога размера — всегда оригинальные пиксели изображения.
-        page_size = None
+        # Диалог выбора размера: 1920×1080 (экран), оригинал или A4–A0.
+        page_size = self._ask_page_size()
+        if page_size is False:          # пользователь отменил диалог
+            return
 
         # Запускаем генерацию (перегенерация если уже COMPLETED)
         try:
@@ -1298,6 +1300,7 @@ class DiagramWorkspace(QWidget):
     def _ask_page_size(self):
         """Диалог выбора размера страницы. Возвращает 'A3', 'A4'... или None, или False (отмена)."""
         items = [
+            "1920×1080 (экран, стандартизация скинов)",
             "Оригинал (пиксели изображения)",
             "A4 landscape (297×210 мм)",
             "A3 landscape (420×297 мм)",
@@ -1308,18 +1311,19 @@ class DiagramWorkspace(QWidget):
         item, ok = QInputDialog.getItem(
             self, "Размер страницы FXML",
             "Выберите целевой размер:",
-            items, 2, False,  # default = A3
+            items, 0, False,  # default = 1920×1080
         )
         if not ok:
             return False
 
         mapping = {
-            items[0]: None,
-            items[1]: "A4",
-            items[2]: "A3",
-            items[3]: "A2",
-            items[4]: "A1",
-            items[5]: "A0",
+            items[0]: "1920x1080",
+            items[1]: None,
+            items[2]: "A4",
+            items[3]: "A3",
+            items[4]: "A2",
+            items[5]: "A1",
+            items[6]: "A0",
         }
         return mapping.get(item)
 

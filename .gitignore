@@ -77,3 +77,5 @@ stages.txt
 diag_status.txt
 .venv_ui/
 docker-compose.gpu.yml
+
+_scratch/

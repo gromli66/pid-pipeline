@@ -1,0 +1,23 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<?import javafx.scene.layout.*?>
+<?import javafx.scene.shape.*?>
+<?import javafx.scene.text.*?>
+<?import ru.get.common.controls.*?>
+<AnchorPane xmlns="http://javafx.com/javafx/17" xmlns:fx="http://javafx.com/fxml/1" fx:id="root" prefWidth="1920.0" prefHeight="1080.0" style="-fx-background-color: #d4d4d4;">
+  <children>
+    <!-- horizontal pipe at y=1000 from x=200..2800 -->
+    <Line fx:id="pipe" startX="0.00" startY="318.46" endX="1920.00" endY="318.46" stroke="#1e5fbf" strokeWidth="5.91"/>
+    <!-- vertical branch -->
+    <Line fx:id="branch" startX="960.00" startY="318.46" endX="960.00" endY="835.38" stroke="#1e5fbf" strokeWidth="5.91"/>
+    <!-- HANDLE_VLV (AR0.5) HORIZONTAL on pipe, centered at x=600,y=1000 : box 200x100 -> layout 500,950 -->
+    <ValveControl fx:id="v1" layoutX="221.54" layoutY="281.54" prefWidth="147.69" prefHeight="73.85" skinType="HANDLE_VLV" orientation="HORIZONTAL"/>
+    <!-- ELECTRIC_VLV placed in a SQUARE box (the bug): 180x180 centered at x=1100,y=1000 -> layout 1010,910 -->
+    <ValveControl fx:id="v2" layoutX="598.15" layoutY="252.00" prefWidth="132.92" prefHeight="132.92" skinType="ELECTRIC_VLV" orientation="HORIZONTAL"/>
+    <!-- PUMP square on branch end, 160x160 centered at x=1500,y=1700 -> 1420,1620 -->
+    <PumpControl fx:id="p1" layoutX="900.92" layoutY="776.31" prefWidth="118.15" prefHeight="118.15" skinType="PUMP" orientation="VERTICAL"/>
+    <!-- polygon tank -->
+    <Polygon fx:id="tank" layoutX="1550.77" layoutY="185.54" points="0.00, 0.00, 265.85, 0.00, 265.85, 265.85, 0.00, 265.85" fill="#cfe8cf" stroke="#333333" strokeWidth="2.22"/>
+    <Text layoutX="206.77" layoutY="377.54" text="V-101" style="-fx-font-size: 29.54px;"/>
+    <Text layoutX="1587.69" layoutY="325.85" text="TANK" fill="#333333"><font><Font size="35.45"/></font></Text>
+  </children>
+</AnchorPane>

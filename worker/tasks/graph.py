@@ -362,7 +362,9 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None):
 
     Args:
         diagram_uid: UUID диаграммы
-        page_size: 'A4', 'A3', 'A2', 'A1', 'A0' или None (пиксельные координаты)
+        page_size: 'A4', 'A3', 'A2', 'A1', 'A0';
+                   '1920x1080' — экранный лист (стандартизация + фикс скинов);
+                   None — пиксельные координаты (оригинал)
 
     Статус:  GENERATING_FXML → COMPLETED
     """
@@ -565,9 +567,31 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None):
                 )
 
         # ===== 5. Generate FXML =====
+        # '1920x1080' — экранный лист: генерируем в пикселях, затем стандартизируем.
+        STD_1920 = "1920x1080"
+        gen_page_size = None if page_size == STD_1920 else page_size
         page_info = f" (page: {page_size})" if page_size else " (original pixels)"
         logger.info("Generating FXML%s...", page_info)
-        fxml_content = generate_fxml(graph_data, page_size=page_size)
+        fxml_content = generate_fxml(graph_data, page_size=gen_page_size)
+
+        # Экранный лист 1920x1080: привести к стандарту + убрать смещение скинов,
+        # датчиков и невидимые разрывы мостов (tools/fxml_standardize.py). Остальные
+        # размеры (оригинал / A4-A0) остаются как есть. Ошибка стандартизации не
+        # фатальна — пишем сырой FXML.
+        if page_size == STD_1920:
+            try:
+                from pathlib import Path as _Path
+                from tools.fxml_standardize import standardize_xml, load_geo
+                _geo_path = _Path(__file__).resolve().parents[2] / "tools" / "skin_geometry.json"
+                fxml_content = standardize_xml(
+                    fxml_content, geo=load_geo(str(_geo_path)), mode="letterbox",
+                )
+                logger.info("FXML standardized to 1920x1080")
+            except Exception as exc:
+                logger.error(
+                    "1920x1080 standardization failed, writing raw FXML: %s",
+                    exc, exc_info=True,
+                )
 
         # ===== 6. Save FXML =====
         with open(output_fxml_path, 'w', encoding='utf-8') as f:

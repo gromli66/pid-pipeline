@@ -119,6 +119,7 @@ services:
     volumes:
       - ./worker:/app/worker
       - ./modules:/app/modules
+      - ./tools:/app/tools
       - ./configs:/app/configs
       - ./app:/app/app
       - ./storage:/storage

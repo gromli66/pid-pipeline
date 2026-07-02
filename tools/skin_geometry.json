@@ -1,0 +1,303 @@
+{
+  "_meta": {
+    "purpose": "Intrinsic geometry of ru.get custom-control skins, used to place them in FXML without offset.",
+    "source": "custom-control-skin-based-1.6.0.jar: skin classes getPreferredWidth/Height/getAspectRatio + resource FXML canvases, cross-checked with graph_to_fxml.SKIN_CONTACT_OFFSET.",
+    "fields": {
+      "canvas_w/canvas_h": "native skin canvas in px (getPreferredWidth/Height)",
+      "aspect_hw": "height/width ratio the skin's resize() preserves (getAspectRatio). Give the control a prefWidth:prefHeight matching this or the graphic is letterboxed inside the box -> visual offset.",
+      "square": "true when aspect_hw == 1.0",
+      "contact": "[h_frac, v_frac] contact-axis (butterfly waist) offset as a fraction of the control cross-size; HORIZONTAL -> layoutY -= h_frac*height, VERTICAL -> layoutX += v_frac*height. Mirrors graph_to_fxml.apply_contact_offset.",
+      "control": "owning Control class",
+      "skin_class": "skin implementation in the jar"
+    }
+  },
+  "defaults": {
+    "canvas_w": 100,
+    "canvas_h": 100,
+    "aspect_hw": 1.0,
+    "square": true,
+    "contact": [
+      0.0,
+      0.0
+    ]
+  },
+  "skins": {
+    "HANDLE_VLV": {
+      "control": "ValveControl",
+      "skin_class": "HandleVlvSkin",
+      "canvas_w": 100,
+      "canvas_h": 50,
+      "aspect_hw": 0.5,
+      "square": false,
+      "contact": [
+        0.0,
+        0.0
+      ],
+      "note": "bare butterfly, no actuator"
+    },
+    "CHECK_VLV": {
+      "control": "ValveControl",
+      "skin_class": "CheckVlvSkin",
+      "canvas_w": 100,
+      "canvas_h": 50,
+      "aspect_hw": 0.5,
+      "square": false,
+      "contact": [
+        0.0,
+        0.0
+      ]
+    },
+    "ELECTRIC_VLV": {
+      "control": "ValveControl",
+      "skin_class": "ElectricVlvSkin",
+      "canvas_w": 100,
+      "canvas_h": 90,
+      "aspect_hw": 0.9,
+      "square": false,
+      "contact": [
+        0.2,
+        0.2
+      ],
+      "note": "motor circle on top",
+      "waist": [
+        0.3,
+        0.7
+      ]
+    },
+    "ELECTROMAGNETIC_VLV": {
+      "control": "ValveControl",
+      "skin_class": "ElectroMagneticVlvSkin",
+      "canvas_w": 100,
+      "canvas_h": 90,
+      "aspect_hw": 0.9,
+      "square": false,
+      "contact": [
+        0.05,
+        0.05
+      ],
+      "waist": [
+        0.45,
+        0.55
+      ]
+    },
+    "CTRL_VLV_ELEC": {
+      "control": "ValveControl",
+      "skin_class": "CtrlVlvElectricSkin",
+      "canvas_w": 100,
+      "canvas_h": 90,
+      "aspect_hw": 0.9,
+      "square": false,
+      "contact": [
+        0.1,
+        0.2
+      ],
+      "waist": [
+        0.3,
+        0.6
+      ]
+    },
+    "CTRL_VLV_HANDLE": {
+      "control": "ValveControl",
+      "skin_class": "CtrlVlvHandleSkin",
+      "canvas_w": 100,
+      "canvas_h": 90,
+      "aspect_hw": 0.9,
+      "square": false,
+      "contact": [
+        0.1,
+        0.2
+      ],
+      "waist": [
+        0.3,
+        0.6
+      ]
+    },
+    "CHECK_HYDRO_VLV": {
+      "control": "ValveControl",
+      "skin_class": "CheckSolVlvSkin",
+      "canvas_w": 100,
+      "canvas_h": 90,
+      "aspect_hw": 0.9,
+      "square": false,
+      "contact": [
+        0.1,
+        0.18
+      ],
+      "waist": [
+        0.32,
+        0.6
+      ]
+    },
+    "RELIEF_VLV": {
+      "control": "ValveControl",
+      "skin_class": "ReliefVlvSkin",
+      "canvas_w": 100,
+      "canvas_h": 75,
+      "aspect_hw": 0.75,
+      "square": false,
+      "contact": [
+        0.15,
+        0.12
+      ],
+      "waist": [
+        0.38,
+        0.65
+      ]
+    },
+    "AOC_VLV": {
+      "control": "ValveControl",
+      "skin_class": "AocVlvSkin",
+      "canvas_w": 100,
+      "canvas_h": 220,
+      "aspect_hw": 1.5,
+      "square": false,
+      "contact": [
+        0.34,
+        0.34
+      ],
+      "note": "getAspectRatio=1.5 while canvas is 100x220; large side actuator",
+      "waist": [
+        0.16,
+        0.84
+      ]
+    },
+    "AOC_CTRL_VLV": {
+      "control": "ValveControl",
+      "skin_class": "ThreeWayAocCtrlVlvSkin",
+      "canvas_w": 100,
+      "canvas_h": 75,
+      "aspect_hw": 0.75,
+      "square": false,
+      "contact": [
+        0.15,
+        0.15
+      ],
+      "waist": [
+        0.35,
+        0.65
+      ]
+    },
+    "AOC_VLV_V2_NPP": {
+      "control": "ValveControl",
+      "skin_class": "AocVlvV2NPPSkin",
+      "canvas_w": 100,
+      "canvas_h": 100,
+      "aspect_hw": 1.0,
+      "square": true,
+      "contact": [
+        0.2,
+        0.2
+      ]
+    },
+    "PUMP": {
+      "control": "PumpControl",
+      "skin_class": "PumpSkin",
+      "canvas_w": 60,
+      "canvas_h": 60,
+      "aspect_hw": 1.0,
+      "square": true,
+      "contact": [
+        0.0,
+        0.0
+      ]
+    },
+    "FAN": {
+      "control": "PumpControl",
+      "skin_class": "FanSkin",
+      "canvas_w": 60,
+      "canvas_h": 60,
+      "aspect_hw": 1.0,
+      "square": true,
+      "contact": [
+        0.0,
+        0.0
+      ]
+    },
+    "HEATER": {
+      "control": "HeaterControl",
+      "skin_class": "HeaterSkin",
+      "canvas_w": 100,
+      "canvas_h": 100,
+      "aspect_hw": 1.0,
+      "square": true,
+      "contact": [
+        0.0,
+        0.0
+      ]
+    },
+    "HEATER_VOL_TUBE": {
+      "control": "HeaterControl",
+      "skin_class": "HeaterVolTubeSkin",
+      "canvas_w": 100,
+      "canvas_h": 100,
+      "aspect_hw": 1.0,
+      "square": true,
+      "contact": [
+        0.0,
+        0.0
+      ]
+    },
+    "FILTER": {
+      "control": "FunctionControl",
+      "skin_class": "FilterSkin",
+      "canvas_w": 100,
+      "canvas_h": 100,
+      "aspect_hw": 1.0,
+      "square": true,
+      "contact": [
+        0.0,
+        0.0
+      ]
+    },
+    "FLOWMETER": {
+      "control": "FunctionControl",
+      "skin_class": "FlowMeterSkin",
+      "canvas_w": 20,
+      "canvas_h": 20,
+      "aspect_hw": 1.0,
+      "square": true,
+      "contact": [
+        0.0,
+        0.0
+      ]
+    },
+    "ARROW": {
+      "control": "FunctionControl",
+      "skin_class": "ArrowSkin",
+      "canvas_w": 10,
+      "canvas_h": 10,
+      "aspect_hw": 1.0,
+      "square": true,
+      "contact": [
+        0.0,
+        0.0
+      ]
+    },
+    "MINSK": {
+      "control": "DetectorControl",
+      "skin_class": "DetectorMinskSkin",
+      "canvas_w": 30,
+      "canvas_h": 30,
+      "aspect_hw": 1.0,
+      "square": true,
+      "contact": [
+        0.0,
+        0.0
+      ],
+      "note": "generator forces HORIZONTAL and shrinks x1/3"
+    },
+    "TEXT_BUTTON": {
+      "control": "ButtonControl",
+      "skin_class": "TextButtonSkin",
+      "canvas_w": 120,
+      "canvas_h": 30,
+      "aspect_hw": 0.25,
+      "square": false,
+      "contact": [
+        0.0,
+        0.0
+      ],
+      "note": "very wide button"
+    }
+  }
+}

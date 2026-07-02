@@ -174,7 +174,7 @@ async def get_graph_result(
 @router.post("/{uid}/generate-fxml")
 async def generate_fxml(
     uid: UUID,
-    page_size: str = Query(default=None, description="Page size: A0, A1, A2, A3, A4 (landscape). None = original pixels."),
+    page_size: str = Query(default=None, description="Page size: A0-A4 (landscape); '1920x1080' = screen sheet (standardized); None = original pixels."),
     db: AsyncSession = Depends(get_async_db),
 ):
     """

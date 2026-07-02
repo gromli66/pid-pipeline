@@ -1411,6 +1411,66 @@ def _subpath_between(points, cum, s0, s1):
     return pts
 
 
+# ---------------------------------------------------------------------------
+# B2: посадка конца трубы на КОНТУР полигона (SAM2 segmentation), а не на
+# detection-bbox узла. Труба тянется вдоль своей оси до реального ребра контура.
+# ---------------------------------------------------------------------------
+def _point_in_poly(x, y, pts):
+    inside = False
+    n = len(pts)
+    j = n - 1
+    for i in range(n):
+        xi, yi = pts[i]
+        xj, yj = pts[j]
+        if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / ((yj - yi) or 1e-9) + xi):
+            inside = not inside
+        j = i
+    return inside
+
+
+def _ray_seg_t(px, py, dx, dy, ax, ay, bx, by):
+    """Параметр t>=0, где луч (px,py)+t*(dx,dy) пересекает отрезок AB, иначе None."""
+    ex, ey = bx - ax, by - ay
+    den = dx * ey - dy * ex
+    if abs(den) < 1e-9:
+        return None
+    t = ((ax - px) * ey - (ay - py) * ex) / den
+    u = ((ax - px) * dy - (ay - py) * dx) / den
+    return t if (t >= -1e-6 and -1e-6 <= u <= 1 + 1e-6) else None
+
+
+def project_endpoint_to_contour(point, adjacent, segmentation):
+    """Двигает конец трубы (point) вдоль оси сегмента (направление от adjacent к
+    концу и глубже) до границы контура segmentation. Ортогонально; если конец уже
+    внутри контура или пересечения нет — возвращает point без изменений."""
+    seg = segmentation
+    if seg and isinstance(seg[0], list):
+        seg = [v for poly in seg for v in poly]
+    if not seg or len(seg) < 6:
+        return point
+    pts = [(seg[i], seg[i + 1]) for i in range(0, len(seg) - 1, 2)]
+    px, py = point
+    if _point_in_poly(px, py, pts):
+        return point
+    dx, dy = px - adjacent[0], py - adjacent[1]
+    if dx == 0 and dy == 0:
+        return point
+    if abs(dy) >= abs(dx):
+        dx, dy = 0.0, (1.0 if dy > 0 else -1.0)
+    else:
+        dx, dy = (1.0 if dx > 0 else -1.0), 0.0
+    best = None
+    for i in range(len(pts)):
+        ax, ay = pts[i]
+        bx, by = pts[(i + 1) % len(pts)]
+        t = _ray_seg_t(px, py, dx, dy, ax, ay, bx, by)
+        if t is not None and t >= 0 and (best is None or t < best):
+            best = t
+    if best is None:
+        return point
+    return (px + dx * best, py + dy * best)
+
+
 def generate_fxml_line(edge, nodes, edge_id: str,
                        base_stroke: float = LINE_STROKE_WIDTH,
                        use_diameter: bool = True,
@@ -1461,6 +1521,16 @@ def generate_fxml_line(edge, nodes, edge_id: str,
         if converted:
             all_points.append(converted)
     all_points.append(end)
+
+    # B2: если конец ребра соединён с ПОЛИГОН-узлом (есть segmentation и нет скина),
+    # посадить конец трубы на контур, а не на detection-bbox.
+    if len(all_points) >= 2:
+        _src = nodes.get(edge.get('source'))
+        _tgt = nodes.get(edge.get('target'))
+        if _src and _src.get('segmentation') and get_skin_info(_src) is None:
+            all_points[0] = project_endpoint_to_contour(all_points[0], all_points[1], _src['segmentation'])
+        if _tgt and _tgt.get('segmentation') and get_skin_info(_tgt) is None:
+            all_points[-1] = project_endpoint_to_contour(all_points[-1], all_points[-2], _tgt['segmentation'])
 
     def _emit(points, fid):
         """<Line> для 2 точек, иначе <Polyline>."""

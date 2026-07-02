@@ -1,0 +1,3431 @@
+{
+  "ArrowSkin": {
+    "skin_class": "ArrowSkin",
+    "package": "diagram/functional",
+    "resource": null,
+    "pref_w": 10.0,
+    "pref_h": 10.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "SelectionNvartSkin": {
+    "skin_class": "SelectionNvartSkin",
+    "package": "diagram/functional",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 50.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "EmptySkin": {
+    "skin_class": "EmptySkin",
+    "package": "diagram/functional",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "FlowMeterSkin": {
+    "skin_class": "FlowMeterSkin",
+    "package": "diagram/functional",
+    "resource": null,
+    "pref_w": 20.0,
+    "pref_h": 20.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "TVSSkin": {
+    "skin_class": "TVSSkin",
+    "package": "diagram/functional",
+    "resource": null,
+    "pref_w": 63.0,
+    "pref_h": 70.0,
+    "aspect_hw": 1.05,
+    "square": false
+  },
+  "SignalIndicatorNvartSkin": {
+    "skin_class": "SignalIndicatorNvartSkin",
+    "package": "diagram/functional",
+    "resource": null,
+    "pref_w": 10.0,
+    "pref_h": 10.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "AVRSkinNvart": {
+    "skin_class": "AVRSkinNvart",
+    "package": "diagram/functional",
+    "resource": "avrNvart",
+    "pref_w": 100.0,
+    "pref_h": 50.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "RecombinatorSkin": {
+    "skin_class": "RecombinatorSkin",
+    "package": "diagram/functional",
+    "resource": "recombinator",
+    "pref_w": 100.0,
+    "pref_h": 50.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "TabloWithoutBackSkin": {
+    "skin_class": "TabloWithoutBackSkin",
+    "package": "diagram/functional",
+    "resource": "tablowithoutback",
+    "pref_w": 150.0,
+    "pref_h": 50.0,
+    "aspect_hw": 0.3333,
+    "square": false
+  },
+  "FlameIndicationSkin": {
+    "skin_class": "FlameIndicationSkin",
+    "package": "diagram/functional",
+    "resource": null,
+    "pref_w": 78.0,
+    "pref_h": 280.0,
+    "aspect_hw": 3.5897,
+    "square": false
+  },
+  "LcdSkin": {
+    "skin_class": "LcdSkin",
+    "package": "diagram/functional",
+    "resource": null,
+    "pref_w": 220.0,
+    "pref_h": 100.0,
+    "aspect_hw": 0.4545,
+    "square": false
+  },
+  "ArrowButtonSkin": {
+    "skin_class": "ArrowButtonSkin",
+    "package": "diagram/functional",
+    "resource": null,
+    "pref_w": 50.0,
+    "pref_h": 50.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "DetectorPortalSkin": {
+    "skin_class": "DetectorPortalSkin",
+    "package": "diagram/functional/detector",
+    "resource": null,
+    "pref_w": 300.0,
+    "pref_h": 100.0,
+    "aspect_hw": 0.3333,
+    "square": false
+  },
+  "DetectorDigitalFontSkin": {
+    "skin_class": "DetectorDigitalFontSkin",
+    "package": "diagram/functional/detector",
+    "resource": null,
+    "pref_w": null,
+    "pref_h": 148.0,
+    "aspect_hw": null,
+    "square": null
+  },
+  "DetectorMinskSkin": {
+    "skin_class": "DetectorMinskSkin",
+    "package": "diagram/functional/detector",
+    "resource": "detectorMinsk",
+    "pref_w": null,
+    "pref_h": 30.0,
+    "aspect_hw": null,
+    "square": null
+  },
+  "ValueDetectorSkin": {
+    "skin_class": "ValueDetectorSkin",
+    "package": "diagram/functional/detector",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 50.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "DetectorSkin": {
+    "skin_class": "DetectorSkin",
+    "package": "diagram/functional/detector",
+    "resource": null,
+    "pref_w": null,
+    "pref_h": 30.0,
+    "aspect_hw": null,
+    "square": null
+  },
+  "DetectorBISkin": {
+    "skin_class": "DetectorBISkin",
+    "package": "diagram/functional/detector",
+    "resource": "detectorBI",
+    "pref_w": null,
+    "pref_h": 30.0,
+    "aspect_hw": null,
+    "square": null
+  },
+  "DetectorNvartSkin": {
+    "skin_class": "DetectorNvartSkin",
+    "package": "diagram/functional/detector",
+    "resource": "detectorNvart",
+    "pref_w": null,
+    "pref_h": 30.0,
+    "aspect_hw": null,
+    "square": null
+  },
+  "DiagramButtonSkin": {
+    "skin_class": "DiagramButtonSkin",
+    "package": "diagram/functional/button",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 60.0,
+    "aspect_hw": 0.6,
+    "square": false
+  },
+  "ButtonPortalSkin": {
+    "skin_class": "ButtonPortalSkin",
+    "package": "diagram/functional/button",
+    "resource": null,
+    "pref_w": 80.0,
+    "pref_h": 80.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "TextButtonSkin": {
+    "skin_class": "TextButtonSkin",
+    "package": "diagram/functional/button",
+    "resource": null,
+    "pref_w": 120.0,
+    "pref_h": 30.0,
+    "aspect_hw": 0.25,
+    "square": false
+  },
+  "PlanTransitionButtonSkin": {
+    "skin_class": "PlanTransitionButtonSkin",
+    "package": "diagram/functional/button",
+    "resource": null,
+    "pref_w": 200.0,
+    "pref_h": 100.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "ButtonNvartSkin": {
+    "skin_class": "ButtonNvartSkin",
+    "package": "diagram/functional/button",
+    "resource": "buttonnvart",
+    "pref_w": 100.0,
+    "pref_h": 50.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "LampPortalSkin": {
+    "skin_class": "LampPortalSkin",
+    "package": "diagram/functional/lamp",
+    "resource": null,
+    "pref_w": 80.0,
+    "pref_h": 80.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "LampSkin": {
+    "skin_class": "LampSkin",
+    "package": "diagram/functional/lamp",
+    "resource": "lamp",
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "LampNvartSkin": {
+    "skin_class": "LampNvartSkin",
+    "package": "diagram/functional/lamp",
+    "resource": "lampnvart",
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "LampRectangleNvartSkin": {
+    "skin_class": "LampRectangleNvartSkin",
+    "package": "diagram/functional/lamp",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "LampCircleSkin": {
+    "skin_class": "LampCircleSkin",
+    "package": "diagram/functional/lamp",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "LampRectangleSkin": {
+    "skin_class": "LampRectangleSkin",
+    "package": "diagram/functional/lamp",
+    "resource": "lampRectangle",
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "FilterSkin": {
+    "skin_class": "FilterSkin",
+    "package": "diagram/functional/filter",
+    "resource": "filter",
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "Filter2Skin": {
+    "skin_class": "Filter2Skin",
+    "package": "diagram/functional/filter",
+    "resource": "filter2",
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "SteamTrapSkin": {
+    "skin_class": "SteamTrapSkin",
+    "package": "diagram/functional/filter",
+    "resource": "steamtrap",
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "TxtNvartSkin": {
+    "skin_class": "TxtNvartSkin",
+    "package": "diagram/functional/text",
+    "resource": "txtNvart",
+    "pref_w": 100.0,
+    "pref_h": 50.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "InputSkin": {
+    "skin_class": "InputSkin",
+    "package": "diagram/functional/text",
+    "resource": null,
+    "pref_w": 104.0,
+    "pref_h": 33.0,
+    "aspect_hw": 0.3137,
+    "square": false
+  },
+  "TxtSkin": {
+    "skin_class": "TxtSkin",
+    "package": "diagram/functional/text",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 50.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "LevelRoundSkin": {
+    "skin_class": "LevelRoundSkin",
+    "package": "diagram/functional/level",
+    "resource": "findDetectorWithSameKks",
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "LevelSkin": {
+    "skin_class": "LevelSkin",
+    "package": "diagram/functional/level",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 20.0,
+    "aspect_hw": 0.2,
+    "square": false
+  },
+  "FGUNvartSkin": {
+    "skin_class": "FGUNvartSkin",
+    "package": "diagram/functional/fgu",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 50.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "FguSkin": {
+    "skin_class": "FguSkin",
+    "package": "diagram/functional/fgu",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 50.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "TabloSkin": {
+    "skin_class": "TabloSkin",
+    "package": "diagram/functional/tablo",
+    "resource": "tablo",
+    "pref_w": 150.0,
+    "pref_h": 50.0,
+    "aspect_hw": 0.3333,
+    "square": false
+  },
+  "RemoteFunctionSkin": {
+    "skin_class": "RemoteFunctionSkin",
+    "package": "diagram/functional/malfunction",
+    "resource": "remote",
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "MalfunctionSkin": {
+    "skin_class": "MalfunctionSkin",
+    "package": "diagram/functional/malfunction",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "RemoteFunctionRectSkin": {
+    "skin_class": "RemoteFunctionRectSkin",
+    "package": "diagram/functional/malfunction",
+    "resource": "remoterec",
+    "pref_w": null,
+    "pref_h": 30.0,
+    "aspect_hw": null,
+    "square": null
+  },
+  "LockSkin": {
+    "skin_class": "LockSkin",
+    "package": "diagram/electric",
+    "resource": null,
+    "pref_w": 50.0,
+    "pref_h": 50.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "ReactorSkin": {
+    "skin_class": "ReactorSkin",
+    "package": "diagram/electric",
+    "resource": null,
+    "pref_w": 50.0,
+    "pref_h": 50.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "PortableEarthSkin": {
+    "skin_class": "PortableEarthSkin",
+    "package": "diagram/electric",
+    "resource": null,
+    "pref_w": 31.0,
+    "pref_h": 89.0,
+    "aspect_hw": 2.871,
+    "square": false
+  },
+  "GndSkin": {
+    "skin_class": "GndSkin",
+    "package": "diagram/electric",
+    "resource": null,
+    "pref_w": 40.0,
+    "pref_h": 32.0,
+    "aspect_hw": 0.8,
+    "square": false
+  },
+  "DIS_F2Skin": {
+    "skin_class": "DIS_F2Skin",
+    "package": "diagram/electric/breaker",
+    "resource": null,
+    "pref_w": 50.0,
+    "pref_h": 50.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "Brk6PortalSkin": {
+    "skin_class": "Brk6PortalSkin",
+    "package": "diagram/electric/breaker",
+    "resource": "brk6Portal",
+    "pref_w": 386.0,
+    "pref_h": 199.0,
+    "aspect_hw": 0.5155,
+    "square": false
+  },
+  "Disconnector04Skin": {
+    "skin_class": "Disconnector04Skin",
+    "package": "diagram/electric/breaker",
+    "resource": null,
+    "pref_w": 44.0,
+    "pref_h": 40.0,
+    "aspect_hw": 0.9091,
+    "square": false
+  },
+  "BreakerRoot": {
+    "skin_class": "BreakerRoot",
+    "package": "diagram/electric/breaker",
+    "resource": null,
+    "pref_w": 386.0,
+    "pref_h": 199.0,
+    "aspect_hw": 0.5155,
+    "square": false
+  },
+  "DisconnectorSkin": {
+    "skin_class": "DisconnectorSkin",
+    "package": "diagram/electric/breaker",
+    "resource": null,
+    "pref_w": 44.0,
+    "pref_h": 40.0,
+    "aspect_hw": 0.9091,
+    "square": false
+  },
+  "DisconnectorGndSkin": {
+    "skin_class": "DisconnectorGndSkin",
+    "package": "diagram/electric/breaker",
+    "resource": null,
+    "pref_w": 80.0,
+    "pref_h": 40.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "BRK_F2Skin": {
+    "skin_class": "BRK_F2Skin",
+    "package": "diagram/electric/breaker",
+    "resource": null,
+    "pref_w": 50.0,
+    "pref_h": 141.0,
+    "aspect_hw": 2.82,
+    "square": false
+  },
+  "PullOutBreakerSkin": {
+    "skin_class": "PullOutBreakerSkin",
+    "package": "diagram/electric/breaker",
+    "resource": null,
+    "pref_w": 50.0,
+    "pref_h": 150.0,
+    "aspect_hw": 3.0,
+    "square": false
+  },
+  "BreakerSkin": {
+    "skin_class": "BreakerSkin",
+    "package": "diagram/electric/breaker",
+    "resource": null,
+    "pref_w": 50.0,
+    "pref_h": 50.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "AutoBrkF2Skin": {
+    "skin_class": "AutoBrkF2Skin",
+    "package": "diagram/electric/breaker",
+    "resource": null,
+    "pref_w": 50.0,
+    "pref_h": 50.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "LineRoot": {
+    "skin_class": "LineRoot",
+    "package": "diagram/electric/line",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "VlSkin": {
+    "skin_class": "VlSkin",
+    "package": "diagram/electric/line",
+    "resource": null,
+    "pref_w": 23.0,
+    "pref_h": 57.0,
+    "aspect_hw": 2.4783,
+    "square": false
+  },
+  "KlSkin": {
+    "skin_class": "KlSkin",
+    "package": "diagram/electric/line",
+    "resource": null,
+    "pref_w": 34.0,
+    "pref_h": 28.0,
+    "aspect_hw": 0.8235,
+    "square": false
+  },
+  "TransformerSkin": {
+    "skin_class": "TransformerSkin",
+    "package": "diagram/electric/transformer",
+    "resource": "transformer",
+    "pref_w": null,
+    "pref_h": 42.2857,
+    "aspect_hw": 42.2857,
+    "square": false
+  },
+  "DoubleWoundTransformerSkin": {
+    "skin_class": "DoubleWoundTransformerSkin",
+    "package": "diagram/electric/transformer",
+    "resource": "doubleWoundTransformer",
+    "pref_w": 50.0,
+    "pref_h": 90.0,
+    "aspect_hw": 1.8,
+    "square": false
+  },
+  "ThreeWoundTransformerSkin": {
+    "skin_class": "ThreeWoundTransformerSkin",
+    "package": "diagram/electric/transformer",
+    "resource": "threeWoundTransformer",
+    "pref_w": 90.0,
+    "pref_h": 85.0,
+    "aspect_hw": 0.9444,
+    "square": false
+  },
+  "FourWoundTransformerSkin": {
+    "skin_class": "FourWoundTransformerSkin",
+    "package": "diagram/electric/transformer",
+    "resource": "fourWoundTransformer",
+    "pref_w": 90.0,
+    "pref_h": 120.0,
+    "aspect_hw": 1.3333,
+    "square": false
+  },
+  "RectifierSkin": {
+    "skin_class": "RectifierSkin",
+    "package": "diagram/electric/rectifier",
+    "resource": null,
+    "pref_w": 42.0,
+    "pref_h": 42.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "InvertorSkin": {
+    "skin_class": "InvertorSkin",
+    "package": "diagram/electric/invertor",
+    "resource": null,
+    "pref_w": 42.0,
+    "pref_h": 42.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "GeneratorACSkin": {
+    "skin_class": "GeneratorACSkin",
+    "package": "diagram/electric/generator",
+    "resource": null,
+    "pref_w": 50.0,
+    "pref_h": 50.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "BatterySkin": {
+    "skin_class": "BatterySkin",
+    "package": "diagram/electric/battery",
+    "resource": null,
+    "pref_w": 40.0,
+    "pref_h": 40.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "ElectricalNodeSkin": {
+    "skin_class": "ElectricalNodeSkin",
+    "package": "diagram/electric/node",
+    "resource": null,
+    "pref_w": 30.0,
+    "pref_h": 30.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "PlugContactsSkin": {
+    "skin_class": "PlugContactsSkin",
+    "package": "diagram/electric/node",
+    "resource": null,
+    "pref_w": 40.0,
+    "pref_h": 50.0,
+    "aspect_hw": 1.25,
+    "square": false
+  },
+  "BusSkin": {
+    "skin_class": "BusSkin",
+    "package": "diagram/electric/bus",
+    "resource": null,
+    "pref_w": 50.0,
+    "pref_h": 50.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "DieselGeneratorSkin": {
+    "skin_class": "DieselGeneratorSkin",
+    "package": "diagram/electric/dieselgenerator",
+    "resource": null,
+    "pref_w": 95.0,
+    "pref_h": 95.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "ThreeWayHandleVlvSkin": {
+    "skin_class": "ThreeWayHandleVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "threeWayHandleVlv",
+    "pref_w": 100.0,
+    "pref_h": 75.0,
+    "aspect_hw": 0.75,
+    "square": false
+  },
+  "PumpSkinNvart": {
+    "skin_class": "PumpSkinNvart",
+    "package": "diagram/hydraulic",
+    "resource": "pumpnvart",
+    "pref_w": 60.0,
+    "pref_h": 60.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "HeaterVolTubeSkin": {
+    "skin_class": "HeaterVolTubeSkin",
+    "package": "diagram/hydraulic",
+    "resource": "heaterVolTube",
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "ThreeWaySafetyVlvSkin": {
+    "skin_class": "ThreeWaySafetyVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "threeWaySafetyVlv",
+    "pref_w": 100.0,
+    "pref_h": 75.0,
+    "aspect_hw": 0.75,
+    "square": false
+  },
+  "AirVlvSkin": {
+    "skin_class": "AirVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "airVlv",
+    "pref_w": 100.0,
+    "pref_h": 90.0,
+    "aspect_hw": 0.9,
+    "square": false
+  },
+  "CheckAirVlvSkin": {
+    "skin_class": "CheckAirVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "airCheckVlv",
+    "pref_w": 100.0,
+    "pref_h": 90.0,
+    "aspect_hw": 0.9,
+    "square": false
+  },
+  "StopVlvSkinNvart": {
+    "skin_class": "StopVlvSkinNvart",
+    "package": "diagram/hydraulic",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "MixerSkin": {
+    "skin_class": "MixerSkin",
+    "package": "diagram/hydraulic",
+    "resource": "mixer",
+    "pref_w": 100.0,
+    "pref_h": 150.0,
+    "aspect_hw": 1.5,
+    "square": false
+  },
+  "AirSmokeVlvSkin": {
+    "skin_class": "AirSmokeVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "smokerezistVlv",
+    "pref_w": 100.0,
+    "pref_h": 90.0,
+    "aspect_hw": 0.9,
+    "square": false
+  },
+  "CtrlVlvHandleSkin": {
+    "skin_class": "CtrlVlvHandleSkin",
+    "package": "diagram/hydraulic",
+    "resource": "ctrlVlvHandleNpp",
+    "pref_w": 100.0,
+    "pref_h": 90.0,
+    "aspect_hw": 0.9,
+    "square": false
+  },
+  "ElectroMagnetVlvSkin": {
+    "skin_class": "ElectroMagnetVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "electromagnet",
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "SafetyElectroVlvNPPSkin": {
+    "skin_class": "SafetyElectroVlvNPPSkin",
+    "package": "diagram/hydraulic",
+    "resource": "safetyElectroVlvNpp",
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "ThreeWayElectricCtrlVlvNPPSkin": {
+    "skin_class": "ThreeWayElectricCtrlVlvNPPSkin",
+    "package": "diagram/hydraulic",
+    "resource": "threeWayElectricCtrlVlvNPP",
+    "pref_w": 100.0,
+    "pref_h": 75.0,
+    "aspect_hw": 0.75,
+    "square": false
+  },
+  "PneumaticCtrlVlvSkin": {
+    "skin_class": "PneumaticCtrlVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "CheckElectricVlvSkin": {
+    "skin_class": "CheckElectricVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "checkElectricVlv",
+    "pref_w": 100.0,
+    "pref_h": 90.0,
+    "aspect_hw": 0.9,
+    "square": false
+  },
+  "CtrlVlvMechBeforeSkin": {
+    "skin_class": "CtrlVlvMechBeforeSkin",
+    "package": "diagram/hydraulic",
+    "resource": "ctrlVlvMechBeforeNpp",
+    "pref_w": 100.0,
+    "pref_h": 90.0,
+    "aspect_hw": 0.9,
+    "square": false
+  },
+  "EmptyVlvSkin": {
+    "skin_class": "EmptyVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": null,
+    "pref_w": 50.0,
+    "pref_h": 50.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "ThreeWayAocCtrlVlvSkin": {
+    "skin_class": "ThreeWayAocCtrlVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "threeWayAocCtrlVlv",
+    "pref_w": 100.0,
+    "pref_h": 75.0,
+    "aspect_hw": 0.75,
+    "square": false
+  },
+  "ThreeWayElectricCtrlVlvSkin": {
+    "skin_class": "ThreeWayElectricCtrlVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "threeWayElectricCtrlVlv",
+    "pref_w": 100.0,
+    "pref_h": 75.0,
+    "aspect_hw": 0.75,
+    "square": false
+  },
+  "ThreeWayElectricVlvSkin": {
+    "skin_class": "ThreeWayElectricVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "threeWayElectricVlv",
+    "pref_w": 100.0,
+    "pref_h": 75.0,
+    "aspect_hw": 0.75,
+    "square": false
+  },
+  "Pump2SpeedSkin": {
+    "skin_class": "Pump2SpeedSkin",
+    "package": "diagram/hydraulic",
+    "resource": null,
+    "pref_w": 60.0,
+    "pref_h": 60.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "ThreeWaySafetyAocVlvV3Skin": {
+    "skin_class": "ThreeWaySafetyAocVlvV3Skin",
+    "package": "diagram/hydraulic",
+    "resource": "threeWaySafetyAocVlvV3",
+    "pref_w": 100.0,
+    "pref_h": 75.0,
+    "aspect_hw": 0.75,
+    "square": false
+  },
+  "ThreeWaySafetyElectromagnetVlvSkin": {
+    "skin_class": "ThreeWaySafetyElectromagnetVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "threeWaySafetyElectromagVlv",
+    "pref_w": 100.0,
+    "pref_h": 75.0,
+    "aspect_hw": 0.75,
+    "square": false
+  },
+  "FanSkin": {
+    "skin_class": "FanSkin",
+    "package": "diagram/hydraulic",
+    "resource": null,
+    "pref_w": 60.0,
+    "pref_h": 60.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "ThreeWayHydroVlvSkin": {
+    "skin_class": "ThreeWayHydroVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "threeWayHydroVlv",
+    "pref_w": 100.0,
+    "pref_h": 75.0,
+    "aspect_hw": 0.75,
+    "square": false
+  },
+  "SafetyVlvV2Skin": {
+    "skin_class": "SafetyVlvV2Skin",
+    "package": "diagram/hydraulic",
+    "resource": "safetyVlvV2",
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "CtrlVlvReducingSkin": {
+    "skin_class": "CtrlVlvReducingSkin",
+    "package": "diagram/hydraulic",
+    "resource": "ctrlVlvReducing",
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "HeaterSkin": {
+    "skin_class": "HeaterSkin",
+    "package": "diagram/hydraulic",
+    "resource": "heater",
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "CtrlVlvMechSkin": {
+    "skin_class": "CtrlVlvMechSkin",
+    "package": "diagram/hydraulic",
+    "resource": "ctrlVlvMechNpp",
+    "pref_w": 100.0,
+    "pref_h": 90.0,
+    "aspect_hw": 0.9,
+    "square": false
+  },
+  "CtrlVlvNvartSkin": {
+    "skin_class": "CtrlVlvNvartSkin",
+    "package": "diagram/hydraulic",
+    "resource": "ctrlVlvNvart",
+    "pref_w": 100.0,
+    "pref_h": 90.0,
+    "aspect_hw": 0.9,
+    "square": false
+  },
+  "HandleVlvSkin": {
+    "skin_class": "HandleVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 50.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "CheckVlvSkin": {
+    "skin_class": "CheckVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "checkVlv",
+    "pref_w": 100.0,
+    "pref_h": 50.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "CtrlVlvElectricSkin": {
+    "skin_class": "CtrlVlvElectricSkin",
+    "package": "diagram/hydraulic",
+    "resource": "ctrlVlvElecNpp",
+    "pref_w": 100.0,
+    "pref_h": 90.0,
+    "aspect_hw": 0.9,
+    "square": false
+  },
+  "FridgeSkin": {
+    "skin_class": "FridgeSkin",
+    "package": "diagram/hydraulic",
+    "resource": "fridge",
+    "pref_w": 60.0,
+    "pref_h": 60.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "SafetyVlvSkinNvart": {
+    "skin_class": "SafetyVlvSkinNvart",
+    "package": "diagram/hydraulic",
+    "resource": "safetyvlvnvart",
+    "pref_w": 100.0,
+    "pref_h": 75.0,
+    "aspect_hw": 0.75,
+    "square": false
+  },
+  "SafetyImpVlvSkin": {
+    "skin_class": "SafetyImpVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "safetyImpVlv",
+    "pref_w": 100.0,
+    "pref_h": 75.0,
+    "aspect_hw": 0.75,
+    "square": false
+  },
+  "ThreeWayHandleCtrlNPPVlvSkin": {
+    "skin_class": "ThreeWayHandleCtrlNPPVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "threeWayHandleCtrlNPPVlv",
+    "pref_w": 100.0,
+    "pref_h": 75.0,
+    "aspect_hw": 0.75,
+    "square": false
+  },
+  "AirCtrlVlvSkin": {
+    "skin_class": "AirCtrlVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "airCtrlVlv",
+    "pref_w": 100.0,
+    "pref_h": 90.0,
+    "aspect_hw": 0.9,
+    "square": false
+  },
+  "StopCtrlVlvSkin": {
+    "skin_class": "StopCtrlVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "FilterElectricSkin": {
+    "skin_class": "FilterElectricSkin",
+    "package": "diagram/hydraulic",
+    "resource": "electricFilter",
+    "pref_w": 100.0,
+    "pref_h": 160.0,
+    "aspect_hw": 1.6,
+    "square": false
+  },
+  "ThreeWayHandleCtrlVlvSkin": {
+    "skin_class": "ThreeWayHandleCtrlVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "threeWayHandleCtrlVlv",
+    "pref_w": 100.0,
+    "pref_h": 75.0,
+    "aspect_hw": 0.75,
+    "square": false
+  },
+  "ThreeWayAocVlvV3Skin": {
+    "skin_class": "ThreeWayAocVlvV3Skin",
+    "package": "diagram/hydraulic",
+    "resource": "threeWayAocVlvV3",
+    "pref_w": 100.0,
+    "pref_h": 75.0,
+    "aspect_hw": 0.75,
+    "square": false
+  },
+  "FireVlvSkin": {
+    "skin_class": "FireVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 90.0,
+    "aspect_hw": 0.9,
+    "square": false
+  },
+  "ThreeWayElectromagneticVlvSkin": {
+    "skin_class": "ThreeWayElectromagneticVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "threeWayElectromagneticVlv",
+    "pref_w": 100.0,
+    "pref_h": 75.0,
+    "aspect_hw": 0.75,
+    "square": false
+  },
+  "AocVlvV2NPPSkin": {
+    "skin_class": "AocVlvV2NPPSkin",
+    "package": "diagram/hydraulic",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "AirFireVlvSkin": {
+    "skin_class": "AirFireVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "firerezistVlv",
+    "pref_w": 100.0,
+    "pref_h": 90.0,
+    "aspect_hw": 0.9,
+    "square": false
+  },
+  "ThreeWayElectromagnetVlvSkin": {
+    "skin_class": "ThreeWayElectromagnetVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "threeWayElectromagnetVlv",
+    "pref_w": 100.0,
+    "pref_h": 75.0,
+    "aspect_hw": 0.75,
+    "square": false
+  },
+  "PidVlvSkinNvart": {
+    "skin_class": "PidVlvSkinNvart",
+    "package": "diagram/hydraulic",
+    "resource": "pidvlvnvart",
+    "pref_w": 100.0,
+    "pref_h": 90.0,
+    "aspect_hw": 0.9,
+    "square": false
+  },
+  "PumpSkin": {
+    "skin_class": "PumpSkin",
+    "package": "diagram/hydraulic",
+    "resource": "pump",
+    "pref_w": 60.0,
+    "pref_h": 60.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "AocVlvSkin": {
+    "skin_class": "AocVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "aocVlv",
+    "pref_w": 100.0,
+    "pref_h": 220.0,
+    "aspect_hw": 1.5,
+    "square": false
+  },
+  "SafetyVlvNppSkin": {
+    "skin_class": "SafetyVlvNppSkin",
+    "package": "diagram/hydraulic",
+    "resource": "safetyVlvNpp",
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "ConditionerSkin": {
+    "skin_class": "ConditionerSkin",
+    "package": "diagram/hydraulic",
+    "resource": "conditioner",
+    "pref_w": 70.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.4286,
+    "square": false
+  },
+  "CtrlVlvSkin": {
+    "skin_class": "CtrlVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "ctrlVlv",
+    "pref_w": 100.0,
+    "pref_h": 90.0,
+    "aspect_hw": 0.9,
+    "square": false
+  },
+  "ElectroMagneticVlvSkin": {
+    "skin_class": "ElectroMagneticVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "electromagneticVlv",
+    "pref_w": 100.0,
+    "pref_h": 90.0,
+    "aspect_hw": 0.9,
+    "square": false
+  },
+  "FanVacuumSkin": {
+    "skin_class": "FanVacuumSkin",
+    "package": "diagram/hydraulic",
+    "resource": "fanvacuum",
+    "pref_w": 60.0,
+    "pref_h": 60.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "CheckSolVlvSkin": {
+    "skin_class": "CheckSolVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "checksolVlv",
+    "pref_w": 100.0,
+    "pref_h": 90.0,
+    "aspect_hw": 0.9,
+    "square": false
+  },
+  "ElectricVlvSkin": {
+    "skin_class": "ElectricVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "electricVlv",
+    "pref_w": 100.0,
+    "pref_h": 90.0,
+    "aspect_hw": 0.9,
+    "square": false
+  },
+  "SafetyAocVlvNPPSkin": {
+    "skin_class": "SafetyAocVlvNPPSkin",
+    "package": "diagram/hydraulic",
+    "resource": "safetyAocVlvNpp",
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "Pump2SpeedNPPSkin": {
+    "skin_class": "Pump2SpeedNPPSkin",
+    "package": "diagram/hydraulic",
+    "resource": null,
+    "pref_w": 60.0,
+    "pref_h": 60.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "ThreeWayAocVlvSkin": {
+    "skin_class": "ThreeWayAocVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "threeWayAocVlv",
+    "pref_w": 100.0,
+    "pref_h": 75.0,
+    "aspect_hw": 0.75,
+    "square": false
+  },
+  "MotorVlvSkin": {
+    "skin_class": "MotorVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "motor",
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "ReliefVlvSkin": {
+    "skin_class": "ReliefVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "reliefVlv",
+    "pref_w": 100.0,
+    "pref_h": 75.0,
+    "aspect_hw": 0.75,
+    "square": false
+  },
+  "FanFrequencySkin": {
+    "skin_class": "FanFrequencySkin",
+    "package": "diagram/hydraulic",
+    "resource": "fanfrequency",
+    "pref_w": 60.0,
+    "pref_h": 60.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "PneumaticVlvSkin": {
+    "skin_class": "PneumaticVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "PumpFrequencySkin": {
+    "skin_class": "PumpFrequencySkin",
+    "package": "diagram/hydraulic",
+    "resource": "pumpfrequency",
+    "pref_w": 60.0,
+    "pref_h": 60.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "SafetyVlvSkin": {
+    "skin_class": "SafetyVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": "safetyVlv",
+    "pref_w": 100.0,
+    "pref_h": 75.0,
+    "aspect_hw": 0.75,
+    "square": false
+  },
+  "HeaterTubeVolSkin": {
+    "skin_class": "HeaterTubeVolSkin",
+    "package": "diagram/hydraulic",
+    "resource": "heaterTubeVol",
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "HeaterV2Skin": {
+    "skin_class": "HeaterV2Skin",
+    "package": "diagram/hydraulic",
+    "resource": "heaterV2",
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "FanSkinNvart": {
+    "skin_class": "FanSkinNvart",
+    "package": "diagram/hydraulic",
+    "resource": "fannvart",
+    "pref_w": 60.0,
+    "pref_h": 60.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "EngineSkinNvart": {
+    "skin_class": "EngineSkinNvart",
+    "package": "diagram/hydraulic",
+    "resource": "enginenvart",
+    "pref_w": 60.0,
+    "pref_h": 60.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "ThreeWayAocVlvV2Skin": {
+    "skin_class": "ThreeWayAocVlvV2Skin",
+    "package": "diagram/hydraulic",
+    "resource": "threeWayAocVlvV2",
+    "pref_w": 100.0,
+    "pref_h": 75.0,
+    "aspect_hw": 0.75,
+    "square": false
+  },
+  "AocVlvNPPSkin": {
+    "skin_class": "AocVlvNPPSkin",
+    "package": "diagram/hydraulic",
+    "resource": "aocVlvNPP",
+    "pref_w": 100.0,
+    "pref_h": 90.0,
+    "aspect_hw": 0.9,
+    "square": false
+  },
+  "StopVlvSkin": {
+    "skin_class": "StopVlvSkin",
+    "package": "diagram/hydraulic",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "CRClusterJamSkin": {
+    "skin_class": "CRClusterJamSkin",
+    "package": "diagram/nuclear/cr_indicators",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "CRBreakOfRodSkin": {
+    "skin_class": "CRBreakOfRodSkin",
+    "package": "diagram/nuclear/cr_indicators",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "CommonIndicatorKKSkin": {
+    "skin_class": "CommonIndicatorKKSkin",
+    "package": "diagram/nuclear/cr_indicators",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "CRDescentFromULSSkin": {
+    "skin_class": "CRDescentFromULSSkin",
+    "package": "diagram/nuclear/cr_indicators",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "CRFailureOfPPSSkin": {
+    "skin_class": "CRFailureOfPPSSkin",
+    "package": "diagram/nuclear/cr_indicators",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "CoordinatesDetectorSkin": {
+    "skin_class": "CoordinatesDetectorSkin",
+    "package": "diagram/nuclear/cr_indicators",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 50.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "CRDisablingUpCommandSkin": {
+    "skin_class": "CRDisablingUpCommandSkin",
+    "package": "diagram/nuclear/cr_indicators",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "SuzSkin": {
+    "skin_class": "SuzSkin",
+    "package": "diagram/nuclear/suz",
+    "resource": null,
+    "pref_w": 60.0,
+    "pref_h": 68.0,
+    "aspect_hw": 0.8824,
+    "square": false
+  },
+  "BreslerOMPSkin": {
+    "skin_class": "BreslerOMPSkin",
+    "package": "panel/relayTerminals",
+    "resource": null,
+    "pref_w": 500.0,
+    "pref_h": 660.0,
+    "aspect_hw": 1.32,
+    "square": false
+  },
+  "Siprotec7SL86Skin": {
+    "skin_class": "Siprotec7SL86Skin",
+    "package": "panel/relayTerminals",
+    "resource": null,
+    "pref_w": 790.0,
+    "pref_h": 680.0,
+    "aspect_hw": 0.8608,
+    "square": false
+  },
+  "ProsoftTPA02Skin": {
+    "skin_class": "ProsoftTPA02Skin",
+    "package": "panel/relayTerminals",
+    "resource": null,
+    "pref_w": 572.0,
+    "pref_h": 570.0,
+    "aspect_hw": 0.9965,
+    "square": false
+  },
+  "NRpcs902Skin": {
+    "skin_class": "NRpcs902Skin",
+    "package": "panel/relayTerminals",
+    "resource": null,
+    "pref_w": 800.0,
+    "pref_h": 280.0,
+    "aspect_hw": 0.35,
+    "square": false
+  },
+  "AKSTSkin": {
+    "skin_class": "AKSTSkin",
+    "package": "panel/relayTerminals",
+    "resource": null,
+    "pref_w": 969.0,
+    "pref_h": 552.0,
+    "aspect_hw": 0.5697,
+    "square": false
+  },
+  "ABBRec670Skin": {
+    "skin_class": "ABBRec670Skin",
+    "package": "panel/relayTerminals",
+    "resource": null,
+    "pref_w": 896.0,
+    "pref_h": 530.0,
+    "aspect_hw": 0.5915,
+    "square": false
+  },
+  "ABBRel511Skin": {
+    "skin_class": "ABBRel511Skin",
+    "package": "panel/relayTerminals",
+    "resource": null,
+    "pref_w": 600.0,
+    "pref_h": 430.0,
+    "aspect_hw": 0.7167,
+    "square": false
+  },
+  "AkaKedr20Skin": {
+    "skin_class": "AkaKedr20Skin",
+    "package": "panel/relayTerminals",
+    "resource": null,
+    "pref_w": 965.0,
+    "pref_h": 536.0,
+    "aspect_hw": 0.5554,
+    "square": false
+  },
+  "IMF3PSkin": {
+    "skin_class": "IMF3PSkin",
+    "package": "panel/relayTerminals",
+    "resource": null,
+    "pref_w": 280.0,
+    "pref_h": 580.0,
+    "aspect_hw": 2.0714,
+    "square": false
+  },
+  "RelematikaTOR300R6Skin": {
+    "skin_class": "RelematikaTOR300R6Skin",
+    "package": "panel/relayTerminals",
+    "resource": null,
+    "pref_w": 978.0,
+    "pref_h": 552.0,
+    "aspect_hw": 0.5644,
+    "square": false
+  },
+  "EkraCKISkin": {
+    "skin_class": "EkraCKISkin",
+    "package": "panel/relayTerminals",
+    "resource": null,
+    "pref_w": 720.0,
+    "pref_h": 368.0,
+    "aspect_hw": 0.5111,
+    "square": false
+  },
+  "PkySP24Skin": {
+    "skin_class": "PkySP24Skin",
+    "package": "panel/relayTerminals",
+    "resource": null,
+    "pref_w": 969.0,
+    "pref_h": 293.0,
+    "aspect_hw": 0.3024,
+    "square": false
+  },
+  "SiemensPSD02Skin": {
+    "skin_class": "SiemensPSD02Skin",
+    "package": "panel/relayTerminals",
+    "resource": null,
+    "pref_w": 540.0,
+    "pref_h": 266.0,
+    "aspect_hw": 0.4926,
+    "square": false
+  },
+  "AC_M3Skin": {
+    "skin_class": "AC_M3Skin",
+    "package": "panel/relayTerminals",
+    "resource": null,
+    "pref_w": 542.0,
+    "pref_h": 264.0,
+    "aspect_hw": 0.4871,
+    "square": false
+  },
+  "ProsoftTPA01Skin": {
+    "skin_class": "ProsoftTPA01Skin",
+    "package": "panel/relayTerminals",
+    "resource": null,
+    "pref_w": 524.0,
+    "pref_h": 534.0,
+    "aspect_hw": 1.0191,
+    "square": false
+  },
+  "Sirius2OMPSkin": {
+    "skin_class": "Sirius2OMPSkin",
+    "package": "panel/relayTerminals",
+    "resource": null,
+    "pref_w": 470.0,
+    "pref_h": 380.0,
+    "aspect_hw": 0.8085,
+    "square": false
+  },
+  "ABBReb670Skin": {
+    "skin_class": "ABBReb670Skin",
+    "package": "panel/relayTerminals",
+    "resource": null,
+    "pref_w": 600.0,
+    "pref_h": 400.0,
+    "aspect_hw": 0.6667,
+    "square": false
+  },
+  "Ekra2x2Skin": {
+    "skin_class": "Ekra2x2Skin",
+    "package": "panel/relayTerminals",
+    "resource": null,
+    "pref_w": 756.0,
+    "pref_h": 552.0,
+    "aspect_hw": 0.7302,
+    "square": false
+  },
+  "FlatLampSkin": {
+    "skin_class": "FlatLampSkin",
+    "package": "panel/lamps",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "LedCircleSkin": {
+    "skin_class": "LedCircleSkin",
+    "package": "panel/lamps",
+    "resource": null,
+    "pref_w": 50.0,
+    "pref_h": 50.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "SphericalLampSkin": {
+    "skin_class": "SphericalLampSkin",
+    "package": "panel/lamps",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "PanelLampRootSkin": {
+    "skin_class": "PanelLampRootSkin",
+    "package": "panel/lamps",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "LedRectangleSkin": {
+    "skin_class": "LedRectangleSkin",
+    "package": "panel/lamps",
+    "resource": null,
+    "pref_w": 50.0,
+    "pref_h": 50.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "BaseEquipmentSkin": {
+    "skin_class": "BaseEquipmentSkin",
+    "package": "panel/protectionEquipment",
+    "resource": null,
+    "pref_w": 350.0,
+    "pref_h": 270.0,
+    "aspect_hw": 0.7714,
+    "square": false
+  },
+  "BaseProtectionEquipmentSkin": {
+    "skin_class": "BaseProtectionEquipmentSkin",
+    "package": "panel/protectionEquipment",
+    "resource": null,
+    "pref_w": 350.0,
+    "pref_h": 270.0,
+    "aspect_hw": 0.7714,
+    "square": false
+  },
+  "BaseCheckActionSkin": {
+    "skin_class": "BaseCheckActionSkin",
+    "package": "panel/protectionEquipment",
+    "resource": null,
+    "pref_w": 350.0,
+    "pref_h": 270.0,
+    "aspect_hw": 0.7714,
+    "square": false
+  },
+  "ButtonSkin": {
+    "skin_class": "ButtonSkin",
+    "package": "panel/functional",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "ButtonRotationSkin": {
+    "skin_class": "ButtonRotationSkin",
+    "package": "panel/functional",
+    "resource": null,
+    "pref_w": 45.7,
+    "pref_h": 45.74,
+    "aspect_hw": 1.0009,
+    "square": true
+  },
+  "BarRoundSkin": {
+    "skin_class": "BarRoundSkin",
+    "package": "panel/functional",
+    "resource": null,
+    "pref_w": 380.8,
+    "pref_h": 380.8,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "NKR_3Skin": {
+    "skin_class": "NKR_3Skin",
+    "package": "panel/relayOverlays",
+    "resource": null,
+    "pref_w": 320.0,
+    "pref_h": 208.0,
+    "aspect_hw": 0.65,
+    "square": false
+  },
+  "KRU_BRK_Door1Skin": {
+    "skin_class": "KRU_BRK_Door1Skin",
+    "package": "panel/doorHandle",
+    "resource": null,
+    "pref_w": 48.0,
+    "pref_h": 284.0,
+    "aspect_hw": 5.9167,
+    "square": false
+  },
+  "KRU_RP_Door1Skin": {
+    "skin_class": "KRU_RP_Door1Skin",
+    "package": "panel/doorHandle",
+    "resource": null,
+    "pref_w": 220.0,
+    "pref_h": 15.0,
+    "aspect_hw": 0.0682,
+    "square": false
+  },
+  "DoorHandle1Skin": {
+    "skin_class": "DoorHandle1Skin",
+    "package": "panel/doorHandle",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 400.0,
+    "aspect_hw": 4.0,
+    "square": false
+  },
+  "PosterVoltageRUSSkin": {
+    "skin_class": "PosterVoltageRUSSkin",
+    "package": "panel/poster",
+    "resource": null,
+    "pref_w": 298.0,
+    "pref_h": 261.0,
+    "aspect_hw": 0.8758,
+    "square": false
+  },
+  "PosterDontTurnOnPeopleRUSSkin": {
+    "skin_class": "PosterDontTurnOnPeopleRUSSkin",
+    "package": "panel/poster",
+    "resource": null,
+    "pref_w": 200.0,
+    "pref_h": 100.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "PosterGroupRUSSkin": {
+    "skin_class": "PosterGroupRUSSkin",
+    "package": "panel/poster",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "PosterDangerVoltageRUSSkin": {
+    "skin_class": "PosterDangerVoltageRUSSkin",
+    "package": "panel/poster",
+    "resource": null,
+    "pref_w": 304.0,
+    "pref_h": 398.0,
+    "aspect_hw": 1.3092,
+    "square": false
+  },
+  "PosterGetHereRUSSkin": {
+    "skin_class": "PosterGetHereRUSSkin",
+    "package": "panel/poster",
+    "resource": null,
+    "pref_w": 200.0,
+    "pref_h": 200.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "PosterWorkHereRUSSkin": {
+    "skin_class": "PosterWorkHereRUSSkin",
+    "package": "panel/poster",
+    "resource": null,
+    "pref_w": 200.0,
+    "pref_h": 200.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "SensorGKSkin": {
+    "skin_class": "SensorGKSkin",
+    "package": "panel/kruSensors",
+    "resource": null,
+    "pref_w": 25.0,
+    "pref_h": 97.0,
+    "aspect_hw": 3.88,
+    "square": false
+  },
+  "EMBSensorSkin": {
+    "skin_class": "EMBSensorSkin",
+    "package": "panel/kruSensors",
+    "resource": null,
+    "pref_w": 200.0,
+    "pref_h": 200.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "SensorSkin": {
+    "skin_class": "SensorSkin",
+    "package": "panel/kruSensors",
+    "resource": null,
+    "pref_w": 40.0,
+    "pref_h": 50.0,
+    "aspect_hw": 1.25,
+    "square": false
+  },
+  "PadlockSkin": {
+    "skin_class": "PadlockSkin",
+    "package": "panel/kruSensors",
+    "resource": null,
+    "pref_w": 40.0,
+    "pref_h": 55.0,
+    "aspect_hw": 1.375,
+    "square": false
+  },
+  "BI4Skin": {
+    "skin_class": "BI4Skin",
+    "package": "panel/testUnits",
+    "resource": null,
+    "pref_w": 350.0,
+    "pref_h": 192.0,
+    "aspect_hw": 0.5486,
+    "square": false
+  },
+  "BI6Skin": {
+    "skin_class": "BI6Skin",
+    "package": "panel/testUnits",
+    "resource": null,
+    "pref_w": 470.0,
+    "pref_h": 192.0,
+    "aspect_hw": 0.4085,
+    "square": false
+  },
+  "FWP8_1Skin": {
+    "skin_class": "FWP8_1Skin",
+    "package": "panel/testUnits",
+    "resource": null,
+    "pref_w": 368.0,
+    "pref_h": 200.0,
+    "aspect_hw": 0.5435,
+    "square": false
+  },
+  "TriangleKeySkin": {
+    "skin_class": "TriangleKeySkin",
+    "package": "panel/key",
+    "resource": null,
+    "pref_w": 37.5,
+    "pref_h": 216.0,
+    "aspect_hw": 5.76,
+    "square": false
+  },
+  "ThinArrowSkin": {
+    "skin_class": "ThinArrowSkin",
+    "package": "panel/key",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 200.0,
+    "aspect_hw": 2.0,
+    "square": false
+  },
+  "OverlayCapSkin": {
+    "skin_class": "OverlayCapSkin",
+    "package": "panel/key",
+    "resource": null,
+    "pref_w": 64.0,
+    "pref_h": 190.0,
+    "aspect_hw": 2.9688,
+    "square": false
+  },
+  "ArrowKeySkin": {
+    "skin_class": "ArrowKeySkin",
+    "package": "panel/key",
+    "resource": null,
+    "pref_w": 37.5,
+    "pref_h": 216.0,
+    "aspect_hw": 5.76,
+    "square": false
+  },
+  "WhiteKeySkin": {
+    "skin_class": "WhiteKeySkin",
+    "package": "panel/key",
+    "resource": null,
+    "pref_w": 50.0,
+    "pref_h": 140.0,
+    "aspect_hw": 2.8,
+    "square": false
+  },
+  "BlackArrow5Skin": {
+    "skin_class": "BlackArrow5Skin",
+    "package": "panel/key",
+    "resource": null,
+    "pref_w": 200.0,
+    "pref_h": 263.0,
+    "aspect_hw": 1.315,
+    "square": false
+  },
+  "WhiteKeyCircleSkin": {
+    "skin_class": "WhiteKeyCircleSkin",
+    "package": "panel/key",
+    "resource": null,
+    "pref_w": 50.0,
+    "pref_h": 140.0,
+    "aspect_hw": 2.8,
+    "square": false
+  },
+  "BlackArrow7Skin": {
+    "skin_class": "BlackArrow7Skin",
+    "package": "panel/key",
+    "resource": null,
+    "pref_w": 108.0,
+    "pref_h": 318.0,
+    "aspect_hw": 2.9444,
+    "square": false
+  },
+  "BlackArrow2Skin": {
+    "skin_class": "BlackArrow2Skin",
+    "package": "panel/key",
+    "resource": null,
+    "pref_w": 54.0,
+    "pref_h": 176.0,
+    "aspect_hw": 3.2593,
+    "square": false
+  },
+  "BlackArrow6Skin": {
+    "skin_class": "BlackArrow6Skin",
+    "package": "panel/key",
+    "resource": null,
+    "pref_w": 200.0,
+    "pref_h": 263.0,
+    "aspect_hw": 1.315,
+    "square": false
+  },
+  "keyPsxSkin": {
+    "skin_class": "keyPsxSkin",
+    "package": "panel/key",
+    "resource": null,
+    "pref_w": 26.0,
+    "pref_h": 180.0,
+    "aspect_hw": 6.9231,
+    "square": false
+  },
+  "RectangularArrowSkin": {
+    "skin_class": "RectangularArrowSkin",
+    "package": "panel/key",
+    "resource": null,
+    "pref_w": 37.5,
+    "pref_h": 216.0,
+    "aspect_hw": 5.76,
+    "square": false
+  },
+  "ArrowKey2Skin": {
+    "skin_class": "ArrowKey2Skin",
+    "package": "panel/key",
+    "resource": null,
+    "pref_w": 34.0,
+    "pref_h": 73.0,
+    "aspect_hw": 2.1471,
+    "square": false
+  },
+  "EllipseKeySkin": {
+    "skin_class": "EllipseKeySkin",
+    "package": "panel/key",
+    "resource": null,
+    "pref_w": 40.0,
+    "pref_h": 152.0,
+    "aspect_hw": 3.8,
+    "square": false
+  },
+  "KeySiemensSkin": {
+    "skin_class": "KeySiemensSkin",
+    "package": "panel/key",
+    "resource": null,
+    "pref_w": 60.0,
+    "pref_h": 60.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "KeyholeSkin": {
+    "skin_class": "KeyholeSkin",
+    "package": "panel/key",
+    "resource": null,
+    "pref_w": 37.5,
+    "pref_h": 216.0,
+    "aspect_hw": 5.76,
+    "square": false
+  },
+  "Key323SkinRoot": {
+    "skin_class": "Key323SkinRoot",
+    "package": "panel/key",
+    "resource": null,
+    "pref_w": 323.0,
+    "pref_h": 323.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "BlackArrow4Skin": {
+    "skin_class": "BlackArrow4Skin",
+    "package": "panel/key",
+    "resource": null,
+    "pref_w": 200.0,
+    "pref_h": 263.0,
+    "aspect_hw": 1.315,
+    "square": false
+  },
+  "BlackArrowKeySkin": {
+    "skin_class": "BlackArrowKeySkin",
+    "package": "panel/key",
+    "resource": null,
+    "pref_w": 54.0,
+    "pref_h": 175.0,
+    "aspect_hw": 3.2407,
+    "square": false
+  },
+  "BlackArrow3Skin": {
+    "skin_class": "BlackArrow3Skin",
+    "package": "panel/key",
+    "resource": null,
+    "pref_w": 240.0,
+    "pref_h": 323.0,
+    "aspect_hw": 1.3458,
+    "square": false
+  },
+  "ToggleKeySkin": {
+    "skin_class": "ToggleKeySkin",
+    "package": "panel/key",
+    "resource": null,
+    "pref_w": 37.5,
+    "pref_h": 216.0,
+    "aspect_hw": 5.76,
+    "square": false
+  },
+  "BlackArrow1Skin": {
+    "skin_class": "BlackArrow1Skin",
+    "package": "panel/key",
+    "resource": null,
+    "pref_w": 200.0,
+    "pref_h": 263.0,
+    "aspect_hw": 1.315,
+    "square": false
+  },
+  "BlackArrowOldSkin": {
+    "skin_class": "BlackArrowOldSkin",
+    "package": "panel/key",
+    "resource": null,
+    "pref_w": 200.0,
+    "pref_h": 253.0,
+    "aspect_hw": 1.265,
+    "square": false
+  },
+  "Key323BackgroundSkinRoot": {
+    "skin_class": "Key323BackgroundSkinRoot",
+    "package": "panel/key/backgrounds/root",
+    "resource": null,
+    "pref_w": 323.0,
+    "pref_h": 323.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "KeyAutoRootSkin": {
+    "skin_class": "KeyAutoRootSkin",
+    "package": "panel/key/key",
+    "resource": null,
+    "pref_w": null,
+    "pref_h": null,
+    "aspect_hw": null,
+    "square": null
+  },
+  "TextLayerKeySkin": {
+    "skin_class": "TextLayerKeySkin",
+    "package": "panel/key/textLayer",
+    "resource": null,
+    "pref_w": 323.0,
+    "pref_h": 323.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "BackgroundAutoRootSkin": {
+    "skin_class": "BackgroundAutoRootSkin",
+    "package": "panel/key/background",
+    "resource": null,
+    "pref_w": null,
+    "pref_h": null,
+    "aspect_hw": null,
+    "square": null
+  },
+  "CustomAutoSkin": {
+    "skin_class": "CustomAutoSkin",
+    "package": "panel/key/auto",
+    "resource": null,
+    "pref_w": 323.0,
+    "pref_h": 323.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "ButtonRectangleSkin": {
+    "skin_class": "ButtonRectangleSkin",
+    "package": "panel/buttons/button",
+    "resource": "buttonRectangle",
+    "pref_w": 50.0,
+    "pref_h": 37.5,
+    "aspect_hw": 0.75,
+    "square": false
+  },
+  "ButtonHorizontalSkin": {
+    "skin_class": "ButtonHorizontalSkin",
+    "package": "panel/buttons/button",
+    "resource": "buttonHorizontal",
+    "pref_w": 80.0,
+    "pref_h": 40.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "ButtonCircleSkin": {
+    "skin_class": "ButtonCircleSkin",
+    "package": "components/buttons",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "TypeSetterSkin": {
+    "skin_class": "TypeSetterSkin",
+    "package": "panel/buttons/typesetter",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 360.0,
+    "aspect_hw": 3.6,
+    "square": false
+  },
+  "PanelTabloSmallSkin": {
+    "skin_class": "PanelTabloSmallSkin",
+    "package": "panel/panelTablo",
+    "resource": null,
+    "pref_w": 250.0,
+    "pref_h": 200.0,
+    "aspect_hw": 0.8,
+    "square": false
+  },
+  "PanelTabloSkin": {
+    "skin_class": "PanelTabloSkin",
+    "package": "panel/panelTablo",
+    "resource": null,
+    "pref_w": 500.0,
+    "pref_h": 200.0,
+    "aspect_hw": 0.4,
+    "square": false
+  },
+  "UAS24MSkin": {
+    "skin_class": "UAS24MSkin",
+    "package": "panel/panelTablo",
+    "resource": null,
+    "pref_w": 300.0,
+    "pref_h": 210.0,
+    "aspect_hw": 0.7,
+    "square": false
+  },
+  "RegulatorCircleSkin": {
+    "skin_class": "RegulatorCircleSkin",
+    "package": "panel/regulator",
+    "resource": null,
+    "pref_w": 300.0,
+    "pref_h": 300.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "RegulatorCircle3Skin": {
+    "skin_class": "RegulatorCircle3Skin",
+    "package": "panel/regulator",
+    "resource": null,
+    "pref_w": 140.0,
+    "pref_h": 100.0,
+    "aspect_hw": 0.7143,
+    "square": false
+  },
+  "RPN_AntraxSkin": {
+    "skin_class": "RPN_AntraxSkin",
+    "package": "panel/regulator",
+    "resource": null,
+    "pref_w": 288.0,
+    "pref_h": 288.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "RegulatorSetterSkin": {
+    "skin_class": "RegulatorSetterSkin",
+    "package": "panel/regulator",
+    "resource": null,
+    "pref_w": 300.0,
+    "pref_h": 300.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "RegulatorSkin": {
+    "skin_class": "RegulatorSkin",
+    "package": "panel/regulator",
+    "resource": null,
+    "pref_w": 428.0,
+    "pref_h": 185.0,
+    "aspect_hw": 0.4322,
+    "square": false
+  },
+  "RegulatorBU21Skin": {
+    "skin_class": "RegulatorBU21Skin",
+    "package": "panel/regulator",
+    "resource": null,
+    "pref_w": 200.0,
+    "pref_h": 200.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "TestRegulatorSkin": {
+    "skin_class": "TestRegulatorSkin",
+    "package": "panel/regulator",
+    "resource": null,
+    "pref_w": 200.0,
+    "pref_h": 200.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "RegulatorCircle2Skin": {
+    "skin_class": "RegulatorCircle2Skin",
+    "package": "panel/regulator",
+    "resource": null,
+    "pref_w": 200.0,
+    "pref_h": 100.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "DispName2ArbitrarySizeSkin": {
+    "skin_class": "DispName2ArbitrarySizeSkin",
+    "package": "panel/dispName",
+    "resource": null,
+    "pref_w": 280.0,
+    "pref_h": 60.0,
+    "aspect_hw": 0.2143,
+    "square": false
+  },
+  "DispName1Skin": {
+    "skin_class": "DispName1Skin",
+    "package": "panel/dispName",
+    "resource": null,
+    "pref_w": 220.0,
+    "pref_h": 60.0,
+    "aspect_hw": 0.2727,
+    "square": false
+  },
+  "DispNameArbitrarySizeSkin": {
+    "skin_class": "DispNameArbitrarySizeSkin",
+    "package": "panel/dispName",
+    "resource": null,
+    "pref_w": 220.0,
+    "pref_h": 60.0,
+    "aspect_hw": 0.2727,
+    "square": false
+  },
+  "DispNameForListSkin": {
+    "skin_class": "DispNameForListSkin",
+    "package": "panel/dispName",
+    "resource": null,
+    "pref_w": 280.0,
+    "pref_h": 120.0,
+    "aspect_hw": 0.4286,
+    "square": false
+  },
+  "DispName2Skin": {
+    "skin_class": "DispName2Skin",
+    "package": "panel/dispName",
+    "resource": null,
+    "pref_w": 280.0,
+    "pref_h": 60.0,
+    "aspect_hw": 0.2143,
+    "square": false
+  },
+  "DispNameTitleSkin": {
+    "skin_class": "DispNameTitleSkin",
+    "package": "panel/dispName",
+    "resource": null,
+    "pref_w": 200.0,
+    "pref_h": 140.0,
+    "aspect_hw": 0.7,
+    "square": false
+  },
+  "Fuse1phSkin": {
+    "skin_class": "Fuse1phSkin",
+    "package": "panel/switchers",
+    "resource": null,
+    "pref_w": 74.0,
+    "pref_h": 240.0,
+    "aspect_hw": 3.2432,
+    "square": false
+  },
+  "Switch3phSkin": {
+    "skin_class": "Switch3phSkin",
+    "package": "panel/switchers",
+    "resource": null,
+    "pref_w": 110.0,
+    "pref_h": 164.0,
+    "aspect_hw": 1.4909,
+    "square": false
+  },
+  "Switch1phSkin": {
+    "skin_class": "Switch1phSkin",
+    "package": "panel/switchers",
+    "resource": null,
+    "pref_w": 38.0,
+    "pref_h": 164.0,
+    "aspect_hw": 4.3158,
+    "square": false
+  },
+  "ABB_OT_F3CSkin": {
+    "skin_class": "ABB_OT_F3CSkin",
+    "package": "panel/switchers",
+    "resource": null,
+    "pref_w": 296.0,
+    "pref_h": 184.0,
+    "aspect_hw": 0.6216,
+    "square": false
+  },
+  "ETI_3PSkin": {
+    "skin_class": "ETI_3PSkin",
+    "package": "panel/switchers",
+    "resource": null,
+    "pref_w": 568.0,
+    "pref_h": 400.0,
+    "aspect_hw": 0.7042,
+    "square": false
+  },
+  "TumblerSkin": {
+    "skin_class": "TumblerSkin",
+    "package": "panel/switchers",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 289.0,
+    "aspect_hw": 2.89,
+    "square": false
+  },
+  "Switch2phSkin": {
+    "skin_class": "Switch2phSkin",
+    "package": "panel/switchers",
+    "resource": null,
+    "pref_w": 75.0,
+    "pref_h": 164.0,
+    "aspect_hw": 2.1867,
+    "square": false
+  },
+  "Fuse3phSkin": {
+    "skin_class": "Fuse3phSkin",
+    "package": "panel/switchers",
+    "resource": null,
+    "pref_w": 222.0,
+    "pref_h": 240.0,
+    "aspect_hw": 1.0811,
+    "square": false
+  },
+  "Fuse2phSkin": {
+    "skin_class": "Fuse2phSkin",
+    "package": "panel/switchers",
+    "resource": null,
+    "pref_w": 148.0,
+    "pref_h": 240.0,
+    "aspect_hw": 1.6216,
+    "square": false
+  },
+  "AP50Skin": {
+    "skin_class": "AP50Skin",
+    "package": "panel/switchers",
+    "resource": null,
+    "pref_w": 200.0,
+    "pref_h": 300.0,
+    "aspect_hw": 1.5,
+    "square": false
+  },
+  "Switch4phSkin": {
+    "skin_class": "Switch4phSkin",
+    "package": "panel/switchers",
+    "resource": null,
+    "pref_w": 147.0,
+    "pref_h": 164.0,
+    "aspect_hw": 1.1156,
+    "square": false
+  },
+  "A3124Skin": {
+    "skin_class": "A3124Skin",
+    "package": "panel/switchers",
+    "resource": null,
+    "pref_w": 366.0,
+    "pref_h": 516.0,
+    "aspect_hw": 1.4098,
+    "square": false
+  },
+  "KnifeSw3PhSkin": {
+    "skin_class": "KnifeSw3PhSkin",
+    "package": "panel/switchers",
+    "resource": null,
+    "pref_w": 222.0,
+    "pref_h": 370.0,
+    "aspect_hw": 1.6667,
+    "square": false
+  },
+  "ETI_KVL033RSkin": {
+    "skin_class": "ETI_KVL033RSkin",
+    "package": "panel/switchers",
+    "resource": null,
+    "pref_w": 214.0,
+    "pref_h": 434.0,
+    "aspect_hw": 2.028,
+    "square": false
+  },
+  "KnifeSw1phSkin": {
+    "skin_class": "KnifeSw1phSkin",
+    "package": "panel/switchers",
+    "resource": null,
+    "pref_w": 74.0,
+    "pref_h": 370.0,
+    "aspect_hw": 5.0,
+    "square": false
+  },
+  "KnifeSw2PhSkin": {
+    "skin_class": "KnifeSw2PhSkin",
+    "package": "panel/switchers",
+    "resource": null,
+    "pref_w": 148.0,
+    "pref_h": 370.0,
+    "aspect_hw": 2.5,
+    "square": false
+  },
+  "PlugConector1Skin": {
+    "skin_class": "PlugConector1Skin",
+    "package": "panel/plugConnector",
+    "resource": null,
+    "pref_w": 232.0,
+    "pref_h": 247.0,
+    "aspect_hw": 1.0647,
+    "square": false
+  },
+  "TerminalEesSkin": {
+    "skin_class": "TerminalEesSkin",
+    "package": "panel/indicator",
+    "resource": null,
+    "pref_w": 300.0,
+    "pref_h": 300.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "BRKIndicator1Skin": {
+    "skin_class": "BRKIndicator1Skin",
+    "package": "panel/indicator",
+    "resource": null,
+    "pref_w": 200.0,
+    "pref_h": 100.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "BaseStraightScaleDeviceSkin": {
+    "skin_class": "BaseStraightScaleDeviceSkin",
+    "package": "panel/indicator/analogDevices/straightScale",
+    "resource": null,
+    "pref_w": 320.0,
+    "pref_h": 160.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "GradStraightSkin": {
+    "skin_class": "GradStraightSkin",
+    "package": "panel/indicator/analogDevices/straightScale",
+    "resource": null,
+    "pref_w": 500.0,
+    "pref_h": 250.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "ScaleDevice2Skin": {
+    "skin_class": "ScaleDevice2Skin",
+    "package": "panel/indicator/analogDevices/straightScale",
+    "resource": null,
+    "pref_w": 570.0,
+    "pref_h": 100.0,
+    "aspect_hw": 0.1754,
+    "square": false
+  },
+  "AnalogRPNIndicator": {
+    "skin_class": "AnalogRPNIndicator",
+    "package": "panel/indicator/analogDevices/straightScale",
+    "resource": null,
+    "pref_w": 420.0,
+    "pref_h": 120.0,
+    "aspect_hw": 0.2857,
+    "square": false
+  },
+  "BaseAnalogDeviceArrowSkin": {
+    "skin_class": "BaseAnalogDeviceArrowSkin",
+    "package": "panel/indicator/analogDevices/arrows",
+    "resource": null,
+    "pref_w": 10.0,
+    "pref_h": 200.0,
+    "aspect_hw": 20.0,
+    "square": false
+  },
+  "M42300Skin": {
+    "skin_class": "M42300Skin",
+    "package": "panel/indicator/analogDevices/roundScale",
+    "resource": null,
+    "pref_w": 200.0,
+    "pref_h": 200.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "M381Skin": {
+    "skin_class": "M381Skin",
+    "package": "panel/indicator/analogDevices/roundScale",
+    "resource": null,
+    "pref_w": 200.0,
+    "pref_h": 200.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "MechanicalTachometerSkin": {
+    "skin_class": "MechanicalTachometerSkin",
+    "package": "panel/indicator/analogDevices/roundScale",
+    "resource": null,
+    "pref_w": 300.0,
+    "pref_h": 300.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "GradRoundSkin": {
+    "skin_class": "GradRoundSkin",
+    "package": "panel/indicator/analogDevices/roundScale",
+    "resource": null,
+    "pref_w": 500.0,
+    "pref_h": 500.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "PF1M1Skin": {
+    "skin_class": "PF1M1Skin",
+    "package": "panel/indicator/analogDevices/roundScale",
+    "resource": null,
+    "pref_w": 320.0,
+    "pref_h": 400.0,
+    "aspect_hw": 1.25,
+    "square": false
+  },
+  "MA19Skin": {
+    "skin_class": "MA19Skin",
+    "package": "panel/indicator/analogDevices/roundScale",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "E8021Skin": {
+    "skin_class": "E8021Skin",
+    "package": "panel/indicator/analogDevices/roundScale",
+    "resource": null,
+    "pref_w": 200.0,
+    "pref_h": 200.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "M325Skin": {
+    "skin_class": "M325Skin",
+    "package": "panel/indicator/analogDevices/roundScale",
+    "resource": null,
+    "pref_w": 120.0,
+    "pref_h": 120.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "M42300RPNSkin": {
+    "skin_class": "M42300RPNSkin",
+    "package": "panel/indicator/analogDevices/roundScale",
+    "resource": null,
+    "pref_w": 200.0,
+    "pref_h": 200.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "SY96Skin": {
+    "skin_class": "SY96Skin",
+    "package": "panel/indicator/analogDevices/roundScale",
+    "resource": null,
+    "pref_w": 200.0,
+    "pref_h": 200.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "IRT5301Skin": {
+    "skin_class": "IRT5301Skin",
+    "package": "panel/indicator/digitalDevices",
+    "resource": null,
+    "pref_w": 800.0,
+    "pref_h": 400.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "SicamPSkin": {
+    "skin_class": "SicamPSkin",
+    "package": "panel/indicator/digitalDevices",
+    "resource": null,
+    "pref_w": 500.0,
+    "pref_h": 500.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "CPU8501Skin": {
+    "skin_class": "CPU8501Skin",
+    "package": "panel/indicator/digitalDevices",
+    "resource": null,
+    "pref_w": 550.0,
+    "pref_h": 550.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "Metran900Skin": {
+    "skin_class": "Metran900Skin",
+    "package": "panel/indicator/digitalDevices",
+    "resource": null,
+    "pref_w": 260.0,
+    "pref_h": 190.0,
+    "aspect_hw": 0.7308,
+    "square": false
+  },
+  "IRT1730USkin": {
+    "skin_class": "IRT1730USkin",
+    "package": "panel/indicator/digitalDevices",
+    "resource": "normal",
+    "pref_w": 600.0,
+    "pref_h": 135.0,
+    "aspect_hw": 0.225,
+    "square": false
+  },
+  "ElemerKC2ESkin": {
+    "skin_class": "ElemerKC2ESkin",
+    "package": "panel/indicator/digitalDevices",
+    "resource": null,
+    "pref_w": 234.0,
+    "pref_h": 312.0,
+    "aspect_hw": 1.3333,
+    "square": false
+  },
+  "KMSF1Skin": {
+    "skin_class": "KMSF1Skin",
+    "package": "panel/indicator/digitalDevices",
+    "resource": null,
+    "pref_w": 800.0,
+    "pref_h": 400.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "IRT5920NSkin": {
+    "skin_class": "IRT5920NSkin",
+    "package": "panel/indicator/digitalDevices",
+    "resource": null,
+    "pref_w": 800.0,
+    "pref_h": 400.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "IRT5502Skin": {
+    "skin_class": "IRT5502Skin",
+    "package": "panel/indicator/digitalDevices",
+    "resource": null,
+    "pref_w": 440.0,
+    "pref_h": 440.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "ElemerKP1ESkin": {
+    "skin_class": "ElemerKP1ESkin",
+    "package": "panel/indicator/digitalDevices",
+    "resource": null,
+    "pref_w": 440.0,
+    "pref_h": 440.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "EvroPriborL1": {
+    "skin_class": "EvroPriborL1",
+    "package": "panel/indicator/digitalDevices",
+    "resource": null,
+    "pref_w": 300.0,
+    "pref_h": 250.0,
+    "aspect_hw": 0.8333,
+    "square": false
+  },
+  "ElemerPMT59LSkin": {
+    "skin_class": "ElemerPMT59LSkin",
+    "package": "panel/indicator/digitalDevices",
+    "resource": null,
+    "pref_w": 234.0,
+    "pref_h": 206.0,
+    "aspect_hw": 0.8803,
+    "square": false
+  },
+  "CPU8506Skin": {
+    "skin_class": "CPU8506Skin",
+    "package": "panel/indicator/digitalDevices",
+    "resource": null,
+    "pref_w": 550.0,
+    "pref_h": 550.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "DigitalDevice2Skin": {
+    "skin_class": "DigitalDevice2Skin",
+    "package": "panel/indicator/digitalDevices",
+    "resource": null,
+    "pref_w": 440.0,
+    "pref_h": 160.0,
+    "aspect_hw": 0.3636,
+    "square": false
+  },
+  "DigitalDevice1Skin": {
+    "skin_class": "DigitalDevice1Skin",
+    "package": "panel/indicator/digitalDevices",
+    "resource": null,
+    "pref_w": 315.0,
+    "pref_h": 120.0,
+    "aspect_hw": 0.381,
+    "square": false
+  },
+  "IRT5920NMSkin": {
+    "skin_class": "IRT5920NMSkin",
+    "package": "panel/indicator/digitalDevices",
+    "resource": null,
+    "pref_w": 800.0,
+    "pref_h": 400.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "MechanicalRecorderSkin": {
+    "skin_class": "MechanicalRecorderSkin",
+    "package": "panel/indicator/recorders",
+    "resource": null,
+    "pref_w": 240.0,
+    "pref_h": 320.0,
+    "aspect_hw": 1.3333,
+    "square": false
+  },
+  "ElmetroViER104Skin": {
+    "skin_class": "ElmetroViER104Skin",
+    "package": "panel/indicator/recorders",
+    "resource": null,
+    "pref_w": 280.0,
+    "pref_h": 240.0,
+    "aspect_hw": 0.8571,
+    "square": false
+  },
+  "SwitchSkin": {
+    "skin_class": "SwitchSkin",
+    "package": "panel/indicator/schematicIndicator",
+    "resource": null,
+    "pref_w": 200.0,
+    "pref_h": 200.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "GroundSkin": {
+    "skin_class": "GroundSkin",
+    "package": "panel/indicator/schematicIndicator",
+    "resource": null,
+    "pref_w": 285.0,
+    "pref_h": 366.0,
+    "aspect_hw": 1.2842,
+    "square": false
+  },
+  "ConverterNPP3Skin": {
+    "skin_class": "ConverterNPP3Skin",
+    "package": "panel/indicator/lightIndicators",
+    "resource": null,
+    "pref_w": 400.0,
+    "pref_h": 400.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "LampBlinkerCasedRotationWSkin": {
+    "skin_class": "LampBlinkerCasedRotationWSkin",
+    "package": "panel/blinker",
+    "resource": null,
+    "pref_w": 260.0,
+    "pref_h": 260.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "LampBlinkerCasedRotationSkin": {
+    "skin_class": "LampBlinkerCasedRotationSkin",
+    "package": "panel/blinker",
+    "resource": null,
+    "pref_w": 260.0,
+    "pref_h": 260.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "LampBlinkerIPKSkin": {
+    "skin_class": "LampBlinkerIPKSkin",
+    "package": "panel/blinker",
+    "resource": null,
+    "pref_w": 230.0,
+    "pref_h": 230.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "LampBlinkerTabloSkin": {
+    "skin_class": "LampBlinkerTabloSkin",
+    "package": "panel/blinker",
+    "resource": null,
+    "pref_w": 110.0,
+    "pref_h": 155.0,
+    "aspect_hw": 1.4091,
+    "square": false
+  },
+  "LampBlinkerRU1": {
+    "skin_class": "LampBlinkerRU1",
+    "package": "panel/blinker",
+    "resource": null,
+    "pref_w": 160.0,
+    "pref_h": 300.0,
+    "aspect_hw": 1.875,
+    "square": false
+  },
+  "LampBlinkerRotationSkin": {
+    "skin_class": "LampBlinkerRotationSkin",
+    "package": "panel/blinker",
+    "resource": null,
+    "pref_w": 220.0,
+    "pref_h": 220.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "MEBkcSkin": {
+    "skin_class": "MEBkcSkin",
+    "package": "mosaic/active",
+    "resource": "down",
+    "pref_w": 2000.0,
+    "pref_h": 500.0,
+    "aspect_hw": 0.25,
+    "square": false
+  },
+  "MEBic71RSkin": {
+    "skin_class": "MEBic71RSkin",
+    "package": "mosaic/active",
+    "resource": null,
+    "pref_w": 200.0,
+    "pref_h": 50.0,
+    "aspect_hw": 0.25,
+    "square": false
+  },
+  "MEJE1550Skin": {
+    "skin_class": "MEJE1550Skin",
+    "package": "mosaic/active",
+    "resource": "enter",
+    "pref_w": 1000.0,
+    "pref_h": 1000.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "MEBsrSkin": {
+    "skin_class": "MEBsrSkin",
+    "package": "mosaic/active",
+    "resource": null,
+    "pref_w": 2500.0,
+    "pref_h": 2000.0,
+    "aspect_hw": 0.8,
+    "square": false
+  },
+  "ME2k2000Skin": {
+    "skin_class": "ME2k2000Skin",
+    "package": "mosaic/active/control",
+    "resource": null,
+    "pref_w": 500.0,
+    "pref_h": 250.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "LampCirclePrimitiveSkin": {
+    "skin_class": "LampCirclePrimitiveSkin",
+    "package": "mosaic/active/auxiliary",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "LampBsrSkin": {
+    "skin_class": "LampBsrSkin",
+    "package": "mosaic/active/auxiliary",
+    "resource": null,
+    "pref_w": 90.0,
+    "pref_h": 90.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "SpinnerSkin": {
+    "skin_class": "SpinnerSkin",
+    "package": "mosaic/active/auxiliary",
+    "resource": null,
+    "pref_w": 36.45,
+    "pref_h": 75.73,
+    "aspect_hw": 2.0776,
+    "square": false
+  },
+  "MECapSmallSkin": {
+    "skin_class": "MECapSmallSkin",
+    "package": "mosaic/active/auxiliary",
+    "resource": null,
+    "pref_w": 200.0,
+    "pref_h": 240.0,
+    "aspect_hw": 1.2,
+    "square": false
+  },
+  "KeyElementSkin": {
+    "skin_class": "KeyElementSkin",
+    "package": "mosaic/active/auxiliary",
+    "resource": null,
+    "pref_w": 160.0,
+    "pref_h": 160.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "Spinner_4Skin": {
+    "skin_class": "Spinner_4Skin",
+    "package": "mosaic/active/auxiliary",
+    "resource": null,
+    "pref_w": 20.0,
+    "pref_h": 100.0,
+    "aspect_hw": 5.0,
+    "square": false
+  },
+  "LampBlinkerSkin": {
+    "skin_class": "LampBlinkerSkin",
+    "package": "mosaic/active/auxiliary",
+    "resource": null,
+    "pref_w": 250.0,
+    "pref_h": 250.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "Lamp7SegmentLeftSkin": {
+    "skin_class": "Lamp7SegmentLeftSkin",
+    "package": "mosaic/active/auxiliary",
+    "resource": null,
+    "pref_w": 115.2,
+    "pref_h": 351.2,
+    "aspect_hw": 3.0486,
+    "square": false
+  },
+  "Lamp7SegmentMidSkin": {
+    "skin_class": "Lamp7SegmentMidSkin",
+    "package": "mosaic/active/auxiliary",
+    "resource": null,
+    "pref_w": 357.58,
+    "pref_h": 80.0,
+    "aspect_hw": 0.2237,
+    "square": false
+  },
+  "LampArrowSkin": {
+    "skin_class": "LampArrowSkin",
+    "package": "mosaic/active/auxiliary",
+    "resource": null,
+    "pref_w": 207.0,
+    "pref_h": 125.0,
+    "aspect_hw": 0.6039,
+    "square": false
+  },
+  "LampRectanglePrimitiveSkin": {
+    "skin_class": "LampRectanglePrimitiveSkin",
+    "package": "mosaic/active/auxiliary",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "GradRoundMosaicSkin": {
+    "skin_class": "GradRoundMosaicSkin",
+    "package": "mosaic/active/auxiliary",
+    "resource": "gradRound",
+    "pref_w": 400.0,
+    "pref_h": 400.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "Lamp7SegmentDotSkin": {
+    "skin_class": "Lamp7SegmentDotSkin",
+    "package": "mosaic/active/auxiliary",
+    "resource": null,
+    "pref_w": 90.0,
+    "pref_h": 90.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "ToggleSkin": {
+    "skin_class": "ToggleSkin",
+    "package": "mosaic/active/auxiliary",
+    "resource": null,
+    "pref_w": null,
+    "pref_h": null,
+    "aspect_hw": null,
+    "square": null
+  },
+  "Spinner_1Skin": {
+    "skin_class": "Spinner_1Skin",
+    "package": "mosaic/active/auxiliary",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "TransparentSkin": {
+    "skin_class": "TransparentSkin",
+    "package": "mosaic/active/auxiliary",
+    "resource": null,
+    "pref_w": 50.0,
+    "pref_h": 50.0,
+    "aspect_hw": 0.3333,
+    "square": false
+  },
+  "Spinner_2Skin": {
+    "skin_class": "Spinner_2Skin",
+    "package": "mosaic/active/auxiliary",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "Lamp7SegmentUpSkin": {
+    "skin_class": "Lamp7SegmentUpSkin",
+    "package": "mosaic/active/auxiliary",
+    "resource": null,
+    "pref_w": 390.4534,
+    "pref_h": 80.0,
+    "aspect_hw": 0.2049,
+    "square": false
+  },
+  "Lamp7SegmentRightSkin": {
+    "skin_class": "Lamp7SegmentRightSkin",
+    "package": "mosaic/active/auxiliary",
+    "resource": null,
+    "pref_w": 118.4,
+    "pref_h": 349.6,
+    "aspect_hw": 2.9527,
+    "square": false
+  },
+  "MESegmentSkin": {
+    "skin_class": "MESegmentSkin",
+    "package": "mosaic/active/auxiliary",
+    "resource": null,
+    "pref_w": 660.0,
+    "pref_h": 940.0,
+    "aspect_hw": 1.4242,
+    "square": false
+  },
+  "Spinner_3Skin": {
+    "skin_class": "Spinner_3Skin",
+    "package": "mosaic/active/auxiliary",
+    "resource": null,
+    "pref_w": 50.0,
+    "pref_h": 50.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "LampMosaicRoot": {
+    "skin_class": "LampMosaicRoot",
+    "package": "mosaic/active/auxiliary/lamps",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "ButtonElementCircleSkin": {
+    "skin_class": "ButtonElementCircleSkin",
+    "package": "mosaic/active/auxiliary/buttons",
+    "resource": null,
+    "pref_w": 180.0,
+    "pref_h": 180.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "ButtonElementSkin": {
+    "skin_class": "ButtonElementSkin",
+    "package": "mosaic/active/auxiliary/buttons",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "ButtonElementBkcSkin": {
+    "skin_class": "ButtonElementBkcSkin",
+    "package": "mosaic/active/auxiliary/buttons",
+    "resource": null,
+    "pref_w": 110.0,
+    "pref_h": 110.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "ButtonElementIndicatorSkin": {
+    "skin_class": "ButtonElementIndicatorSkin",
+    "package": "mosaic/active/auxiliary/buttons",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "ButtonElementRectSkin": {
+    "skin_class": "ButtonElementRectSkin",
+    "package": "mosaic/active/auxiliary/buttons",
+    "resource": null,
+    "pref_w": 240.0,
+    "pref_h": 180.0,
+    "aspect_hw": 0.75,
+    "square": false
+  },
+  "PusherRootSkin": {
+    "skin_class": "PusherRootSkin",
+    "package": "mosaic/active/pusher",
+    "resource": null,
+    "pref_w": 500.0,
+    "pref_h": 500.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "SelectorSkinRoot": {
+    "skin_class": "SelectorSkinRoot",
+    "package": "mosaic/active/switcher",
+    "resource": null,
+    "pref_w": 500.0,
+    "pref_h": 500.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "SwitcherSkin": {
+    "skin_class": "SwitcherSkin",
+    "package": "mosaic/active/switcher",
+    "resource": null,
+    "pref_w": 250.0,
+    "pref_h": 250.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "ME3k2014Skin": {
+    "skin_class": "ME3k2014Skin",
+    "package": "mosaic/active/transparant",
+    "resource": null,
+    "pref_w": 500.0,
+    "pref_h": 500.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "ME4k2001Skin": {
+    "skin_class": "ME4k2001Skin",
+    "package": "mosaic/active/transparant",
+    "resource": null,
+    "pref_w": null,
+    "pref_h": null,
+    "aspect_hw": null,
+    "square": null
+  },
+  "ME2k2035Skin": {
+    "skin_class": "ME2k2035Skin",
+    "package": "mosaic/active/transparant",
+    "resource": null,
+    "pref_w": 500.0,
+    "pref_h": 250.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "ME2k2055Skin": {
+    "skin_class": "ME2k2055Skin",
+    "package": "mosaic/active/transparant",
+    "resource": null,
+    "pref_w": 500.0,
+    "pref_h": 250.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "ME2k2052Skin": {
+    "skin_class": "ME2k2052Skin",
+    "package": "mosaic/active/transparant",
+    "resource": null,
+    "pref_w": 500.0,
+    "pref_h": 250.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "f1762_5Skin": {
+    "skin_class": "f1762_5Skin",
+    "package": "mosaic/active/indicator",
+    "resource": null,
+    "pref_w": null,
+    "pref_h": null,
+    "aspect_hw": null,
+    "square": null
+  },
+  "f1762_7Skin": {
+    "skin_class": "f1762_7Skin",
+    "package": "mosaic/active/indicator",
+    "resource": null,
+    "pref_w": 500.0,
+    "pref_h": 1000.0,
+    "aspect_hw": 2.0,
+    "square": false
+  },
+  "f1761_6Skin": {
+    "skin_class": "f1761_6Skin",
+    "package": "mosaic/active/indicator",
+    "resource": null,
+    "pref_w": 1000.0,
+    "pref_h": 1000.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "f1761_4Skin": {
+    "skin_class": "f1761_4Skin",
+    "package": "mosaic/active/indicator",
+    "resource": null,
+    "pref_w": 1000.0,
+    "pref_h": 250.0,
+    "aspect_hw": 0.25,
+    "square": false
+  },
+  "f1762_6Skin": {
+    "skin_class": "f1762_6Skin",
+    "package": "mosaic/active/indicator",
+    "resource": null,
+    "pref_w": null,
+    "pref_h": null,
+    "aspect_hw": null,
+    "square": null
+  },
+  "f1762_3Skin": {
+    "skin_class": "f1762_3Skin",
+    "package": "mosaic/active/indicator",
+    "resource": null,
+    "pref_w": 500.0,
+    "pref_h": 250.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "f1761_5Skin": {
+    "skin_class": "f1761_5Skin",
+    "package": "mosaic/active/indicator",
+    "resource": null,
+    "pref_w": 250.0,
+    "pref_h": 1000.0,
+    "aspect_hw": 4.0,
+    "square": false
+  },
+  "PassiveRootSkin": {
+    "skin_class": "PassiveRootSkin",
+    "package": "mosaic/passive",
+    "resource": null,
+    "pref_w": 50.0,
+    "pref_h": 25.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "E3HRootSkin": {
+    "skin_class": "E3HRootSkin",
+    "package": "mosaic/passive",
+    "resource": null,
+    "pref_w": 50.0,
+    "pref_h": 50.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "SegmentsSkin": {
+    "skin_class": "SegmentsSkin",
+    "package": "mosaic/passive/image",
+    "resource": "fewSegments",
+    "pref_w": 3500.0,
+    "pref_h": 1500.0,
+    "aspect_hw": 0.4286,
+    "square": false
+  },
+  "RU200Skin": {
+    "skin_class": "RU200Skin",
+    "package": "mosaic/passive/text",
+    "resource": "textLabel",
+    "pref_w": 200.0,
+    "pref_h": null,
+    "aspect_hw": 0.125,
+    "square": false
+  },
+  "RU150Skin": {
+    "skin_class": "RU150Skin",
+    "package": "mosaic/passive/text",
+    "resource": "textLabel",
+    "pref_w": 150.0,
+    "pref_h": null,
+    "aspect_hw": 0.1667,
+    "square": false
+  },
+  "RU100Skin": {
+    "skin_class": "RU100Skin",
+    "package": "mosaic/passive/text",
+    "resource": "textLabel",
+    "pref_w": 100.0,
+    "pref_h": null,
+    "aspect_hw": 0.25,
+    "square": false
+  },
+  "PassiveCustomSquaredSkin": {
+    "skin_class": "PassiveCustomSquaredSkin",
+    "package": "mosaic/passive/custom",
+    "resource": null,
+    "pref_w": 500.0,
+    "pref_h": 500.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "TransAAutoSkin": {
+    "skin_class": "TransAAutoSkin",
+    "package": "mosaic/passive/custom",
+    "resource": "trans1Auto",
+    "pref_w": 50.0,
+    "pref_h": 50.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "GenLargeSkin": {
+    "skin_class": "GenLargeSkin",
+    "package": "mosaic/passive/custom",
+    "resource": null,
+    "pref_w": 50.0,
+    "pref_h": 50.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "GradRoundNewSkin": {
+    "skin_class": "GradRoundNewSkin",
+    "package": "components",
+    "resource": null,
+    "pref_w": 400.0,
+    "pref_h": 400.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "PrimitiveKnifeSwSkin": {
+    "skin_class": "PrimitiveKnifeSwSkin",
+    "package": "components/primitiveSwitchers",
+    "resource": null,
+    "pref_w": 74.0,
+    "pref_h": 370.0,
+    "aspect_hw": 5.0,
+    "square": false
+  },
+  "PrimitiveSwitchSkin": {
+    "skin_class": "PrimitiveSwitchSkin",
+    "package": "components/primitiveSwitchers",
+    "resource": null,
+    "pref_w": 38.0,
+    "pref_h": 164.0,
+    "aspect_hw": 4.3158,
+    "square": false
+  },
+  "PrimitiveFuseSkin": {
+    "skin_class": "PrimitiveFuseSkin",
+    "package": "components/primitiveSwitchers",
+    "resource": null,
+    "pref_w": 74.0,
+    "pref_h": 240.0,
+    "aspect_hw": 3.2432,
+    "square": false
+  },
+  "ButtonElementHorizontalSkin": {
+    "skin_class": "ButtonElementHorizontalSkin",
+    "package": "components/buttons",
+    "resource": "buttonElementHorizontal",
+    "pref_w": 80.0,
+    "pref_h": 40.0,
+    "aspect_hw": 0.5,
+    "square": false
+  },
+  "FixedCircleButtonSkin": {
+    "skin_class": "FixedCircleButtonSkin",
+    "package": "components/buttons",
+    "resource": "pressed",
+    "pref_w": 50.0,
+    "pref_h": 50.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "MouseScreenSkin": {
+    "skin_class": "MouseScreenSkin",
+    "package": "components/buttons",
+    "resource": null,
+    "pref_w": 200.0,
+    "pref_h": 200.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "EllipseButtonSkin": {
+    "skin_class": "EllipseButtonSkin",
+    "package": "components/buttons",
+    "resource": null,
+    "pref_w": 25.0,
+    "pref_h": 25.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "RectangleButtonSkin": {
+    "skin_class": "RectangleButtonSkin",
+    "package": "components/buttons",
+    "resource": null,
+    "pref_w": 25.0,
+    "pref_h": 25.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "FixedCircleButtonExternalControlSkin": {
+    "skin_class": "FixedCircleButtonExternalControlSkin",
+    "package": "components/buttons",
+    "resource": null,
+    "pref_w": 50.0,
+    "pref_h": 50.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "AngleSensorSkin": {
+    "skin_class": "AngleSensorSkin",
+    "package": "components/buttons",
+    "resource": null,
+    "pref_w": 200.0,
+    "pref_h": 200.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "PrimitivePanelLampCircleSkin": {
+    "skin_class": "PrimitivePanelLampCircleSkin",
+    "package": "components/primitiveLamps",
+    "resource": null,
+    "pref_w": 100.0,
+    "pref_h": 100.0,
+    "aspect_hw": 1.0,
+    "square": true
+  },
+  "DigitalText4NumberSkin": {
+    "skin_class": "DigitalText4NumberSkin",
+    "package": "components/digitalText",
+    "resource": null,
+    "pref_w": 315.0,
+    "pref_h": 120.0,
+    "aspect_hw": 0.381,
+    "square": false
+  },
+  "DigitalText5NumberSkin": {
+    "skin_class": "DigitalText5NumberSkin",
+    "package": "components/digitalText",
+    "resource": null,
+    "pref_w": 370.0,
+    "pref_h": 120.0,
+    "aspect_hw": 0.3243,
+    "square": false
+  },
+  "DigitalText2NumberSkin": {
+    "skin_class": "DigitalText2NumberSkin",
+    "package": "components/digitalText",
+    "resource": null,
+    "pref_w": 130.0,
+    "pref_h": 120.0,
+    "aspect_hw": 0.9231,
+    "square": false
+  }
+}

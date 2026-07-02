@@ -66,11 +66,19 @@ RUN pip install --no-cache-dir -r requirements/worker.txt -c requirements/worker
 # numba/llvmlite запинены под numpy<2.0 / python3.11.
 RUN pip install --no-cache-dir ensemble-boxes==1.0.9 numba==0.60.0 llvmlite==0.43.0
 
+# lxml — парсинг/перезапись FXML в стандартизаторе (tools/fxml_standardize.py):
+# сохраняет <?import?> и namespace'ы JavaFX (stdlib xml так не умеет). Отдельным
+# слоем — у lxml есть manylinux-wheel, граф зависимостей не раздувается.
+RUN pip install --no-cache-dir lxml
+
 # Копируем worker
 COPY worker/ /app/worker/
 
 # Копируем ML модули
 COPY modules/ /app/modules/
+
+# Копируем инструменты (стандартизация FXML 1920x1080 + skin_geometry.json)
+COPY tools/ /app/tools/
 
 # Добавляем модули в PYTHONPATH
 ENV PYTHONPATH="/app:/app/modules"
