@@ -49,6 +49,37 @@ def _is_point_like(node: dict) -> bool:
     return node.get('type') != 'equipment' or not (bb and len(bb) == 4)
 
 
+def _side_attach_point(bb: list, side: str, ref_x: float, ref_y: float,
+                       pad: float = 2.0) -> tuple:
+    """Точка на стороне bbox, скользящая навстречу опоре (ref).
+
+    Если опора попадает в пролёт стороны — ребро сможет пройти прямо
+    (кейс «клапан на линии» — бокс детекции смещён относительно трубы).
+    Иначе точка прижимается к ближнему краю стороны (с отступом pad)."""
+    x1, y1, x2, y2 = bb
+    if side in ('left', 'right'):
+        x = x1 if side == 'left' else x2
+        y = min(max(ref_y, y1 + pad), y2 - pad)
+        return x, y
+    y = y1 if side == 'top' else y2
+    x = min(max(ref_x, x1 + pad), x2 - pad)
+    return x, y
+
+
+def _attach_ref(other: dict, other_bb: list, self_bb: list,
+                ocx: float, ocy: float) -> tuple:
+    """Опорная координата для скольжения по стороне: центр соседа;
+    для equipment-соседа — середина перекрытия проекций боксов
+    (симметрично для обоих концов → прямое ребро)."""
+    if _is_point_like(other):
+        return ocx, ocy
+    ox = (max(self_bb[0], other_bb[0]) + min(self_bb[2], other_bb[2])) / 2 \
+        if min(self_bb[2], other_bb[2]) > max(self_bb[0], other_bb[0]) else ocx
+    oy = (max(self_bb[1], other_bb[1]) + min(self_bb[3], other_bb[3])) / 2 \
+        if min(self_bb[3], other_bb[3]) > max(self_bb[1], other_bb[1]) else ocy
+    return ox, oy
+
+
 def compute_optimized_route(
     nodes: dict,
     edges_data: list,
@@ -95,7 +126,8 @@ def compute_optimized_route(
         elif override_src is not None:
             sx, sy = override_src      # слот распределения (шаг 6)
         else:
-            sx, sy = bbox_side_midpoint(src_bb, src_side)
+            rx, ry = _attach_ref(tgt, tgt_bb, src_bb, tcx, tcy)
+            sx, sy = _side_attach_point(src_bb, src_side, rx, ry)
 
     # --- точка прикрепления и сторона выхода: target ---
     if man_tp:
@@ -108,7 +140,8 @@ def compute_optimized_route(
         elif override_tgt is not None:
             tx, ty = override_tgt      # слот распределения (шаг 6)
         else:
-            tx, ty = bbox_side_midpoint(tgt_bb, tgt_side)
+            rx, ry = _attach_ref(src, src_bb, tgt_bb, scx, scy)
+            tx, ty = _side_attach_point(tgt_bb, tgt_side, rx, ry)
 
     # --- препятствия и существующие пути ---
     obstacles = [
@@ -204,6 +237,8 @@ def optimize_all_routes(
             seen.add((nid, side))
             dist = distribute_connection_points(
                 nid, side, virtual_bbox(node, conn_radius), valid, nodes)
+            if len(dist) <= 1:
+                continue  # одно ребро на стороне → скользящая точка (не слот)
             for ee in valid:
                 eid = ee.get('id')
                 if eid is None or eid not in dist:
@@ -226,15 +261,27 @@ def optimize_all_routes(
         order.append((d, idx))
     order.sort()
 
-    def _route_one(idx: int):
+    def _route_one(idx: int, center_attach: bool = False):
         e = valid[idx]
         eid = e.get('id')
+        osrc = slots.get((eid, 'src'))
+        otgt = slots.get((eid, 'tgt'))
+        if center_attach and not e.get('_manual_route'):
+            # третий проход: скользящая точка мешает разойтись —
+            # даём роутеру центр стороны (больше свободы кандидатам)
+            s_n, t_n = nodes[e['source']], nodes[e['target']]
+            if not _is_point_like(s_n):
+                osrc = bbox_side_midpoint(
+                    virtual_bbox(s_n, conn_radius), e.get('_src_side') or 'right')
+            if not _is_point_like(t_n):
+                otgt = bbox_side_midpoint(
+                    virtual_bbox(t_n, conn_radius), e.get('_tgt_side') or 'left')
         existing = [pl for k, pl in paths.items() if k != idx]
         r = compute_optimized_route(
             nodes, edges_data, e, conn_radius,
             existing_paths=existing,
-            override_src=slots.get((eid, 'src')),
-            override_tgt=slots.get((eid, 'tgt')),
+            override_src=osrc,
+            override_tgt=otgt,
         )
         e['source_point'] = r['source_point']
         e['target_point'] = r['target_point']
@@ -279,6 +326,13 @@ def optimize_all_routes(
     for _, idx in order:
         if idx in crossing:
             _route_one(idx)
+
+    # Третий мини-проход: оставшиеся пересечения — с центром стороны
+    crossing2 = _crossing_idxs()
+    if crossing2:
+        for _, idx in order:
+            if idx in crossing2:
+                _route_one(idx, center_attach=True)
 
     return {
         'routed': len(order),

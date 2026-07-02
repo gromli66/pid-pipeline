@@ -472,11 +472,14 @@ def test_step6_optimize_all_zero_metrics_on_real_graph():
     if path is None:
         pytest.skip("нет графа 4464be08")
     nodes, edges = _load_graph(path)
+    m_before = compute_metrics(nodes, edges)
     n2, e2 = deepcopy(nodes), deepcopy(edges)
     stats = optimize_all_routes(n2, e2)
     assert stats["routed"] == len(e2)
     m = compute_metrics(n2, e2)
-    assert m["crossings"] == 0, m
+    # Шаг 9: скользящие точки прикрепления (прямые трубы сквозь клапаны)
+    # важнее абсолютного нуля пересечений — требуем «не хуже исходника».
+    assert m["crossings"] <= m_before["crossings"], (m, m_before)
     assert m["diagonal"] == 0, m
     assert m["through_bbox"] == 0, m
     # сходимость: после второго прогона третий не меняет ни одного ребра
@@ -558,6 +561,49 @@ def test_step7b_autofix_replaces_diagonal_with_orthogonal_route():
         assert abs(a[0] - b[0]) < 0.5 or abs(a[1] - b[1]) < 0.5, \
             f"диагональ осталась: {a}→{b}"
     assert e["waypoints"], "маршрут не построен"
+
+
+def test_step9_inline_valve_straight_through():
+    """Бокс клапана смещён относительно линии трубы — точка прикрепления
+    скользит навстречу соседу, труба идёт прямо, без ступенек (кейс M-448)."""
+    from ui.editors.optimize_core import compute_optimized_route
+    nodes = {
+        "j1": {"id": "j1", "type": "connector", "centroid": [100.0, 40.0]},
+        "V": {"id": "V", "type": "equipment",
+              "centroid": [93.0, 150.0], "bbox": [120, 73, 180, 113]},
+        "j2": {"id": "j2", "type": "connector", "centroid": [100.0, 260.0]},
+    }
+    e1 = {"id": "a", "source": "j1", "target": "V", "waypoints": []}
+    e2 = {"id": "b", "source": "V", "target": "j2", "waypoints": []}
+    r1 = compute_optimized_route(nodes, [e1, e2], e1)
+    assert r1["waypoints"] == [], r1
+    assert r1["target_point"] == [100.0, 120.0]  # вход на y линии, не центра
+    r2 = compute_optimized_route(nodes, [e1, e2], e2)
+    assert r2["waypoints"] == [], r2
+    assert r2["source_point"] == [100.0, 180.0]
+
+
+def test_step9_autofix_pulls_free_connector_instead_of_zigzag():
+    """Диагональ клапан—перекрёсток: перекрёсток на вертикальной трубе
+    (X зафиксирован цепочкой, Y свободен) подтягивается к y клапана —
+    прямое ребро вместо зигзага (кейс VX08-10)."""
+    nodes = {
+        "top": {"id": "top", "type": "connector", "centroid": [0.0, 300.0]},
+        "j": {"id": "j", "type": "connector", "centroid": [125.0, 300.0]},
+        "V": {"id": "V", "type": "equipment",
+              "centroid": [200.0, 80.0], "bbox": [50, 180, 110, 220]},
+    }
+    edges = [
+        {"id": "pipe", "source": "top", "target": "j", "waypoints": [],
+         "source_point": [0.0, 300.0], "target_point": [125.0, 300.0]},
+        {"id": "d", "source": "V", "target": "j", "waypoints": [],
+         "source_point": [200.0, 110.0], "target_point": [125.0, 300.0]},
+    ]
+    auto_fix_graph(nodes, edges)
+    assert abs(nodes["j"]["centroid"][0] - 200.0) < 0.01, nodes["j"]
+    e = edges[1]
+    assert abs(e["source_point"][0] - e["target_point"][0]) < 0.6, e
+    assert e["waypoints"] == [], e
 
 
 def test_step8_micro_skew_snapped_straight():

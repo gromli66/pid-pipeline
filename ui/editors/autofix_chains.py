@@ -358,6 +358,21 @@ def _vbox(n: dict) -> list:
     return [cx - r, cy - r, cx + r, cy + r]
 
 
+def _shift_node(n: dict, new_cx: float, new_cy: float):
+    """Переместить узел (centroid [y,x] + bbox + segmentation) в (new_cx,new_cy)."""
+    dx = new_cx - n['centroid'][1]
+    dy = new_cy - n['centroid'][0]
+    n['centroid'] = [new_cy, new_cx]
+    bb = n.get('bbox')
+    if bb and len(bb) == 4:
+        n['bbox'] = [bb[0] + dx, bb[1] + dy, bb[2] + dx, bb[3] + dy]
+    seg = n.get('segmentation')
+    if seg and isinstance(seg, list) and len(seg) >= 6:
+        for i in range(0, len(seg), 2):
+            seg[i] += dx
+            seg[i + 1] += dy
+
+
 def _side_of(bbox: list, x: float, y: float) -> str:
     d = {
         'left': abs(x - bbox[0]), 'right': abs(x - bbox[2]),
@@ -423,6 +438,7 @@ def auto_fix_graph(
         'overlaps_fixed': 0,
         'manual_kept': 0,      # 7a: ручные маршруты сохранены
         'edges_rerouted': 0,   # 7b: диагонали заменены ортогональным маршрутом
+        'diagonals_rescued': 0,  # 9b: коннектор подтянут по свободной оси
     }
 
     def _cx(n: dict) -> float:
@@ -549,6 +565,38 @@ def auto_fix_graph(
         stats['passes'] = pass_num + 1
         if moved_this_pass < 3:
             break
+
+    # ─── Diagonal rescue (9b): подтянуть свободный коннектор ──────
+    # Рёбра-«диагонали» не попадают в цепочки, узлы не двигаются, и 7b
+    # рисует зигзаг. Вместо этого: если конец — коннектор, у которого
+    # нужная ось не зафиксирована цепочкой, подтянуть его к соседу
+    # (в пределах clamp) — ребро становится прямым H/V без изломов.
+    for e in edges_data:
+        src = nodes.get(e['source'])
+        tgt = nodes.get(e['target'])
+        if not src or not tgt or e.get('_manual_route'):
+            continue
+        ddx_r = abs(_cx(src) - _cx(tgt))
+        ddy_r = abs(_cy(src) - _cy(tgt))
+        if ddx_r <= STRAIGHT_TOL or ddy_r <= STRAIGHT_TOL:
+            continue  # уже прямое или почти
+        for mover, other, mid in ((src, tgt, e['source']),
+                                  (tgt, src, e['target'])):
+            if _is_equip(mover):
+                continue  # equipment не двигаем — визуальное соответствие PNG
+            ox_r, oy_r = orig_pos[mid]
+            if ddy_r <= ddx_r and mid not in y_targets:
+                new_y = _cy(other)
+                if abs(new_y - oy_r) <= conn_max_shift:
+                    _shift_node(mover, _cx(mover), new_y)
+                    stats['diagonals_rescued'] += 1
+                    break
+            if ddx_r < ddy_r and mid not in x_targets:
+                new_x = _cx(other)
+                if abs(new_x - ox_r) <= conn_max_shift:
+                    _shift_node(mover, new_x, _cy(mover))
+                    stats['diagonals_rescued'] += 1
+                    break
 
     # ─── Overlap resolution ────────────────────────────────────
     equip_bboxes: list[tuple[str, list]] = []
