@@ -21,6 +21,11 @@ from ui.editors.graph_geometry import (
 # Синхронно с BaseGraphEditor.CONNECTOR_MARKER_RADIUS
 CONNECTOR_RADIUS = 8
 
+# Допуск «невидимого» перекоса (фидбек UI): до 1° от оси или до 3px —
+# рисуем прямую, а не микро-зигзаг. Зигзаг только когда он реально нужен.
+STRAIGHT_SLOPE = 0.01746   # tan(1°) — согласовано с PERPENDICULARITY_THRESHOLD
+STRAIGHT_PX = 3.0
+
 
 def virtual_bbox(node: dict, conn_radius: float = CONNECTOR_RADIUS) -> list:
     """Как BaseGraphEditor._get_node_bbox: equipment → реальный bbox,
@@ -143,11 +148,33 @@ def compute_optimized_route(
             rx, ry = _attach_ref(src, src_bb, tgt_bb, scx, scy)
             tx, ty = _side_attach_point(tgt_bb, tgt_side, rx, ry)
 
-    # --- препятствия и существующие пути ---
+    # --- препятствия ---
     obstacles = [
         virtual_bbox(n, conn_radius) for nid, n in nodes.items()
         if nid != edge_data['source'] and nid != edge_data['target']
     ]
+
+    # --- микро-перекос: прямая вместо зигзага ---
+    # Перекос в пределах 1°/3px не виден глазом (и «хорош» по перп-метрике);
+    # прямая линия здесь лучше двух изломов. Но только если прямая не
+    # задевает чужие узлы — иначе честный ортогональный обход.
+    ddx_a, ddy_a = abs(tx - sx), abs(ty - sy)
+    minor = min(ddx_a, ddy_a)
+    major = max(ddx_a, ddy_a)
+    if minor <= max(STRAIGHT_PX, major * STRAIGHT_SLOPE):
+        clean = all(
+            not er._seg_hits_bbox(sx, sy, tx, ty, bb, margin=0)
+            for bb in obstacles
+        )
+        if clean:
+            return {
+                'source_point': [sy, sx],
+                'target_point': [ty, tx],
+                'waypoints': [],
+                'src_side': src_side,
+                'tgt_side': tgt_side,
+            }
+
     if existing_paths is None:
         existing_paths = [
             pl for e in edges_data if e is not edge_data

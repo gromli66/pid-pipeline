@@ -866,16 +866,30 @@ def auto_fix_graph(
             if sp and tp:
                 ddx_e = abs(sp[1] - tp[1])
                 ddy_e = abs(sp[0] - tp[0])
-                if ddx_e > STRAIGHT_TOL and ddy_e > STRAIGHT_TOL:
+                # Допуск как в optimize_core: 1° от оси или 3px — снапим
+                # к прямой (у перекрёстка приоритет его координаты),
+                # зигзаг только для реальных перекосов.
+                tol_e = max(STRAIGHT_TOL, 0.01746 * max(ddx_e, ddy_e))
+                if ddx_e > tol_e and ddy_e > tol_e:
                     e['waypoints'] = _orthogonal_waypoints(e, sp, tp, nodes)
                     if e['waypoints']:
                         stats['edges_rerouted'] += 1
                 elif ddx_e >= ddy_e and ddy_e > 1e-9:
-                    common_y2 = (sp[0] + tp[0]) / 2   # почти горизонталь
+                    if not _is_equip(src) and _is_equip(tgt):
+                        common_y2 = sp[0]      # перекрёсток важнее
+                    elif not _is_equip(tgt) and _is_equip(src):
+                        common_y2 = tp[0]
+                    else:
+                        common_y2 = (sp[0] + tp[0]) / 2
                     sp[0] = tp[0] = common_y2
                     stats['edges_straightened'] += 1
                 elif ddy_e > ddx_e and ddx_e > 1e-9:
-                    common_x2 = (sp[1] + tp[1]) / 2   # почти вертикаль
+                    if not _is_equip(src) and _is_equip(tgt):
+                        common_x2 = sp[1]
+                    elif not _is_equip(tgt) and _is_equip(src):
+                        common_x2 = tp[1]
+                    else:
+                        common_x2 = (sp[1] + tp[1]) / 2
                     sp[1] = tp[1] = common_x2
                     stats['edges_straightened'] += 1
 

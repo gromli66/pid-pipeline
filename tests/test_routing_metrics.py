@@ -174,7 +174,9 @@ def compute_metrics(nodes, edges):
         for s in range(len(pl) - 1):
             adx = abs(pl[s + 1][0] - pl[s][0])
             ady = abs(pl[s + 1][1] - pl[s][1])
-            if adx > 1 and ady > 1:
+            # Диагональ = перекос заметный глазу: >3px (STRAIGHT_TOL) И >1°.
+            # Микро-перекосы до 3px/1° — допустимая прямая (шаг 9).
+            if adx > 3 and ady > 3:
                 ang = math.degrees(math.atan2(min(adx, ady), max(adx, ady)))
                 if ang > 1.0:
                     diagonal += 1
@@ -604,6 +606,38 @@ def test_step9_autofix_pulls_free_connector_instead_of_zigzag():
     e = edges[1]
     assert abs(e["source_point"][0] - e["target_point"][0]) < 0.6, e
     assert e["waypoints"] == [], e
+
+
+def test_step9_micro_skew_straight_not_zigzag():
+    """Перекос 4px на 300px (0.76°) — прямая линия, а не микро-зигзаг."""
+    from ui.editors.optimize_core import compute_optimized_route
+    nodes = {
+        "c1": {"id": "c1", "type": "connector", "centroid": [100.0, 50.0]},
+        "c2": {"id": "c2", "type": "connector", "centroid": [104.0, 350.0]},
+    }
+    e = {"id": "m", "source": "c1", "target": "c2", "waypoints": []}
+    r = compute_optimized_route(nodes, [e], e)
+    assert r["waypoints"] == [], r
+
+
+def test_step9_micro_skew_with_obstacle_still_routed():
+    """Тот же перекос, но на прямой узел — честный обход, не сквозь."""
+    from ui.editors.optimize_core import compute_optimized_route
+    obs_bb = [170, 80, 230, 124]
+    nodes = {
+        "c1": {"id": "c1", "type": "connector", "centroid": [100.0, 50.0]},
+        "c2": {"id": "c2", "type": "connector", "centroid": [104.0, 350.0]},
+        "E": {"id": "E", "type": "equipment",
+              "centroid": [102.0, 200.0], "bbox": obs_bb},
+    }
+    e = {"id": "m", "source": "c1", "target": "c2", "waypoints": []}
+    r = compute_optimized_route(nodes, [e], e)
+    assert r["waypoints"], "нужен обход препятствия"
+    pts = ([(50.0, 100.0)] + [(w[1], w[0]) for w in r["waypoints"]]
+           + [(350.0, 104.0)])
+    for i in range(len(pts) - 1):
+        a, b = pts[i], pts[i + 1]
+        assert not er._seg_hits_bbox(a[0], a[1], b[0], b[1], obs_bb, margin=0)
 
 
 def test_step8_micro_skew_snapped_straight():
