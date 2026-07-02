@@ -288,12 +288,16 @@ def test_O2_uturn_gets_zigzag_penalty():
     assert er.score_candidate(l_path, []) == pytest.approx(200)
 
 
-@pytest.mark.xfail(strict=True,
-                   reason="O3 (шаг 3): порог перпендикулярности 1.0 вместо "
-                          "1° ≈ 0.9825 — идеально-почти-прямое ребро 'плохое'")
-def test_O3_half_degree_edge_is_good():
-    info = gg.compute_edge_perpendicularity((0, 0), (1000, 5), {}, {})
-    assert info["is_good"]  # 0.29° от оси — должно быть «хорошим»
+def test_O3_perpendicularity_threshold_is_one_degree():
+    """O3 исправлена шагом 3: порог = 1° от оси (было 1.0 — только идеал)."""
+    # 0.29° от оси → «хорошее».
+    assert gg.compute_edge_perpendicularity((0, 0), (1000, 5), {}, {})["is_good"]
+    # Идеально прямое → «хорошее».
+    assert gg.compute_edge_perpendicularity((0, 0), (1000, 0), {}, {})["is_good"]
+    # Ровно на границе ~1° (17.45px на 1000px) → «хорошее» (>=).
+    assert gg.compute_edge_perpendicularity((0, 0), (1000, 17), {}, {})["is_good"]
+    # 2° от оси (35px на 1000px) → «плохое».
+    assert not gg.compute_edge_perpendicularity((0, 0), (1000, 35), {}, {})["is_good"]
 
 
 @pytest.mark.xfail(strict=True,

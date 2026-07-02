@@ -759,9 +759,10 @@ def connect_point_polygon(point: Tuple[float, float], polygon: List[float], requ
 # EDGE PERPENDICULARITY ANALYSIS
 # =====================================================================
 
-# Порог "хорошей" перпендикулярности: 1° от оси
-# score = 1 - sin(угол), для 1°: 1 - sin(1°) ≈ 0.983
-PERPENDICULARITY_THRESHOLD = 1.0
+# Порог "хорошей" перпендикулярности: 1° от оси.
+# score = 1 - sin(угол) ⇒ для 1° порог = 1 - sin(1°) ≈ 0.98255.
+# (Раньше стояло 1.0 — из-за float «хорошими» были только идеально прямые рёбра.)
+PERPENDICULARITY_THRESHOLD = 1.0 - math.sin(math.radians(1.0))
 
 
 def global_axis_perpendicularity(dx: float, dy: float) -> Tuple[float, str]:
