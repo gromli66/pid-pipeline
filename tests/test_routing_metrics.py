@@ -560,6 +560,21 @@ def test_step7b_autofix_replaces_diagonal_with_orthogonal_route():
     assert e["waypoints"], "маршрут не построен"
 
 
+def test_step8_micro_skew_snapped_straight():
+    """8.1: перекос endpoints ≤ STRAIGHT_TOL после проекции снапится к общей
+    координате, а не остаётся микро-диагональю (случай a9c136e8)."""
+    nodes = {
+        "E1": {"id": "E1", "type": "equipment",
+               "centroid": [20.0, 30.0], "bbox": [0, 0, 60, 40]},
+        "c": {"id": "c", "type": "connector", "centroid": [43.0, 75.0]},
+    }
+    edges = [{"id": "m", "source": "E1", "target": "c", "waypoints": [],
+              "source_point": [40.0, 60.0], "target_point": [43.0, 75.0]}]
+    auto_fix_graph(nodes, edges)
+    sp, tp = edges[0]["source_point"], edges[0]["target_point"]
+    assert abs(sp[0] - tp[0]) < 0.01 or abs(sp[1] - tp[1]) < 0.01, (sp, tp)
+
+
 if __name__ == "__main__":
     # Печать метрик всех графов — для заполнения BASELINE.
     for p in _graph_files():

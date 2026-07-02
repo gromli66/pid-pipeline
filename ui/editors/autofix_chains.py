@@ -810,13 +810,26 @@ def auto_fix_graph(
 
             # 7b: если соединение осталось диагональным — ортогональный
             # маршрут в обход узлов вместо прямой диагонали.
+            # 8.1: ветвление выше выбиралось по центроидам, а спроецированные
+            # endpoint'ы могут дать перекос МЕНЬШЕ порога — такие микро-
+            # диагонали (minor ≤ STRAIGHT_TOL) снапим к общей координате.
             e['waypoints'] = []
             sp, tp = e.get('source_point'), e.get('target_point')
-            if sp and tp and abs(sp[1] - tp[1]) > STRAIGHT_TOL \
-                    and abs(sp[0] - tp[0]) > STRAIGHT_TOL:
-                e['waypoints'] = _orthogonal_waypoints(e, sp, tp, nodes)
-                if e['waypoints']:
-                    stats['edges_rerouted'] += 1
+            if sp and tp:
+                ddx_e = abs(sp[1] - tp[1])
+                ddy_e = abs(sp[0] - tp[0])
+                if ddx_e > STRAIGHT_TOL and ddy_e > STRAIGHT_TOL:
+                    e['waypoints'] = _orthogonal_waypoints(e, sp, tp, nodes)
+                    if e['waypoints']:
+                        stats['edges_rerouted'] += 1
+                elif ddx_e >= ddy_e and ddy_e > 1e-9:
+                    common_y2 = (sp[0] + tp[0]) / 2   # почти горизонталь
+                    sp[0] = tp[0] = common_y2
+                    stats['edges_straightened'] += 1
+                elif ddy_e > ddx_e and ddx_e > 1e-9:
+                    common_x2 = (sp[1] + tp[1]) / 2   # почти вертикаль
+                    sp[1] = tp[1] = common_x2
+                    stats['edges_straightened'] += 1
 
     # ─── Final statistics ──────────────────────────────────────
     total_shift = 0.0
