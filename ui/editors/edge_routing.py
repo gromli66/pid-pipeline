@@ -376,17 +376,17 @@ def score_candidate(route_pts: list[tuple],
     for a, b in segs:
         total_length += abs(a[0] - b[0]) + abs(a[1] - b[1])
 
-    # Zigzag: штраф за разворот
+    # Zigzag: штраф за разворот на 180°. В ортогональном пути соседние
+    # сегменты перпендикулярны, поэтому разворот виден только при сравнении
+    # сегментов i и i+2 (оба H или оба V, направления противоположны).
     zigzags = 0
-    for i in range(2, len(route_pts)):
-        p0, p1, p2 = route_pts[i - 2], route_pts[i - 1], route_pts[i]
-        dx1 = p1[0] - p0[0]
-        dx2 = p2[0] - p1[0]
+    for i in range(len(segs) - 2):
+        (a1, a2), (b1, b2) = segs[i], segs[i + 2]
+        dx1, dy1 = a2[0] - a1[0], a2[1] - a1[1]
+        dx2, dy2 = b2[0] - b1[0], b2[1] - b1[1]
         if abs(dx1) > 1 and abs(dx2) > 1 and dx1 * dx2 < 0:
             zigzags += 1
-        dy1 = p1[1] - p0[1]
-        dy2 = p2[1] - p1[1]
-        if abs(dy1) > 1 and abs(dy2) > 1 and dy1 * dy2 < 0:
+        elif abs(dy1) > 1 and abs(dy2) > 1 and dy1 * dy2 < 0:
             zigzags += 1
 
     return (collinear_overlap * 5 +  # R5: сильнейший штраф за совпадение

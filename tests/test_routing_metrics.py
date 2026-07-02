@@ -274,14 +274,18 @@ def test_O1_wall_rule_catches_outside_segment():
     assert not er._seg_near_bbox_wall(95, 250, 95, 350, bbox, margin=15)
 
 
-@pytest.mark.xfail(strict=True,
-                   reason="O2 (шаг 2): штраф за разворот не начисляется — "
-                          "сравниваются соседние перпендикулярные сегменты")
 def test_O2_uturn_gets_zigzag_penalty():
+    """O2 исправлена шагом 2: разворот на 180° штрафуется."""
     u_path = [(0, 0), (100, 0), (100, 50), (0, 50)]  # разворот на 180°
     score = er.score_candidate(u_path, [])
-    # 2 поворота×100 + длина 250 = 450; штраф за разворот должен добавить ≥500
+    # 2 поворота×100 + длина 250 + разворот 500 = 950
     assert score >= 950
+    # Z-образный путь без разворота — штрафа нет: 2×100 + длина 150 = 350.
+    z_path = [(0, 0), (50, 0), (50, 50), (100, 50)]
+    assert er.score_candidate(z_path, []) == pytest.approx(350)
+    # L-образный: 1 поворот×100 + длина 100 = 200.
+    l_path = [(0, 0), (50, 0), (50, 50)]
+    assert er.score_candidate(l_path, []) == pytest.approx(200)
 
 
 @pytest.mark.xfail(strict=True,
