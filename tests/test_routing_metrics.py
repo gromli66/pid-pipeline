@@ -43,12 +43,8 @@ BASELINE = {
     "4464be08": {"crossings": 1, "through_bbox": 3, "diagonal": 22},
 }
 
-# Baseline поведения auto_fix_graph (не хуже): остаточные диагонали после фикса.
-AUTOFIX_BASELINE = {
-    "0c89a9fe": {"diagonal_after": 11},
-    "1533eef4": {"diagonal_after": 2},
-    "4464be08": {"diagonal_after": 5},
-}
+# Шаг 7b: после Auto-Fix диагональных рёбер быть не должно вовсе —
+# per-graph baseline не нужен, инвариант универсальный (см. тест ниже).
 
 
 # ---------------------------------------------------------------------------
@@ -244,12 +240,11 @@ def test_autofix_shift_within_limits_and_not_worse(path):
         limit = 30.0 if n.get("type") != "connector" else 80.0
         assert shift <= limit + 5.0, f"{uid}/{nid}: сдвиг {shift:.1f} > {limit}"
 
-    base = AUTOFIX_BASELINE.get(uid)
-    if base is not None:
-        d = _diag_straight_edges(e2)
-        assert d <= base["diagonal_after"], (
-            f"{uid}: диагональных после auto_fix {d} > baseline "
-            f"{base['diagonal_after']}")
+    # Инвариант шага 7b: невыровненные рёбра идут ортогональным маршрутом,
+    # диагональных сегментов после Auto-Fix нет вообще.
+    m = compute_metrics(n2, e2)
+    assert m["diagonal"] == 0, (
+        f"{uid}: диагональных после auto_fix: {m['diagonal']}")
 
 
 # ---------------------------------------------------------------------------
