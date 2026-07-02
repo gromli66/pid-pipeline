@@ -171,6 +171,11 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         # Зазор при расталкивании наслоившихся боксов (px).
         self.RESIZE_SPREAD_GAP: int = 8
 
+        # ── Правка точек полигона (базовое состояние, Ctrl+2ЛКМ по полигону) ──
+        self._poly_edit_node: str | None = None   # редактируемый узел
+        self._poly_overlay = None                 # PolygonVertexOverlay | None
+        self._poly_op_before = None               # snapshot модели до текущей операции (undo)
+
         # ── Отображение FXML-скинов внутри боксов ──
         self.show_skins: bool = False
         self._skin_pixmaps: dict[str, QPixmap] = {}   # class_name → QPixmap | None (кэш)
@@ -245,6 +250,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             return
         if self.display_regime == regime:
             return
+        # Выход из правки полигона при смене состояния (с коммитом).
+        if self._poly_edit_node:
+            self._exit_polygon_editing_mode(commit=True)
         self.display_regime = regime
         # Сбросить инструменты, специфичные для состояний, при выходе из них.
         state_modes = ("edit_edge_color", "edit_edge_size", "optimize_edge",
@@ -1186,6 +1194,24 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
 
         В режимах изменения ребра Ctrl+ПКМ НЕ удаляет, а убирает ребро из обводки.
         """
+        # Правка полигона: Ctrl+ПКМ по вершине удаляет вершину (минимум 3).
+        # Удаление узла/ребра в этом режиме ЗАБЛОКИРОВАНО — чтобы случайно не
+        # снести весь узел или ребро при работе с точками полигона.
+        if self._poly_edit_node and self._poly_overlay:
+            vtx = self._poly_overlay.find_vertex_at(x, y)
+            if vtx is not None:
+                if self._poly_overlay.vertex_count <= 3:
+                    self.update_status("Минимум 3 вершины")
+                    return
+                before = self.model.snapshot()
+                self._poly_overlay.remove_vertex(vtx)
+                self._poly_write_node()
+                self._poly_push(before, "Удалить вершину")
+                self.update_status(
+                    f"Удалена вершина (осталось {self._poly_overlay.vertex_count})"
+                )
+            return
+
         # Режим «Размер объектов»: Ctrl+ПКМ убирает экземпляр из набора (не удаляет узел).
         if self._current_mode == "resize_objects":
             nid = self.find_node_at(x, y)
@@ -2563,6 +2589,11 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         2-я ступень: если инструмент не активен и снимать нечего —
                      вернуться в базовое состояние.
         """
+        # Правка полигона имеет собственный выход (с коммитом изменений).
+        if self._poly_edit_node:
+            self._exit_polygon_editing_mode(commit=True)
+            return
+
         # resize_node имеет собственный корректный выход
         if self._current_mode == "resize_node" and hasattr(self, "_stop_resize"):
             self._stop_resize()
@@ -2601,6 +2632,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
 
     def _on_ctrl_lmb_click(self, x: float, y: float, node_id: str):
         """Ctrl+ЛКМ клик (без drag) на узле."""
+        # Правка полигона: одиночный Ctrl+ЛКМ по вершине (без drag) — ничего.
+        if self._poly_edit_node:
+            return
         # Режим «Размер объектов»: Ctrl+ЛКМ добавляет экземпляр в набор.
         if self._current_mode == "resize_objects":
             self._resize_handle_ctrl_click(x, y)
@@ -2618,19 +2652,185 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         Перетаскивание доступно во всех режимах, кроме «Размер объектов»
         (там Ctrl+ЛКМ только набирает экземпляры, узлы двигать нельзя).
         """
+        # Правка полигона: Ctrl+ЛКМ по вершине → тянем вершину, а не узел.
+        if (self._poly_edit_node and self._poly_overlay
+                and self._poly_overlay.phase == "edit"):
+            vtx = self._poly_overlay.find_vertex_at(
+                self._ctrl_lmb_start_x, self._ctrl_lmb_start_y)
+            if vtx is not None:
+                self._poly_op_before = self.model.snapshot()
+                self._poly_overlay.start_drag(vtx)
+                return
         if self._current_mode == "resize_objects":
             return
         self.start_drag_node(node_id)
 
     def _update_ctrl_drag(self, x: float, y: float):
         """Ctrl+ЛКМ drag → обновить позицию."""
+        # Правка полигона: тянем вершину через оверлей.
+        if (self._poly_edit_node and self._poly_overlay
+                and self._poly_overlay.is_dragging):
+            self._poly_overlay.drag_to(x, y)
+            return
         if self.dragging_node:
             self.drag_node_to(x, y)
 
     def _end_ctrl_drag(self):
         """Ctrl+ЛКМ drag → завершить перетаскивание."""
+        # Правка полигона: завершить перетаскивание вершины + шаг undo (если сдвинули).
+        if (self._poly_edit_node and self._poly_overlay
+                and self._poly_overlay.is_dragging):
+            idx = self._poly_overlay._dragging_idx
+            result = self._poly_overlay.end_drag()
+            moved = False
+            if result is not None and idx is not None:
+                old_x, old_y = result
+                poly = self._poly_overlay.get_polygon()
+                if idx * 2 + 1 < len(poly):
+                    moved = (abs(old_x - poly[idx * 2]) > 0.5
+                             or abs(old_y - poly[idx * 2 + 1]) > 0.5)
+            if moved:
+                self._poly_write_node()
+                self._poly_push(self._poly_op_before, "Двигать вершину")
+            self._poly_op_before = None
+            return
         if self.dragging_node:
             self.end_drag_node()
+
+    # =================================================================
+    # Правка точек полигона (базовое состояние, Ctrl+2ЛКМ по полигону)
+    # =================================================================
+
+    def mousePressEvent(self, event):
+        """В режиме правки полигона перехватываем Ctrl+ЛКМ по вершине/ребру ДО
+        базовой логики (иначе клик ушёл бы в перетаскивание узла)."""
+        if (self._poly_edit_node and self._poly_overlay
+                and self.ctrl_pressed
+                and event.button() == Qt.MouseButton.LeftButton
+                and self._poly_overlay.phase == "edit"):
+            pos = self.mapToScene(event.pos())
+            x, y = pos.x(), pos.y()
+            # Вершина → отложенный клик/drag (решение по движению — в базовом классе).
+            if self._poly_overlay.find_vertex_at(x, y) is not None:
+                self._ctrl_lmb_pending = True
+                self._ctrl_lmb_start_x = x
+                self._ctrl_lmb_start_y = y
+                self._ctrl_lmb_node = self._poly_edit_node
+                self._ctrl_lmb_dragging = False
+                event.accept()
+                return
+            # Ребро → добавить вершину сразу.
+            edge_idx = self._poly_overlay.find_edge_at(x, y)
+            if edge_idx is not None:
+                self._poly_add_vertex(edge_idx, x, y)
+                event.accept()
+                return
+            # Мимо вершин/рёбер → выйти из правки (с коммитом).
+            self._exit_polygon_editing_mode(commit=True)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def _enter_polygon_editing_mode(self, node_id: str):
+        """Войти в правку точек полигона узла (Ctrl+2ЛКМ по полигону в базовом).
+
+        Каждая операция (сдвиг/добавление/удаление вершины) — отдельный шаг undo.
+        """
+        node = self.nodes.get(node_id)
+        seg = node.get('segmentation') if node else None
+        if not (seg and isinstance(seg, list) and len(seg) >= 6):
+            return
+        self._exit_polygon_editing_mode()
+        from ui.editors.polygon_overlay import PolygonVertexOverlay
+        self._poly_op_before = None
+        self._poly_edit_node = node_id
+        self._poly_overlay = PolygonVertexOverlay(self.scene, node_id)
+        self._poly_overlay.show_edit(seg)
+        self.update_status(
+            f"Правка полигона {node_id}: тяните вершины · Ctrl+ЛКМ по ребру — "
+            "добавить · Ctrl+ПКМ по вершине — удалить · Ctrl+Z — отмена · Esc — выход"
+        )
+
+    def _poly_write_node(self):
+        """Записать полигон из оверлея в узел + пересчитать bbox/центроид/визуал."""
+        if not (self._poly_edit_node and self._poly_overlay):
+            return
+        seg = self._poly_overlay.get_polygon()
+        node = self.nodes.get(self._poly_edit_node)
+        if not node or not seg or len(seg) < 6:
+            return
+        node['segmentation'] = list(seg)
+        xs = seg[0::2]
+        ys = seg[1::2]
+        node['bbox'] = [min(xs), min(ys), max(xs), max(ys)]
+        node['centroid'] = [sum(ys) / len(ys), sum(xs) / len(xs)]  # [y, x]
+        node['area'] = (node['bbox'][2] - node['bbox'][0]) * \
+                       (node['bbox'][3] - node['bbox'][1])
+        self._refresh_node_visual(self._poly_edit_node)
+
+    def _poly_push(self, before_snap, desc: str):
+        """Зафиксировать операцию правки полигона отдельным шагом undo."""
+        if before_snap is None:
+            return
+        from ui.editors.undo_manager import SnapshotCommand
+        cmd = SnapshotCommand(self.model, self._redraw_all)
+        cmd._before = before_snap
+        cmd.description = desc
+        cmd.finalize()
+        self.model.rebuild_edge_data_index()
+        self.undo_mgr.push_executed(cmd)
+        self.update_statistics()
+
+    def _poly_add_vertex(self, edge_idx: int, x: float, y: float):
+        """Вставить вершину на ребре полигона под курсором (шаг undo)."""
+        if not self._poly_overlay:
+            return
+        before = self.model.snapshot()
+        self._poly_overlay.insert_vertex(edge_idx, x, y)
+        self._poly_write_node()
+        self._poly_push(before, "Добавить вершину")
+        self.update_status(
+            f"Добавлена вершина (всего {self._poly_overlay.vertex_count})")
+
+    def _poly_resync_overlay(self):
+        """После undo/redo пересоздать оверлей на восстановленной геометрии узла."""
+        if not self._poly_edit_node:
+            return
+        node = self.nodes.get(self._poly_edit_node)
+        seg = node.get('segmentation') if node else None
+        if self._poly_overlay:
+            self._poly_overlay.hide()
+            self._poly_overlay = None
+        if seg and isinstance(seg, list) and len(seg) >= 6:
+            from ui.editors.polygon_overlay import PolygonVertexOverlay
+            self._poly_overlay = PolygonVertexOverlay(
+                self.scene, self._poly_edit_node)
+            self._poly_overlay.show_edit(seg)
+        else:
+            # полигон исчез после undo/redo — выйти из правки
+            self._poly_edit_node = None
+            self._poly_op_before = None
+
+    def undo(self):
+        super().undo()
+        self._poly_resync_overlay()
+
+    def redo(self):
+        super().redo()
+        self._poly_resync_overlay()
+
+    def _exit_polygon_editing_mode(self, commit: bool = True):
+        """Выйти из правки полигона. Все операции уже зафиксированы пошагово как
+        undo-шаги, поэтому commit не используется (параметр оставлен для
+        совместимости существующих вызовов)."""
+        if not self._poly_edit_node:
+            return
+        if self._poly_overlay:
+            self._poly_overlay.hide()
+        self._poly_edit_node = None
+        self._poly_overlay = None
+        self._poly_op_before = None
+        self._redraw_all()
 
     def mouseMoveEvent(self, event):
         """Override: KKS hover tooltip при наведении на equipment."""
@@ -2668,40 +2868,63 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         super().mouseMoveEvent(event)
 
     def mouseDoubleClickEvent(self, event):
-        """DoubleClick: узел → edit KKS; ребро → edit diameter.
+        """Ctrl+двойной клик — единый жест правки, зависящий от состояния:
 
-        Правка диаметра/KKS работает только в режиме «ОКР привязка».
+          • базовое      — по боксу: ручки размера; по полигону: правка точек;
+          • ОКР привязка — только KKS бокса / диаметр ребра / текст блока;
+          • перпендикулярность и линии — ничего.
+
+        Простой двойной клик (без Ctrl) ничего не делает.
         """
-        if self.display_regime != "ocr":
+        if event.button() != Qt.MouseButton.LeftButton:
             super().mouseDoubleClickEvent(event)
             return
-        if event.button() == Qt.MouseButton.LeftButton:
-            pos = self.mapToScene(event.pos())
-            x, y = pos.x(), pos.y()
 
-            # Ctrl + 2ЛКМ по текст-блоку → правка его текста (как в «бусине»).
-            if (event.modifiers() & Qt.KeyboardModifier.ControlModifier) \
-                    and hasattr(self, "_ocr_block_at"):
+        ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier) \
+            or self.ctrl_pressed
+        if not ctrl:
+            event.accept()
+            return
+
+        pos = self.mapToScene(event.pos())
+        x, y = pos.x(), pos.y()
+        regime = self.display_regime
+
+        if regime == "ocr":
+            # Текст-блок → правка текста.
+            if hasattr(self, "_ocr_block_at"):
                 bid = self._ocr_block_at(x, y)
                 if bid is not None:
                     self.edit_ocr_block_text(bid)
                     return
-
-            # DoubleClick на equipment → edit KKS (с Ctrl или без)
+            # Equipment → KKS.
             clicked = self.find_node_at(x, y)
             if clicked:
                 node = self.nodes.get(clicked)
                 if node and node.get('type') == 'equipment':
                     self._open_kks_edit_dialog(clicked)
                     return
-
-            # DoubleClick на ребро → edit diameter
+            # Ребро → диаметр.
             edge_key, _ = self.find_nearest_edge(x, y, threshold=15.0)
             if edge_key:
                 self._open_diameter_edit_dialog(edge_key)
-                return
+            return
 
-        super().mouseDoubleClickEvent(event)
+        if regime == "base":
+            clicked = self.find_node_at(x, y)
+            if clicked:
+                node = self.nodes.get(clicked)
+                if node and node.get('type') == 'equipment':
+                    # Полигон → правка точек; бокс → ручки размера.
+                    if self._node_geom_kind(node) == 'poly':
+                        self._enter_polygon_editing_mode(clicked)
+                    elif node.get('bbox'):
+                        self._enter_resize_mode(clicked)
+                    return
+            return
+
+        # perp / style → ничего.
+        event.accept()
 
     def _open_diameter_edit_dialog(self, edge_key: tuple):
         """Диалог редактирования диаметра ребра."""

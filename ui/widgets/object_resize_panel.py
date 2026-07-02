@@ -104,13 +104,16 @@ class ObjectResizePanel(QFrame):
         self._info.setStyleSheet("color: #f1c40f; font-size: 11px;")
         root.addWidget(self._info)
 
-        # ── контролы: боксы (Ш/В) ──
+        # ── контролы: боксы (короткая/длинная сторона) ──
+        # Значения нормализованы по ориентации: _spin_w = короткая ось набора,
+        # _spin_h = длинная ось. Подписи соответствуют этому (не «ширина/высота»),
+        # иначе после «Применить» медианы пересчитываются и подписи «прыгают».
         self._box_ctrl = QWidget()
         bl = QVBoxLayout(self._box_ctrl)
         bl.setContentsMargins(0, 0, 0, 0)
         bl.setSpacing(6)
         wr = QHBoxLayout()
-        wr.addWidget(self._lbl("Ширина:"))
+        wr.addWidget(self._lbl("Короткая сторона:"))
         self._spin_w = QSpinBox()
         self._spin_w.setRange(1, 100000)
         self._spin_w.setSuffix(" px")
@@ -118,7 +121,7 @@ class ObjectResizePanel(QFrame):
         wr.addWidget(self._spin_w)
         bl.addLayout(wr)
         hr = QHBoxLayout()
-        hr.addWidget(self._lbl("Высота:"))
+        hr.addWidget(self._lbl("Длинная сторона:"))
         self._spin_h = QSpinBox()
         self._spin_h.setRange(1, 100000)
         self._spin_h.setSuffix(" px")

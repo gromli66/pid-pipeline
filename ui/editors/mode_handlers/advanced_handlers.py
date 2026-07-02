@@ -261,7 +261,11 @@ class ResizeObjectsHandler(ModeHandler):
         ed._exit_resize_objects()
 
     def on_press(self, ed, x, y, event):
-        # Ctrl+ЛКМ по пустому месту попадает сюда — игнорируем.
+        # Ctrl+ЛКМ по экземпляру класса — добавить в набор.
+        # В режиме resize_objects _node_drag_allowed()=False, поэтому клик по
+        # узлу приходит сюда (а не в _on_ctrl_lmb_click). По пустому месту
+        # _resize_handle_ctrl_click ничего не делает (узел не найден).
+        ed._resize_handle_ctrl_click(x, y)
         return True
 
     def on_move(self, ed, x, y, event):

@@ -531,6 +531,14 @@ class ContourEditor(SimpleGraphEditor):
     # Overrides -- mousePressEvent, Ctrl+RMB, Ctrl+Drag, undo/redo, keyPress
     # =================================================================
 
+    def mouseDoubleClickEvent(self, event):
+        """В «Контурах» размер бокса не меняется. Подавляем resize по Ctrl+2ЛКМ,
+        унаследованный из SimpleGraphEditor (_enter_resize_mode). Работа с
+        контуром/полигоном идёт одиночным Ctrl+ЛКМ в режимах
+        select_recognize / apply_contour / edit_polygon.
+        """
+        event.accept()
+
     def mousePressEvent(self, event):
         """In edit_polygon mode: intercept vertex/edge/draw hits BEFORE
         base class find_node_at, so all polygon interactions work reliably.

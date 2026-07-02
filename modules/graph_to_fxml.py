@@ -815,6 +815,11 @@ _TEXT_VERTICAL_RATIO = 1.3
 # Кегль шрифта ≈ короткой стороне блока (перпендикуляр к направлению чтения).
 _TEXT_FONT_RATIO = 0.9
 _TEXT_COLOR = "#000000"
+# Единый шрифт подписей: System Regular, фиксированный кегль 40, текст по центру бокса.
+_TEXT_FONT_NAME = "System Regular"
+_TEXT_FONT_SIZE = 40.0
+# Оценка средней ширины символа System относительно кегля (для центрирования строки).
+_TEXT_CHAR_W_FACTOR = 0.55
 
 
 def build_node_kks_map(graph_data: dict) -> dict:
@@ -855,33 +860,37 @@ def generate_fxml_text(block: dict):
     x1, y1, x2, y2 = [float(v) for v in bbox]
     w = max(1.0, x2 - x1)
     h = max(1.0, y2 - y1)
+    cx = (x1 + x2) / 2.0
+    cy = (y1 + y2) / 2.0
 
     vertical = h > w * _TEXT_VERTICAL_RATIO
-    # Кегль ≈ короткая сторона (перпендикуляр к направлению чтения).
-    font_size = max(1.0, min(w, h) * _TEXT_FONT_RATIO)
+    # Единый шрифт System Regular, фиксированный кегль 40 (не зависит от размера бокса).
+    font_size = _TEXT_FONT_SIZE
     esc = escape(text, {'"': '&quot;', "'": '&apos;'})
+    # Приблизительная длина строки при данном кегле — для центрирования по центру бокса.
+    est_len = len(text) * font_size * _TEXT_CHAR_W_FACTOR
 
     if vertical:
         # Поворот 90° влево (angle=-90) вокруг локальной точки (0,0):
-        # локальная (px,py) → (py,-px). Текст (textOrigin=TOP) занимает по x
-        # [0..F], по y [-L..0]; низ строки ставим на y2 (читается вверх),
-        # толщину центрируем по ширине блока.
-        layout_x = x1 + (w - font_size) / 2.0
-        layout_y = y2
+        # локальная (px,py) → (py,-px). Повёрнутая строка занимает по x толщину
+        # [layout_x .. layout_x+F], по y длину [layout_y-L .. layout_y].
+        # Центрируем толщину по cx, длину — по cy.
+        layout_x = cx - font_size / 2.0
+        layout_y = cy + est_len / 2.0
         lines = [
-            f'        <Text layoutX="{max(0.0, layout_x):.1f}" layoutY="{max(0.0, layout_y):.1f}" text="{esc}" fill="{_TEXT_COLOR}" textOrigin="TOP">',
-            f'            <font><Font size="{font_size:.1f}"/></font>',
+            f'        <Text layoutX="{max(0.0, layout_x):.1f}" layoutY="{max(0.0, layout_y):.1f}" text="{esc}" fill="{_TEXT_COLOR}" textAlignment="CENTER" textOrigin="TOP">',
+            f'            <font><Font name="{_TEXT_FONT_NAME}" size="{font_size:.1f}"/></font>',
             '            <transforms><Rotate angle="-90.0" pivotX="0.0" pivotY="0.0"/></transforms>',
             '        </Text>',
         ]
         return "\n".join(lines)
 
-    # Горизонтальный: текст как есть, по вертикали центрируем в bbox.
-    layout_x = x1
-    layout_y = y1 + (h - font_size) / 2.0
+    # Горизонтальный: строка центрируется по центру бокса (по X и по Y).
+    layout_x = cx - est_len / 2.0
+    layout_y = cy - font_size / 2.0
     lines = [
-        f'        <Text layoutX="{max(0.0, layout_x):.1f}" layoutY="{max(0.0, layout_y):.1f}" text="{esc}" fill="{_TEXT_COLOR}" textOrigin="TOP">',
-        f'            <font><Font size="{font_size:.1f}"/></font>',
+        f'        <Text layoutX="{max(0.0, layout_x):.1f}" layoutY="{max(0.0, layout_y):.1f}" text="{esc}" fill="{_TEXT_COLOR}" textAlignment="CENTER" textOrigin="TOP">',
+        f'            <font><Font name="{_TEXT_FONT_NAME}" size="{font_size:.1f}"/></font>',
         '        </Text>',
     ]
     return "\n".join(lines)
@@ -1177,6 +1186,44 @@ def generate_fxml_triangle(node, node_id: str, graph_scale: float = 1.0, kks: st
     return f'        {comment}\n        <Polygon {" ".join(attrs)} />'
 
 
+def _infer_napravlenie_direction(node, node_id, edges, nodes):
+    """Направление стрелки для napravlenie-узла, у которого нет flow_direction.
+
+    Ручной узел не проходит annotate_direction_nodes (нет классификатора),
+    поэтому направление выводим здесь:
+      • не подключён к ребру          → 'up' (дефолт);
+      • у ребра есть e['direction']   → берём его;
+      • иначе                         → ось из ориентации ребра
+        (гориз → left/right, верт → up/down), сторона — вершина смотрит
+        ПРОЧЬ от подключённого соседа (ребро входит в основание, а не в вершину).
+    Центроиды в формате [y, x].
+    """
+    incident = [e for e in edges
+                if e.get('source') == node_id or e.get('target') == node_id]
+    if not incident:
+        return 'up'
+    for e in incident:
+        d = e.get('direction')
+        if d in ('up', 'down', 'left', 'right'):
+            return d
+    c = node.get('centroid')
+    if not c:
+        return 'up'
+    ncx, ncy = c[1], c[0]
+    e = incident[0]
+    other_id = e.get('target') if e.get('source') == node_id else e.get('source')
+    other = nodes.get(other_id) if other_id else None
+    if not other or not other.get('centroid'):
+        return 'up'
+    ocx, ocy = other['centroid'][1], other['centroid'][0]
+    dx, dy = ocx - ncx, ocy - ncy
+    # Вершина смотрит ПРОЧЬ от соседа: ребро входит в основание треугольника.
+    # Сосед справа → вершина влево; сосед снизу → вершина вверх; и т.д.
+    if abs(dx) >= abs(dy):
+        return 'left' if dx >= 0 else 'right'
+    return 'up' if dy >= 0 else 'down'
+
+
 def _edge_polyline_xy(edge, nodes):
     """Полилиния ребра в (x, y): start + waypoints + end (масштабированные)."""
     endpoints = get_line_endpoints(edge, nodes)
@@ -1241,7 +1288,8 @@ def compute_bridge_cuts(edges, nodes, base_stroke, use_diameter, graph_scale):
     """Найти мосты геометрически и вычислить разрывы.
 
     Мост = пересечение двух рёбер без узла рядом (рёбра не делят общий узел).
-    Рвётся более горизонтальное ребро; вертикальное проходит сверху (— | —).
+    Рвётся более ТОЛСТОЕ ребро (на тонкой линии разрыв теряется); при равной
+    толщине — более горизонтальное, вертикальное проходит сверху (— | —).
 
     Returns:
         dict edge_id -> list[(s, gap)] — позиция разрыва по длине ребра и ширина.
@@ -1280,12 +1328,22 @@ def compute_bridge_cuts(edges, nodes, base_stroke, use_diameter, graph_scale):
                     p = _segment_intersection(pa[ai], pa[ai + 1], pb[bj], pb[bj + 1])
                     if not p or near_node(p[0], p[1]):
                         continue
-                    # Рвём более горизонтальную трубу, вертикальная — сверху
-                    if _horizontality(pa[ai], pa[ai + 1]) >= _horizontality(pb[bj], pb[bj + 1]):
+                    # Разрыв делаем на более ТОЛСТОЙ трубе — на тонкой линии
+                    # разрыв визуально теряется. При равной толщине рвём более
+                    # горизонтальную (вертикальная проходит сверху, — | —).
+                    if wa > wb:
+                        under_e, under_pl, seg_idx, over_w = ea, pa, ai, wb
+                    elif wb > wa:
+                        under_e, under_pl, seg_idx, over_w = eb, pb, bj, wa
+                    elif _horizontality(pa[ai], pa[ai + 1]) >= _horizontality(pb[bj], pb[bj + 1]):
                         under_e, under_pl, seg_idx, over_w = ea, pa, ai, wb
                     else:
                         under_e, under_pl, seg_idx, over_w = eb, pb, bj, wa
-                    gap = max(BRIDGE_GAP_STROKE_FACTOR * over_w, min_gap)
+                    # Разрыв достаточно широкий, чтобы был виден и на толстой линии:
+                    # учитываем обе трубы (перекрывающую и разрываемую).
+                    under_w = wa if under_e is ea else wb
+                    gap = max(BRIDGE_GAP_STROKE_FACTOR * over_w,
+                              BRIDGE_GAP_STROKE_FACTOR * under_w, min_gap)
                     ucum = _cumulative_lengths(under_pl)
                     s = ucum[seg_idx] + math.hypot(
                         p[0] - under_pl[seg_idx][0], p[1] - under_pl[seg_idx][1])
@@ -1597,9 +1655,13 @@ def generate_fxml(graph_data: dict, stroke_width: float = LINE_STROKE_WIDTH,
             continue
 
         # napravlenie → треугольник по направлению потока (приоритет над
-        # скином/полигоном/прямоугольником). Если направления нет —
-        # проваливаемся в обычную обработку (прямоугольник).
+        # скином/полигоном/прямоугольником). Ручной узел может не иметь
+        # flow_direction (его ставит только annotate_direction_nodes при сборке),
+        # поэтому выводим направление здесь: не подключён → 'up', подключён →
+        # по ребру. Иначе узел ошибочно рисуется прямоугольником.
         if node.get('class_name') == NAPRAVLENIE_CLASS_NAME or node.get('direction_node'):
+            if not (node.get('flow_direction') or node.get('direction')):
+                node['direction'] = _infer_napravlenie_direction(node, node_id, edges, nodes)
             tri = generate_fxml_triangle(node, node_id, graph_scale, kks=kks_by_node.get(node_id))
             if tri:
                 polygon_elements.append(tri)

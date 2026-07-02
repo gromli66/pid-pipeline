@@ -245,15 +245,18 @@ _BTN_STYLE_RED = """
 _IDX_KEY = {idx: key for (idx, key, *_rest) in _BEAD_DEFS}
 _GIF_DIR = Path(__file__).resolve().parent.parent / "resources" / "beads"
 _GIF_FILES = {
-    "detect":   "pid_detection_light.gif",
-    "cvat":     "pid_cvat_manual.gif",
-    "segment":  "pid_pipe_trace.gif",
-    "pipe":     "pid_valpipe_fix.gif",
-    "graph":    "pid_graph.gif",
-    "val_graph": "pid_valgraph.gif",
-    "contours": "pid_contours.gif",
-    "ocr":      "pid_ocr.gif",
-    # frame / ocr_binding / edit_graph / fxml — гифки пока нет (плейсхолдер)
+    "frame":       "pid_frame_clean.gif",
+    "detect":      "pid_detection_light.gif",
+    "cvat":        "pid_cvat_manual.gif",
+    "segment":     "pid_pipe_trace.gif",
+    "pipe":        "pid_valpipe_fix.gif",
+    "graph":       "pid_graph.gif",
+    "val_graph":   "pid_valgraph.gif",
+    "contours":    "pid_contours.gif",
+    "ocr":         "pid_ocr.gif",
+    "ocr_binding": "pid_ocr_binding.gif",
+    "edit_graph":  "pid_edit_graph.gif",
+    "fxml":        "pid_fxml_export.gif",
 }
 
 
