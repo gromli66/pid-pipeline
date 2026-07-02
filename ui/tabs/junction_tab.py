@@ -17,6 +17,9 @@ from PySide6.QtCore import Signal, Slot, Qt, QThread, QObject
 
 from ui.services.api_client import APIClient, APIError
 from ui.widgets.appearance_panel import AppearanceMixin
+from ui.widgets.toolbar_buttons import (
+    make_undo_button, make_save_button, make_confirm_button,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +144,10 @@ class JunctionTab(AppearanceMixin, QWidget):
         toolbar.setContentsMargins(8, 4, 8, 4)
         toolbar.setSpacing(8)
 
+        # Undo слева (единая кнопка); redo нет — редактор масок его не поддерживает
+        self.btn_undo = make_undo_button(self._undo)
+        toolbar.addWidget(self.btn_undo)
+
         self.btn_class1 = QPushButton("⬜ Перекрёсток")
         self.btn_class1.setCheckable(True)
         self.btn_class1.setChecked(True)
@@ -189,33 +196,14 @@ class JunctionTab(AppearanceMixin, QWidget):
 
         toolbar.addStretch()
 
-        btn_undo = QPushButton("Undo")
-        btn_undo.setToolTip("Отменить последнее действие (Ctrl+Z)")
-        btn_undo.clicked.connect(self._undo)
-        toolbar.addWidget(btn_undo)
+        self.btn_save = make_save_button(
+            self._save_masks, "Сохранить маски перекрёстков и мостов (Ctrl+S)")
+        toolbar.addWidget(self.btn_save)
 
-        btn_save = QPushButton("Сохранить")
-        btn_save.setToolTip("Сохранить маски перекрёстков и мостов на сервер (Ctrl+S)")
-        btn_save.clicked.connect(self._save_masks)
-        toolbar.addWidget(btn_save)
-
-        self.btn_confirm = QPushButton("✅ Подтвердить")
-        self.btn_confirm.setToolTip(
-            "Сохранить и подтвердить валидацию.\n"
-            "Запускает построение графа схемы."
+        self.btn_confirm = make_confirm_button(
+            self._on_confirm,
+            tooltip="Сохранить и подтвердить валидацию.\nЗапускает построение графа схемы.",
         )
-        self.btn_confirm.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                font-weight: bold;
-                padding: 8px 16px;
-                border-radius: 4px;
-            }
-            QPushButton:hover { background-color: #45a049; }
-            QPushButton:disabled { background-color: #9E9E9E; }
-        """)
-        self.btn_confirm.clicked.connect(self._on_confirm)
         toolbar.addWidget(self.btn_confirm)
 
         layout.addLayout(toolbar)

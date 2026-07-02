@@ -61,7 +61,13 @@ def export_node_link_format(nodes: List[Dict],
         "multigraph": False,
         "graph": metadata or {},
         "nodes": [],
-        "links": []
+        "links": [],
+        # Единый граф-JSON: OCR текст-блоки и их привязки к узлам/рёбрам.
+        # Пустые с рождения графа; заполняются на этапе слияния OCR->граф
+        # (complete_simple_graph_validation / конец OCR-таска) и в состоянии
+        # "ОКР привязка".
+        "text_blocks": [],
+        "bindings": []
     }
 
     # Экспорт узлов

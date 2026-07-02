@@ -30,6 +30,9 @@ from ui.widgets.appearance_panel import AppearanceMixin
 
 from ui.services.api_client import APIClient, APIError
 from ui.editors.ocr_binding_editor import OcrBindingEditor
+from ui.widgets.toolbar_buttons import (
+    make_undo_button, make_save_button, make_confirm_button,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -223,9 +226,7 @@ class _SubTabToolbar(QWidget):
         layout.addWidget(self.stats_label)
 
         # правая группа: Отменить | Сохранить | Подтвердить
-        self.btn_undo = QPushButton("Undo")
-        self.btn_undo.setToolTip("Отменить последнее действие (Ctrl+Z)")
-        self.btn_undo.clicked.connect(self.undo_clicked.emit)
+        self.btn_undo = make_undo_button(self.undo_clicked.emit)
         layout.addWidget(self.btn_undo)
 
         self.right_layout = QHBoxLayout()
@@ -355,19 +356,12 @@ class OcrBindingTab(AppearanceMixin, QWidget):
         self.btn_undo.clicked.connect(self._undo)
         toolbar.addWidget(self.btn_undo)
 
-        self.btn_save = QPushButton("💾 Сохранить")
-        self.btn_save.setToolTip("Сохранить привязки на сервер")
-        self.btn_save.clicked.connect(self._save_binding)
+        self.btn_save = make_save_button(self._save_binding, "Сохранить привязки на сервер")
         toolbar.addWidget(self.btn_save)
 
-        self.btn_confirm_all = QPushButton("Подтвердить")
-        self.btn_confirm_all.setToolTip("Финальное подтверждение — сохранить и применить привязки")
-        self.btn_confirm_all.setStyleSheet(
-            "QPushButton { background-color: #4CAF50; color: white; "
-            "font-weight: bold; padding: 8px 16px; border-radius: 4px; }"
-            "QPushButton:hover { background-color: #45a049; }"
-        )
-        self.btn_confirm_all.clicked.connect(self._on_confirm)
+        self.btn_confirm_all = make_confirm_button(
+            self._on_confirm,
+            tooltip="Финальное подтверждение — сохранить и применить привязки")
         toolbar.addWidget(self.btn_confirm_all)
 
         layout.addLayout(toolbar)
@@ -738,6 +732,35 @@ class OcrBindingTab(AppearanceMixin, QWidget):
                     self._bindings = binding_raw
                 else:
                     logger.warning("Unknown binding format: %s", type(binding_raw))
+
+            # Единый граф-JSON: если граф несёт text_blocks/bindings (сделано в
+            # ручной правке или ранее здесь) — берём их как источник правды.
+            _gtb = self._graph_data.get("text_blocks") or []
+            if _gtb:
+                _id_to_idx = {}
+                self._ocr_blocks = []
+                for _i, _tb in enumerate(_gtb):
+                    _id_to_idx[_tb.get("id")] = _i
+                    self._ocr_blocks.append({
+                        "bbox": _tb.get("bbox"),
+                        "text": _tb.get("text", ""),
+                        "confidence": _tb.get("confidence", 0),
+                        "source": _tb.get("source", "graph"),
+                    })
+                self._bindings = []
+                for _gb in (self._graph_data.get("bindings") or []):
+                    _idx = _id_to_idx.get(_gb.get("block_id"))
+                    if _idx is None:
+                        continue
+                    _nb = {"ocr_block_idx": _idx, "text": _gb.get("text", ""),
+                           "bbox": self._ocr_blocks[_idx]["bbox"]}
+                    if _gb.get("node_id"):
+                        _nb["node_id"] = _gb["node_id"]
+                    elif _gb.get("edge_key"):
+                        _nb["edge_key"] = _gb["edge_key"]
+                    self._bindings.append(_nb)
+                logger.info("Загружено из графа (единый источник): %d блоков / %d привязок",
+                            len(self._ocr_blocks), len(self._bindings))
 
             # COCO
             coco_data = {}
@@ -1665,8 +1688,33 @@ class OcrBindingTab(AppearanceMixin, QWidget):
                     node["class_name"] = kb["reclassify_to"]
                 kks_count += 1
 
+            # === Единый граф-JSON: text_blocks + bindings (общий источник) ===
+            # Ручная правка читает эти ключи → её «ОКР привязка» увидит то,
+            # что сделано здесь, в «бусине».
+            self._graph_data["text_blocks"] = [
+                {
+                    "id": f"block_{i + 1}",
+                    "bbox": b.get("bbox"),
+                    "text": b.get("text", ""),
+                    "confidence": b.get("confidence", 0),
+                    "source": b.get("source", "unknown"),
+                    "merged_into": None,
+                }
+                for i, b in enumerate(active_blocks)
+            ]
+            _g_bindings = []
+            for cb in clean_bindings:
+                _bid = f"block_{cb.get('ocr_block_idx', -1) + 1}"
+                if cb.get("node_id"):
+                    _g_bindings.append({"block_id": _bid, "node_id": cb["node_id"],
+                                        "kind": "node", "text": cb.get("text", "")})
+                elif cb.get("edge_key"):
+                    _g_bindings.append({"block_id": _bid, "edge_key": cb["edge_key"],
+                                        "kind": "edge", "text": cb.get("text", "")})
+            self._graph_data["bindings"] = _g_bindings
+
             # === 5. Сохранить обновлённый граф ===
-            if self._graph_data.get("links") or kks_count:
+            if self._graph_data.get("links") or kks_count or active_blocks:
                 graph_path = self.temp_dir / "graph_validated.json"
                 with open(graph_path, "w", encoding="utf-8") as f:
                     json.dump(self._graph_data, f, ensure_ascii=False, indent=2)

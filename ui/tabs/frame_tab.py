@@ -25,6 +25,9 @@ from PySide6.QtWidgets import (
 
 from ui.editors.frame_editor import FrameRemoverView
 from ui.services.api_client import APIError
+from ui.widgets.toolbar_buttons import (
+    make_undo_button, make_save_button, make_confirm_button,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -82,25 +85,21 @@ class FrameTab(QWidget):
         self.btn_box.clicked.connect(lambda: self._set_tool("box"))
         toolbar.addWidget(self.btn_box)
 
-        btn_undo = QPushButton("↩ Undo")
-        btn_undo.setToolTip(
-            "Отменить последнюю операцию (заливку полигона или бокса).\n"
-            "Также Ctrl+Z. История — до 30 шагов."
-        )
-        btn_undo.clicked.connect(self._on_undo)
-        toolbar.addWidget(btn_undo)
+        self.btn_undo = make_undo_button(
+            self._on_undo,
+            tooltip="Отменить последнюю операцию (Ctrl+Z). История — до 30 шагов.")
+        toolbar.addWidget(self.btn_undo)
 
         toolbar.addStretch(1)
 
-        btn_save = QPushButton("💾 Сохранить и продолжить")
-        btn_save.setToolTip(
-            "Сохранить очищенное изображение и перейти к детекции."
-        )
-        btn_save.setStyleSheet(
-            "background-color: #4CAF50; color: white; font-weight: bold; padding: 4px 12px;"
-        )
-        btn_save.clicked.connect(self._on_save)
-        toolbar.addWidget(btn_save)
+        self.btn_save = make_save_button(
+            self._on_save_only, "Сохранить очищенное изображение (без перехода)")
+        toolbar.addWidget(self.btn_save)
+
+        self.btn_confirm = make_confirm_button(
+            self._on_save,
+            tooltip="Сохранить очищенное изображение и перейти к детекции.")
+        toolbar.addWidget(self.btn_confirm)
 
         root.addLayout(toolbar)
 
@@ -134,6 +133,16 @@ class FrameTab(QWidget):
 
     # ── Сохранение / пропуск ──────────────────────────────
     @Slot()
+    def _on_save_only(self):
+        """Сохранить очищенное изображение без перехода к следующему этапу."""
+        try:
+            clean_path = self._tmp_dir / "cleaned.png"
+            self.editor.save_image(str(clean_path))
+            self.api_client.save_cleaned_image(str(self._uid), clean_path)
+            self.status_message.emit("💾 Сохранено")
+        except (APIError, Exception) as exc:
+            QMessageBox.warning(self, "Ошибка", f"Не удалось сохранить:\n{exc}")
+
     def _on_save(self):
         try:
             clean_path = self._tmp_dir / "cleaned.png"

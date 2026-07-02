@@ -148,12 +148,22 @@ _BEAD_DEFS = [
 
     (BEAD_EDIT_GRAPH,    "edit_graph",  DiagramStatus.GENERATING_FXML,
      set(),
-     DiagramStatus.OCR_BOUND),
+     DiagramStatus.OCR_COMPLETED),   # доступно сразу после OCR (привязка внутри ручной правки)
 
     (BEAD_FXML,          "fxml",        DiagramStatus.COMPLETED,
      {DiagramStatus.GENERATING_FXML},
      DiagramStatus.GENERATING_FXML),
 ]
+
+
+# Ручные этапы, которые при ОТКРЫТИИ переводят диаграмму в *ING-статус.
+# status → (ключ кнопки для повторного входа, стабильный этап для отката).
+_MANUAL_INPROGRESS = {
+    DiagramStatus.CLEANING_FRAME:       ("frame",     "uploaded"),
+    DiagramStatus.VALIDATING_JUNCTIONS: ("junction",  "detected_junctions"),
+    DiagramStatus.VALIDATING_MASKS:     ("pipe",      "skeletonized"),
+    DiagramStatus.VALIDATING_GRAPH:     ("val_graph", "built"),
+}
 
 
 def _beads_for_status(status: DiagramStatus) -> list:
@@ -504,6 +514,9 @@ class DiagramWorkspace(QWidget):
         # Обновить бусины и кнопки
         self._refresh_status()
 
+        # #2: если диаграмма застряла в *ING без открытой вкладки — авто-откат
+        self._self_heal_stuck_stage()
+
         # Подписаться на обновления (один раз)
         import warnings
         with warnings.catch_warnings():
@@ -535,6 +548,28 @@ class DiagramWorkspace(QWidget):
     # =================================================================
     # Refresh
     # =================================================================
+
+    def _self_heal_stuck_stage(self):
+        """Авто-откат диаграммы, застрявшей в *ING-статусе без открытой вкладки.
+
+        Срабатывает при открытии диаграммы: если предыдущий сеанс редактирования
+        этапа был прерван (открыл, не сохранил, вышел не через «← Назад» / закрыл
+        приложение), статус остаётся *ING и бид «висит в процессе». Откатываем к
+        стабильному этапу, чтобы этап снова стал доступен.
+        """
+        if self._active_tab is not None:
+            return
+        mi = _MANUAL_INPROGRESS.get(self._last_status)
+        if not mi:
+            return
+        _key, target = mi
+        try:
+            self.api_client.rollback_diagram(self._uid, target)
+            logger.info("Self-heal: %s застрял в %s → откат к %s",
+                        self._uid[:8], self._last_status.value, target)
+            self._refresh_status()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Self-heal откат не удался: %s", exc)
 
     def _refresh_status(self):
         """Обновить бусины и кнопки из текущего статуса в БД."""
@@ -589,6 +624,10 @@ class DiagramWorkspace(QWidget):
                         self._action_buttons["ocr_binding"].setEnabled(True)
                         self._action_buttons["ocr_binding"].setStyleSheet(_BTN_STYLE_YELLOW)
                         self.beads.set_state(BEAD_OCR_BINDING, BeadState.AVAILABLE)
+                    if "edit_graph" in self._action_buttons:
+                        self._action_buttons["edit_graph"].setEnabled(True)
+                        self._action_buttons["edit_graph"].setStyleSheet(_BTN_STYLE_YELLOW)
+                        self.beads.set_state(BEAD_EDIT_GRAPH, BeadState.AVAILABLE)
                 else:
                     # OCR ещё работает — запустить периодическую проверку
                     self._start_ocr_poll()
@@ -615,6 +654,10 @@ class DiagramWorkspace(QWidget):
                 self._action_buttons["ocr_binding"].setEnabled(True)
                 self._action_buttons["ocr_binding"].setStyleSheet(_BTN_STYLE_YELLOW)
                 self.beads.set_state(BEAD_OCR_BINDING, BeadState.AVAILABLE)
+            if "edit_graph" in self._action_buttons:
+                self._action_buttons["edit_graph"].setEnabled(True)
+                self._action_buttons["edit_graph"].setStyleSheet(_BTN_STYLE_YELLOW)
+                self.beads.set_state(BEAD_EDIT_GRAPH, BeadState.AVAILABLE)
 
     # =================================================================
     # OCR artifact polling (independent of DiagramStatus changes)
@@ -656,6 +699,10 @@ class DiagramWorkspace(QWidget):
                     self._action_buttons["ocr_binding"].setEnabled(True)
                     self._action_buttons["ocr_binding"].setStyleSheet(_BTN_STYLE_YELLOW)
                     self.beads.set_state(BEAD_OCR_BINDING, BeadState.AVAILABLE)
+                if "edit_graph" in self._action_buttons:
+                    self._action_buttons["edit_graph"].setEnabled(True)
+                    self._action_buttons["edit_graph"].setStyleSheet(_BTN_STYLE_YELLOW)
+                    self.beads.set_state(BEAD_EDIT_GRAPH, BeadState.AVAILABLE)
         except Exception:
             pass  # не блокируем UI
 
@@ -713,6 +760,13 @@ class DiagramWorkspace(QWidget):
 
     def _update_buttons(self, status: DiagramStatus, error_stage: str = None):
         available, completed, processing = _buttons_for_status(status)
+
+        # #3: ручной *ING-этап — кнопка остаётся кликабельной (повторный вход),
+        # хотя бид показывает «в процессе». Иначе после «открыл и вышел» не зайти.
+        _mi = _MANUAL_INPROGRESS.get(status)
+        if _mi:
+            processing.discard(_mi[0])
+            available.add(_mi[0])
 
         # Перекрыть pipe/junction если подтверждены по отдельности
         if status == DiagramStatus.VALIDATING_MASKS:
@@ -808,17 +862,26 @@ class DiagramWorkspace(QWidget):
         if tab_layout:
             # Создаём маленькую кнопку назад
             self._btn_back_injected = QPushButton("← Назад")
-            self._btn_back_injected.setFixedSize(70, 26)
             self._btn_back_injected.setStyleSheet(
                 "QPushButton { background: #555; color: white; "
-                "border-radius: 3px; font-size: 11px; }"
+                "border-radius: 3px; padding: 2px 8px; min-width: 0px; }"
                 "QPushButton:hover { background: #777; }"
             )
             self._btn_back_injected.clicked.connect(self._close_active_tab)
 
-            # Вставляем в первый layout-item если это QHBoxLayout
+            # Найти горизонтальный тулбар вкладки: это либо прямой QHBoxLayout,
+            # либо QHBoxLayout внутри виджета-контейнера (тулбар обёрнут в контейнер
+            # ради авто-подгонки ширины) — иначе Назад/⚙ встали бы отдельными ярусами.
             first_item = tab_layout.itemAt(0)
-            target_layout = first_item.layout() if (first_item and first_item.layout()) else None
+            target_layout = None
+            if first_item is not None:
+                lay = first_item.layout()
+                if isinstance(lay, QHBoxLayout):
+                    target_layout = lay
+                else:
+                    w = first_item.widget()
+                    if w is not None and isinstance(w.layout(), QHBoxLayout):
+                        target_layout = w.layout()
             if target_layout:
                 target_layout.insertWidget(0, self._btn_back_injected)
             else:
@@ -829,13 +892,12 @@ class DiagramWorkspace(QWidget):
             # вкладка их поддерживает. Рядом с «← Назад».
             if hasattr(tab_widget, "toggle_appearance_panel"):
                 self._btn_appearance_injected = QPushButton("⚙")
-                self._btn_appearance_injected.setFixedSize(28, 26)
                 self._btn_appearance_injected.setToolTip(
                     "Оформление вкладки (затемнение фона, цвета)"
                 )
                 self._btn_appearance_injected.setStyleSheet(
                     "QPushButton { background: #555; color: white; "
-                    "border-radius: 3px; font-size: 14px; }"
+                    "border-radius: 3px; padding: 2px 6px; min-width: 0px; }"
                     "QPushButton:hover { background: #777; }"
                 )
                 self._btn_appearance_injected.clicked.connect(
@@ -1167,6 +1229,11 @@ class DiagramWorkspace(QWidget):
             if "ocr_binding" in self._action_buttons:
                 self._action_buttons["ocr_binding"].setEnabled(False)
                 self._action_buttons["ocr_binding"].setStyleSheet(_BTN_STYLE_GRAY)
+            # «Ручная правка» тоже зависит от OCR — сбросить на время повторного OCR
+            self.beads.set_state(BEAD_EDIT_GRAPH, BeadState.UNAVAILABLE)
+            if "edit_graph" in self._action_buttons:
+                self._action_buttons["edit_graph"].setEnabled(False)
+                self._action_buttons["edit_graph"].setStyleSheet(_BTN_STYLE_GRAY)
             self._ocr_notified = False
             self.status_provider.watch(self._uid)
             self._start_ocr_poll()
@@ -1517,11 +1584,17 @@ class DiagramWorkspace(QWidget):
 
     @Slot()
     def _on_cvat_confirmed(self):
-        """CVAT сохранил аннотации → скачать аннотации → закрыть."""
+        """CVAT сохранил аннотации → скачать аннотации → авто-старт сегментации.
+
+        Сегментация запускается автоматически (как junction → построение графа),
+        без отдельной кнопки.
+        """
         logger.info("CVAT confirmed, fetching annotations")
+        fetched = False
         try:
             result = self.api_client.fetch_cvat_annotations(self._uid)
             count = result.get("annotation_count", 0)
+            fetched = True
             self.status_message.emit(
                 f"✅ Получено {count} валидированных аннотаций", 5000,
             )
@@ -1532,6 +1605,10 @@ class DiagramWorkspace(QWidget):
             )
 
         self._close_tab_and_restore_header()
+
+        # Авто-запуск сегментации сразу после CVAT — не по кнопке.
+        if fetched:
+            self._start_segmentation()
 
     @Slot()
     def _on_junction_confirmed(self):

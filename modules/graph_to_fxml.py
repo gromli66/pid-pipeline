@@ -810,8 +810,85 @@ def generate_flow_detectors(nodes, edges, graph_scale=1.0):
 # ГЕНЕРАЦИЯ FXML
 # ============================================================================
 
+# Порог «вертикальный» текст-блок: высота заметно больше ширины (не на чуть-чуть).
+_TEXT_VERTICAL_RATIO = 1.3
+# Кегль шрифта ≈ короткой стороне блока (перпендикуляр к направлению чтения).
+_TEXT_FONT_RATIO = 0.9
+_TEXT_COLOR = "#000000"
+
+
+def build_node_kks_map(graph_data: dict) -> dict:
+    """KKS оборудования = текст блока, привязанного к узлу (graph.bindings).
+
+    Единственный источник — bindings; node.kks_full НЕ используется.
+    Возвращает {node_id: text} (только непустой текст).
+    """
+    kks_map = {}
+    for b in (graph_data.get('bindings') or []):
+        if b.get('kind') == 'edge':
+            continue
+        nid = b.get('node_id')
+        if not nid:
+            continue
+        t = (b.get('text') or '').strip()
+        if t:
+            kks_map[nid] = t
+    return kks_map
+
+
+def generate_fxml_text(block: dict):
+    """Непривязанный OCR-блок → <Text>.
+
+    Сам блок остаётся на месте (bbox из редактора не меняется) — задаётся только
+    раскладка текста внутри bbox:
+      • горизонтальный блок — текст как есть (слева направо);
+      • вертикальный (height > width * _TEXT_VERTICAL_RATIO) — текст повёрнут на
+        90° влево (CCW), читается снизу-вверх, внутри того же bbox.
+    Кегль ≈ короткой стороне блока, цвет чёрный.
+    """
+    bbox = block.get('bbox')
+    if not bbox or len(bbox) != 4:
+        return None
+    text = (block.get('text') or '').strip()
+    if not text:
+        return None
+    x1, y1, x2, y2 = [float(v) for v in bbox]
+    w = max(1.0, x2 - x1)
+    h = max(1.0, y2 - y1)
+
+    vertical = h > w * _TEXT_VERTICAL_RATIO
+    # Кегль ≈ короткая сторона (перпендикуляр к направлению чтения).
+    font_size = max(1.0, min(w, h) * _TEXT_FONT_RATIO)
+    esc = escape(text, {'"': '&quot;', "'": '&apos;'})
+
+    if vertical:
+        # Поворот 90° влево (angle=-90) вокруг локальной точки (0,0):
+        # локальная (px,py) → (py,-px). Текст (textOrigin=TOP) занимает по x
+        # [0..F], по y [-L..0]; низ строки ставим на y2 (читается вверх),
+        # толщину центрируем по ширине блока.
+        layout_x = x1 + (w - font_size) / 2.0
+        layout_y = y2
+        lines = [
+            f'        <Text layoutX="{max(0.0, layout_x):.1f}" layoutY="{max(0.0, layout_y):.1f}" text="{esc}" fill="{_TEXT_COLOR}" textOrigin="TOP">',
+            f'            <font><Font size="{font_size:.1f}"/></font>',
+            '            <transforms><Rotate angle="-90.0" pivotX="0.0" pivotY="0.0"/></transforms>',
+            '        </Text>',
+        ]
+        return "\n".join(lines)
+
+    # Горизонтальный: текст как есть, по вертикали центрируем в bbox.
+    layout_x = x1
+    layout_y = y1 + (h - font_size) / 2.0
+    lines = [
+        f'        <Text layoutX="{max(0.0, layout_x):.1f}" layoutY="{max(0.0, layout_y):.1f}" text="{esc}" fill="{_TEXT_COLOR}" textOrigin="TOP">',
+        f'            <font><Font size="{font_size:.1f}"/></font>',
+        '        </Text>',
+    ]
+    return "\n".join(lines)
+
+
 def generate_fxml_control(node, geometry: SkinGeometry, node_id: str,
-                          graph_scale: float = 1.0) -> str:
+                          graph_scale: float = 1.0, kks: str = None) -> str:
     """
     Генерирует FXML элемент для скина.
     Добавляет KKS если доступен.
@@ -920,13 +997,12 @@ def generate_fxml_control(node, geometry: SkinGeometry, node_id: str,
     if equipment_type:
         attrs.append(f'equipmentType="{equipment_type}"')
 
-    # --- KKS привязка ---
-    kks = node.get('kks_full')
+    # --- KKS привязка (источник — graph.bindings; см. build_node_kks_map) ---
     # У датчиков KKS по дефолту, даже если не распознан
     if not kks and control_class == 'DetectorControl':
         kks = DETECTOR_DEFAULT_KKS
     if kks:
-        attrs.append(f'kks="{escape(str(kks))}"')
+        attrs.append(f'kks="{escape(str(kks), {chr(34): "&quot;", chr(39): "&apos;"})}"')
         attrs.append('kksVisible="true"')
         # Размер шрифта KKS: пропорционален размеру элемента,
         # но с scale-aware минимумом чтобы текст оставался читаемым
@@ -962,14 +1038,13 @@ def generate_fxml_control(node, geometry: SkinGeometry, node_id: str,
 
 
 def generate_fxml_rectangle(node, geometry: SkinGeometry, node_id: str,
-                            graph_scale: float = 1.0) -> str:
+                            graph_scale: float = 1.0, kks: str = None) -> str:
     """
     Генерирует FXML Rectangle для элементов без скинов.
     Добавляет KKS как Tooltip через вложенный Text (или комментарий).
     """
     class_name = node.get('class_name', 'unknown')
     color = CLASS_COLORS.get(class_name, DEFAULT_COLOR)
-    kks = node.get('kks_full')
 
     # strokeWidth масштабируется по graph_scale
     elem_stroke = max(0.3, 1.0 * graph_scale) if graph_scale < 1.0 else 1.0
@@ -991,7 +1066,7 @@ def generate_fxml_rectangle(node, geometry: SkinGeometry, node_id: str,
     return f'        {comment}\n        <Rectangle {" ".join(attrs)} />'
 
 
-def generate_fxml_polygon(node, node_id: str, graph_scale: float = 1.0) -> str:
+def generate_fxml_polygon(node, node_id: str, graph_scale: float = 1.0, kks: str = None) -> str:
     """
     Генерирует FXML Polygon для элементов с segmentation.
     Points нормализованы относительно layoutX/layoutY (JavaFX семантика).
@@ -1002,7 +1077,6 @@ def generate_fxml_polygon(node, node_id: str, graph_scale: float = 1.0) -> str:
 
     class_name = node.get('class_name', 'unknown')
     color = CLASS_COLORS.get(class_name, DEFAULT_COLOR)
-    kks = node.get('kks_full')
 
     # Compute layoutX/layoutY from segmentation bounds
     xs = [segmentation[i] for i in range(0, len(segmentation), 2)]
@@ -1036,7 +1110,7 @@ def generate_fxml_polygon(node, node_id: str, graph_scale: float = 1.0) -> str:
     return f'        {comment}\n        <Polygon {" ".join(attrs)} />'
 
 
-def generate_fxml_triangle(node, node_id: str, graph_scale: float = 1.0) -> Optional[str]:
+def generate_fxml_triangle(node, node_id: str, graph_scale: float = 1.0, kks: str = None) -> Optional[str]:
     """
     Генерирует FXML Polygon-треугольник для узла `napravlenie`.
 
@@ -1086,7 +1160,6 @@ def generate_fxml_triangle(node, node_id: str, graph_scale: float = 1.0) -> Opti
     points_str = ",".join(f"{v:.1f}" for v in rel)
 
     color = CLASS_COLORS.get(NAPRAVLENIE_CLASS_NAME, NAPRAVLENIE_COLOR)
-    kks = node.get('kks_full')
     elem_stroke = max(0.3, 1.0 * graph_scale) if graph_scale < 1.0 else 1.0
 
     attrs = [
@@ -1453,6 +1526,12 @@ def scale_graph_to_page(graph_data: dict, page_size: str = None,
                 wp[0] = _sy(wp[0])
                 wp[1] = _sx(wp[1])
 
+    # Масштабировать текст-блоки OCR (bbox [x1, y1, x2, y2])
+    for blk in (graph_data.get('text_blocks') or []):
+        bb = blk.get('bbox')
+        if bb and len(bb) == 4:
+            blk['bbox'] = [_sx(bb[0]), _sy(bb[1]), _sx(bb[2]), _sy(bb[3])]
+
     # Обновить image_size
     graph_data.setdefault('graph', {})['image_size'] = [page_h_px, page_w_px]
 
@@ -1482,6 +1561,14 @@ def generate_fxml(graph_data: dict, stroke_width: float = LINE_STROKE_WIDTH,
 
     nodes = {n['id']: n for n in graph_data['nodes']}
     edges = graph_data['links']
+
+    # KKS оборудования — ТОЛЬКО из graph.bindings (node.kks_full не используется).
+    kks_by_node = build_node_kks_map(graph_data)
+    # Блоки с привязкой (к узлу или ребру) как <Text> не печатаем.
+    bound_block_ids = {
+        b.get('block_id') for b in (graph_data.get('bindings') or [])
+        if b.get('block_id')
+    }
 
     # Масштабировать stroke_width пропорционально scale графа
     if page_size and page_size in PAGE_SIZES_MM:
@@ -1513,7 +1600,7 @@ def generate_fxml(graph_data: dict, stroke_width: float = LINE_STROKE_WIDTH,
         # скином/полигоном/прямоугольником). Если направления нет —
         # проваливаемся в обычную обработку (прямоугольник).
         if node.get('class_name') == NAPRAVLENIE_CLASS_NAME or node.get('direction_node'):
-            tri = generate_fxml_triangle(node, node_id, graph_scale)
+            tri = generate_fxml_triangle(node, node_id, graph_scale, kks=kks_by_node.get(node_id))
             if tri:
                 polygon_elements.append(tri)
                 stats['polygons'] += 1
@@ -1530,18 +1617,18 @@ def generate_fxml(graph_data: dict, stroke_width: float = LINE_STROKE_WIDTH,
         skin_info = get_skin_info(node)
 
         if skin_info:
-            fxml = generate_fxml_control(node, geometry, node_id, graph_scale)
+            fxml = generate_fxml_control(node, geometry, node_id, graph_scale, kks=kks_by_node.get(node_id))
             if fxml:
                 control_elements.append(fxml)
                 stats['controls'] += 1
-                if node.get('kks_full'):
+                if kks_by_node.get(node_id):
                     stats['controls_with_kks'] += 1
         elif node.get('contours_all'):
             # Множественные полигоны из contour_extractor
             # (drossel = 2 полигона, voronka = 1-2 полигона и т.д.)
             class_name = node.get('class_name', 'unknown')
             color = CLASS_COLORS.get(class_name, DEFAULT_COLOR)
-            kks = node.get('kks_full')
+            kks = kks_by_node.get(node_id)
             kks_comment = f' kks={kks}' if kks else ''
             elem_stroke = max(0.3, 1.0 * graph_scale) if graph_scale < 1.0 else 1.0
 
@@ -1571,16 +1658,16 @@ def generate_fxml(graph_data: dict, stroke_width: float = LINE_STROKE_WIDTH,
                 polygon_elements.append(f'        {comment}\n        <Polygon {" ".join(attrs)} />')
                 stats['polygons'] += 1
         elif node.get('segmentation'):
-            fxml = generate_fxml_polygon(node, node_id, graph_scale)
+            fxml = generate_fxml_polygon(node, node_id, graph_scale, kks=kks_by_node.get(node_id))
             if fxml:
                 polygon_elements.append(fxml)
                 stats['polygons'] += 1
         else:
-            fxml = generate_fxml_rectangle(node, geometry, node_id, graph_scale)
+            fxml = generate_fxml_rectangle(node, geometry, node_id, graph_scale, kks=kks_by_node.get(node_id))
             if fxml:
                 rectangle_elements.append(fxml)
                 stats['rectangles'] += 1
-                if node.get('kks_full'):
+                if kks_by_node.get(node_id):
                     stats['rectangles_with_kks'] += 1
 
     # Авто-датчики расхода для шайб без привязанного датчика
@@ -1607,12 +1694,29 @@ def generate_fxml(graph_data: dict, stroke_width: float = LINE_STROKE_WIDTH,
             if edge.get('diameter_value'):
                 stats['lines_with_diameter'] += 1
 
+    # Текст-блоки OCR (непривязанные) → <Text>. Привязанные к узлу идут в kks,
+    # к ребру (диаметры) — пока не печатаем.
+    text_elements = []
+    for blk in (graph_data.get('text_blocks') or []):
+        if blk.get('merged_into') is not None:
+            continue
+        if blk.get('id') in bound_block_ids:
+            continue
+        if not (blk.get('text') or '').strip():
+            continue
+        t = generate_fxml_text(blk)
+        if t:
+            text_elements.append(t)
+    stats['text_blocks'] = len(text_elements)
+
     # Собираем FXML
     fxml_lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         '',
         '<?import javafx.scene.layout.*?>',
         '<?import javafx.scene.shape.*?>',
+        '<?import javafx.scene.text.*?>',
+        '<?import javafx.scene.transform.*?>',
         '<?import ru.get.common.controls.*?>',
         '',
         f'<AnchorPane fx:id="root" xmlns="http://javafx.com/javafx/17" xmlns:fx="http://javafx.com/fxml/1"',
@@ -1653,6 +1757,15 @@ def generate_fxml(graph_data: dict, stroke_width: float = LINE_STROKE_WIDTH,
     ])
 
     fxml_lines.extend(polygon_elements)
+
+    fxml_lines.extend([
+        '',
+        '        <!-- ======================================== -->',
+        '        <!-- OCR text blocks (unbound labels)         -->',
+        '        <!-- ======================================== -->',
+    ])
+
+    fxml_lines.extend(text_elements)
 
     fxml_lines.extend([
         '',
@@ -1762,7 +1875,7 @@ def main():
     edges = graph_data['links']
     equipment_count = sum(1 for n in nodes if n['type'] == 'equipment')
     connector_count = sum(1 for n in nodes if n['type'] == 'connector')
-    kks_count = sum(1 for n in nodes if n.get('kks_full'))
+    kks_count = len(build_node_kks_map(graph_data))
 
     stats = getattr(generate_fxml, '_stats', {})
 

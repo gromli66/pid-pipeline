@@ -1097,3 +1097,55 @@ def get_node_geometry(node: dict) -> dict:
     if centroid and len(centroid) >= 2:
         return {'type': 'point', 'data': (centroid[1], centroid[0])}
     return {'type': 'point', 'data': None}
+
+
+def node_orientation_by_edges(node_id, nodes, edges_data):
+    """Ориентация оборудования по подключённым рёбрам (без Qt, без FXML-импорта).
+
+    Та же логика, что в FXML (determine_side + calculate_skin_geometry), но на
+    моделях редактора:
+      • сторона подключения ребра = ближайшая стенка bbox к точке подключения
+        (LEFT/RIGHT/TOP/BOTTOM);
+      • есть LEFT или RIGHT -> 'HORIZONTAL' (приоритет горизонтали при смешении);
+      • только TOP/BOTTOM   -> 'VERTICAL';
+      • рёбер с точками нет  -> None (вызывающий решает по размеру бокса).
+
+    Точка подключения = source_point/target_point ребра ([y, x] -> (x, y)).
+    Как и в FXML, рёбра без точки не учитываются.
+    """
+    node = nodes.get(node_id)
+    if not node:
+        return None
+    bb = node.get('bbox')
+    if not bb or len(bb) != 4:
+        return None
+    x1, y1, x2, y2 = bb
+
+    has_h = False
+    has_v = False
+    for e in edges_data:
+        if e.get('source') == node_id:
+            pt = e.get('source_point')
+        elif e.get('target') == node_id:
+            pt = e.get('target_point')
+        else:
+            continue
+        if not pt or len(pt) != 2:
+            continue
+        px, py = pt[1], pt[0]  # [y, x] -> (x, y)
+        # Ближайшая стенка bbox (как determine_side в FXML).
+        dists = {
+            'LEFT': abs(px - x1),
+            'RIGHT': abs(px - x2),
+            'TOP': abs(py - y1),
+            'BOTTOM': abs(py - y2),
+        }
+        side = min(dists, key=dists.get)
+        if side in ('LEFT', 'RIGHT'):
+            has_h = True
+        else:
+            has_v = True
+
+    if not (has_h or has_v):
+        return None
+    return 'HORIZONTAL' if has_h else 'VERTICAL'

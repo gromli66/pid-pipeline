@@ -9,17 +9,19 @@ Overrides: load_data, add_edge, _get_edge_color, _get_edge_pen,
 """
 
 import math
+import sys
 import statistics
 from copy import deepcopy
+from pathlib import Path
 from typing import Optional
 
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsPathItem,
-    QGraphicsLineItem, QGraphicsSimpleTextItem, QDialog,
+    QGraphicsLineItem, QGraphicsSimpleTextItem, QGraphicsPixmapItem, QDialog,
     QVBoxLayout, QFormLayout, QLineEdit, QDialogButtonBox, QLabel,
     QToolTip,
 )
-from PySide6.QtGui import QColor, QBrush, QPen, QPainterPath, QFont
+from PySide6.QtGui import QColor, QBrush, QPen, QPainterPath, QFont, QPixmap, QTransform
 from PySide6.QtCore import Qt
 
 from ui.editors.simple_graph_editor import SimpleGraphEditor
@@ -40,16 +42,25 @@ from ui.editors.graph_geometry import (
     connect_bbox_bbox, connect_bbox_polygon, connect_polygon_polygon,
     connect_point_bbox, connect_point_polygon,
     global_axis_perpendicularity,
+    node_orientation_by_edges,
 )
 from ui.editors.edge_routing import distribute_connection_points, route_edge as route_edge_v2, segment_intersects_bbox
 from ui.editors.autofix_chains import auto_fix_graph
+from ui.editors.ocr_layer_mixin import (
+    OcrLayerMixin, AddOcrBlockHandler, OcrBindHandler,
+)
 
 
-class AdvancedGraphEditor(SimpleGraphEditor):
-    """Полный редактор: routing, оптимизация, drag, multi-select, waypoints, auto-fix."""
+class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
+    """Полный редактор: routing, оптимизация, drag, multi-select, waypoints, auto-fix.
+
+    Плюс OCR-слой (OcrLayerMixin): текст-блоки и их привязка к узлам/рёбрам,
+    активные в состоянии display_regime == 'ocr'.
+    """
 
     def __init__(self):
         super().__init__()
+        self._init_ocr_layer()
 
         # ── Viewport mouse tracking для hover tooltip ──
         self.viewport().setMouseTracking(True)
@@ -68,6 +79,10 @@ class AdvancedGraphEditor(SimpleGraphEditor):
         self.register_mode("edit_edge_color", EditEdgeColorHandler())
         self.register_mode("edit_edge_size", EditEdgeSizeHandler())
         self.register_mode("resize_objects", ResizeObjectsHandler())
+
+        # ── OCR-слой: добавление блока + резидентная привязка ──
+        self.register_mode("add_ocr_block", AddOcrBlockHandler())
+        self.register_mode("ocr_bind", OcrBindHandler())
 
         # ── Режим изменения ребра (цвет / размер) ──
         # Текущий «кисточный» цвет и размер, которыми красятся/масштабируются рёбра.
@@ -135,8 +150,10 @@ class AdvancedGraphEditor(SimpleGraphEditor):
         #           диаметра, KKS-подписи/подсказки, правка диаметра/KKS
         #           двойным кликом);
         #   perp  — перпендикулярность (оранжевые рёбра + утолщение);
-        #   style — размер и цвет рёбер (по умолчанию белые, кисть цвет/размер).
-        self.display_regime: str = "ocr"
+        #   style — размер и цвет рёбер (по умолчанию белые, кисть цвет/размер);
+        #   base  — базовое (нейтральное) состояние: только общие функции,
+        #           без подсветок и без инструментов состояний.
+        self.display_regime: str = "base"
         # Callback в таб для синхронизации кнопок-флагов режима.
         self.regime_callback: Optional[callable] = None
 
@@ -153,6 +170,11 @@ class AdvancedGraphEditor(SimpleGraphEditor):
         self.resize_panel_state_cb: Optional[callable] = None     # (kind, count, mw, mh)
         # Зазор при расталкивании наслоившихся боксов (px).
         self.RESIZE_SPREAD_GAP: int = 8
+
+        # ── Отображение FXML-скинов внутри боксов ──
+        self.show_skins: bool = False
+        self._skin_pixmaps: dict[str, QPixmap] = {}   # class_name → QPixmap | None (кэш)
+        self._skin_items: dict[str, list] = {}        # node_id → [bg_rect, pixmap_item]
 
     # =================================================================
     # Overrides — Base/Simple hooks
@@ -190,21 +212,18 @@ class AdvancedGraphEditor(SimpleGraphEditor):
                     return self.COLOR_EDGE_BAD
             return self.COLOR_EDGE
 
-        # ocr
-        if not edge_data.get('diameter_text'):
-            return self.COLOR_NO_DIAMETER
+        # ocr — визуал как во вкладке привязки: рёбра нейтральные (без красных);
+        #        вся информация о диаметрах/KKS показывается на текст-блоках.
+        # base — нейтральное отображение без подсветок.
         return self.COLOR_EDGE
 
     def _get_equipment_brush(self, node: dict) -> QBrush:
-        """Подсветка equipment: зелёная если есть KKS, красная если нет.
+        """Заливка equipment — нейтральная во всех состояниях.
 
-        Если подсветка привязки OCR выключена — нейтральная (прозрачная) заливка.
+        В состоянии «ОКР привязка» узлы рисуются как во вкладке привязки
+        (нейтрально), а привязка KKS отражается на текст-блоках, а не заливкой.
         """
-        if not self._ocr_highlight:
-            return super()._get_equipment_brush(node)
-        if node.get('kks_full'):
-            return QBrush(self.COLOR_KKS_BOUND)
-        return QBrush(self.COLOR_NO_KKS)
+        return super()._get_equipment_brush(node)
 
     def set_edge_no_diameter_color(self, color: QColor):
         """Цвет рёбер без диаметра (подсветка привязки)."""
@@ -217,21 +236,32 @@ class AdvancedGraphEditor(SimpleGraphEditor):
         self._redraw_all()
 
     def set_display_regime(self, regime: str):
-        """Переключить режим отображения/правки: 'ocr' | 'perp' | 'style'.
+        """Переключить режим отображения/правки: 'base' | 'ocr' | 'perp' | 'style'.
 
         Режимы взаимоисключающие — активен ровно один.
+        При смене состояния активный инструмент состояния сбрасывается в idle.
         """
-        if regime not in ("ocr", "perp", "style"):
+        if regime not in ("base", "ocr", "perp", "style"):
             return
         if self.display_regime == regime:
             return
         self.display_regime = regime
-        # Выйти из правки цвета/размера, если ушли из режима 'style'
-        if regime != "style" and self._current_mode in ("edit_edge_color", "edit_edge_size"):
+        # Сбросить инструменты, специфичные для состояний, при выходе из них.
+        state_modes = ("edit_edge_color", "edit_edge_size", "optimize_edge",
+                       "edit_waypoint", "add_ocr_block", "ocr_bind")
+        if self._current_mode in state_modes:
             self.set_mode("idle")
         # KKS-подписи показываются только в режиме 'ocr'
         if regime != "ocr":
             self._hide_all_kks_labels()
+            if hasattr(self, "_selected_ocr"):
+                self._selected_ocr.clear()
+        # В состоянии 'ocr' резидентный режим привязки блоков.
+        if regime == "ocr" and self._current_mode in ("", "idle"):
+            self.set_mode("ocr_bind")
+        # OCR-слой блоков виден только в состоянии 'ocr' (если слой подключён).
+        if hasattr(self, "_refresh_ocr_layer_visibility"):
+            self._refresh_ocr_layer_visibility()
         self._redraw_all()
         if self.regime_callback:
             self.regime_callback(regime)
@@ -298,6 +328,10 @@ class AdvancedGraphEditor(SimpleGraphEditor):
         self._dragging_endpoint = None
         self.dragging_waypoint = None
         self._auto_fix_result = None
+        # OCR-слой: сцена уже очищается в Base; сбросить ссылки на item'ы.
+        if hasattr(self, "_ocr_block_items"):
+            self._ocr_block_items.clear()
+            self._ocr_hl_restore = []
         super()._reset_scene_state()
 
     def _redraw_all(self):
@@ -305,6 +339,10 @@ class AdvancedGraphEditor(SimpleGraphEditor):
         super()._redraw_all()
         if self.grid_visible:
             self._draw_grid()
+        self._redraw_skins()
+        # OCR текст-блоки поверх графа (видимы только в состоянии 'ocr').
+        if hasattr(self, "_ocr_block_items"):
+            self.refresh_ocr_layer()
 
     def _after_statistics_update(self):
         """Обновить multi-select визуалы."""
@@ -931,6 +969,10 @@ class AdvancedGraphEditor(SimpleGraphEditor):
                 return
             self._start_rubber_band(x, y)
             return
+        # Состояние «ОКР привязка»: Shift выделяет текст-блоки (не узлы/рёбра).
+        if self.display_regime == "ocr" and hasattr(self, "_ocr_shift_press"):
+            self._ocr_shift_press(x, y)
+            return
         # В режиме style — только рёбра (узлы не трогаем)
         if not self._edge_only_selection():
             clicked = self.find_node_at(x, y)
@@ -988,6 +1030,11 @@ class AdvancedGraphEditor(SimpleGraphEditor):
                 if rx <= cx <= rx + rw and ry <= cy <= ry + rh:
                     self._resize_sel.add(nid)
             self._update_resize_panel()
+            return
+
+        # Состояние «ОКР привязка»: рамка выделяет текст-блоки.
+        if self.display_regime == "ocr" and hasattr(self, "_ocr_rubber_select"):
+            self._ocr_rubber_select(x1, y1, x2, y2, extend)
             return
 
         if not extend:
@@ -1149,6 +1196,22 @@ class AdvancedGraphEditor(SimpleGraphEditor):
             else:
                 self.update_status("Под курсором нет экземпляра из набора")
             return
+
+        # Состояние «ОКР привязка»: Ctrl+ПКМ по блоку — отвязать (если привязан)
+        # или удалить блок.
+        if self.display_regime == "ocr" and hasattr(self, "_ocr_block_at"):
+            bid = self._ocr_block_at(x, y)
+            if bid is not None:
+                if getattr(self, "_selected_ocr", None) and bid in self._selected_ocr:
+                    self._delete_selected_ocr_blocks()
+                    self.update_status("Выделенные блоки удалены")
+                elif self.model.find_binding(bid) is not None:
+                    self.unbind_ocr_block(bid)
+                    self.update_status("Блок отвязан")
+                else:
+                    self.delete_ocr_block(bid)
+                    self.update_status("Блок удалён")
+                return
 
         if self._current_mode in ("edit_edge_color", "edit_edge_size"):
             edge_key, _ = self.find_nearest_edge(x, y, threshold=20.0)
@@ -2083,6 +2146,9 @@ class AdvancedGraphEditor(SimpleGraphEditor):
             r = (self.EQUIPMENT_MARKER_RADIUS if node.get('type') == 'equipment'
                  else self.CONNECTOR_MARKER_RADIUS)
             self.node_items[node_id].setRect(cx - r, cy - r, r * 2, r * 2)
+        # подогнать скин под новый размер (живой резайз)
+        if self.show_skins and node_id in self._skin_items:
+            self._update_node_skin(node_id)
 
     def preview_resize(self, width=None, height=None, scale=None):
         """Живое превью: визуально меняет размеры набора без перестройки связей.
@@ -2152,10 +2218,13 @@ class AdvancedGraphEditor(SimpleGraphEditor):
         bb = node.get('bbox')
         cur_w = (bb[2] - bb[0]) if (bb and len(bb) == 4) else 0
         cur_h = (bb[3] - bb[1]) if (bb and len(bb) == 4) else 0
-        if cur_h >= cur_w:          # вертикальный или квадрат
-            new_w, new_h = short, long_
-        else:                        # горизонтальный
+        # Ориентация по рёбрам (Часть 1); рёбер нет → по текущему размеру.
+        orient = self._node_orientation(node.get('id')) or (
+            'VERTICAL' if cur_h >= cur_w else 'HORIZONTAL')
+        if orient == 'HORIZONTAL':   # длинная сторона вдоль потока → по ширине
             new_w, new_h = long_, short
+        else:                        # вертикальный/квадрат → длинная по высоте
+            new_w, new_h = short, long_
         node['bbox'] = [cx - new_w / 2, cy - new_h / 2, cx + new_w / 2, cy + new_h / 2]
         node['area'] = new_w * new_h
 
@@ -2290,6 +2359,150 @@ class AdvancedGraphEditor(SimpleGraphEditor):
             )
 
     # =================================================================
+    # Отображение FXML-скинов внутри боксов
+    # =================================================================
+
+    def _skins_dir(self) -> Path:
+        """Папка с PNG-скинами (ui/resources/skins), с учётом PyInstaller."""
+        base = getattr(sys, "_MEIPASS", None)
+        if base:
+            p = Path(base) / "ui" / "resources" / "skins"
+            if p.is_dir():
+                return p
+        return Path(__file__).resolve().parents[1] / "resources" / "skins"
+
+    def _skin_pixmap_for(self, class_name: str | None):
+        """QPixmap скина для класса (по имени файла) или None. Кэшируется."""
+        if class_name in self._skin_pixmaps:
+            return self._skin_pixmaps[class_name]
+        pm = None
+        if class_name:
+            f = self._skins_dir() / f"{class_name}.png"
+            if f.is_file():
+                img = QPixmap(str(f))
+                if not img.isNull():
+                    pm = img
+        self._skin_pixmaps[class_name] = pm
+        return pm
+
+    def set_show_skins(self, on: bool):
+        """Включить/выключить отрисовку скинов внутри боксов."""
+        self.show_skins = bool(on)
+        self._redraw_skins()
+        self.update_status("Скины " + ("показаны" if self.show_skins else "скрыты"))
+
+    def _clear_skin_items(self):
+        for items in self._skin_items.values():
+            for it in items:
+                try:
+                    self.scene.removeItem(it)
+                except Exception:
+                    pass
+        self._skin_items.clear()
+
+    def _fit_pixmap(self, item: QGraphicsPixmapItem, pm: QPixmap,
+                    x1: float, y1: float, w: float, h: float):
+        """Вписать пиксмап в bbox (с сохранением пропорций, по центру)."""
+        pw, ph = pm.width(), pm.height()
+        if pw <= 0 or ph <= 0 or w <= 0 or h <= 0:
+            return
+        s = min(w / pw, h / ph)
+        item.setScale(s)
+        item.setPos(x1 + (w - pw * s) / 2.0, y1 + (h - ph * s) / 2.0)
+
+    def _skin_bg_color(self) -> QColor:
+        """Цвет фона-«тайла» скина: белый, затемнённый общим фактором листа."""
+        g = max(0, min(255, int(round(255 * (1.0 - self._bg_darkness)))))
+        return QColor(g, g, g)
+
+    def _node_orientation(self, node_id):
+        """Ориентация узла для скина/размера — по рёбрам (Часть 1).
+
+        Датчик всегда горизонтальный (как FORCE_HORIZONTAL в FXML).
+        None → рёбер нет; вызывающий код решает по размеру бокса.
+        """
+        node = self.nodes.get(node_id)
+        if node is not None and node.get('class_name') == 'datchik':
+            return 'HORIZONTAL'
+        return node_orientation_by_edges(node_id, self.nodes, self.edges_data)
+
+    def _oriented_skin_pixmap(self, base_pm: QPixmap, orientation: str) -> QPixmap:
+        """База PNG — вертикальная (кол.1). Горизонталь → поворот −90° CCW (кол.3)."""
+        if orientation == 'HORIZONTAL':
+            return base_pm.transformed(QTransform().rotate(-90),
+                                       Qt.TransformationMode.SmoothTransformation)
+        return base_pm
+
+    def _apply_skin_geometry(self, node_id: str):
+        """Обновить фон-тайл (цвет затемнения) + ориентацию/вписывание скина."""
+        items = self._skin_items.get(node_id)
+        node = self.nodes.get(node_id)
+        if not items or not node:
+            return
+        bg, item = items
+        bb = node.get("bbox")
+        if not bb or len(bb) != 4:
+            return
+        x1, y1, x2, y2 = bb
+        w, h = x2 - x1, y2 - y1
+        if w <= 0 or h <= 0:
+            return
+        bg.setRect(x1, y1, w, h)
+        bg.setBrush(QBrush(self._skin_bg_color()))
+        base = self._skin_pixmap_for(node.get("class_name"))
+        if base is None:
+            return
+        orient = self._node_orientation(node_id) or ('HORIZONTAL' if w > h else 'VERTICAL')
+        disp = self._oriented_skin_pixmap(base, orient)
+        item.setPixmap(disp)
+        self._fit_pixmap(item, disp, x1, y1, w, h)
+
+    def _add_node_skin(self, node_id: str, node: dict, base_pm: QPixmap):
+        bb = node.get("bbox")
+        if not bb or len(bb) != 4:
+            return
+        x1, y1, x2, y2 = bb
+        if (x2 - x1) <= 0 or (y2 - y1) <= 0:
+            return
+        # непрозрачный фон-«тайл» (затемняется общим ползунком вместе с листом)
+        bg = QGraphicsRectItem(0, 0, 1, 1)
+        bg.setPen(QPen(Qt.PenStyle.NoPen))
+        bg.setZValue(4.0)
+        self.scene.addItem(bg)
+        # сам скин (прозрачный фон у PNG → виден затемнённый тайл)
+        item = QGraphicsPixmapItem()
+        item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
+        item.setZValue(4.1)
+        self.scene.addItem(item)
+        self._skin_items[node_id] = [bg, item]
+        self._apply_skin_geometry(node_id)
+
+    def _redraw_skins(self):
+        """Перерисовать все скины по текущему состоянию (вызывается в _redraw_all)."""
+        self._clear_skin_items()
+        if not self.show_skins:
+            return
+        for nid, node in self.nodes.items():
+            if node.get("type") != "equipment":
+                continue
+            pm = self._skin_pixmap_for(node.get("class_name"))
+            if pm is None:
+                continue
+            self._add_node_skin(nid, node, pm)
+
+    def _update_node_skin(self, node_id: str):
+        """Подогнать скин узла под текущий bbox (для живого резайза)."""
+        self._apply_skin_geometry(node_id)
+
+    def set_background_darkness(self, darkness: float):
+        """Затемнение фона: применяется и к листу, и к фону скинов (общий ползунок)."""
+        super().set_background_darkness(darkness)
+        if self.show_skins and self._skin_items:
+            col = QBrush(self._skin_bg_color())
+            for items in self._skin_items.values():
+                items[0].setBrush(col)
+
+    # =================================================================
     # Static helpers for obstacle avoidance
     # =================================================================
 
@@ -2311,9 +2524,16 @@ class AdvancedGraphEditor(SimpleGraphEditor):
     # Keys
     # =================================================================
 
+    def save_graph(self, path: str = "") -> bool:
+        """Перед сохранением перенести привязки блоков в узлы/рёбра (для FXML)."""
+        if hasattr(self, "_sync_bindings_to_graph"):
+            self._sync_bindings_to_graph()
+        return super().save_graph(path)
+
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
-            self.clear_multi_select()
+            self._handle_escape()
+            return
         elif event.key() == Qt.Key.Key_Delete:
             self.batch_delete()
             return
@@ -2324,6 +2544,56 @@ class AdvancedGraphEditor(SimpleGraphEditor):
             self.toggle_grid()
             return
         super().keyPressEvent(event)
+
+    def _node_drag_allowed(self) -> bool:
+        """Перетаскивание узлов — только когда не активен инструмент (базовое/idle).
+
+        В любом активном инструменте (добавить ребро/перекрёсток/узел,
+        оптимизировать, точки изгиба, размеры, ocr) Ctrl+ЛКМ идёт в инструмент,
+        а не двигает узел/коннектор.
+        """
+        return self._current_mode in ("", "idle")
+
+    def _handle_escape(self):
+        """Двухступенчатый Esc.
+
+        1-я ступень: если активен инструмент состояния (mode ≠ idle) или есть
+                     выделение — выключить инструмент/снять выделение,
+                     оставаясь в текущем состоянии.
+        2-я ступень: если инструмент не активен и снимать нечего —
+                     вернуться в базовое состояние.
+        """
+        # resize_node имеет собственный корректный выход
+        if self._current_mode == "resize_node" and hasattr(self, "_stop_resize"):
+            self._stop_resize()
+            return
+
+        # ocr_bind — резидентный режим состояния 'ocr', не считается инструментом
+        resting_modes = ("", "idle", "ocr_bind")
+        active_tool = self._current_mode not in resting_modes
+        had_selection = bool(self.selected_nodes or self.selected_edges) \
+            or bool(getattr(self, "_selected_ocr", None))
+
+        # Снять любые выделения/превью
+        self.clear_multi_select()
+        self.clear_selection()
+        if getattr(self, "_selected_ocr", None):
+            self._selected_ocr.clear()
+            self.refresh_ocr_layer()
+
+        if active_tool:
+            # 1-я ступень — выключить активный инструмент, состояние сохраняем.
+            self.set_mode("idle")
+            # В состоянии 'ocr' вернуть резидентную привязку блоков.
+            if self.display_regime == "ocr":
+                self.set_mode("ocr_bind")
+            return
+        if had_selection:
+            # был только выбор без инструмента — уже сняли, остаёмся в состоянии
+            return
+        # 2-я ступень — вернуться в базовое состояние
+        if self.display_regime != "base":
+            self.set_display_regime("base")
 
     # =================================================================
     # Ctrl+ЛКМ: клик → KKS/handler, drag → перетаскивание
@@ -2367,17 +2637,24 @@ class AdvancedGraphEditor(SimpleGraphEditor):
         pos = self.mapToScene(event.pos())
         x, y = pos.x(), pos.y()
 
-        # KKS hover tooltip — ищем equipment по bbox (а не только по centroid)
+        # KKS hover tooltip — ищем equipment по bbox (а не только по centroid).
+        # KKS берём из graph.bindings (единый источник), не из node.kks_full.
         hovered_kks = None
-        for node_id, node in (self.nodes.items() if self._ocr_highlight else []):
-            if node.get('type') != 'equipment' or not node.get('kks_full'):
-                continue
-            bbox = node.get('bbox')
-            if bbox and len(bbox) == 4:
-                x1, y1, x2, y2 = bbox
-                if x1 <= x <= x2 and y1 <= y <= y2:
-                    hovered_kks = node['kks_full']
-                    break
+        if self._ocr_highlight:
+            kks_nodes = {
+                b.get("node_id"): (b.get("text") or "").strip()
+                for b in self.model.bindings
+                if b.get("node_id") and (b.get("text") or "").strip()
+            }
+            for node_id, node in self.nodes.items():
+                if node.get('type') != 'equipment' or node_id not in kks_nodes:
+                    continue
+                bbox = node.get('bbox')
+                if bbox and len(bbox) == 4:
+                    x1, y1, x2, y2 = bbox
+                    if x1 <= x <= x2 and y1 <= y <= y2:
+                        hovered_kks = kks_nodes[node_id]
+                        break
 
         if hovered_kks:
             # mapToGlobal через viewport — гарантированно работает в PySide6
@@ -2401,6 +2678,14 @@ class AdvancedGraphEditor(SimpleGraphEditor):
         if event.button() == Qt.MouseButton.LeftButton:
             pos = self.mapToScene(event.pos())
             x, y = pos.x(), pos.y()
+
+            # Ctrl + 2ЛКМ по текст-блоку → правка его текста (как в «бусине»).
+            if (event.modifiers() & Qt.KeyboardModifier.ControlModifier) \
+                    and hasattr(self, "_ocr_block_at"):
+                bid = self._ocr_block_at(x, y)
+                if bid is not None:
+                    self.edit_ocr_block_text(bid)
+                    return
 
             # DoubleClick на equipment → edit KKS (с Ctrl или без)
             clicked = self.find_node_at(x, y)
@@ -2589,10 +2874,11 @@ class AdvancedGraphEditor(SimpleGraphEditor):
         if not self._ocr_highlight:
             return
         node = self.nodes.get(node_id)
-        if not node or not node.get('kks_full'):
+        if not node:
             return
-
-        kks = node['kks_full']
+        kks = self._node_kks(node_id)
+        if not kks:
+            return
         bbox = node.get('bbox')
         cx, cy = node['centroid'][1], node['centroid'][0]
 
@@ -2630,6 +2916,33 @@ class AdvancedGraphEditor(SimpleGraphEditor):
             self.scene.removeItem(item)
         self._kks_labels.clear()
 
+    def _node_kks(self, node_id: str) -> str:
+        """KKS узла — из graph.bindings (единый источник истины). '' если нет."""
+        for b in self.model.bindings:
+            if b.get("node_id") == node_id:
+                t = (b.get("text") or "").strip()
+                if t:
+                    return t
+        return ""
+
+    def _set_node_kks(self, node_id: str, kks: str):
+        """Записать ручной KKS узла как привязку в graph.bindings.
+
+        Один узел — один KKS: убираем любые прежние привязки этого узла
+        (OCR или ручные) и ставим ручную. Пустой kks — просто снятие.
+        """
+        self.model.bindings = [
+            b for b in self.model.bindings if b.get("node_id") != node_id
+        ]
+        if kks:
+            self.model.set_binding({
+                "block_id": f"nodekks_{node_id}",
+                "node_id": node_id,
+                "kind": "node",
+                "text": kks,
+                "source": "manual_kks",
+            })
+
     def _open_kks_edit_dialog(self, node_id: str):
         """Open dialog to edit KKS of an equipment node — single text field."""
         node = self.nodes.get(node_id)
@@ -2648,7 +2961,7 @@ class AdvancedGraphEditor(SimpleGraphEditor):
 
         # Single KKS field
         form = QFormLayout()
-        kks_edit = QLineEdit(str(node.get('kks_full', '')))
+        kks_edit = QLineEdit(self._node_kks(node_id))
         kks_edit.setFont(QFont("monospace", 12))
         kks_edit.selectAll()
         form.addRow("KKS:", kks_edit)
@@ -2668,7 +2981,7 @@ class AdvancedGraphEditor(SimpleGraphEditor):
             new_kks = kks_edit.text().strip()
 
             # B6.5: нормализация через KksMatcher (если доступен config)
-            normalized = False
+            final_kks = new_kks
             if new_kks and self._project_config_dir:
                 try:
                     from pathlib import Path
@@ -2683,8 +2996,7 @@ class AdvancedGraphEditor(SimpleGraphEditor):
                         km = matcher.match(new_kks)
 
                         if km:
-                            node['kks_full'] = km.full
-                            normalized = True
+                            final_kks = km.full
                             # Валидация unit↔class (предупреждение, не блокирует)
                             cls_cfg_path = Path(self._project_config_dir) / "class_to_kks_config.yaml"
                             if cls_cfg_path.exists():
@@ -2701,10 +3013,13 @@ class AdvancedGraphEditor(SimpleGraphEditor):
                     import logging
                     logging.getLogger(__name__).warning("KKS normalization failed: %s", exc)
 
-            if not normalized:
-                node['kks_full'] = new_kks
+            # Единый источник истины — graph.bindings (node.kks_full не пишем).
+            if final_kks != self._node_kks(node_id):
+                cmd = self._ocr_push_snapshot("Ручной KKS")
+                self._set_node_kks(node_id, final_kks)
+                self._ocr_commit(cmd)
 
-            saved_kks = node['kks_full']
+            saved_kks = final_kks
 
             # Update label if visible
             if node_id in self._kks_labels:
@@ -2714,4 +3029,5 @@ class AdvancedGraphEditor(SimpleGraphEditor):
 
             # Refresh visual (fill color may change)
             self._redraw_all()
+            self.refresh_ocr_layer()
             self.update_status(f"KKS обновлён: {saved_kks}" if saved_kks else "KKS удалён")

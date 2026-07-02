@@ -739,6 +739,35 @@ async def complete_simple_graph_validation(
         db.add(artifact)
         await db.flush()
 
+    # === Safety-net слияния OCR -> граф ===
+    # Основное слияние — в конце OCR-таска. Здесь на случай, если OCR уже готов
+    # (альтернативный параллельный путь): переносим блоки в graph_validated.
+    try:
+        from app.services.ocr_graph_merge import merge_ocr_result_into_graph
+        gv_res = await db.execute(
+            select(Artifact).where(
+                Artifact.diagram_uid == uid,
+                Artifact.artifact_type == ArtifactType.GRAPH_VALIDATED,
+            )
+        )
+        gv_art = gv_res.scalar_one_or_none()
+        ocr_res = await db.execute(
+            select(Artifact).where(
+                Artifact.diagram_uid == uid,
+                Artifact.artifact_type == ArtifactType.OCR_RESULT,
+            )
+        )
+        ocr_art = ocr_res.scalar_one_or_none()
+        if gv_art and ocr_art:
+            _storage = StorageService()
+            await asyncio.to_thread(
+                merge_ocr_result_into_graph,
+                str(_storage.base_path / gv_art.file_path),
+                str(_storage.base_path / ocr_art.file_path),
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
     # Статус → VALIDATED_GRAPH. Контуры идут СЛЕДУЮЩИМ шагом; авто-пропуск
     # OCR (если отключён) происходит ПОСЛЕ контуров — в complete_contour_validation.
     diagram.status = DiagramStatus.VALIDATED_GRAPH

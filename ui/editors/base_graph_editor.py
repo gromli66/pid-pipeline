@@ -1116,14 +1116,24 @@ class BaseGraphEditor(QGraphicsView):
         else:
             super().keyReleaseEvent(event)
 
+    def _node_drag_allowed(self) -> bool:
+        """Разрешено ли перетаскивание узлов Ctrl+ЛКМ.
+
+        По умолчанию — да. Потомки ограничивают (например, только когда
+        не активен ни один инструмент), чтобы случайно не двигать узлы.
+        """
+        return True
+
     def mousePressEvent(self, event):
         if self.ctrl_pressed and event.button() == Qt.MouseButton.LeftButton:
             pos = self.mapToScene(event.pos())
             x, y = pos.x(), pos.y()
 
-            # Проверить: есть ли узел под курсором → потенциальный drag
+            # Проверить: есть ли узел под курсором → потенциальный drag.
+            # Перетаскивание разрешено только когда нет активного инструмента
+            # (иначе — отдать клик инструменту, чтобы случайно не сдвинуть узел).
             node_id = self.find_node_at(x, y)
-            if node_id:
+            if node_id and self._node_drag_allowed():
                 # Отложить решение: клик или drag (определим по движению)
                 self._ctrl_lmb_pending = True
                 self._ctrl_lmb_start_x = x
@@ -1133,7 +1143,7 @@ class BaseGraphEditor(QGraphicsView):
                 event.accept()
                 return
             else:
-                # Нет узла → сразу клик (для handler: добавить коннектор и т.п.)
+                # Нет узла или перетаскивание запрещено → сразу клик инструменту
                 self._ctrl_lmb_pending = False
                 if self._current_handler:
                     self._current_handler.on_press(self, x, y, event)

@@ -29,6 +29,13 @@ class GraphDataModel:
         self.manual_node_counter: int = 0
         self.manual_edge_counter: int = 0
         self._edge_data_index: dict[tuple[str, str], dict] = {}
+        # Единый граф-JSON: OCR текст-блоки и их привязки к узлам/рёбрам.
+        #   text_blocks — список dict: {id, bbox:[x1,y1,x2,y2], text, confidence,
+        #                 source, merged_into}
+        #   bindings    — список dict: {block_id, node_id|edge_key, kind, text, ...}
+        self.text_blocks: list[dict] = []
+        self.bindings: list[dict] = []
+        self.manual_block_counter: int = 0
 
     # =================================================================
     # I/O
@@ -104,6 +111,20 @@ class GraphDataModel:
         # 5. Build index
         self.rebuild_edge_data_index()
 
+        # 6. OCR текст-блоки и привязки (единый граф-JSON).
+        #    Устойчиво к старым файлам без этих ключей.
+        self.text_blocks = list(self.graph_data.get('text_blocks', []) or [])
+        self.bindings = list(self.graph_data.get('bindings', []) or [])
+        self.manual_block_counter = 0
+        for blk in self.text_blocks:
+            bid = str(blk.get('id', ''))
+            if bid.startswith('block_'):
+                try:
+                    n = int(bid.split('_')[-1])
+                    self.manual_block_counter = max(self.manual_block_counter, n)
+                except ValueError:
+                    pass
+
         return True
 
     def save(self, path: str) -> bool:
@@ -118,6 +139,9 @@ class GraphDataModel:
         # Sync
         self.graph_data['links'] = self.edges_data
         self.graph_data['nodes'] = list(self.nodes.values())
+        # OCR текст-блоки и привязки — часть единого графа.
+        self.graph_data['text_blocks'] = self.text_blocks
+        self.graph_data['bindings'] = self.bindings
 
         # Метаданные
         graph_meta = self.graph_data.setdefault('graph', {})
@@ -139,17 +163,26 @@ class GraphDataModel:
     # =================================================================
 
     def snapshot(self) -> tuple:
-        """Глубокая копия (nodes, edges_data, edges, graph_meta) для undo."""
+        """Глубокая копия для undo.
+
+        Формат: (nodes, edges_data, edges, graph_meta, text_blocks, bindings).
+        """
         return (
             deepcopy(self.nodes),
             deepcopy(self.edges_data),
             deepcopy(self.edges),
             deepcopy(self.graph_data.get('graph', {})),
+            deepcopy(self.text_blocks),
+            deepcopy(self.bindings),
         )
 
     def restore(self, snap: tuple):
         """Восстановить из snapshot + перестроить индексы + sync graph_data."""
-        if len(snap) == 4:
+        if len(snap) == 6:
+            (self.nodes, self.edges_data, self.edges, graph_meta,
+             self.text_blocks, self.bindings) = snap
+            self.graph_data['graph'] = graph_meta
+        elif len(snap) == 4:
             self.nodes, self.edges_data, self.edges, graph_meta = snap
             self.graph_data['graph'] = graph_meta
         else:
@@ -157,6 +190,8 @@ class GraphDataModel:
             self.nodes, self.edges_data, self.edges = snap
         self.graph_data['nodes'] = list(self.nodes.values())
         self.graph_data['links'] = self.edges_data
+        self.graph_data['text_blocks'] = self.text_blocks
+        self.graph_data['bindings'] = self.bindings
         self.rebuild_edge_data_index()
 
     # =================================================================
@@ -394,3 +429,82 @@ class GraphDataModel:
             "straight_line_distance": 0,
             "manual": True,
         }
+
+    # =================================================================
+    # OCR текст-блоки и привязки (единый граф-JSON)
+    # =================================================================
+
+    def create_text_block(self, bbox: list, text: str = "",
+                          confidence: float = 0.0,
+                          source: str = "manual") -> dict:
+        """Создать текст-блок. Инкрементирует manual_block_counter.
+
+        Returns:
+            block dict (ещё не добавлен — вызвать add_text_block()).
+        """
+        self.manual_block_counter += 1
+        return {
+            "id": f"block_{self.manual_block_counter}",
+            "bbox": [float(v) for v in bbox],
+            "text": text or "",
+            "confidence": float(confidence),
+            "source": source,
+            "merged_into": None,  # None — активен; иначе id блока-приёмника
+        }
+
+    def add_text_block(self, block: dict) -> str:
+        """Добавить текст-блок в модель. Returns block id."""
+        bid = block.get("id")
+        if not bid:
+            self.manual_block_counter += 1
+            bid = f"block_{self.manual_block_counter}"
+            block["id"] = bid
+        self.text_blocks.append(block)
+        return bid
+
+    def find_text_block(self, block_id: str) -> Optional[dict]:
+        """O(n) поиск блока по id."""
+        for blk in self.text_blocks:
+            if blk.get("id") == block_id:
+                return blk
+        return None
+
+    def remove_text_block(self, block_id: str) -> Optional[dict]:
+        """Удалить блок и все его привязки. Returns удалённый блок или None."""
+        removed = None
+        kept = []
+        for blk in self.text_blocks:
+            if blk.get("id") == block_id:
+                removed = blk
+            else:
+                kept.append(blk)
+        if removed is None:
+            return None
+        self.text_blocks = kept
+        self.bindings = [b for b in self.bindings if b.get("block_id") != block_id]
+        return removed
+
+    def set_binding(self, binding: dict):
+        """Добавить/заменить привязку блока (один блок — одна привязка)."""
+        bid = binding.get("block_id")
+        self.bindings = [b for b in self.bindings if b.get("block_id") != bid]
+        self.bindings.append(binding)
+
+    def remove_binding(self, block_id: str) -> Optional[dict]:
+        """Убрать привязку блока. Returns удалённую привязку или None."""
+        removed = None
+        kept = []
+        for b in self.bindings:
+            if b.get("block_id") == block_id:
+                removed = b
+            else:
+                kept.append(b)
+        self.bindings = kept
+        return removed
+
+    def find_binding(self, block_id: str) -> Optional[dict]:
+        """Найти привязку по block_id."""
+        for b in self.bindings:
+            if b.get("block_id") == block_id:
+                return b
+        return None

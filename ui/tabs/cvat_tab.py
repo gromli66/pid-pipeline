@@ -83,27 +83,11 @@ class CvatTab(QWidget):
         btn_refresh.clicked.connect(self._on_refresh)
         toolbar.addWidget(btn_refresh)
 
-        self.btn_confirm = QPushButton("✅ Подтвердить валидацию")
-        self.btn_confirm.setToolTip(
-            "Сохранить отредактированные аннотации в CVAT и перейти "
-            "к следующему этапу пайплайна."
+        from ui.widgets.toolbar_buttons import make_confirm_button
+        self.btn_confirm = make_confirm_button(
+            self._on_confirm,
+            tooltip="Сохранить аннотации в CVAT и перейти к следующему этапу.",
         )
-        self.btn_confirm.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                font-weight: bold;
-                padding: 8px 16px;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-            QPushButton:disabled {
-                background-color: #9E9E9E;
-            }
-        """)
-        self.btn_confirm.clicked.connect(self._on_confirm)
         toolbar.addWidget(self.btn_confirm)
 
         layout.addLayout(toolbar)
