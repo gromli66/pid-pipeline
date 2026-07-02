@@ -1,0 +1,39 @@
+# Образ для сборки Linux/Astra-клиента P&ID.
+# База manylinux_2_28 = AlmaLinux 8, glibc 2.28 → бинарник совместим с Astra 1.7 И 1.8.
+# Зависимости ставятся ОНЛАЙН с PyPI (не из локальных wheels), поэтому сборка
+# сама подтягивает актуальные версии при изменении requirements/ui.txt.
+#
+# ВАЖНО: встроенный в manylinux /opt/python собран СТАТИЧЕСКИ (без libpython.so),
+# а PyInstaller требует shared-библиотеку Python. Поэтому берём python3.11 из
+# AppStream AlmaLinux 8 — он идёт с libpython3.11.so и тем же glibc 2.28.
+FROM quay.io/pypa/manylinux_2_28_x86_64
+
+# python3.11 (shared) + системные Qt/WebEngine/X-библиотеки, которые PySide6
+# подгружает при ИМПОРТЕ на этапе анализа PyInstaller (сам GUI при сборке не
+# запускается, но .so линкуются к этим либам, иначе импорт падает). zip/tar — упаковка.
+RUN dnf -y install \
+        python3.11 python3.11-devel \
+        mesa-libGL mesa-libEGL libglvnd-glx libglvnd-egl mesa-libgbm libdrm \
+        libxkbcommon libxkbcommon-x11 libxkbfile \
+        libX11 libX11-xcb libXext libXrender libXi libXtst libXrandr \
+        libXcomposite libXdamage libXcursor libXfixes libXinerama libXScrnSaver \
+        libxcb xcb-util xcb-util-wm xcb-util-image xcb-util-keysyms xcb-util-renderutil \
+        libSM libICE fontconfig freetype pango cairo \
+        dbus-libs nss nspr alsa-lib at-spi2-core at-spi2-atk cups-libs \
+        zip tar gzip \
+    && dnf clean all
+
+# Изолированный venv сборки на shared-Python + PyInstaller (один раз в слой образа).
+# ВАЖНО: именно /usr/bin/python3.11 (dnf, с libpython3.11.so). Голое "python3.11"
+# в этом образе резолвится в статический /opt/python из manylinux — он PyInstaller-у
+# не подходит ("Python was built without a shared library").
+RUN /usr/bin/python3.11 -m venv /opt/buildvenv \
+    && /opt/buildvenv/bin/pip install --no-cache-dir --upgrade pip wheel setuptools \
+    && /opt/buildvenv/bin/pip install --no-cache-dir pyinstaller
+
+# Зависимости клиента с PyPI. Этот слой пересобирается ТОЛЬКО когда меняется
+# requirements/ui.txt — тогда всё тянется заново из интернета.
+COPY requirements/ui.txt /tmp/ui.txt
+RUN /opt/buildvenv/bin/pip install --no-cache-dir -r /tmp/ui.txt
+
+WORKDIR /src

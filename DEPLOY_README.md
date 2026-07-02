@@ -92,124 +92,53 @@ curl http://localhost:8000/health
 
 # ЧАСТЬ B. КЛИЕНТ (Astra Linux)
 
-На клиент ставится **только UI**. Модели и Docker не нужны.
+Клиент раздаётся **готовым бинарником** — Python, Qt и зависимости уже внутри.
+Ставить на клиент Python/venv/pip **не нужно**. Как собрать клиент —
+см. `deploy_ready/BUILD_CLIENT.md`; собранные архивы кладутся в `dist/release/`.
 
-## B1. Код клиента
-```bash
-sudo apt-get install -y git
-git clone -b deploy https://github.com/gromli66/pid-pipeline.git ~/pid_client
-cd ~/pid_client
-```
-(используются `ui/ app/ modules/ configs/ requirements/`).
+## B1. Установка и запуск
+1. Получить архив (ссылка из облака) и распаковать:
+   ```bash
+   tar -xzf PID-Client_astra_2026-07-02.tar.gz
+   cd PID-Client
+   ```
+2. Вписать IP сервера в `client.cfg` (строка `PID_API_URL`):
+   ```bash
+   nano client.cfg      # PID_API_URL=http://<IP-сервера>:8000
+   ```
+3. Запустить на рабочем столе Astra (не по SSH — нужен экран):
+   ```bash
+   ./run_standalone.sh
+   ```
+Бинарник собран под glibc 2.28 → работает на Astra **1.7 и 1.8** (x86_64).
+Памятка пользователю и список X/GL библиотек для «голой» системы —
+`deploy_ready/CLIENT_LINUX_README.md`.
 
-## B2. Python 3.11 и зависимости
+## B2. Обновление клиента
+Прислать новый архив (новая дата в имени) → пользователь распаковывает поверх,
+сохранив свой `client.cfg`, и запускает. Версия сборки видна в заголовке окна.
 
-**Astra с интернетом:**
-```bash
-sudo apt-get install -y python3-venv python3-pip libgl1 libegl1 libxkbcommon0 libdbus-1-3 libnss3
-python3 -m venv .venv_ui && source .venv_ui/bin/activate
-pip install -r requirements/ui.txt
-```
-> На свежей Astra 1.8 `apt` по умолчанию видит только установочный DVD, где нет
-> `python3-venv`/`python3-pip`. Подключи онлайн-репозитории и закомментируй cdrom:
-> создай `/etc/apt/sources.list.d/astra-online.list` со строками
-> `deb https://download.astralinux.ru/astra/stable/1.8_x86-64/repository-main/ 1.8_x86-64 main contrib non-free`
-> и `.../repository-extended/ ...`, закомментируй `deb cdrom:` в `/etc/apt/sources.list`,
-> затем `sudo apt-get update`. Пакет называется `libgl1` (не `libgl1-mesa-glx`).
-> Отдельный `PySide6-WebEngine` ставить не нужно — WebEngine входит в `PySide6_Addons`.
-
-**Astra в закрытом контуре (без интернета)** — офлайн-колёса:
-```bash
-# на машине с интернетом (Python 3.11 / x86_64):
-pip download -r requirements/ui.txt --python-version 311 --only-binary=:all: \
-  --platform manylinux_2_28_x86_64 --platform manylinux2014_x86_64 -d wheels_linux
-scp -r wheels_linux administrator@<IP-клиента>:~/
-# на клиенте:
-python3 -m pip install --user --break-system-packages --no-index --find-links ~/wheels_linux -r requirements/ui.txt
-```
-> На закрытой Astra нет pip/venv из коробки — ставятся с установочного DVD (`sudo apt-cdrom add`) или внутреннего зеркала. Установку велась с выключенной ЗПС; на проде с включённым ужесточением проверить отдельно.
-
-Готовый скрипт установки клиента — `deploy_ready/setup_astra_client.sh`.
-
-## B3. Запуск
-
-Запускать на **рабочем столе Astra** (не по SSH — нужен экран).
-
-**Способ 1 — готовый скрипт (рекомендуется).** Один раз вписать IP сервера, дальше просто запускать:
-```bash
-nano ~/pid_client/deploy_ready/run_ui_client.sh   # заменить REPLACE_WITH_SERVER_IP на IP сервера
-chmod +x ~/pid_client/deploy_ready/run_ui_client.sh
-~/pid_client/deploy_ready/run_ui_client.sh        # запуск клиента
-```
-Скрипт сам переходит в корень репо, активирует `.venv_ui`, выставляет `PID_API_URL`/`PID_GL_BACKEND` и стартует UI. Для повторных запусков достаточно последней строки (или двойной клик в файловом менеджере → «Запустить»).
-
-**Способ 2 — вручную:**
-```bash
-cd ~/pid_client && source .venv_ui/bin/activate
-export PID_API_URL=http://<IP-сервера>:8000
-export PID_GL_BACKEND=software
-python3 -m ui.main
-```
-
-**Обновление клиента из репозитория** (когда вышли правки в ветке `deploy`):
-```bash
-cd ~/pid_client && git pull
-```
-После `git pull` IP в `run_ui_client.sh` сохраняется (если его не трогали в репозитории); при необходимости впиши заново.
-
-## B4. Работа
+## B3. Работа
 - Список диаграмм слева загрузился → клиент подключён к серверу.
 - Загрузить схему → детекция → вкладка **CVAT** (логин `admin` / пароль из A7) → разметка → **Сохранить**.
 - Несколько клиентов работают с одним сервером одновременно, видят общие данные.
 
 # ЧАСТЬ C. КЛИЕНТ (Windows)
 
-На клиент ставится **только UI** (как в части B). Модели и Docker не нужны. Скрипт запуска — `deploy_ready/run_ui_client.bat`.
+Тоже **готовый бинарник** (`PID-Client.exe`) — ставить Python на машину пользователя не нужно.
 
-## C1. Код клиента
-Поставь **Git для Windows** (https://git-scm.com) и **Python 3.11** (https://www.python.org — при установке отметь «Add python.exe to PATH»). Затем:
-```bat
-git clone -b deploy https://github.com/gromli66/pid-pipeline.git pid_client
-cd pid_client
-```
-(используются `ui\ app\ modules\ configs\ requirements\`).
+## C1. Установка и запуск
+1. Получить `PID-Client_windows_2026-07-02.zip` (ссылка из облака) и распаковать.
+2. В `PID-Client\client.cfg` вписать IP сервера (`PID_API_URL`).
+3. Запустить `PID-Client.exe` (двойной клик).
 
-## C2. Python 3.11 и зависимости
-```bat
-py -3.11 -m venv .venv_ui
-.venv_ui\Scripts\activate
-pip install -r requirements\ui.txt
-```
-> На Windows отдельные системные библиотеки не нужны (в отличие от Astra) — PySide6 ставит всё через pip, WebEngine входит в `PySide6_Addons`. `scipy` уже в `requirements/ui.txt` (нужен для пересчёта формы контуров).
+## C2. Обновление клиента
+Прислать новый zip → распаковать поверх, сохранив `client.cfg`. Версия — в заголовке окна.
 
-## C3. Запуск
-
-**Способ 1 — готовый скрипт (рекомендуется).** Один раз вписать IP сервера, дальше просто запускать:
-```bat
-notepad deploy_ready\run_ui_client.bat   :: заменить REPLACE_WITH_SERVER_IP на IP сервера
-deploy_ready\run_ui_client.bat           :: запуск (или двойной клик в Проводнике)
-```
-Скрипт сам переходит в корень репо, активирует `.venv_ui`, выставляет `PID_API_URL`/`PID_GL_BACKEND` и стартует UI.
-
-**Способ 2 — вручную:**
-```bat
-cd pid_client
-.venv_ui\Scripts\activate
-set PID_API_URL=http://<IP-сервера>:8000
-python -m ui.main
-```
-
-**Обновление клиента** (когда вышли правки в ветке `deploy`):
-```bat
-cd pid_client
-git pull
-:: если менялся requirements/ui.txt — обнови зависимости:
-.venv_ui\Scripts\activate && pip install -r requirements\ui.txt
-```
-После `git pull` IP в `run_ui_client.bat` сохраняется (если его не трогали в репозитории); при необходимости впиши заново.
-
-## C4. Работа
-То же, что в B4: список диаграмм слева → клиент подключён к серверу; загрузка схемы → этапы → CVAT-разметка → сохранение. Клиенты Astra и Windows работают с одним сервером одновременно.
+## C3. Работа
+То же, что в B3: список диаграмм слева → клиент подключён к серверу; загрузка схемы
+→ этапы → CVAT-разметка → сохранение. Клиенты Astra и Windows работают с одним
+сервером одновременно.
 
 ---
 

@@ -2,6 +2,7 @@
 .env
 .venv/
 .venv311/
+.venv_build/
 venv/
 env/
 

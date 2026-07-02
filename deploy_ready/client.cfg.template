@@ -1,0 +1,6 @@
+# Скопируй в client.cfg рядом с PID-Client.exe и укажи адрес сервера:
+PID_API_URL=http://REPLACE_WITH_SERVER_IP:8000
+
+# Отрисовка интерфейса. По умолчанию gles (без мигания CVAT, нужна встроенная графика).
+# Если на конкретной машине CVAT мигает или не открывается — поставь software:
+PID_GL_BACKEND=gles

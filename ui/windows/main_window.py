@@ -22,6 +22,11 @@ from ui.services.status_provider import StatusProvider
 from ui.widgets.diagram_list import DiagramListWidget
 from ui.widgets.diagram_workspace import DiagramWorkspace
 from ui.widgets.upload_dialog import UploadDialog
+from ui._version import __version__ as APP_VERSION
+
+# Базовый заголовок окна: в собранном клиенте показываем версию-дату,
+# из исходников (dev) — без суффикса.
+APP_TITLE = "P&ID Pipeline" if APP_VERSION == "dev" else f"P&ID Pipeline {APP_VERSION}"
 
 
 class MainWindow(QMainWindow):
@@ -30,7 +35,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle("P&ID Pipeline")
+        self.setWindowTitle(APP_TITLE)
         self.setMinimumSize(1200, 700)
 
         # Shared services
@@ -131,14 +136,14 @@ class MainWindow(QMainWindow):
         self.workspace.load_diagram(uid, name)
         self.stack.setCurrentIndex(1)
         self.action_upload.setVisible(False)
-        self.setWindowTitle(f"P&ID Pipeline — {name}")
+        self.setWindowTitle(f"{APP_TITLE} — {name}")
 
     @Slot()
     def _on_back_to_list(self):
         """Вернуться в список диаграмм."""
         self.stack.setCurrentIndex(0)
         self.action_upload.setVisible(True)
-        self.setWindowTitle("P&ID Pipeline")
+        self.setWindowTitle(APP_TITLE)
         self.diagram_list.load_diagrams()
 
     # === Connection ===
