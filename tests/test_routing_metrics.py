@@ -300,10 +300,8 @@ def test_O3_perpendicularity_threshold_is_one_degree():
     assert not gg.compute_edge_perpendicularity((0, 0), (1000, 35), {}, {})["is_good"]
 
 
-@pytest.mark.xfail(strict=True,
-                   reason="O6 (шаг 7a): auto_fix стирает waypoints ручных "
-                          "маршрутов (_manual_route)")
 def test_O6_autofix_preserves_manual_route():
+    """O6 исправлена шагом 7a: ручные маршруты Auto-Fix не трогает."""
     nodes = {
         "a": {"id": "a", "type": "connector", "centroid": [100.0, 100.0]},
         "b": {"id": "b", "type": "connector", "centroid": [300.0, 400.0]},
@@ -513,6 +511,58 @@ def test_step6_parallel_edges_get_distinct_slots():
     sp1, sp2 = edges[0]["source_point"], edges[1]["source_point"]
     assert sp1 != sp2, "рёбра слиплись в одну точку"
     assert sp1[1] == 60 and sp2[1] == 60  # обе на правой стенке bbox
+
+
+# ---------------------------------------------------------------------------
+# 7. Шаги 7a+7b: Auto-Fix — ручные маршруты и перероутинг диагоналей
+# ---------------------------------------------------------------------------
+
+def test_step7a_manual_endpoint_follows_node():
+    """Узел цепочки сдвинулся — endpoint ручного ребра следует за ним,
+    waypoints неприкосновенны."""
+    nodes = {
+        "a": {"id": "a", "type": "connector", "centroid": [100.0, 0.0]},
+        "b": {"id": "b", "type": "connector", "centroid": [106.0, 300.0]},
+        "x": {"id": "x", "type": "connector", "centroid": [100.0, 600.0]},
+        "c": {"id": "c", "type": "connector", "centroid": [400.0, 300.0]},
+    }
+    edges = [
+        {"id": "ab", "source": "a", "target": "b", "waypoints": [],
+         "source_point": [100.0, 0.0], "target_point": [106.0, 300.0]},
+        {"id": "bx", "source": "b", "target": "x", "waypoints": [],
+         "source_point": [106.0, 300.0], "target_point": [100.0, 600.0]},
+        {"id": "bc", "source": "b", "target": "c", "_manual_route": True,
+         "source_point": [106.0, 300.0], "target_point": [400.0, 300.0],
+         "waypoints": [[250.0, 320.0]]},
+    ]
+    auto_fix_graph(nodes, edges)
+    manual = edges[2]
+    assert manual["waypoints"] == [[250.0, 320.0]], "waypoints тронуты"
+    # узел b выровнялся к y≈100, endpoint последовал за ним
+    assert abs(manual["source_point"][0] - nodes["b"]["centroid"][0]) < 3.5
+
+
+def test_step7b_autofix_replaces_diagonal_with_orthogonal_route():
+    """Невыравниваемая пара equipment: вместо прямой диагонали — ортогональный
+    маршрут (waypoints), ни одного диагонального сегмента."""
+    nodes = {
+        "E1": {"id": "E1", "type": "equipment",
+               "centroid": [100.0, 50.0], "bbox": [20, 70, 80, 130]},
+        "E2": {"id": "E2", "type": "equipment",
+               "centroid": [400.0, 450.0], "bbox": [420, 370, 480, 430]},
+    }
+    edges = [{"id": "d", "source": "E1", "target": "E2", "waypoints": [],
+              "source_point": [100.0, 80.0], "target_point": [400.0, 420.0]}]
+    auto_fix_graph(nodes, edges)
+    e = edges[0]
+    sp, tp = e["source_point"], e["target_point"]
+    pts = ([(sp[1], sp[0])] + [(w[1], w[0]) for w in e["waypoints"]]
+           + [(tp[1], tp[0])])
+    for i in range(len(pts) - 1):
+        a, b = pts[i], pts[i + 1]
+        assert abs(a[0] - b[0]) < 0.5 or abs(a[1] - b[1]) < 0.5, \
+            f"диагональ осталась: {a}→{b}"
+    assert e["waypoints"], "маршрут не построен"
 
 
 if __name__ == "__main__":

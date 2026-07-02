@@ -342,6 +342,50 @@ def _polygon_connection_point(
 
 
 # ═══════════════════════════════════════════════════════════════
+# Orthogonal reroute helpers (шаг 7b)
+# ═══════════════════════════════════════════════════════════════
+
+_CONN_VBOX_R = 8  # синхронно с BaseGraphEditor.CONNECTOR_MARKER_RADIUS
+
+
+def _vbox(n: dict) -> list:
+    """Виртуальный bbox узла: equipment → реальный, иначе бокс вокруг центра."""
+    bb = n.get('bbox')
+    if n.get('type') != 'connector' and bb and len(bb) == 4:
+        return bb
+    cx, cy = n['centroid'][1], n['centroid'][0]
+    r = _CONN_VBOX_R
+    return [cx - r, cy - r, cx + r, cy + r]
+
+
+def _side_of(bbox: list, x: float, y: float) -> str:
+    d = {
+        'left': abs(x - bbox[0]), 'right': abs(x - bbox[2]),
+        'top': abs(y - bbox[1]), 'bottom': abs(y - bbox[3]),
+    }
+    return min(d, key=d.get)
+
+
+def _orthogonal_waypoints(edge: dict, sp: list, tp: list, nodes: dict) -> list:
+    """Ортогональный маршрут между уже вычисленными endpoint'ами (7b).
+
+    Вместо диагонали — route_edge с обходом узлов. Импорт локальный,
+    чтобы модуль остался автономным при отсутствии edge_routing."""
+    from ui.editors.edge_routing import route_edge
+    src, tgt = nodes[edge['source']], nodes[edge['target']]
+    sbb, tbb = _vbox(src), _vbox(tgt)
+    obstacles = [
+        _vbox(n) for nid, n in nodes.items()
+        if nid not in (edge['source'], edge['target'])
+    ]
+    return route_edge(
+        (sp[1], sp[0]), (tp[1], tp[0]),
+        _side_of(sbb, sp[1], sp[0]), _side_of(tbb, tp[1], tp[0]),
+        sbb, tbb, obstacles, [],
+    )
+
+
+# ═══════════════════════════════════════════════════════════════
 # Main algorithm
 # ═══════════════════════════════════════════════════════════════
 
@@ -377,6 +421,8 @@ def auto_fix_graph(
         'nodes_moved': 0, 'total_shift_px': 0.0,
         'edges_straightened': 0, 'passes': 0,
         'overlaps_fixed': 0,
+        'manual_kept': 0,      # 7a: ручные маршруты сохранены
+        'edges_rerouted': 0,   # 7b: диагонали заменены ортогональным маршрутом
     }
 
     def _cx(n: dict) -> float:
@@ -653,6 +699,19 @@ def auto_fix_graph(
         if not src or not tgt:
             continue
 
+        # 7a: ручной маршрут неприкосновенен — endpoints следуют за своими
+        # узлами (на дельту сдвига), waypoints не трогаются вовсе.
+        if e.get('_manual_route'):
+            for node_obj, nid, pkey in ((src, e['source'], 'source_point'),
+                                        (tgt, e['target'], 'target_point')):
+                pt = e.get(pkey)
+                if pt and nid in orig_pos:
+                    ox, oy = orig_pos[nid]
+                    pt[1] += _cx(node_obj) - ox
+                    pt[0] += _cy(node_obj) - oy
+            stats['manual_kept'] += 1
+            continue
+
         sx, sy = _cx(src), _cy(src)
         tx, ty = _cx(tgt), _cy(tgt)
         src_bbox = src.get('bbox') if src.get('bbox') and len(
@@ -749,7 +808,15 @@ def auto_fix_graph(
                     e['source_point'] = [src_pt[1], src_pt[0]]
                     e['target_point'] = [tgt_pt[1], tgt_pt[0]]
 
+            # 7b: если соединение осталось диагональным — ортогональный
+            # маршрут в обход узлов вместо прямой диагонали.
             e['waypoints'] = []
+            sp, tp = e.get('source_point'), e.get('target_point')
+            if sp and tp and abs(sp[1] - tp[1]) > STRAIGHT_TOL \
+                    and abs(sp[0] - tp[0]) > STRAIGHT_TOL:
+                e['waypoints'] = _orthogonal_waypoints(e, sp, tp, nodes)
+                if e['waypoints']:
+                    stats['edges_rerouted'] += 1
 
     # ─── Final statistics ──────────────────────────────────────
     total_shift = 0.0
