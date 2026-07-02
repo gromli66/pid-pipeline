@@ -45,7 +45,7 @@ from ui.editors.graph_geometry import (
     node_orientation_by_edges,
 )
 from ui.editors.edge_routing import distribute_connection_points, route_edge as route_edge_v2, segment_intersects_bbox
-from ui.editors.optimize_core import compute_optimized_route
+from ui.editors.optimize_core import compute_optimized_route, optimize_all_routes
 from ui.editors.autofix_chains import auto_fix_graph
 from ui.editors.ocr_layer_mixin import (
     OcrLayerMixin, AddOcrBlockHandler, OcrBindHandler,
@@ -642,18 +642,45 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         return True
 
     def optimize_all_edges(self) -> int:
-        """Оптимизировать все неперпендикулярные рёбра."""
-        optimized = 0
-        edges_to_optimize = [
-            key for key, info in self.edge_perp_scores.items()
-            if not info.get('is_good', True)
-        ]
-        for node_a, node_b in edges_to_optimize:
-            if self.optimize_edge(node_a, node_b):
-                optimized += 1
-        self.update_status(f"Оптимизировано {optimized} рёбер из {len(edges_to_optimize)}")
+        """Оптимизировать все рёбра с учётом друг друга (шаг 6).
+
+        Фазы в optimize_core.optimize_all_routes: стороны → слоты →
+        роутинг от коротких к длинным → второй проход по пересечениям.
+        Вся операция — один SnapshotCommand (один Ctrl+Z).
+        """
+        from ui.editors.undo_manager import SnapshotCommand
+        cmd = SnapshotCommand(self.model, self._redraw_all)
+        cmd.execute()
+        cmd.description = "Оптимизировать все"
+
+        stats = optimize_all_routes(
+            self.nodes, self.edges_data,
+            conn_radius=self.CONNECTOR_MARKER_RADIUS)
+
+        # perp-оценки: маршрут с изломами «хороший», прямые — по углу
+        for e in self.edges_data:
+            src_id, tgt_id = e.get('source'), e.get('target')
+            if src_id not in self.nodes or tgt_id not in self.nodes:
+                continue
+            key = self.model.edge_key(src_id, tgt_id)
+            sp, tp = e.get('source_point'), e.get('target_point')
+            if e.get('waypoints'):
+                self.edge_perp_scores[key] = {
+                    'is_good': True, 'score': 1.0, 'source_angle': 0}
+            elif sp and tp:
+                self.edge_perp_scores[key] = compute_edge_perpendicularity(
+                    (sp[1], sp[0]), (tp[1], tp[0]),
+                    get_node_geometry(self.nodes[src_id]),
+                    get_node_geometry(self.nodes[tgt_id]))
+
+        self._redraw_all()
+        cmd.finalize()
+        self.undo_mgr.push_executed(cmd)
+        self.update_status(
+            f"Оптимизировано {stats['routed']} рёбер, второй проход: "
+            f"{stats['second_pass']}, осталось пересечений: {stats['crossings_left']}")
         self.update_statistics()
-        return optimized
+        return stats['routed']
 
     def get_perpendicularity_stats(self) -> dict:
         """Статистика перпендикулярности."""

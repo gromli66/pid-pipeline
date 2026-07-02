@@ -467,6 +467,54 @@ def test_step5_core_manual_endpoints_preserved():
     assert r["target_point"] == [95.0, 260.0]
 
 
+# ---------------------------------------------------------------------------
+# 6. Шаг 6: «Оптимизировать все» — совместный роутинг
+# ---------------------------------------------------------------------------
+
+def test_step6_optimize_all_zero_metrics_on_real_graph():
+    """0 пересечений, 0 диагоналей, 0 сквозь узлы; сходимость за 2 прогона."""
+    from ui.editors.optimize_core import optimize_all_routes
+    path = next((p for p in GRAPHS
+                 if p.parent.parent.name.startswith("4464be08")), None)
+    if path is None:
+        pytest.skip("нет графа 4464be08")
+    nodes, edges = _load_graph(path)
+    n2, e2 = deepcopy(nodes), deepcopy(edges)
+    stats = optimize_all_routes(n2, e2)
+    assert stats["routed"] == len(e2)
+    m = compute_metrics(n2, e2)
+    assert m["crossings"] == 0, m
+    assert m["diagonal"] == 0, m
+    assert m["through_bbox"] == 0, m
+    # сходимость: после второго прогона третий не меняет ни одного ребра
+    optimize_all_routes(n2, e2)
+    snap2 = [(e["source_point"], e["target_point"], e["waypoints"])
+             for e in e2]
+    optimize_all_routes(n2, e2)
+    snap3 = [(e["source_point"], e["target_point"], e["waypoints"])
+             for e in e2]
+    assert snap2 == snap3
+
+
+def test_step6_parallel_edges_get_distinct_slots():
+    """Два ребра одной стороны equipment получают разные точки прикрепления."""
+    from ui.editors.optimize_core import optimize_all_routes
+    nodes = {
+        "A": {"id": "A", "type": "equipment",
+              "centroid": [45.0, 30.0], "bbox": [0, 0, 60, 90]},
+        "c1": {"id": "c1", "type": "connector", "centroid": [30.0, 200.0]},
+        "c2": {"id": "c2", "type": "connector", "centroid": [60.0, 200.0]},
+    }
+    edges = [
+        {"id": "E1", "source": "A", "target": "c1", "waypoints": []},
+        {"id": "E2", "source": "A", "target": "c2", "waypoints": []},
+    ]
+    optimize_all_routes(nodes, edges)
+    sp1, sp2 = edges[0]["source_point"], edges[1]["source_point"]
+    assert sp1 != sp2, "рёбра слиплись в одну точку"
+    assert sp1[1] == 60 and sp2[1] == 60  # обе на правой стенке bbox
+
+
 if __name__ == "__main__":
     # Печать метрик всех графов — для заполнения BASELINE.
     for p in _graph_files():
