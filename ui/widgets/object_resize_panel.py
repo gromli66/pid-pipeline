@@ -49,6 +49,7 @@ class ObjectResizePanel(QFrame):
         self.on_filter = None           # (kind: 'box'|'poly') -> None
         self.on_apply = None            # (width:int|None, height:int|None, scale:float|None) -> None
         self.on_preview = None          # (width, height, scale) -> None — живое превью
+        self.on_visibility = None       # (shown: bool) -> None — панель показана/скрыта
 
         self._populating = False
         self._updating = False          # подавляет превью при программном set_state
@@ -297,6 +298,7 @@ class ObjectResizePanel(QFrame):
         self._anim.setEndValue(self._rect(True))
         self._anim.start()
         self._shown = True
+        self._cb(self.on_visibility, True)
 
     def hide_panel(self):
         self._anim.stop()
@@ -309,6 +311,7 @@ class ObjectResizePanel(QFrame):
         self._anim.finished.connect(self.hide)
         self._anim.start()
         self._shown = False
+        self._cb(self.on_visibility, False)
 
     @property
     def is_shown(self) -> bool:

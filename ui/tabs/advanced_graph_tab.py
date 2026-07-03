@@ -305,6 +305,10 @@ class AdvancedGraphTab(SimpleGraphTab):
         for hexc, name in self._EDGE_PALETTE:
             act = self._edge_palette_menu.addAction(self._color_icon(hexc), name)
             act.triggered.connect(lambda checked=False, c=hexc: self._on_edge_color_selected(c))
+        self._edge_palette_menu.addSeparator()
+        act_custom = self._edge_palette_menu.addAction("Свой цвет (RGB/hex)…")
+        act_custom.setToolTip("Задать цвет числами: RGB, HSV или hex-код")
+        act_custom.triggered.connect(self._pick_custom_edge_color)
         self.btn_edge_swatch.setMenu(self._edge_palette_menu)
         row.addWidget(self.btn_edge_swatch)
         self._update_edge_swatch(self._current_edge_color)
@@ -370,8 +374,16 @@ class AdvancedGraphTab(SimpleGraphTab):
             p.on_filter = lambda kind: self._editor and self._editor.resize_filter(kind)
             p.on_preview = lambda w, h, s: self._editor and self._editor.preview_resize(w, h, s)
             p.on_apply = lambda w, h, s: self._editor and self._editor.apply_resize(w, h, s)
+            p.on_visibility = self._on_resize_panel_visibility
             self._resize_panel = p
         return self._resize_panel
+
+    def _on_resize_panel_visibility(self, shown: bool):
+        """Панель показана → сдвинуть видимую область редактора вправо,
+        чтобы панель не перекрывала левый край листа; скрыта → вернуть."""
+        from ui.widgets.object_resize_panel import PANEL_WIDTH
+        if self._editor and hasattr(self._editor, "set_left_gutter"):
+            self._editor.set_left_gutter(PANEL_WIDTH if shown else 0)
 
     def _update_resize_panel_bounds(self):
         p = getattr(self, "_resize_panel", None)
@@ -532,6 +544,16 @@ class AdvancedGraphTab(SimpleGraphTab):
             f"QPushButton {{ background-color: {hexc}; border: 1px solid {border}; "
             f"border-radius: 3px; }}"
         )
+
+    @Slot()
+    def _pick_custom_edge_color(self):
+        """Диалог произвольного цвета: RGB/HSV числами или hex-код."""
+        from PySide6.QtWidgets import QColorDialog
+        color = QColorDialog.getColor(
+            QColor(self._current_edge_color), self, "Цвет ребра",
+        )
+        if color.isValid():
+            self._on_edge_color_selected(color.name())
 
     @Slot()
     def _on_edge_color_selected(self, hexc: str):

@@ -227,6 +227,15 @@ class BaseGraphEditor(QGraphicsView):
         self.setSceneRect(QRectF(0, 0, self.img_width, self.img_height))
         self.fitInView(self.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
+    def set_left_gutter(self, px: int):
+        """Отступ слева у видимой области (px виджета).
+
+        Используется, когда поверх редактора слева выезжает панель
+        (например, «Размер объектов»): контент сдвигается вправо и панель
+        ничего не перекрывает — левый край листа остаётся доступен.
+        """
+        self.setViewportMargins(max(0, int(px)), 0, 0, 0)
+
     def _redraw_all(self):
         """Перерисовать без перезагрузки фона (Z=0). Advanced переопределяет для grid."""
         # Удаляем всё кроме фона

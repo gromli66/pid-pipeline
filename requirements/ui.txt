@@ -29,3 +29,7 @@ PyMuPDF>=1.24.0
 
 # Нужен для пересчёта центроида формы (modules.graph.core.tracing)
 scipy>=1.10.0
+
+# Эндпоинты труб на вкладке валидации pipe (ui.editors.endpoint_overlay:
+# skeletonize/remove_small_objects). Без него маркеры молча не отображаются.
+scikit-image>=0.22.0

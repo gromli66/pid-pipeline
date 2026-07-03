@@ -11,14 +11,22 @@ Live-эндпоинты маски труб для PolylineMaskEditor (вкла�
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 try:
     from skimage.morphology import skeletonize, remove_small_objects
     from scipy.ndimage import convolve
     _SKIMAGE_OK = True
-except Exception:  # pragma: no cover
+except Exception as _imp_exc:  # pragma: no cover
     _SKIMAGE_OK = False
+    logger.warning(
+        "Эндпоинты труб отключены: не удалось импортировать skimage/scipy (%s). "
+        "Установите scikit-image (см. requirements/ui.txt).", _imp_exc
+    )
 
 try:
     import cv2
