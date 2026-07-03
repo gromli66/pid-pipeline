@@ -33,3 +33,8 @@ scipy>=1.10.0
 # Эндпоинты труб на вкладке валидации pipe (ui.editors.endpoint_overlay:
 # skeletonize/remove_small_objects). Без него маркеры молча не отображаются.
 scikit-image>=0.22.0
+
+# KKS-нормализация и text_binding конфиги в ручной правке
+# (modules.kks_binding.config, modules.text_binding.config).
+# Без него эти функции молча отключаются (try/except в редакторе).
+PyYAML>=6.0
