@@ -316,15 +316,25 @@ class CVATClient:
     ) -> Path:
         """
         Экспортировать аннотации из task.
-        CVAT API v2:
-        1. GET /api/tasks/{id}/dataset?format=... - запросить экспорт (вернёт 202)
-        2. GET /api/tasks/{id}/dataset?format=...&action=download - скачать
+
+        CVAT API v2 (проверено на v2.25.0):
+        1. GET /api/tasks/{id}/annotations?format=...                  — запустить экспорт (202)
+        2. GET /api/tasks/{id}/annotations?format=...&action=download  — скачать
+
+        Используем /annotations (только разметка), а НЕ /dataset: картинка
+        пайплайну не нужна (оригинал лежит в storage/{uid}/original/), а на
+        больших схемах (~15000x7000) упаковка изображения резко замедляет
+        экспорт и грузит cvat_worker_export.
+
+        Пока экспорт готовится, CVAT 2.25 отвечает 400 "Dataset export has not
+        been finished yet" (в старых версиях был 202) — это НЕ ошибка,
+        продолжаем ждать.
         """
         headers = self._get_headers()
 
         # Шаг 1: Запросить экспорт (GET без action)
         response = self._client.get(
-            f"/api/tasks/{task_id}/dataset",
+            f"/api/tasks/{task_id}/annotations",
             headers=headers,
             params={"format": format_name},
         )
@@ -341,7 +351,7 @@ class CVATClient:
             download_headers = self._get_headers(for_download=True)
 
             response = self._client.get(
-                f"/api/tasks/{task_id}/dataset",
+                f"/api/tasks/{task_id}/annotations",
                 headers=download_headers,
                 params={"format": format_name, "action": "download"},
                 follow_redirects=True,
@@ -353,6 +363,10 @@ class CVATClient:
                 if "application/zip" in content_type or "application/octet-stream" in content_type or len(response.content) > 100:
                     break
             elif response.status_code == 202:
+                # Старое поведение CVAT: экспорт ещё готовится
+                continue
+            elif response.status_code == 400 and "not been finished" in response.text.lower():
+                # CVAT 2.25: экспорт ещё готовится — это не ошибка, ждём дальше
                 continue
             else:
                 raise Exception(f"Export download failed: {response.status_code} {response.text}")
