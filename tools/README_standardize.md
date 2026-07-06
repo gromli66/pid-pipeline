@@ -33,10 +33,15 @@
 
 Всё считается уже в целевых координатах 1920×1080:
 
-1. **Letterbox** — общий bbox содержимого равномерно вписывается в 1920×1080 с
-   центрированием. Пересчитываются ВСЕ координаты/размеры: layoutX/Y, prefW/H,
-   width/height, Line, Polyline, Polygon points, Rectangle, Circle/Arc, strokeWidth,
-   шрифты (Font size и `-fx-font-size`), Rotate pivot.
+1. **Letterbox (+ поля под подписи)** — общий bbox содержимого равномерно вписывается
+   в 1920×1080 с центрированием. Пересчитываются ВСЕ координаты/размеры: layoutX/Y,
+   prefW/H, width/height, Line, Polyline, Polygon points, Rectangle, Circle/Arc,
+   strokeWidth, шрифты (Font size и `-fx-font-size`), Rotate pivot. Через
+   `pad_top/pad_bottom/pad_left/pad_right` резервируются свободные полосы: холст
+   ОСТАЁТСЯ 1920×1080, контент пропорционально вписывается между полями (единый
+   масштаб, без искажений и смещений). Полосы — это ФОН `AnchorPane` (не отдельная
+   сущность, просто сдвиг). В пайплайне 1920×1080 по умолчанию сверху **100** /
+   снизу **50** px под подписи.
 2. **Клапаны** — измеренная «талия» скина (`waist` в `skin_geometry.json`) сажается
    на ось подключённой трубы; затем концы труб **дотягиваются до реальной графики
    скина** через letterbox-паддинг (ортогонально, вдоль сегмента). Сам скин не
@@ -46,16 +51,21 @@
    `K=1.5`) и прижимаем **рендер-ребро** к концу подводящей трубы — тело уходит в
    сторону, не наезжая на ребро.
 4. **Разрывы мостов** (id `*_b0/_b1`) — половинки раздвигаются до видимого зазора
-   (`max(6px, 2.5·strokeWidth)`), иначе на сжатом листе разрыв не виден.
+   `gap = MULT · max(6px, 2.5·strokeWidth) · (1 + α·log2(sw_max/sw))`: базово ×2
+   (`MULT = BRIDGE_GAP_MULT = 2.0` — «ручка»), плюс лог-надбавка тонким линиям
+   (чем тоньше — тем больше). Зазор ограничен длиной сегмента (каждая половинка ≥
+   `keep`), чтобы линии не исчезли. `MULT`/`α` — параметры `bridge_gap_mult` /
+   `bridge_thin_alpha`; «ручку» можно позже тянуть из UI.
 5. Корню ставится `prefWidth=1920 prefHeight=1080`.
 
 ## Файлы
 
 - **`fxml_standardize.py`** — стандартизатор. CLI + библиотека.
-  - `standardize(in_path, out_path, geo=None, mode="letterbox", margin=0.0)` — файл→файл.
-  - `standardize_xml(xml, geo=None, mode="letterbox", margin=0.0) -> str` — строка→строка
-    (in-memory, без временных файлов; используется воркером). `<?import?>`/комментарии
-    сохраняются.
+  - `standardize(in_path, out_path, geo=None, mode="letterbox", margin=0.0,
+    pad_top=0, pad_bottom=0, pad_left=0, pad_right=0, bridge_gap_mult=2.0)` — файл→файл.
+  - `standardize_xml(xml, geo=None, mode="letterbox", pad_top=0, pad_bottom=0, …,
+    bridge_gap_mult=2.0) -> str` — строка→строка (in-memory, без временных файлов;
+    используется воркером). `<?import?>`/комментарии сохраняются.
 - **`skin_geometry.json`** — геометрия по `skinType` (canvas, `aspect_hw`, `contact`,
   `waist`). Читают и стандартизатор, и генератор.
 - **`fxml_preview.py`** — рендер FXML в PNG без JavaFX/SceneBuilder (виден след скина).
@@ -73,7 +83,9 @@ python3 tools/fxml_preview.py my_sheet_1920x1080.fxml -o preview.png
 ```
 
 Флаги: `--mode letterbox|aspect|full` (по умолчанию `letterbox` — рекомендуется),
-`--margin N` (поля, px), `--geo path` (своя таблица).
+`--margin N` (равные поля, px), `--pad-top/--pad-bottom/--pad-left/--pad-right N`
+(асимметричные поля под подписи), `--bridge-gap-mult K` (множитель зазора мостов,
+стандарт 2.0), `--geo path` (своя таблица).
 
 - `letterbox` — размер + пассы 2–4 (талия/линии/датчики/мосты). Раскладка и привязки
   линий сохраняются; форму боксов клапанов не меняем. **Рекомендуется.**
@@ -92,8 +104,8 @@ UI: _ask_page_size() → "1920x1080"
   → api_client.generate_fxml(page_size)
   → POST /api/graph/{uid}/generate-fxml?page_size=1920x1080
   → celery task_generate_fxml(page_size="1920x1080")
-  → generate_fxml(page_size=None)         # пиксельные координаты
-  → standardize_xml(...)                  # letterbox + фикс скинов/датчиков/мостов
+  → generate_fxml(page_size=None)              # пиксельные координаты
+  → standardize_xml(pad_top=100, pad_bottom=50)  # letterbox + поля(фон) + фикс скинов/датчиков/мостов
   → fxml/diagram.fxml
 ```
 

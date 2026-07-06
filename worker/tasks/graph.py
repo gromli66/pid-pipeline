@@ -585,6 +585,7 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None):
                 _geo_path = _Path(__file__).resolve().parents[2] / "tools" / "skin_geometry.json"
                 fxml_content = standardize_xml(
                     fxml_content, geo=load_geo(str(_geo_path)), mode="letterbox",
+                    pad_top=100.0, pad_bottom=50.0,   # свободные полосы под подписи (фон, не сущность)
                 )
                 logger.info("FXML standardized to 1920x1080")
             except Exception as exc:

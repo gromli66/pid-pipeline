@@ -46,6 +46,7 @@ symbol-полигонов): он в ГЕНЕРАТОРЕ — труба прих
 
 import argparse
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -53,6 +54,13 @@ from lxml import etree
 
 TARGET_W = 1920.0
 TARGET_H = 1080.0
+
+# Мосты: зазор разрыва = MULT * base * (1 + ALPHA*log2(sw_max/sw)), где base растёт
+# для тонких линий (лог-шкала), с клампом по длине сегмента — половинки не исчезают.
+# BRIDGE_GAP_MULT — «ручка» (стандарт x2); её потом можно тянуть из UI.
+BRIDGE_GAP_MULT = 2.0
+BRIDGE_THIN_ALPHA = 0.5
+BRIDGE_GAP_MIN = 6.0
 
 X_LAYOUT = {"layoutX", "translateX"}
 Y_LAYOUT = {"layoutY", "translateY"}
@@ -271,9 +279,16 @@ def fix_skins(root, geo, apply_contact=False):
     return n
 
 
-def _standardize_tree(tree, root, geo=None, mode="letterbox", margin=0.0):
+def _standardize_tree(tree, root, geo=None, mode="letterbox", margin=0.0,
+                      pad_top=0.0, pad_bottom=0.0, pad_left=0.0, pad_right=0.0,
+                      bridge_gap_mult=BRIDGE_GAP_MULT, bridge_thin_alpha=BRIDGE_THIN_ALPHA):
     """Ядро пайплайна: применяет все пассы к уже разобранному дереву (координаты
-    приводятся к 1920x1080). Общее для файлового и in-memory входа."""
+    приводятся к 1920x1080). Общее для файлового и in-memory входа.
+
+    pad_top/bottom/left/right — асимметричные поля (px) под подписи: холст ОСТАЁТСЯ
+    1920x1080, контент пропорционально вписывается и центрируется в прямоугольнике
+    между полями (масштаб единый, без искажений). Если поле = 0, берётся `margin`.
+    bridge_gap_mult — множитель зазора мостов («ручка»)."""
     nfix = fix_skins(root, geo, apply_contact=(mode == "full")) if (mode in ("aspect", "full") and geo) else 0
 
     bbox = content_bbox(root)
@@ -282,10 +297,14 @@ def _standardize_tree(tree, root, geo=None, mode="letterbox", margin=0.0):
         return None
     minx, miny, maxx, maxy = bbox
     cw, ch = max(1e-6, maxx - minx), max(1e-6, maxy - miny)
-    avail_w, avail_h = TARGET_W - 2*margin, TARGET_H - 2*margin
+    pt = pad_top or margin
+    pb = pad_bottom or margin
+    pl = pad_left or margin
+    pr = pad_right or margin
+    avail_w, avail_h = TARGET_W - pl - pr, TARGET_H - pt - pb
     s = min(avail_w / cw, avail_h / ch)
-    offx = margin + (avail_w - cw * s) / 2.0 - minx * s
-    offy = margin + (avail_h - ch * s) / 2.0 - miny * s
+    offx = pl + (avail_w - cw * s) / 2.0 - minx * s
+    offy = pt + (avail_h - ch * s) / 2.0 - miny * s
 
     apply_transform(root, s, offx, offy)
 
@@ -463,6 +482,10 @@ def _standardize_tree(tree, root, geo=None, mode="letterbox", margin=0.0):
         m = re.match(r"(.+)_b(\d+)$", el.attrib.get("{http://javafx.com/fxml/1}id", "") or "")
         if m:
             bseg.setdefault(m.group(1), []).append((int(m.group(2)), el))
+    # опорная толщина для лог-шкалы зазора: макс. strokeWidth среди мостовых сегментов
+    _sws = [fnum(e.attrib.get("strokeWidth")) for _segs in bseg.values() for _i, e in _segs]
+    _sws = [v for v in _sws if v]
+    sw_max = max(_sws) if _sws else 1.0
     for base, segs in bseg.items():
         if len(segs) < 2:
             continue
@@ -484,10 +507,23 @@ def _standardize_tree(tree, root, geo=None, mode="letterbox", margin=0.0):
             d, (k0, x0, y0), (k1, x1, y1) = best
             gap = d ** 0.5
             sw = fnum(e0.attrib.get("strokeWidth")) or 1.0
-            target = max(6.0, 2.5 * sw)
+            # база + лог-шкала (тоньше линия -> больше зазор) + множитель-«ручка»
+            base_gap = max(BRIDGE_GAP_MIN, 2.5 * sw)
+            thin = math.log2(sw_max / sw) if (sw_max > sw > 0) else 0.0
+            target = bridge_gap_mult * base_gap * (1.0 + bridge_thin_alpha * thin)
+            cxg, cyg = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+            # защита от исчезновения: каждая половинка остаётся не короче keep
+            outer0 = next(((xx, yy) for kk, xx, yy in E0 if kk != k0 and xx is not None), None)
+            outer1 = next(((xx, yy) for kk, xx, yy in E1 if kk != k1 and xx is not None), None)
+            keep = max(2.0, sw)
+            if outer0 and outer1:
+                d0 = ((outer0[0] - cxg) ** 2 + (outer0[1] - cyg) ** 2) ** 0.5
+                d1 = ((outer1[0] - cxg) ** 2 + (outer1[1] - cyg) ** 2) ** 0.5
+                half_max = min(d0, d1) - keep
+                if half_max > 0:
+                    target = min(target, 2.0 * half_max)
             if gap >= target:
                 continue
-            cxg, cyg = (x0 + x1) / 2.0, (y0 + y1) / 2.0
             dx, dy = x1 - x0, y1 - y0
             L = (dx * dx + dy * dy) ** 0.5
             if L < 1e-6:
@@ -509,12 +545,16 @@ def _standardize_tree(tree, root, geo=None, mode="letterbox", margin=0.0):
                 minx=minx, miny=miny, maxx=maxx, maxy=maxy, cw=cw, ch=ch)
 
 
-def standardize(in_path, out_path, geo=None, mode="letterbox", margin=0.0, verbose=True):
+def standardize(in_path, out_path, geo=None, mode="letterbox", margin=0.0, verbose=True,
+                pad_top=0.0, pad_bottom=0.0, pad_left=0.0, pad_right=0.0,
+                bridge_gap_mult=BRIDGE_GAP_MULT, bridge_thin_alpha=BRIDGE_THIN_ALPHA):
     """Файловый вход: разобрать FXML-файл, применить пайплайн, записать результат."""
     parser = etree.XMLParser(remove_blank_text=False, remove_comments=False)
     tree = etree.parse(str(in_path), parser)
     root = tree.getroot()
-    info = _standardize_tree(tree, root, geo=geo, mode=mode, margin=margin)
+    info = _standardize_tree(tree, root, geo=geo, mode=mode, margin=margin,
+                             pad_top=pad_top, pad_bottom=pad_bottom, pad_left=pad_left, pad_right=pad_right,
+                             bridge_gap_mult=bridge_gap_mult, bridge_thin_alpha=bridge_thin_alpha)
     if info is None:
         return None
     tree.write(str(out_path), xml_declaration=True, encoding="UTF-8", pretty_print=True)
@@ -526,18 +566,23 @@ def standardize(in_path, out_path, geo=None, mode="letterbox", margin=0.0, verbo
     return info
 
 
-def standardize_xml(xml, geo=None, mode="letterbox", margin=0.0):
+def standardize_xml(xml, geo=None, mode="letterbox", margin=0.0,
+                    pad_top=0.0, pad_bottom=0.0, pad_left=0.0, pad_right=0.0,
+                    bridge_gap_mult=BRIDGE_GAP_MULT, bridge_thin_alpha=BRIDGE_THIN_ALPHA):
     """In-memory вход: FXML-строка (или байты) -> стандартизованная FXML-строка.
 
     Для воркера: не пишет временных файлов. `<?import?>`/`<?xml?>` и комментарии
     сохраняются. При отсутствии содержимого возвращает исходный FXML без изменений.
+    pad_* — поля под подписи (px); bridge_gap_mult — «ручка» зазора мостов.
     """
     import io
     parser = etree.XMLParser(remove_blank_text=False, remove_comments=False)
     data = xml.encode("utf-8") if isinstance(xml, str) else xml
     tree = etree.parse(io.BytesIO(data), parser)
     root = tree.getroot()
-    if _standardize_tree(tree, root, geo=geo, mode=mode, margin=margin) is None:
+    if _standardize_tree(tree, root, geo=geo, mode=mode, margin=margin,
+                         pad_top=pad_top, pad_bottom=pad_bottom, pad_left=pad_left, pad_right=pad_right,
+                         bridge_gap_mult=bridge_gap_mult, bridge_thin_alpha=bridge_thin_alpha) is None:
         return xml if isinstance(xml, str) else data.decode("utf-8")
     return etree.tostring(tree, xml_declaration=True, encoding="UTF-8",
                           pretty_print=True).decode("utf-8")
@@ -553,11 +598,20 @@ def main():
                          "скина по оси подходящих линий; full: + contact-offset")
     ap.add_argument("--fix-skins", action="store_true", help="алиас для --mode full")
     ap.add_argument("--margin", type=float, default=0.0)
+    ap.add_argument("--pad-top", type=float, default=0.0, help="поле сверху под подписи, px")
+    ap.add_argument("--pad-bottom", type=float, default=0.0, help="поле снизу под подписи, px")
+    ap.add_argument("--pad-left", type=float, default=0.0)
+    ap.add_argument("--pad-right", type=float, default=0.0)
+    ap.add_argument("--bridge-gap-mult", type=float, default=BRIDGE_GAP_MULT,
+                    help="множитель зазора мостов («ручка»); стандарт 2.0")
     args = ap.parse_args()
     mode = "full" if args.fix_skins else args.mode
     out = args.output or str(Path(args.input).with_suffix("").as_posix() + "_1920x1080.fxml")
     geo = load_geo(args.geo)
-    standardize(args.input, out, geo=geo, mode=mode, margin=args.margin)
+    standardize(args.input, out, geo=geo, mode=mode, margin=args.margin,
+                pad_top=args.pad_top, pad_bottom=args.pad_bottom,
+                pad_left=args.pad_left, pad_right=args.pad_right,
+                bridge_gap_mult=args.bridge_gap_mult)
 
 
 if __name__ == "__main__":
