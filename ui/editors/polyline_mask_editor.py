@@ -346,13 +346,15 @@ class PolylineMaskEditor(QGraphicsView):
         for ann in self.coco_annotations:
             drawn = False
 
-            # Segmentation polygon (priority)
-            if "segmentation" in ann and ann["segmentation"]:
-                for poly_coords in ann["segmentation"]:
-                    if len(poly_coords) >= 6:
+            # Segmentation polygon (priority).
+            # Рисуем только список полигонов [[x,y,...]]; RLE-словарь и прочее -> bbox.
+            seg = ann.get("segmentation")
+            if isinstance(seg, list):
+                for poly_coords in seg:
+                    if isinstance(poly_coords, (list, tuple)) and len(poly_coords) >= 6:
                         path = QPainterPath()
                         path.moveTo(poly_coords[0], poly_coords[1])
-                        for i in range(2, len(poly_coords), 2):
+                        for i in range(2, len(poly_coords) - 1, 2):
                             path.lineTo(poly_coords[i], poly_coords[i + 1])
                         path.closeSubpath()
                         painter.drawPath(path)

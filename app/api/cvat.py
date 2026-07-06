@@ -138,6 +138,12 @@ def _fetch_cvat_annotations_sync(
         with open(coco_json_path, 'r', encoding='utf-8') as f:
             coco_data = json.load(f)
         
+        # Прослойка нормализации: приводим сегментации к правилам пайплайна
+        # (RLE-маски от CVAT, например «эллипс», -> полигоны; нераспознанное -> bbox)
+        # ДО записи на диск, чтобы источник истины был чистым и ниже ничего менять не пришлось.
+        from app.services.coco_normalize import normalize_coco_segmentation
+        normalize_coco_segmentation(coco_data)
+
         annotations, _ = parse_coco_annotations(coco_data)
         annotation_count = len(annotations)
         
