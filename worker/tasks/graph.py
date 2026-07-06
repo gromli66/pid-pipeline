@@ -349,7 +349,7 @@ def task_build_graph(self, diagram_uid: str):
     soft_time_limit=270,
     acks_late=True,
 )
-def task_generate_fxml(self, diagram_uid: str, page_size: str = None):
+def task_generate_fxml(self, diagram_uid: str, page_size: str = None, bridge_gap: float = None):
     """
     Генерация FXML из валидированного графа.
 
@@ -365,6 +365,8 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None):
         page_size: 'A4', 'A3', 'A2', 'A1', 'A0';
                    '1920x1080' — экранный лист (стандартизация + фикс скинов);
                    None — пиксельные координаты (оригинал)
+        bridge_gap: опциональный фактор разрыва мостов; None — использовать
+                    значение по умолчанию generate_fxml (bridge_gap_factor)
 
     Статус:  GENERATING_FXML → COMPLETED
     """
@@ -572,7 +574,10 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None):
         gen_page_size = None if page_size == STD_1920 else page_size
         page_info = f" (page: {page_size})" if page_size else " (original pixels)"
         logger.info("Generating FXML%s...", page_info)
-        fxml_content = generate_fxml(graph_data, page_size=gen_page_size)
+        gen_kwargs = {"page_size": gen_page_size}
+        if bridge_gap is not None:
+            gen_kwargs["bridge_gap_factor"] = bridge_gap
+        fxml_content = generate_fxml(graph_data, **gen_kwargs)
 
         # Экранный лист 1920x1080: привести к стандарту + убрать смещение скинов,
         # датчиков и невидимые разрывы мостов (tools/fxml_standardize.py). Остальные

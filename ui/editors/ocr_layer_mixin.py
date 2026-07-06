@@ -66,6 +66,10 @@ class OcrLayerMixin:
         self._ocr_add_start: tuple[float, float] | None = None
         self._ocr_hl_restore: list = []
         self._selected_ocr: set[str] = set()  # Shift-выделенные блоки (зелёные)
+        # Ручки изменения размера текст-блока (только в состоянии 'ocr').
+        self._ocr_resize_overlay = None       # ResizableNodeOverlay | None
+        self._ocr_resize_block_id: str | None = None
+        self._ocr_resize_lock = False         # тело не двигать, пока показаны ручки
 
     # -----------------------------------------------------------------
     # Отрисовка
@@ -483,6 +487,90 @@ class OcrLayerMixin:
         self.update_status(f"Текст блока: «{new[:40]}»")
 
     # -----------------------------------------------------------------
+    # Изменение размера текст-блока (ручки) — только в состоянии 'ocr'
+    # -----------------------------------------------------------------
+    def _redraw_single_ocr_block(self, bid: str):
+        """Перерисовать один текст-блок (рамка + подпись + подложка + линия)."""
+        pair = self._ocr_block_items.pop(bid, None)
+        if pair:
+            for it in pair.values():
+                if it is not None and it.scene() is not None:
+                    self.scene.removeItem(it)
+        blk = self.model.find_text_block(bid)
+        if blk is not None and blk.get("merged_into") is None:
+            visible = getattr(self, "display_regime", "base") == "ocr"
+            self._draw_ocr_block(blk, visible)
+
+    def _show_ocr_block_resize(self, bid: str):
+        """Показать 4 ручки изменения размера для текст-блока bid.
+
+        on_resize пишет новый bbox прямо в blk['bbox'] (только model.text_blocks),
+        живо перерисовывая блок. Коммит под Undo — на release (_ocr_resize_commit).
+        """
+        from ui.editors.resize_overlay import ResizableNodeOverlay
+        blk = self.model.find_text_block(bid)
+        if blk is None:
+            return
+        bbox = blk.get("bbox")
+        if not bbox or len(bbox) != 4:
+            return
+        self._hide_ocr_block_resize()
+        self._ocr_resize_block_id = bid
+        self._ocr_resize_cmd = self._ocr_push_snapshot("Размер блока")
+
+        def _on_resize(new_bbox, _bid=bid):
+            b = self.model.find_text_block(_bid)
+            if b is not None:
+                b["bbox"] = [float(v) for v in new_bbox]
+                self._redraw_single_ocr_block(_bid)
+
+        self._ocr_resize_overlay = ResizableNodeOverlay(
+            scene=self.scene,
+            bbox=[float(v) for v in bbox],
+            min_size=int(_MIN_BLOCK_SIZE),
+            on_resize=_on_resize,
+            on_commit=lambda: self._ocr_resize_commit(),
+        )
+        self._ocr_resize_overlay.show()
+        self.update_status(
+            "Тяните за углы — размер блока · Ctrl+ЛКМ по блоку — скрыть ручки · Esc — выход"
+        )
+
+    def _ocr_resize_commit(self):
+        """Финализировать одно перетаскивание ручки блока (шаг undo)."""
+        cmd = getattr(self, "_ocr_resize_cmd", None)
+        if cmd is not None:
+            self._ocr_commit(cmd)
+            self._ocr_resize_cmd = None
+        self.refresh_ocr_layer()
+        # Начать новый снимок на случай продолжения перетаскивания той же рамки.
+        if self._ocr_resize_overlay is not None and self._ocr_resize_block_id is not None:
+            self._ocr_resize_cmd = self._ocr_push_snapshot("Размер блока")
+
+    def _hide_ocr_block_resize(self):
+        """Скрыть ручки изменения размера текст-блока (если есть)."""
+        # Незакоммиченный (открытый) снимок просто отбрасываем — он не попал в
+        # undo-стек, поэтому достаточно снять ссылку (изменений в модели нет).
+        self._ocr_resize_cmd = None
+        if self._ocr_resize_overlay is not None:
+            try:
+                self._ocr_resize_overlay.hide()
+            except Exception:
+                pass
+            self._ocr_resize_overlay = None
+        self._ocr_resize_block_id = None
+
+    def _toggle_ocr_block_resize(self, bid: str):
+        """Переключить ручки размера блока bid.
+
+        Клик по тому же блоку — скрыть; по другому — переставить ручки на него.
+        """
+        if self._ocr_resize_overlay is not None and self._ocr_resize_block_id == bid:
+            self._hide_ocr_block_resize()
+        else:
+            self._show_ocr_block_resize(bid)
+
+    # -----------------------------------------------------------------
     # Подсветка цели при drag
     # -----------------------------------------------------------------
     def _ocr_clear_highlight(self):
@@ -559,9 +647,16 @@ class AddOcrBlockHandler(ModeHandler):
 class OcrBindHandler(ModeHandler):
     """Резидентный режим состояния «ОКР привязка».
 
-    Ctrl+ЛКМ по блоку и протяжка — двигать блок; отпускание над узлом/ребром —
-    привязка, иначе просто перемещение.
+    Жесты Ctrl+ЛКМ по текст-блоку:
+      • одиночный клик (без смещения) — переключить ручки изменения размера блока;
+      • протяжка — двигать блок; отпускание над узлом/ребром — привязка,
+        иначе просто перемещение.
+    Если под курсором ручка активного resize-оверлея — приоритет у оверлея
+    (тянем угол, а не двигаем/переключаем блок).
     """
+
+    # Порог различия клик/drag для блоков (px).
+    OCR_CLICK_MOVE_THRESHOLD = 4.0
 
     def on_enter(self, editor):
         editor._ocr_drag_id = None
@@ -574,24 +669,72 @@ class OcrBindHandler(ModeHandler):
         editor._ocr_clear_highlight()
 
     def on_press(self, editor, x, y, event) -> bool:
+        # 1. Ручка активного resize-оверлея имеет приоритет над всем.
+        ov = getattr(editor, "_ocr_resize_overlay", None)
+        if ov is not None and ov.visible:
+            handle = ov.find_handle_at(x, y)
+            if handle:
+                ov.start_drag(handle)
+                editor._ocr_drag_id = None
+                editor._ocr_resize_dragging = True
+                return True
+
         bid = editor._ocr_block_at(x, y)
         if bid is None:
+            # Клик по пустому месту — скрыть ручки (если были).
+            if getattr(editor, "_ocr_resize_overlay", None) is not None:
+                editor._hide_ocr_block_resize()
             return False
         blk = editor.model.find_text_block(bid)
         if not blk:
             return False
+        # Если для этого блока уже показаны ручки размера — тело двигать нельзя
+        # (размер меняем только углами). Клик по телу — скрыть ручки.
+        editor._ocr_resize_lock = (
+            getattr(editor, "_ocr_resize_overlay", None) is not None
+            and editor._ocr_resize_block_id == bid
+        )
         x1, y1, _x2, _y2 = blk["bbox"]
         editor._ocr_drag_id = bid
         editor._ocr_drag_dx = x - x1
         editor._ocr_drag_dy = y - y1
         editor._ocr_drag_origin = list(blk["bbox"])   # для возврата при привязке
-        editor._ocr_drag_cmd = editor._ocr_push_snapshot("Привязка / перемещение блока")
+        # Различаем клик и drag: снимок для перемещения берём лениво — на первом
+        # реальном сдвиге (в on_move). Клик (без сдвига) переключает ручки.
+        editor._ocr_press_xy = (x, y)
+        editor._ocr_moved = False
+        editor._ocr_drag_cmd = None
+        editor._ocr_resize_dragging = False
         return True
 
     def on_move(self, editor, x, y, event) -> bool:
+        # Перетаскивание ручки resize-оверлея.
+        if getattr(editor, "_ocr_resize_dragging", False):
+            ov = getattr(editor, "_ocr_resize_overlay", None)
+            if ov is not None and ov.is_dragging:
+                ov.drag_to(x, y)
+                return True
+            return False
+
         if editor._ocr_drag_id is None:
             return False
+        # Блок с показанными ручками — тело НЕ двигаем (размер меняем углами).
+        if getattr(editor, "_ocr_resize_lock", False):
+            px, py = getattr(editor, "_ocr_press_xy", (x, y))
+            if ((x - px) ** 2 + (y - py) ** 2) ** 0.5 >= self.OCR_CLICK_MOVE_THRESHOLD:
+                editor._ocr_moved = True
+            return True
         bid = editor._ocr_drag_id
+        # Пока смещение меньше порога — считаем жест кликом (ручки не двигаем).
+        if not getattr(editor, "_ocr_moved", False):
+            px, py = getattr(editor, "_ocr_press_xy", (x, y))
+            if ((x - px) ** 2 + (y - py) ** 2) ** 0.5 < self.OCR_CLICK_MOVE_THRESHOLD:
+                return True
+            editor._ocr_moved = True
+            # Начало реального перемещения → снимок для undo.
+            editor._ocr_drag_cmd = editor._ocr_push_snapshot(
+                "Привязка / перемещение блока"
+            )
         nx1 = x - editor._ocr_drag_dx
         ny1 = y - editor._ocr_drag_dy
         editor.move_ocr_block(bid, nx1, ny1)
@@ -608,11 +751,40 @@ class OcrBindHandler(ModeHandler):
         return True
 
     def on_release(self, editor, x, y, event) -> bool:
+        # Завершение перетаскивания ручки resize-оверлея.
+        if getattr(editor, "_ocr_resize_dragging", False):
+            editor._ocr_resize_dragging = False
+            ov = getattr(editor, "_ocr_resize_overlay", None)
+            if ov is not None and ov.is_dragging:
+                ov.end_drag()   # вызовет _ocr_resize_commit (шаг undo)
+            return True
+
+        # Блок с показанными ручками: тело не двигали. Клик — скрыть ручки; drag — no-op.
+        if getattr(editor, "_ocr_resize_lock", False):
+            editor._ocr_resize_lock = False
+            _bid = editor._ocr_drag_id
+            editor._ocr_drag_id = None
+            _moved = getattr(editor, "_ocr_moved", False)
+            editor._ocr_moved = False
+            if not _moved and _bid is not None:
+                editor._toggle_ocr_block_resize(_bid)
+            return True
+
         bid = editor._ocr_drag_id
         if bid is None:
             return False
         editor._ocr_drag_id = None
         editor._ocr_clear_highlight()
+        moved = getattr(editor, "_ocr_moved", False)
+        editor._ocr_moved = False
+
+        if not moved:
+            # Клик без сдвига → переключить ручки изменения размера блока.
+            editor._ocr_drag_cmd = None
+            editor._ocr_drag_origin = None
+            editor._toggle_ocr_block_resize(bid)
+            return True
+
         cmd = editor._ocr_drag_cmd
         editor._ocr_drag_cmd = None
         origin = getattr(editor, "_ocr_drag_origin", None)

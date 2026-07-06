@@ -68,3 +68,23 @@ class DiagramListResponse(BaseModel):
     total: int
     skip: int
     limit: int
+
+
+class ProcessingStageResponse(BaseModel):
+    """Информация об одном этапе обработки (для UI)."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    stage_type: str
+    status: str
+    attempt: int
+    error_message: Optional[str] = None
+    error_traceback: Optional[str] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    duration_seconds: Optional[float] = None
+
+
+class StagesResponse(BaseModel):
+    """Список этапов обработки диаграммы."""
+    stages: List[ProcessingStageResponse]

@@ -276,10 +276,12 @@ class AutoFixCommand(SnapshotCommand):
 
 
 class SetEdgeStyleCommand(SnapshotCommand):
-    """Изменение цвета/толщины одного или нескольких рёбер — snapshot.
+    """Изменение цвета/толщины/пунктира одного или нескольких рёбер — snapshot.
 
-    Цвет и толщина хранятся прямо в edge_data ('color' / 'render_width'),
-    поэтому snapshot модели корректно отменяет/повторяет изменение.
+    Цвет, толщина и флаг пунктира хранятся прямо в edge_data
+    ('render_color' / 'render_width' / 'dashed'). Snapshot модели — глубокая
+    копия edges_data целиком, поэтому все эти поля (включая 'dashed')
+    корректно отменяются/повторяются без перечисления ключей.
     """
 
     def __init__(self, model, redraw_callback, description: str = "Стиль рёбер"):

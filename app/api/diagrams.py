@@ -13,11 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_async_db
 from app.models import Diagram, DiagramStatus, Artifact, ArtifactType, Project
+from app.models.stage import ProcessingStage
 from app.schemas.diagram import (
     DiagramResponse,
     DiagramListResponse,
     DiagramStatusResponse,
     DiagramUploadResponse,
+    ProcessingStageResponse,
+    StagesResponse,
 )
 from app.services.storage import StorageService
 from app.services.project_loader import get_project_loader, ProjectLoader
@@ -278,6 +281,34 @@ async def get_diagram_status(uid: UUID, db: AsyncSession = Depends(get_async_db)
         cvat_job_id=row.cvat_job_id,
         detection_count=row.detection_count,
         updated_at=row.updated_at,
+    )
+
+
+@router.get("/{uid}/stages", response_model=StagesResponse)
+async def get_diagram_stages(uid: UUID, db: AsyncSession = Depends(get_async_db)):
+    """Пер-этапные данные обработки диаграммы (для UI)."""
+    result = await db.execute(
+        select(ProcessingStage)
+        .where(ProcessingStage.diagram_uid == uid)
+        .order_by(ProcessingStage.id)
+    )
+    stages = result.scalars().all()
+
+    return StagesResponse(
+        stages=[
+            ProcessingStageResponse(
+                id=stage.id,
+                stage_type=stage.stage_type.value,
+                status=stage.status.value,
+                attempt=stage.attempt,
+                error_message=stage.error_message,
+                error_traceback=stage.error_traceback,
+                started_at=stage.started_at,
+                completed_at=stage.completed_at,
+                duration_seconds=stage.duration_seconds,
+            )
+            for stage in stages
+        ]
     )
 
 

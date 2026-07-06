@@ -18,7 +18,7 @@ set_classes() / set_state().
 
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox,
-    QSpinBox, QSlider, QWidget,
+    QSpinBox, QDoubleSpinBox, QSlider, QWidget,
 )
 from PySide6.QtCore import Qt, QPropertyAnimation, QRect, QEasingCurve
 
@@ -50,6 +50,7 @@ class ObjectResizePanel(QFrame):
         self.on_apply = None            # (width:int|None, height:int|None, scale:float|None) -> None
         self.on_preview = None          # (width, height, scale) -> None — живое превью
         self.on_visibility = None       # (shown: bool) -> None — панель показана/скрыта
+        self.on_bridge_gap = None       # (value: float) -> None — множитель разрыва моста (вся схема)
 
         self._populating = False
         self._updating = False          # подавляет превью при программном set_state
@@ -169,6 +170,42 @@ class ObjectResizePanel(QFrame):
 
         root.addStretch()
 
+        # ── разрыв на пересечениях (мост) — настройка всей схемы ──
+        # Независима от выбранного класса и текущего набора: всегда видима.
+        self._bridge_updating = False       # подавляет on_bridge_gap при set_bridge_gap
+        bridge_row = QVBoxLayout()
+        bridge_row.setContentsMargins(0, 0, 0, 0)
+        bridge_row.setSpacing(4)
+        bridge_lbl = QLabel("Разрыв на пересечениях (мост)")
+        bridge_lbl.setWordWrap(True)
+        bridge_lbl.setStyleSheet("color: #ddd; font-size: 11px;")
+        bridge_row.addWidget(bridge_lbl)
+        self._bridge_spin = QDoubleSpinBox()
+        self._bridge_spin.setRange(1.0, 8.0)
+        self._bridge_spin.setSingleStep(0.5)
+        self._bridge_spin.setValue(3.0)
+        self._bridge_spin.setToolTip(
+            "Множитель ширины разрыва в местах пересечения труб (мост).\n"
+            "Применяется ко всей схеме своей кнопкой — на размеры боксов не влияет."
+        )
+        # Разрыв применяется ОТДЕЛЬНОЙ кнопкой (не на каждое изменение спинбокса)
+        # и не связан с «Применить к выбранным» (та — только боксы/полигоны).
+        bridge_apply_row = QHBoxLayout()
+        bridge_apply_row.addWidget(self._bridge_spin)
+        self._bridge_apply_btn = QPushButton("Применить разрыв")
+        self._bridge_apply_btn.setToolTip(
+            "Применить размер разрыва моста ко всей диаграмме.\n"
+            "На размеры боксов НЕ влияет."
+        )
+        self._bridge_apply_btn.setStyleSheet(
+            "QPushButton { color: #ddd; background: #444; border-radius: 3px; padding: 5px; }"
+            "QPushButton:hover { background: #555; }"
+        )
+        self._bridge_apply_btn.clicked.connect(self._bridge_apply)
+        bridge_apply_row.addWidget(self._bridge_apply_btn)
+        bridge_row.addLayout(bridge_apply_row)
+        root.addLayout(bridge_row)
+
         # ── применить ──
         self._apply_btn = QPushButton("Применить к выбранным")
         self._apply_btn.setStyleSheet(
@@ -226,6 +263,20 @@ class ObjectResizePanel(QFrame):
             self.on_apply(None, None, self._scale.value() / 100.0)
         elif self._box_ctrl.isVisible():
             self.on_apply(int(self._spin_w.value()), int(self._spin_h.value()), None)
+
+    def _bridge_apply(self):
+        """Применить множитель разрыва моста ко всей диаграмме (по кнопке).
+
+        Отдельно от «Применить к выбранным» — на размеры боксов не влияет.
+        """
+        if callable(self.on_bridge_gap):
+            self.on_bridge_gap(float(self._bridge_spin.value()))
+
+    def set_bridge_gap(self, value: float):
+        """Установить множитель разрыва моста БЕЗ вызова on_bridge_gap."""
+        self._bridge_updating = True
+        self._bridge_spin.setValue(float(value))
+        self._bridge_updating = False
 
     # ───────────────────── обновление состояния ─────────────────────
 

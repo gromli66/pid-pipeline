@@ -49,6 +49,33 @@ from ui.editors.autofix_chains import auto_fix_graph
 from ui.editors.ocr_layer_mixin import (
     OcrLayerMixin, AddOcrBlockHandler, OcrBindHandler,
 )
+from ui.editors.mode_handlers.base_handler import ModeHandler
+
+
+class EditEdgeDashHandler(ModeHandler):
+    """Режим переключения ПУНКТИРА ребра.
+
+    Ctrl+ЛКМ по ребру → переключить пунктирный стиль (edge_data['dashed']).
+      • если ребро входит в обводку (shift+протяжка) — переключаются все обведённые;
+      • иначе — только это ребро.
+    Ctrl+ПКМ по обведённому ребру → убрать его из обводки.
+    """
+
+    def on_enter(self, ed):
+        # Чистый старт: режим работает только с рёбрами
+        ed.clear_multi_select()
+
+    def on_press(self, ed, x, y, event):
+        edge_key, _ = ed.find_nearest_edge(x, y, threshold=20.0)
+        if edge_key:
+            ed.apply_edge_style_at(edge_key, kind="dash")
+        else:
+            ed.update_status("Ctrl+ЛКМ по ребру — пунктир. Shift+протяжка — обвести рёбра.")
+        return True
+
+    def on_move(self, ed, x, y, event):
+        ed.update_edge_style_preview(x, y)
+        return True
 
 
 class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
@@ -78,6 +105,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self.register_mode("edit_waypoint", EditWaypointHandler())
         self.register_mode("edit_edge_color", EditEdgeColorHandler())
         self.register_mode("edit_edge_size", EditEdgeSizeHandler())
+        self.register_mode("edit_edge_dash", EditEdgeDashHandler())
         self.register_mode("resize_objects", ResizeObjectsHandler())
 
         # ── OCR-слой: добавление блока + резидентная привязка ──
@@ -255,8 +283,8 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             self._exit_polygon_editing_mode(commit=True)
         self.display_regime = regime
         # Сбросить инструменты, специфичные для состояний, при выходе из них.
-        state_modes = ("edit_edge_color", "edit_edge_size", "optimize_edge",
-                       "edit_waypoint", "add_ocr_block", "ocr_bind")
+        state_modes = ("edit_edge_color", "edit_edge_size", "edit_edge_dash",
+                       "optimize_edge", "edit_waypoint", "add_ocr_block", "ocr_bind")
         if self._current_mode in state_modes:
             self.set_mode("idle")
         # KKS-подписи показываются только в режиме 'ocr'
@@ -264,6 +292,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             self._hide_all_kks_labels()
             if hasattr(self, "_selected_ocr"):
                 self._selected_ocr.clear()
+            # Снять ручки изменения размера текст-блока (актуальны только в 'ocr').
+            if hasattr(self, "_hide_ocr_block_resize"):
+                self._hide_ocr_block_resize()
         # В состоянии 'ocr' резидентный режим привязки блоков.
         if regime == "ocr" and self._current_mode in ("", "idle"):
             self.set_mode("ocr_bind")
@@ -282,21 +313,26 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         """Утолщение для неперпендикулярных рёбер.
 
         Приоритет — индивидуальная толщина ребра (режим «Размер ребра»).
+        Флаг edge_data['dashed'] делает ребро пунктирным во всех режимах.
         """
         color = self._get_edge_color(edge_data, key)
 
         # Индивидуальная толщина — только в режиме «Размер и цвет».
         if self.display_regime == "style":
             render_width = edge_data.get('render_width')
-            if render_width:
-                return QPen(color, float(render_width))
-            return QPen(color, self.EDGE_WIDTH)
+            pen = QPen(color, float(render_width)) if render_width else QPen(color, self.EDGE_WIDTH)
+            if edge_data.get('dashed'):
+                pen.setStyle(Qt.PenStyle.DashLine)
+            return pen
 
         pen_width = self.EDGE_WIDTH
         if self.display_regime == "perp" and key and key in self.edge_perp_scores:
             if not self.edge_perp_scores[key].get('is_good', True):
                 pen_width = self.EDGE_WIDTH + 1
-        return QPen(color, pen_width)
+        pen = QPen(color, pen_width)
+        if edge_data.get('dashed'):
+            pen.setStyle(Qt.PenStyle.DashLine)
+        return pen
 
     def _before_draw_all_edges(self):
         """Очистить perp scores перед перерисовкой."""
@@ -1111,14 +1147,29 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         return [edge_key]
 
     def apply_edge_style_at(self, edge_key: tuple, kind: str):
-        """Применить текущий цвет ('color') или размер ('size') к ребру/обводке."""
+        """Применить текущий цвет ('color'), размер ('size') или пунктир ('dash')
+        к ребру/обводке.
+
+        Для 'dash' флаг edge_data['dashed'] переключается (toggle). Если ребро
+        входит в обводку — переключаются все обведённые рёбра одинаково: целевое
+        значение берётся как отрицание флага ребра под курсором, чтобы вся пачка
+        меняла состояние согласованно.
+        """
         keys = self._edges_to_style(edge_key)
         if not keys:
             return
 
-        desc = "Цвет рёбер" if kind == "color" else "Размер рёбер"
+        desc = {"color": "Цвет рёбер", "size": "Размер рёбер",
+                "dash": "Пунктир рёбер"}.get(kind, "Стиль рёбер")
         cmd = SetEdgeStyleCommand(self.model, self._redraw_all, description=desc)
         cmd.execute()  # snapshot before
+
+        # Для пунктира целевое значение — отрицание текущего флага ребра под
+        # курсором (чтобы обведённая пачка переключалась согласованно).
+        dash_target = None
+        if kind == "dash":
+            anchor = self.model.find_edge_data(edge_key)
+            dash_target = not bool(anchor.get('dashed')) if anchor else True
 
         changed = 0
         for k in keys:
@@ -1127,6 +1178,8 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 continue
             if kind == "color":
                 edge_data['render_color'] = self.edge_brush_color.name()
+            elif kind == "dash":
+                edge_data['dashed'] = bool(dash_target)
             else:
                 edge_data['render_width'] = int(self.edge_brush_size)
             changed += 1
@@ -1142,6 +1195,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             self.update_status(
                 f"Цвет {self.edge_brush_color.name()} применён к {changed} рёбрам"
             )
+        elif kind == "dash":
+            state = "включён" if dash_target else "выключен"
+            self.update_status(f"Пунктир {state} для {changed} рёбер")
         else:
             self.update_status(
                 f"Размер {self.edge_brush_size} применён к {changed} рёбрам"
@@ -1170,6 +1226,10 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
 
         if self._current_mode == "edit_edge_size":
             pen = QPen(QColor(255, 255, 255), float(self.edge_brush_size))
+        elif self._current_mode == "edit_edge_dash":
+            base_w = edge_data.get('render_width') or (self.EDGE_WIDTH + 2)
+            pen = QPen(QColor(255, 255, 255), float(base_w))
+            pen.setStyle(Qt.PenStyle.DashLine)
         else:  # edit_edge_color
             pen = QPen(QColor(self.edge_brush_color), self.EDGE_WIDTH + 2)
 
@@ -1228,6 +1288,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         if self.display_regime == "ocr" and hasattr(self, "_ocr_block_at"):
             bid = self._ocr_block_at(x, y)
             if bid is not None:
+                # Снять ручки размера (блок может быть удалён этой операцией).
+                if getattr(self, "_ocr_resize_overlay", None) is not None:
+                    self._hide_ocr_block_resize()
                 if getattr(self, "_selected_ocr", None) and bid in self._selected_ocr:
                     self._delete_selected_ocr_blocks()
                     self.update_status("Выделенные блоки удалены")
@@ -1239,7 +1302,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                     self.update_status("Блок удалён")
                 return
 
-        if self._current_mode in ("edit_edge_color", "edit_edge_size"):
+        if self._current_mode in ("edit_edge_color", "edit_edge_size", "edit_edge_dash"):
             edge_key, _ = self.find_nearest_edge(x, y, threshold=20.0)
             if edge_key and edge_key in self.selected_edges:
                 self.selected_edges.discard(edge_key)
@@ -2589,6 +2652,11 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         2-я ступень: если инструмент не активен и снимать нечего —
                      вернуться в базовое состояние.
         """
+        # Ручки изменения размера OCR-блока — снять первыми (не выходя из ОКР).
+        if getattr(self, "_ocr_resize_overlay", None) is not None:
+            self._hide_ocr_block_resize()
+            return
+
         # Правка полигона имеет собственный выход (с коммитом изменений).
         if self._poly_edit_node:
             self._exit_polygon_editing_mode(commit=True)
@@ -2640,7 +2708,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             self._resize_handle_ctrl_click(x, y)
             return
         # В режиме «Размер и цвет» клик по узлу ничего не красит — узлы только тащим.
-        if self._current_mode in ("edit_edge_color", "edit_edge_size"):
+        if self._current_mode in ("edit_edge_color", "edit_edge_size", "edit_edge_dash"):
             return
         # Ctrl+клик идёт в handler (add_edge, add_connector, delete_node и т.п.)
         if self._current_handler:
@@ -2895,6 +2963,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             if hasattr(self, "_ocr_block_at"):
                 bid = self._ocr_block_at(x, y)
                 if bid is not None:
+                    # Взаимоисключение: перед правкой текста снять ручки размера.
+                    if hasattr(self, "_hide_ocr_block_resize"):
+                        self._hide_ocr_block_resize()
                     self.edit_ocr_block_text(bid)
                     return
             # Equipment → KKS.

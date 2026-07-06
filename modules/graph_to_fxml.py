@@ -1284,7 +1284,8 @@ def _horizontality(a, b):
     return 0.5 if tot < 1e-9 else dx / tot
 
 
-def compute_bridge_cuts(edges, nodes, base_stroke, use_diameter, graph_scale):
+def compute_bridge_cuts(edges, nodes, base_stroke, use_diameter, graph_scale,
+                        bridge_gap_factor: float = BRIDGE_GAP_STROKE_FACTOR):
     """Найти мосты геометрически и вычислить разрывы.
 
     Мост = пересечение двух рёбер без узла рядом (рёбра не делят общий узел).
@@ -1342,8 +1343,8 @@ def compute_bridge_cuts(edges, nodes, base_stroke, use_diameter, graph_scale):
                     # Разрыв достаточно широкий, чтобы был виден и на толстой линии:
                     # учитываем обе трубы (перекрывающую и разрываемую).
                     under_w = wa if under_e is ea else wb
-                    gap = max(BRIDGE_GAP_STROKE_FACTOR * over_w,
-                              BRIDGE_GAP_STROKE_FACTOR * under_w, min_gap)
+                    gap = max(bridge_gap_factor * over_w,
+                              bridge_gap_factor * under_w, min_gap)
                     ucum = _cumulative_lengths(under_pl)
                     s = ucum[seg_idx] + math.hypot(
                         p[0] - under_pl[seg_idx][0], p[1] - under_pl[seg_idx][1])
@@ -1532,6 +1533,16 @@ def generate_fxml_line(edge, nodes, edge_id: str,
         if _tgt and _tgt.get('segmentation') and get_skin_info(_tgt) is None:
             all_points[-1] = project_endpoint_to_contour(all_points[-1], all_points[-2], _tgt['segmentation'])
 
+    # Пунктир (dashed): JavaFX пишет его как CSS-стиль -fx-stroke-dash-array.
+    # Размер штриха ЕДИНЫЙ для всех линий — не зависит от толщины конкретной
+    # трубы (иначе широкие трубы получали неадекватно крупный пунктир), а
+    # считается от базовой толщины и масштаба листа. Одно число ⇒ штрих=пробел.
+    _dash_len = max(4.0, round(3.3 * base_stroke * graph_scale, 1))
+    dash_style = (
+        f' style="-fx-stroke-dash-array: {_dash_len:g};"'
+        if edge.get('dashed') else ''
+    )
+
     def _emit(points, fid):
         """<Line> для 2 точек, иначе <Polyline>."""
         if len(points) <= 2:
@@ -1543,7 +1554,7 @@ def generate_fxml_line(edge, nodes, edge_id: str,
                 f'stroke="{line_color}"',
                 f'strokeWidth="{stroke_width:.1f}"',
             ]
-            return f'<Line {" ".join(attrs)} />'
+            return f'<Line {" ".join(attrs)}{dash_style} />'
         pts_str = ",".join(f"{c:.1f}" for x, y in points for c in (x, y))
         attrs = [
             f'fx:id="{escape(str(fid))}"',
@@ -1551,7 +1562,7 @@ def generate_fxml_line(edge, nodes, edge_id: str,
             f'stroke="{line_color}"',
             f'strokeWidth="{stroke_width:.1f}"',
         ]
-        return f'<Polyline {" ".join(attrs)} />'
+        return f'<Polyline {" ".join(attrs)}{dash_style} />'
 
     # Мост: рвём линию в местах пересечения, каждый сегмент — отдельный элемент
     if cuts:
@@ -1667,7 +1678,8 @@ def scale_graph_to_page(graph_data: dict, page_size: str = None,
 
 
 def generate_fxml(graph_data: dict, stroke_width: float = LINE_STROKE_WIDTH,
-                  page_size: str = None, use_diameter: bool = True) -> str:
+                  page_size: str = None, use_diameter: bool = True,
+                  bridge_gap_factor: float = BRIDGE_GAP_STROKE_FACTOR) -> str:
     """
     Генерирует полный FXML документ из графа.
 
@@ -1813,6 +1825,7 @@ def generate_fxml(graph_data: dict, stroke_width: float = LINE_STROKE_WIDTH,
     bridge_cuts = compute_bridge_cuts(
         edges, nodes, base_stroke=stroke_width,
         use_diameter=use_diameter, graph_scale=graph_scale,
+        bridge_gap_factor=bridge_gap_factor,
     )
     stats['bridge_gaps'] = sum(len(v) for v in bridge_cuts.values())
 

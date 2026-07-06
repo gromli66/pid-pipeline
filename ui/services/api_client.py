@@ -314,6 +314,18 @@ class APIClient:
             updated_at=result.get("updated_at"),
         )
 
+    def get_stages(self, uid: str) -> list:
+        """Список этапов обработки (ProcessingStage) — для по-этапной изоляции ошибок.
+
+        Каждый элемент: stage_type, status (pending/running/completed/failed/skipped),
+        attempt, error_message, error_traceback, started_at, completed_at, duration_seconds.
+        """
+        try:
+            result = self._request("GET", f"/api/diagrams/{uid}/stages", retries=1)
+            return result.get("stages", [])
+        except APIError:
+            return []
+
     def delete_diagram(self, uid: str) -> bool:
         """Удалить диаграмму."""
         self._request("DELETE", f"/api/diagrams/{uid}")
@@ -533,7 +545,7 @@ class APIClient:
         """
         return self._request("POST", f"/api/validation/{uid}/graph/complete")
 
-    def generate_fxml(self, uid: str, page_size: str = None) -> Dict[str, Any]:
+    def generate_fxml(self, uid: str, page_size: str = None, bridge_gap: float = None) -> Dict[str, Any]:
         """
         Запустить генерацию FXML из валидированного графа.
 
@@ -546,6 +558,8 @@ class APIClient:
         params = {}
         if page_size:
             params["page_size"] = page_size
+        if bridge_gap is not None:
+            params["bridge_gap"] = bridge_gap
         return self._request("POST", f"/api/graph/{uid}/generate-fxml", params=params)
 
     # === OCR ===

@@ -19,6 +19,7 @@ from PySide6.QtCore import Slot, Qt, QThread, QObject, Signal
 from PySide6.QtGui import QColor, QPixmap, QIcon
 
 from ui.services.api_client import APIClient
+from ui.services.ui_settings import UISettings
 from ui.editors.advanced_graph_editor import AdvancedGraphEditor
 from ui.editors.base_graph_editor import BaseGraphEditor
 from ui.tabs.simple_graph_tab import SimpleGraphTab
@@ -344,6 +345,22 @@ class AdvancedGraphTab(SimpleGraphTab):
         self.spin_edge_size.valueChanged.connect(self._on_edge_size_spin)
         row.addWidget(self.spin_edge_size)
 
+        # --- Пунктир (штриховой стиль ребра) ---
+        self.btn_edge_dash = QPushButton("Пунктир")
+        self.btn_edge_dash.setCheckable(True)
+        self.btn_edge_dash.setToolTip(
+            "Инструмент штриховки (пунктира) ребра.\n"
+            "Ctrl+ЛКМ по ребру — переключить пунктирный стиль.\n"
+            "Обведённые рёбра (Shift+протяжка) переключаются все сразу.\n"
+            "Пунктирный стиль сохраняется в FXML."
+        )
+        self.btn_edge_dash.setStyleSheet(
+            "QPushButton:checked { background-color: #607D8B; color: white; }"
+        )
+        self.btn_edge_dash.clicked.connect(lambda: self._set_mode("edit_edge_dash"))
+        self.mode_group.addButton(self.btn_edge_dash)
+        row.addWidget(self.btn_edge_dash)
+
         self._style_panel = panel
         self._style_panel.setVisible(False)
         toolbar.addWidget(panel)
@@ -355,6 +372,7 @@ class AdvancedGraphTab(SimpleGraphTab):
             "edit_waypoint": self.btn_waypoints,
             "edit_edge_color": self.btn_edge_color,
             "edit_edge_size": self.btn_edge_size,
+            "edit_edge_dash": self.btn_edge_dash,
             "resize_objects": self.btn_resize_objects,
             "add_ocr_block": self.btn_add_block,
         })
@@ -375,6 +393,14 @@ class AdvancedGraphTab(SimpleGraphTab):
             p.on_preview = lambda w, h, s: self._editor and self._editor.preview_resize(w, h, s)
             p.on_apply = lambda w, h, s: self._editor and self._editor.apply_resize(w, h, s)
             p.on_visibility = self._on_resize_panel_visibility
+            # Разрыв моста — общая настройка схемы (per uid), уходит в FXML-генерацию.
+            p.on_bridge_gap = lambda v: UISettings.instance().set_appearance(
+                self.uid, "bridge_gap_factor", float(v)
+            )
+            cur = float(UISettings.instance().get_appearance(
+                self.uid, "bridge_gap_factor", 3.0
+            ))
+            p.set_bridge_gap(cur)
             self._resize_panel = p
         return self._resize_panel
 

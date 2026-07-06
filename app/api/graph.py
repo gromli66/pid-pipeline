@@ -7,6 +7,7 @@ Endpoints:
 """
 
 from uuid import UUID
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -175,6 +176,7 @@ async def get_graph_result(
 async def generate_fxml(
     uid: UUID,
     page_size: str = Query(default=None, description="Page size: A0-A4 (landscape); '1920x1080' = screen sheet (standardized); None = original pixels."),
+    bridge_gap: Optional[float] = Query(default=None, description="Bridge gap factor for FXML generation. None = use default."),
     db: AsyncSession = Depends(get_async_db),
 ):
     """
@@ -229,10 +231,13 @@ async def generate_fxml(
     try:
         from worker.celery_app import celery_app
 
+        task_kwargs = {"page_size": page_size}
+        if bridge_gap is not None:
+            task_kwargs["bridge_gap"] = bridge_gap
         async_result = celery_app.send_task(
             "worker.tasks.graph.task_generate_fxml",
             args=[str(uid)],
-            kwargs={"page_size": page_size},
+            kwargs=task_kwargs,
         )
         task_id = async_result.id
     except Exception as exc:

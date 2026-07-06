@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QMessageBox, QFrame,
     QStackedWidget, QApplication, QFileDialog, QInputDialog,
-    QMenu,
+    QMenu, QDialog, QComboBox, QLineEdit, QDialogButtonBox,
 )
 from PySide6.QtCore import Qt, Signal, Slot, QTimer
 from PySide6.QtGui import QAction, QFont
@@ -243,6 +243,41 @@ _BTN_STYLE_RED = """
 # =====================================================================
 
 _IDX_KEY = {idx: key for (idx, key, *_rest) in _BEAD_DEFS}
+_KEY_IDX = {key: idx for idx, key in _IDX_KEY.items()}
+
+# ProcessingStage.stage_type (value) → ключ бусины/кнопки (по-этапная изоляция ошибок)
+_STAGE_TYPE_TO_KEY = {
+    "frame_removal": "frame",
+    "detection": "detect",
+    "cvat_validation": "cvat",
+    "segmentation": "segment",
+    "skeletonization": "segment",
+    "mask_validation": "pipe",
+    "junction_classification": "junction",
+    "final_skeletonization": "segment",
+    "graph_building": "graph",
+    "graph_validation": "val_graph",
+    "contour_extraction": "contours",
+    "ocr": "ocr",
+    "fxml_generation": "fxml",
+}
+
+# Завершённый stage_type → соответствующий DiagramStatus (реконструкция прогресса при ERROR)
+_STAGE_DONE_STATUS = {
+    "frame_removal": DiagramStatus.FRAME_CLEANED,
+    "detection": DiagramStatus.DETECTED,
+    "cvat_validation": DiagramStatus.VALIDATED_BBOX,
+    "segmentation": DiagramStatus.SKELETONIZED,
+    "skeletonization": DiagramStatus.SKELETONIZED,
+    "mask_validation": DiagramStatus.VALIDATED_MASKS,
+    "junction_classification": DiagramStatus.DETECTED_JUNCTIONS,
+    "final_skeletonization": DiagramStatus.SKELETONIZED_FINAL,
+    "graph_building": DiagramStatus.BUILT,
+    "graph_validation": DiagramStatus.VALIDATED_GRAPH,
+    "contour_extraction": DiagramStatus.CONTOURS_VALIDATED,
+    "ocr": DiagramStatus.OCR_COMPLETED,
+    "fxml_generation": DiagramStatus.COMPLETED,
+}
 _GIF_DIR = Path(__file__).resolve().parent.parent / "resources" / "beads"
 _GIF_FILES = {
     "frame":       "pid_frame_clean.gif",
@@ -295,6 +330,79 @@ class _StagePanel(QWidget):
             btn.setFixedHeight(row_h)
             btn.setFont(font)
         self._beads.set_radius(int(row_h * 0.30))
+
+
+# =====================================================================
+# Диалог экспорта FXML
+# =====================================================================
+
+class FxmlExportDialog(QDialog):
+    """Единый диалог экспорта FXML: размер страницы + папка + имя файла.
+
+    values() → (page_size, save_path). page_size: '1920x1080'/'A4'…/None (оригинал).
+    """
+
+    # (подпись, значение page_size) — как в прежнем _ask_page_size
+    _SIZE_ITEMS = [
+        ("1920×1080 (экран, стандартизация скинов)", "1920x1080"),
+        ("Оригинал (пиксели изображения)", None),
+        ("A4 landscape (297×210 мм)", "A4"),
+        ("A3 landscape (420×297 мм)", "A3"),
+        ("A2 landscape (594×420 мм)", "A2"),
+        ("A1 landscape (841×594 мм)", "A1"),
+        ("A0 landscape (1189×841 мм)", "A0"),
+    ]
+
+    def __init__(self, parent, default_dir: str, default_name: str):
+        super().__init__(parent)
+        self.setWindowTitle("Экспорт FXML")
+        self.setMinimumWidth(480)
+
+        layout = QVBoxLayout(self)
+
+        layout.addWidget(QLabel("Размер страницы:"))
+        self._size_combo = QComboBox()
+        self._size_combo.addItems([label for label, _ in self._SIZE_ITEMS])
+        layout.addWidget(self._size_combo)
+
+        layout.addWidget(QLabel("Имя файла:"))
+        self._name_edit = QLineEdit(default_name)
+        layout.addWidget(self._name_edit)
+
+        layout.addWidget(QLabel("Папка:"))
+        dir_row = QHBoxLayout()
+        self._dir_edit = QLineEdit(default_dir or "")
+        dir_row.addWidget(self._dir_edit)
+        btn_browse = QPushButton("Обзор…")
+        btn_browse.clicked.connect(self._browse)
+        dir_row.addWidget(btn_browse)
+        layout.addLayout(dir_row)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Экспорт")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Отмена")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _browse(self):
+        start = self._dir_edit.text().strip()
+        chosen = QFileDialog.getExistingDirectory(self, "Папка для сохранения", start)
+        if chosen:
+            self._dir_edit.setText(chosen)
+
+    def values(self):
+        """(page_size, save_path). save_path — абсолютный путь с расширением .fxml."""
+        import os
+        page_size = self._SIZE_ITEMS[self._size_combo.currentIndex()][1]
+        name = (self._name_edit.text() or "diagram").strip() or "diagram"
+        if not name.lower().endswith((".fxml", ".xml")):
+            name += ".fxml"
+        directory = self._dir_edit.text().strip()
+        return page_size, os.path.join(directory, name)
 
 
 # =====================================================================
@@ -503,6 +611,8 @@ class DiagramWorkspace(QWidget):
         self._ocr_notified = False
         self._fxml_save_prompted = True
         self._awaiting_fxml_save = False
+        self._fxml_target_path = None
+        self._stage_errors = {}
         self._last_status = DiagramStatus.UPLOADED
 
         self.title_label.setText(f"Диаграмма — {name}")
@@ -590,6 +700,14 @@ class DiagramWorkspace(QWidget):
         """Применить статус к бусинам и кнопкам."""
         _prev_status = self._last_status
         self._last_status = status
+
+        # ERROR: по-этапная изоляция — не морозим весь пайплайн, а
+        # реконструируем прогресс из ProcessingStage и красим только упавший этап.
+        if status == DiagramStatus.ERROR:
+            self._apply_error_status(error_stage)
+            return
+        self._stage_errors = {}
+
         self._update_beads(status)
         self._update_buttons(status, error_stage=error_stage)
         self._update_gif(status)
@@ -597,12 +715,13 @@ class DiagramWorkspace(QWidget):
         # Армируем сохранение, как только началась генерация FXML
         if status == DiagramStatus.GENERATING_FXML:
             self._awaiting_fxml_save = True
-        # Диалог сохранения — надёжно по завершении генерации (Экспорт или авто),
-        # не завязан на переход статуса (на готовой схеме перехода нет).
+        # По завершении генерации — тихо сохранить в заранее выбранный путь
+        # (без второго окна). Не завязано на переход статуса (на готовой схеме
+        # перехода нет).
         if (status == DiagramStatus.COMPLETED
                 and getattr(self, "_awaiting_fxml_save", False)):
             self._awaiting_fxml_save = False
-            self._download_fxml()
+            self._save_fxml_silently()
 
         # B6.4: При параллельных статусах — проверить готовность OCR по артефакту
         if not self._ocr_notified and status in (
@@ -830,6 +949,121 @@ class DiagramWorkspace(QWidget):
                 label = _KEY_LABELS.get(key)
                 if label:
                     btn.setText(label)
+
+    def _apply_error_status(self, error_stage: str = None):
+        """ERROR без «заморозки»: реконструировать прогресс из ProcessingStage.
+
+        Завершённые этапы остаются зелёными, параллельные ветки — независимыми,
+        красной становится только упавшая бусина; клик по ней — лог + перезапуск.
+        Если этапы недоступны — фолбэк на старое поведение (по error_stage).
+        """
+        self._stage_errors = {}
+        try:
+            stages = self.api_client.get_stages(self._uid)
+        except Exception:
+            stages = []
+
+        if not stages:
+            # Фолбэк: хотя бы retry упавшего этапа по глобальному error_stage
+            self._update_beads(DiagramStatus.ERROR)
+            self._update_buttons(DiagramStatus.ERROR, error_stage=error_stage)
+            self._update_gif(DiagramStatus.ERROR)
+            return
+
+        # Последняя попытка каждого stage_type
+        latest = {}
+        for s in stages:
+            st = s.get("stage_type")
+            if st:
+                latest[st] = s
+
+        completed_keys, running_keys = set(), set()
+        failed = {}
+        best_status = DiagramStatus.UPLOADED
+        for st, s in latest.items():
+            key = _STAGE_TYPE_TO_KEY.get(st)
+            sstatus = (s.get("status") or "").lower()
+            if sstatus == "completed":
+                if key:
+                    completed_keys.add(key)
+                done = _STAGE_DONE_STATUS.get(st)
+                if done and _STATUS_IDX.get(done, -1) > _STATUS_IDX.get(best_status, -1):
+                    best_status = done
+            elif sstatus == "failed":
+                if key:
+                    failed[key] = (s.get("error_message") or "",
+                                   s.get("error_traceback") or "")
+            elif sstatus == "running":
+                if key:
+                    running_keys.add(key)
+
+        # База: рендер по достигнутому прогрессу (не по ERROR → лишнего не гасим)
+        self._update_beads(best_status)
+        self._update_buttons(best_status)
+        self._update_gif(best_status)
+
+        _KEY_LABELS = {k: v for k, v in self._BUTTON_DEFS}
+
+        # Overlay фактических статусов этапов из ProcessingStage
+        for key in completed_keys:
+            idx = _KEY_IDX.get(key)
+            if idx is not None:
+                self.beads.set_state(idx, BeadState.COMPLETED)
+            btn = self._action_buttons.get(key)
+            if btn is not None:
+                btn.setEnabled(True)
+                btn.setStyleSheet(_BTN_STYLE_GREEN)
+                btn.setText(_KEY_LABELS.get(key, key))
+        for key in running_keys:
+            if key in failed:
+                continue
+            idx = _KEY_IDX.get(key)
+            if idx is not None:
+                self.beads.set_state(idx, BeadState.IN_PROGRESS)
+            btn = self._action_buttons.get(key)
+            if btn is not None:
+                btn.setEnabled(False)
+                btn.setStyleSheet(_BTN_STYLE_BLUE)
+
+        # OCR по артефакту может опережать ProcessingStage
+        if getattr(self, "_ocr_notified", False) and "ocr" not in failed:
+            self.beads.set_state(BEAD_OCR, BeadState.COMPLETED)
+            if "ocr" in self._action_buttons:
+                self._action_buttons["ocr"].setEnabled(True)
+                self._action_buttons["ocr"].setStyleSheet(_BTN_STYLE_GREEN)
+
+        # Overlay упавших этапов — красная бусина + красная retry-кнопка
+        self._stage_errors = failed
+        for key, (msg, _tb) in failed.items():
+            idx = _KEY_IDX.get(key)
+            if idx is not None:
+                self.beads.set_state(idx, BeadState.ERROR)
+            btn = self._action_buttons.get(key)
+            if btn is not None:
+                btn.setEnabled(True)
+                btn.setText(f"🔄 {_KEY_LABELS.get(key, key)}")
+                btn.setStyleSheet(_BTN_STYLE_RED)
+                short = (msg or "").strip().splitlines()[0] if msg else ""
+                btn.setToolTip(
+                    (f"Ошибка: {short}\n" if short else "")
+                    + "Нажмите — показать лог и перезапустить"
+                )
+
+    def _show_stage_error_dialog(self, key: str, original_handler):
+        """Показать лог упавшего этапа и предложить перезапуск только его."""
+        msg, tb = getattr(self, "_stage_errors", {}).get(key, ("", ""))
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(f"Этап «{key}» — ошибка")
+        box.setText(msg or "Этап завершился с ошибкой.")
+        if tb:
+            box.setDetailedText(tb)
+        retry_btn = box.addButton("🔄 Перезапустить", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Закрыть", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is retry_btn:
+            original_handler()
+
     # =================================================================
     # Навигация
     # =================================================================
@@ -1083,6 +1317,10 @@ class DiagramWorkspace(QWidget):
     @Slot()
     def _on_button_click(self, key: str, original_handler):
         """Обработчик клика по кнопке — если этап уже пройден, предложить откат."""
+        # Упавший этап — показать лог и предложить перезапуск только его.
+        if key in getattr(self, "_stage_errors", {}):
+            self._show_stage_error_dialog(key, original_handler)
+            return
         status = self._last_status
         _, completed, _ = _buttons_for_status(status)
 
@@ -1278,57 +1516,76 @@ class DiagramWorkspace(QWidget):
             )
 
     def _start_fxml(self):
-        # Диалог выбора размера: 1920×1080 (экран), оригинал или A4–A0.
-        page_size = self._ask_page_size()
-        if page_size is False:          # пользователь отменил диалог
+        import os
+        # Единый диалог: размер + папка + имя. По завершении генерации файл
+        # сохранится автоматически в выбранный путь (без второго окна).
+        base = (self._diagram_name or "diagram").strip()
+        default_name = (os.path.splitext(base)[0] or "diagram") + ".fxml"
+        default_dir = getattr(self, "_last_fxml_dir", None) or os.path.expanduser("~")
+
+        dialog = FxmlExportDialog(self, default_dir, default_name)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
+        page_size, save_path = dialog.values()
+        if not save_path:
+            return
+        self._fxml_target_path = save_path
+        self._last_fxml_dir = os.path.dirname(save_path)
+
+        # Разрыв моста — из настроек редактора этой диаграммы (если задан пользователем)
+        bridge_gap = None
+        try:
+            from ui.services.ui_settings import UISettings
+            _bg = UISettings.instance().get_appearance(self._uid, "bridge_gap_factor", None)
+            if _bg is not None:
+                bridge_gap = float(_bg)
+        except Exception:
+            bridge_gap = None
 
         # Запускаем генерацию (перегенерация если уже COMPLETED)
         try:
             self._awaiting_fxml_save = True
-            self.api_client.generate_fxml(self._uid, page_size=page_size)
+            self.api_client.generate_fxml(self._uid, page_size=page_size, bridge_gap=bridge_gap)
             self.status_provider.watch(self._uid)
             size_label = page_size or "оригинал"
             self.status_message.emit(f"📄 Генерация FXML ({size_label}) запущена", 3000)
             self._refresh_status()
         except APIError as exc:
+            self._awaiting_fxml_save = False
             QMessageBox.warning(
                 self, "Ошибка",
                 f"Не удалось запустить генерацию FXML:\n{exc.message}",
             )
 
-    def _ask_page_size(self):
-        """Диалог выбора размера страницы. Возвращает 'A3', 'A4'... или None, или False (отмена)."""
-        items = [
-            "1920×1080 (экран, стандартизация скинов)",
-            "Оригинал (пиксели изображения)",
-            "A4 landscape (297×210 мм)",
-            "A3 landscape (420×297 мм)",
-            "A2 landscape (594×420 мм)",
-            "A1 landscape (841×594 мм)",
-            "A0 landscape (1189×841 мм)",
-        ]
-        item, ok = QInputDialog.getItem(
-            self, "Размер страницы FXML",
-            "Выберите целевой размер:",
-            items, 0, False,  # default = 1920×1080
-        )
-        if not ok:
-            return False
+    def _save_fxml_silently(self):
+        """Тихо сохранить готовый FXML в заранее выбранный путь (без диалога).
 
-        mapping = {
-            items[0]: "1920x1080",
-            items[1]: None,
-            items[2]: "A4",
-            items[3]: "A3",
-            items[4]: "A2",
-            items[5]: "A1",
-            items[6]: "A0",
-        }
-        return mapping.get(item)
+        Путь берётся из _fxml_target_path (задан в _start_fxml). Если он не задан
+        (напр. генерацию запустили не через диалог) — окно не открываем, показываем
+        подсказку нажать 📄 FXML.
+        """
+        target = getattr(self, "_fxml_target_path", None)
+        if not target:
+            # Генерация без заранее выбранного пути (напр. авто-пайплайн):
+            # окно сами НЕ открываем — просто подсказываем нажать 📄 FXML.
+            self.status_message.emit(
+                "✅ FXML готов — нажмите 📄 FXML, чтобы сохранить.", 6000,
+            )
+            return
+        try:
+            from pathlib import Path
+            self.api_client.download_artifact(self._uid, "fxml", Path(target))
+            self.status_message.emit(f"📄 FXML сохранён: {target}", 6000)
+        except APIError as exc:
+            QMessageBox.warning(
+                self, "Ошибка",
+                f"Не удалось сохранить FXML:\n{exc.message}",
+            )
+        finally:
+            self._fxml_target_path = None
 
     def _download_fxml(self):
-        """Скачать сгенерированный FXML на компьютер пользователя."""
+        """Скачать сгенерированный FXML на компьютер пользователя (ручной фолбэк)."""
         import os
         base = (self._diagram_name or "diagram").strip()
         default_name = (os.path.splitext(base)[0] or "diagram") + ".fxml"
@@ -1773,8 +2030,5 @@ class DiagramWorkspace(QWidget):
                     "✅ OCR завершён! Можно переходить к привязке.", 5000,
                 )
 
-            # Авто-скачивание FXML при завершении генерации
-            if status_info.status == DiagramStatus.COMPLETED:
-                self.status_message.emit(
-                    "✅ FXML готов! Нажмите 📄 FXML для скачивания.", 5000,
-                )
+            # По завершении генерации FXML сохраняется автоматически внутри
+            # _apply_status → _save_fxml_silently (в выбранный путь, без окна).
