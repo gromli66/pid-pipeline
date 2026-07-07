@@ -89,6 +89,8 @@ class ProcessingStage(Base):
     # Error Info
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     error_traceback: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    failed_step: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
 
     # Metrics (JSON string)
     metrics_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -118,12 +120,20 @@ class ProcessingStage(Base):
         if metrics:
             self.metrics_json = json.dumps(metrics)
 
-    def fail(self, error: str, traceback: Optional[str] = None) -> None:
+    def fail(
+        self,
+        error: str,
+        traceback: Optional[str] = None,
+        error_code: Optional[str] = None,
+        failed_step: Optional[str] = None,
+    ) -> None:
         """Отметить ошибку."""
         self.status = StageStatus.FAILED
         self.completed_at = datetime.utcnow()
         self.error_message = error
         self.error_traceback = traceback
+        self.error_code = error_code
+        self.failed_step = failed_step
         if self.started_at:
             self.duration_seconds = (self.completed_at - self.started_at).total_seconds()
 

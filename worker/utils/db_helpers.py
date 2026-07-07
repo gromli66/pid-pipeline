@@ -193,7 +193,20 @@ def complete_stage(stage, metrics: dict = None) -> None:
         stage.complete(metrics)
 
 
-def fail_stage(stage, error: str, tb: str = None) -> None:
-    """Mark a ProcessingStage as FAILED."""
+def fail_stage(stage, error: str, tb: str = None, exc: BaseException = None) -> None:
+    """Mark a ProcessingStage as FAILED.
+
+    If ``exc`` is given, its domain ``error_code`` / ``failed_step`` are recorded
+    (Wave 0). Without ``exc`` the behavior is unchanged: both columns stay NULL.
+    """
     if stage is not None:
-        stage.fail(error[:2000], tb[:10000] if tb else None)
+        error_code = (
+            getattr(exc, "code", type(exc).__name__) if exc is not None else None
+        )
+        failed_step = getattr(exc, "step", None)
+        stage.fail(
+            error[:2000],
+            tb[:10000] if tb else None,
+            error_code=error_code,
+            failed_step=failed_step,
+        )
