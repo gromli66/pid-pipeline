@@ -2076,7 +2076,9 @@ class DiagramWorkspace(QWidget):
         if uid != self._uid:
             return
         from ui.services.progress_model import compute_progress
-        ps = compute_progress(stages)
+        # Бюджеты — p50 реальных длительностей с боевого железа (кэш на сессию);
+        # {} при недоступности → progress_model берёт свой статический сид.
+        ps = compute_progress(stages, budgets=self.api_client.get_stage_durations())
         key = (
             _STAGE_TYPE_TO_KEY.get(ps.running_stage)
             if ps.state == "running" and ps.running_stage else None
