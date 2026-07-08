@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Tuple
 from uuid import UUID
@@ -17,7 +18,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_async_db
 from app.models import Diagram, DiagramStatus, Artifact, ArtifactType
+from app.models.stage import ProcessingStage, StageStatus
 from app.config import settings
+from app.core import obs
+from app.core.logging import get_logger
+from app.core.errors import StageStateError
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -228,9 +235,19 @@ async def fetch_cvat_annotations(
         raise HTTPException(status_code=404, detail="Diagram not found")
     
     if diagram.status != DiagramStatus.VALIDATING_BBOX:
+        logger.warning(
+            "confirm rejected: wrong state",
+            extra={"uid": str(uid), "phase": "cvat_validation", "step": "confirm",
+                   "event": "error", "code": StageStateError.code,
+                   "from_status": diagram.status.value, "expected": "validating_bbox"},
+        )
         raise HTTPException(
             status_code=400,
-            detail=f"Cannot fetch annotations: status is '{diagram.status.value}', expected 'validating_bbox'"
+            detail=(
+                f"Нельзя подтвердить: диаграмма в статусе '{diagram.status.value}', "
+                f"ожидается 'validating_bbox'. Если вернулись доразметить — "
+                f"используйте «переоткрыть валидацию»."
+            ),
         )
     
     if not diagram.cvat_task_id:
@@ -307,6 +324,104 @@ async def fetch_cvat_annotations(
             status_code=500,
             detail=f"Failed to fetch annotations: {exc}"
         )
+
+
+# Из этих статусов возвращаться на валидацию bbox нельзя (ещё до неё / уже там).
+_NOT_REOPENABLE = {
+    DiagramStatus.UPLOADED,
+    DiagramStatus.FRAME_CLEANED,
+    DiagramStatus.DETECTED,
+    DiagramStatus.VALIDATING_BBOX,
+}
+
+
+@router.post("/{uid}/reopen-bbox-validation")
+async def reopen_bbox_validation(
+    uid: UUID,
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Жёсткий возврат к валидации bbox (кнопка «Проверка элементов» с поздних этапов).
+
+    Останавливает текущий этап (revoke бегущей Celery-задачи), сбрасывает артефакты
+    после `detected`, ставит статус `validating_bbox` и переоткрывает ТУ ЖЕ CVAT-задачу —
+    ручные правки в CVAT сохраняются (таск не пересоздаётся).
+    """
+    obs.bind(uid=str(uid), phase="cvat_validation")
+
+    result = await db.execute(select(Diagram).where(Diagram.uid == uid))
+    diagram = result.scalar_one_or_none()
+    if not diagram:
+        raise HTTPException(status_code=404, detail="Diagram not found")
+
+    if not diagram.cvat_task_id or not diagram.cvat_job_id:
+        raise HTTPException(status_code=400, detail="CVAT task not created — nothing to reopen")
+
+    from_status = diagram.status
+    if from_status in _NOT_REOPENABLE:
+        logger.warning(
+            "reopen rejected: wrong state",
+            extra={"uid": str(uid), "phase": "cvat_validation", "step": "reopen_validation",
+                   "event": "error", "code": StageStateError.code, "from_status": from_status.value},
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=f"Нельзя переоткрыть валидацию из статуса '{from_status.value}'",
+        )
+
+    with obs.step("reopen_validation", logger,
+                  from_status=from_status.value, cvat_task_id=diagram.cvat_task_id):
+        # 1. Жёсткий стоп: revoke бегущих/ожидающих стадий этой диаграммы.
+        from worker.celery_app import celery_app
+        running = await db.execute(
+            select(ProcessingStage).where(
+                ProcessingStage.diagram_uid == uid,
+                ProcessingStage.status.in_([StageStatus.RUNNING, StageStatus.PENDING]),
+            )
+        )
+        revoked = 0
+        for stage in running.scalars().all():
+            if stage.celery_task_id:
+                celery_app.control.revoke(stage.celery_task_id, terminate=True)
+                revoked += 1
+            stage.status = StageStatus.SKIPPED
+            stage.completed_at = datetime.utcnow()
+            stage.error_message = "stopped: reopened bbox validation"
+
+        # 2. Сбросить артефакты после detected (seg/skeleton + старый coco_validated).
+        from app.api.rollback import _artifacts_to_delete
+        art_types = _artifacts_to_delete(DiagramStatus.DETECTED)
+        deleted = 0
+        if art_types:
+            res = await db.execute(
+                delete(Artifact).where(
+                    Artifact.diagram_uid == uid,
+                    Artifact.artifact_type.in_(art_types),
+                )
+            )
+            deleted = res.rowcount
+
+        # 3. Статус → validating_bbox, чистим ошибку.
+        diagram.status = DiagramStatus.VALIDATING_BBOX
+        diagram.error_message = None
+        diagram.error_stage = None
+        await db.commit()
+
+    browser_url = _get_cvat_browser_url()
+    cvat_url = f"{browser_url}/tasks/{diagram.cvat_task_id}/jobs/{diagram.cvat_job_id}"
+    logger.info(
+        "reopen_validation done",
+        extra={"uid": str(uid), "phase": "cvat_validation", "step": "reopen_validation",
+               "revoked_tasks": revoked, "deleted_artifacts": deleted,
+               "from_status": from_status.value},
+    )
+    return {
+        "status": "validating_bbox",
+        "cvat_url": cvat_url,
+        "cvat_task_id": diagram.cvat_task_id,
+        "cvat_job_id": diagram.cvat_job_id,
+        "revoked_tasks": revoked,
+        "deleted_artifacts": deleted,
+    }
 
 
 @router.get("/{uid}/cvat-url")
