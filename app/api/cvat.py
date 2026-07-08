@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import tempfile
+import traceback
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -13,12 +14,12 @@ from typing import List, Dict, Tuple
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_async_db
 from app.models import Diagram, DiagramStatus, Artifact, ArtifactType
-from app.models.stage import ProcessingStage, StageStatus
+from app.models.stage import ProcessingStage, StageStatus, StageType
 from app.config import settings
 from app.core import obs
 from app.core.logging import get_logger
@@ -32,6 +33,50 @@ router = APIRouter()
 def _get_cvat_browser_url() -> str:
     """Получить URL CVAT для браузера пользователя."""
     return getattr(settings, 'CVAT_BROWSER_URL', None) or settings.CVAT_URL
+
+
+async def _start_cvat_stage(db: AsyncSession, uid: UUID) -> ProcessingStage:
+    """RUNNING-строка `cvat_validation` для интерактивных CVAT-эндпоинтов.
+
+    Воркерные `start_stage`/`fail_stage` синхронные (Session) — их НЕ
+    переиспользуем; здесь AsyncSession (RUNBOOK §8.4). Коммитим сразу: строка
+    видна в `/stages`, пока идёт долгая CVAT-операция (как worker `start_stage`).
+    Под-шаг (`upload_media`/`task_shell`/`confirm`) различаем полем `failed_step`.
+    """
+    attempt = (
+        await db.execute(
+            select(func.count())
+            .select_from(ProcessingStage)
+            .where(
+                ProcessingStage.diagram_uid == uid,
+                ProcessingStage.stage_type == StageType.CVAT_VALIDATION,
+            )
+        )
+    ).scalar_one() + 1
+    stage = ProcessingStage(
+        diagram_uid=uid,
+        stage_type=StageType.CVAT_VALIDATION,
+        status=StageStatus.PENDING,
+        attempt=attempt,
+    )
+    stage.start()
+    db.add(stage)
+    await db.commit()
+    return stage
+
+
+def _fail_cvat_stage(stage: ProcessingStage, exc: BaseException, *, default_step: str) -> None:
+    """Проставить FAILED + `error_code`/`failed_step`/traceback (БЕЗ commit — коммитит вызывающий).
+
+    Зеркалит воркерный `fail_stage`: `error_code` = `exc.code` (или имя типа),
+    `failed_step` = `exc.step` (проставлен `_cvat_op`/`obs.step`), иначе — `default_step`.
+    """
+    stage.fail(
+        str(exc)[:2000],
+        traceback.format_exc()[:10000],
+        error_code=getattr(exc, "code", type(exc).__name__),
+        failed_step=getattr(exc, "step", None) or default_step,
+    )
 
 
 def parse_coco_annotations(coco_json: dict) -> Tuple[List[Dict], Dict[int, str]]:
@@ -260,6 +305,8 @@ async def fetch_cvat_annotations(
     storage_path = Path(settings.STORAGE_PATH)
     detection_dir = storage_path / str(diagram.uid) / "detection"
     
+    stage = await _start_cvat_stage(db, uid)
+
     obs.bind(uid=str(uid), phase="cvat_validation")
     try:
         # Долгая операция ВНЕ транзакции (может занять минуты)
@@ -305,7 +352,8 @@ async def fetch_cvat_annotations(
         # Обновляем диаграмму
         diagram.status = DiagramStatus.VALIDATED_BBOX
         diagram.validated_detection_count = annotation_count
-        
+        stage.complete({"annotation_count": annotation_count})
+
         await db.commit()
         
         return {
@@ -316,6 +364,7 @@ async def fetch_cvat_annotations(
         }
         
     except Exception as exc:
+        _fail_cvat_stage(stage, exc, default_step="confirm")
         # Откатываем статус при ошибке
         diagram.status = DiagramStatus.ERROR
         diagram.error_message = str(exc)[:500]
@@ -596,6 +645,8 @@ async def create_cvat_task_endpoint(
     # Путь к YOLO predictions
     yolo_path = storage_path / str(diagram.uid) / "detection" / "yolo_predicted.txt"
 
+    stage = await _start_cvat_stage(db, uid)
+
     try:
         cvat_task_id, cvat_job_id = await asyncio.to_thread(
             _create_cvat_task_sync,
@@ -607,6 +658,7 @@ async def create_cvat_task_endpoint(
 
         diagram.cvat_task_id = cvat_task_id
         diagram.cvat_job_id = cvat_job_id
+        stage.complete()
 
         await db.commit()
 
@@ -620,4 +672,6 @@ async def create_cvat_task_endpoint(
         }
 
     except Exception as exc:
+        _fail_cvat_stage(stage, exc, default_step="create_task")
+        await db.commit()
         raise HTTPException(status_code=500, detail=f"Failed to create CVAT task: {exc}")

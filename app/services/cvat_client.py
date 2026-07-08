@@ -27,11 +27,13 @@ logger = get_logger(__name__)
 
 
 @contextmanager
-def _cvat_op(op: str, *, wrap: Optional[type] = None, **fields):
+def _cvat_op(op: str, *, wrap: Optional[type] = None, step: Optional[str] = None, **fields):
     """httpx-ошибки CVAT → доменные CVAT-типы + строка лога.
 
     Доменные (CVATError) пропускаем как есть; `wrap` переопределяет тип для
     конкретной операции (import/export); не-httpx/не-CVAT — наверх (это баги).
+    `step` (если задан) проставляется на исключение → доезжает до `failed_step`
+    строки `cvat_validation` (напр. `upload_media` vs `task_shell`, RUNBOOK §8.4).
     """
     t0 = time.perf_counter()
     try:
@@ -50,17 +52,17 @@ def _cvat_op(op: str, *, wrap: Optional[type] = None, **fields):
                    "duration_ms": round((time.perf_counter() - t0) * 1000), **fields},
             exc_info=True)
         # Причина CVAT (body) — и в исключении → доходит до клиента через HTTPException.
-        raise cls(f"CVAT {op} → HTTP {status}: {body}", cause=exc) from exc
+        raise cls(f"CVAT {op} → HTTP {status}: {body}", cause=exc, step=step) from exc
     except httpx.TimeoutException as exc:
         cls = wrap or CVATTimeoutError
         logger.error(f"cvat.error op={op} → timeout",
                      extra={"op": op, "event": "error", "code": cls.code, **fields}, exc_info=True)
-        raise cls(f"CVAT {op}: timeout", cause=exc) from exc
+        raise cls(f"CVAT {op}: timeout", cause=exc, step=step) from exc
     except httpx.RequestError as exc:
         cls = wrap or CVATConnectionError
         logger.error(f"cvat.error op={op} → {exc}",
                      extra={"op": op, "event": "error", "code": cls.code, **fields}, exc_info=True)
-        raise cls(f"CVAT {op}: {exc}", cause=exc) from exc
+        raise cls(f"CVAT {op}: {exc}", cause=exc, step=step) from exc
 
 
 def _cvat_call(op: str, *, wrap: Optional[type] = None):
@@ -283,49 +285,94 @@ class CVATClient:
             return project_id
         return self.create_project(name, labels)
 
-    @_cvat_call("create_task")
     def create_task(
         self,
         project_id: int,
         name: str,
         image_path: Path,
     ) -> Tuple[int, int]:
-        """Создать task и загрузить изображение."""
+        """Создать task и загрузить изображение.
+
+        Две фазы обёрнуты РАЗДЕЛЬНО (RUNBOOK §8.4): оболочка задачи (POST /tasks)
+        vs загрузка медиа (POST /tasks/{id}/data). Так `failed_step` строки
+        `cvat_validation` отличает `upload_media` (CVAT отвергает большой файл —
+        реальная жалоба) от общего сбоя создания.
+        """
         image_path = Path(image_path)
 
-        # 1. Создаём task
-        response = self._client.post(
-            "/api/tasks",
-            headers={**self._get_headers(), "Content-Type": "application/json"},
-            json={
-                "name": name,
-                "project_id": project_id,
-            },
-        )
-        response.raise_for_status()
-        task_id = response.json()["id"]
-
-        # 2. Загружаем изображение (увеличенный timeout)
-        headers = self._get_headers()
-
-        with open(image_path, "rb") as f:
-            files = {"client_files[0]": (image_path.name, f, "image/png")}
+        # 1. Создаём оболочку task (POST /tasks)
+        with _cvat_op("create_task", step="task_shell"):
             response = self._client.post(
-                f"/api/tasks/{task_id}/data",
-                headers=headers,
-                files=files,
-                # use_cache=true — чанки генерируются лениво, по запросу,
-                # а не все сразу при создании задачи. Для больших цветных схем
-                # (~15000x7000) это резко ускоряет создание task.
-                data={"image_quality": 70, "use_cache": "true"},
-                timeout=self.timeout * 2,
+                "/api/tasks",
+                headers={**self._get_headers(), "Content-Type": "application/json"},
+                json={
+                    "name": name,
+                    "project_id": project_id,
+                },
             )
             response.raise_for_status()
+            task_id = response.json()["id"]
 
-        # 3. Ждём создания job
+        # 2. Загружаем изображение (POST /tasks/{id}/data, увеличенный timeout).
+        #    Болевой под-шаг upload_media: большой файл → Pillow/CVAT может отвергнуть.
+        with _cvat_op("upload_media", step="upload_media"):
+            headers = self._get_headers()
+            with open(image_path, "rb") as f:
+                files = {"client_files[0]": (image_path.name, f, "image/png")}
+                response = self._client.post(
+                    f"/api/tasks/{task_id}/data",
+                    headers=headers,
+                    files=files,
+                    # use_cache=true — чанки генерируются лениво, по запросу,
+                    # а не все сразу при создании задачи. Для больших цветных схем
+                    # (~15000x7000) это резко ускоряет создание task.
+                    data={"image_quality": 70, "use_cache": "true"},
+                    timeout=self.timeout * 2,
+                )
+                response.raise_for_status()
+
+            # CVAT принимает /data (202) и обрабатывает медиа в фоне; отказ
+            # (большой файл → Pillow) виден как state=Failed → ловим как upload_media
+            # с причиной CVAT, иначе он всплыл бы слепым таймаутом job (§9 #8, вар. b).
+            self._wait_for_data(task_id)
+
+        # 3. Ждём создания job (свой _cvat_call-wrapper)
         job_id = self._wait_for_job(task_id)
 
         return task_id, job_id
+
+    def _wait_for_data(
+        self,
+        task_id: int,
+        max_attempts: int = 60,
+        delay: float = 1.0,
+    ) -> None:
+        """Дождаться завершения фоновой обработки медиа после POST /data.
+
+        CVAT принимает /data (202) и обрабатывает изображение в rq-воркере;
+        отказ (например, большой файл → Pillow) виден в
+        ``GET /api/tasks/{id}/status`` как ``state=Failed``. Ловим его как
+        ``upload_media`` с причиной от CVAT (последняя строка traceback), иначе
+        сбой всплыл бы слепым таймаутом ``_wait_for_job`` (RUNBOOK §9 #8, b).
+        Вызывается ВНУТРИ ``_cvat_op("upload_media")`` — httpx-ошибки опроса тоже
+        атрибутируются на upload_media.
+        """
+        for _ in range(max_attempts):
+            response = self._client.get(
+                f"/api/tasks/{task_id}/status",
+                headers=self._get_headers(),
+            )
+            response.raise_for_status()
+            data = response.json()
+            state = data.get("state")
+            if state == "Failed":
+                msg = (data.get("message") or "").strip()
+                reason = msg.splitlines()[-1] if msg else "unknown"
+                raise CVATRequestError(f"CVAT rejected media: {reason}", step="upload_media")
+            if state == "Finished":
+                return
+            time.sleep(delay)
+        # Терминального состояния не дождались — не роняем ложно, пусть решает _wait_for_job.
 
     @_cvat_call("wait_for_job")
     def _wait_for_job(

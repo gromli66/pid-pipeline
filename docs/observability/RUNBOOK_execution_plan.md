@@ -195,7 +195,7 @@
 | Волна | Статус | Ветка/PR | Дата |
 |---|---|---|---|
 | 0 Фундамент | ✅ готово (смоук на стенде) | feat/observability | 2026-07-08 |
-| 1 CVAT | ✅ ядро готово; **переоткрыта для закрытия DoD-дыры** — `create-task`/`fetch` не пишут строку в `/stages` (§9 #8, вариант A, порядок — §8.4) | feat/observability | 2026-07-08 |
+| 1 CVAT | ✅ готово; DoD-дыра закрыта — `create-task`/`fetch` пишут `cvat_validation` в `/stages` (async-хелпер, Вариант A); болевой `upload_media` ловится опросом task-status (большой файл = асинхронный отказ CVAT). Клиент — Вариант A. Смоук на стенде зелёный (§8.5) | feat/observability | 2026-07-08 |
 | 2 Клиент | ✅ проверено визуально: окно ошибки (FAILED), прогресс-заливка в кнопке (RUNNING; верхний бар убран, §9 #9), reopen-диалог «Проверка элементов». Отложено осознанно: `stats`-эндпоинт, `current_step` | feat/observability | 2026-07-08 |
 | 3 detection | ⬜ | | |
 | 3 segmentation/skeleton/graph | ⬜ | | |
@@ -268,8 +268,25 @@
 Сначала закрываем начатое, потом расширяем (нашли недоделанное — возвращаемся сразу, не копим).
 
 1. **Волна 2 — закрыть визуалкой** [нужен ты]: пересобрать клиент, проверить determinate-бар (RUNNING), окно ошибки (FAILED), кнопку «Проверка элементов» с позднего этапа. Код + 41 тест зелёные; `stats`-эндпоинт и `current_step` осознанно не делаем.
-2. **Волна 1 — закрыть DoD-дыру:** `create-task`/`fetch` → строка `cvat_validation` + `fail_stage` (**Вариант A**, §9 #8); обязательный под-шаг `upload_media`; опц. `step("persist_validated")`.
+2. **Волна 1 — закрыть DoD-дыру:** ✅ сделано (§8.5) — `create-task`/`fetch` пишут строку `cvat_validation` + `fail_stage` (Вариант A, async-хелпер); двухфазный `create_task` (`task_shell`/`upload_media`); болевой `upload_media` — опросом task-status после `/data` (Вариант b). `step("persist_validated")` — не делали (осознанно).
 3. **После — расширение:** CVAT-углубление (тонкая карта отказов: login/project · task-shell · media-upload · wait-job · open/reopen · export[request→ready→download→parse] · import · state; отдельные `error_code` — по боли) + авто-стадии Волн 3+. Инкрементально: по боли + проактивно медленное-на-CPU. Идея отдельной «Волны 1.5» распущена — нужная часть ушла в п.2.
+
+### 8.5 Волна 1 — закрытие DoD-дыры (2026-07-08)
+
+Интерактивные CVAT-эндпоинты теперь пишут строку `cvat_validation` → CVAT-сбои видны в `/stages` и в окне ошибки клиента.
+
+**Сделано (`feat/observability`):**
+- `app/api/cvat.py` — async-хелперы `_start_cvat_stage` (RUNNING-строка `cvat_validation`, `commit` сразу — видна в `/stages` во время долгой операции, как worker `start_stage`) и `_fail_cvat_stage` (`error_code`/`failed_step`/traceback, без commit — коммитит вызывающий). Проводка: `create-task` (start→`complete`/`fail` c `default_step=create_task`), `fetch` (start→`complete`/`fail` c `default_step=confirm`). Воркерные sync `start_stage`/`fail_stage` НЕ переиспользуются.
+- `app/services/cvat_client.py` — `_cvat_op` принимает `step=` (доезжает до `failed_step`); `create_task` разбит на две фазы (`task_shell`=`POST /tasks`, `upload_media`=`POST /data`); `_wait_for_data` после `/data` опрашивает `GET /api/tasks/{id}/status` и при `state=Failed` поднимает `CVATRequestError step=upload_media` с причиной CVAT (последняя строка traceback).
+- `tests/observability/test_cvat_stage_rows.py` — `_cvat_op(step)`, двухфазность `create_task`, `_fail_cvat_stage`, `_wait_for_data` (8 тестов).
+
+**Находка (§0.2, изменила план):** большой файл CVAT отвергает **асинхронно** — `POST /data`→202, Pillow-бомба падает в фоновом rq-воркере, видно в task-status как `state=Failed`. Исходное допущение «синхронный отказ `/data`» не годилось (сбой всплывал слепым таймаутом `_wait_for_job` → `failed_step=create_task`/`cvat_timeout`). Поэтому добавлен опрос статуса (Вариант b). Смоук на стенде: `failed_step=upload_media`, msg `PIL.Image.DecompressionBombError: Image size (200000000 pixels) exceeds limit of 178956970 pixels…`.
+
+**Решения (наследуются волнами):**
+- **Клиент — Вариант A:** `fetch`-сбой уже зажигает богатое окно ошибки (статус→ERROR → поллинг → `_apply_error_status` → строка `cvat_validation` по `_STAGE_TYPE_TO_KEY["cvat_validation"]="cvat"`). `create-task`-сбой показывается inline-сообщением «Не удалось открыть CVAT: <причина>» + строкой в `/stages`; богатое окно для него НЕ делаем (синхронное действие; боль §9 #8 = невидимая причина — закрыта).
+- `create-task` НЕ ставит `diagram.status=ERROR` (пишет только строку стадии; диаграмма остаётся в своём статусе, retry не ломается). `fetch` свой ERROR-откат сохранил.
+- Наблюдаемость only — сам отказ большого файла НЕ чиним (DoD «поведение не изменилось»). Фикс (даунскейл/лимит Pillow/тайлинг) — при необходимости отдельным пунктом §9.
+- **Гоча деплоя:** `uvicorn` в `pid_api` без `--reload` → правки кода подхватываются только `docker restart pid_api` (воркерный код — `docker restart pid_worker`). Код бинд-маунтится (`./app:/app/app`), пересборка образа не нужна.
 
 ---
 
@@ -286,7 +303,7 @@
 | 5 | `reopen-bbox-validation` НЕ останавливал бегущую авто-стадию: `start_stage` коммитил RUNNING-строку только `flush`, reopen (др. сессия) её не видел → `revoked_tasks=0`, чейн добегал и корраптил статус (тест-сессия §4-B: reopen посреди сегментации → статус уезжал в `skeletonized`) | баг (Волна 1, DoD «жёсткий стоп») | `start_stage`: `flush`→`commit` (RUNNING видна сразу, бонус — видна в `/stages` вживую) + `tests/observability/test_start_stage_commit.py` | ✅ исправлено в сессии 2026-07-08 (`feat/observability`, Вариант 1); предохранитель статуса в телах задач (Вариант 2) — отложен |
 | 6 | Показалось, что `GET /{uid}/status` не отдаёт поле `status` | ложная тревога (артефакт копипаста) | повтор `/status` вернул `status` (`error`) корректно; код/enum/сериализация в порядке — механизма дропа нет | ✅ закрыто, не баг |
 | 7 | detection пишет «SAHI загружено» и молчит — под-под-шаги (tiling/inference/fusion) не логируются, стадия выглядит зависшей (всплыло в Волне 2 при обсуждении под-шага) | долг обсёрвабилити (worker) | обернуть под-под-шаги detection в `obs.step()` — тогда в логах видно движение | ⬜ Волна 3 (detection); пользователь запросил в Волне 2 — делать точечно сейчас или в Волне 3 |
-| 8 | Сбой `create-task` (CVAT отверг большой файл — Pillow) виден плохо: причина (`body`) была только в `extra` → не в `docker logs`; эндпоинт синхронный, без `obs.bind` и без строки `ProcessingStage` → новое окно ошибки Волны 2 его не ловит | долг обсёрвабилити (CVAT) | вынести `op/http_status/body` в текст лога и в исключение; `obs.bind(uid)` в `create-task`; (остаток) сделать `create-task` трекаемой стадией | 🔶 частично 2026-07-08 (`feat/observability`): `_cvat_op` → `op/http_status/body` в тексте лога **и** в исключении (видно в `docker logs` и в клиентском окне); `create-task` получил `obs.bind(uid)`. → **решено: Вариант A** (одна строка `cvat_validation` + `fail_stage`, под-шаги через `failed_step`), закрываем в рамках Волны 1 (§5, §8.4). ⬜ остаток: реализовать `ProcessingStage`+`fail_stage` для `create-task`/`fetch` (болевой под-шаг `upload_media`) |
+| 8 | Сбой `create-task` (CVAT отверг большой файл — Pillow) виден плохо: причина (`body`) была только в `extra` → не в `docker logs`; эндпоинт синхронный, без `obs.bind` и без строки `ProcessingStage` → новое окно ошибки Волны 2 его не ловит | долг обсёрвабилити (CVAT) | вынести `op/http_status/body` в текст лога и в исключение; `obs.bind(uid)` в `create-task`; (остаток) сделать `create-task` трекаемой стадией | ✅ закрыто 2026-07-08 (`feat/observability`, §8.5): `create-task`/`fetch` пишут строку `cvat_validation` (async-хелпер, Вариант A), под-шаги через `failed_step`. **Находка:** большой файл CVAT отвергает АСИНХРОННО (`POST /data`→202, Pillow падает в фоне) → всплывал слепым таймаутом `_wait_for_job`. Реализован Вариант b: после `/data` опрос `GET /tasks/{id}/status`, при `state=Failed` → `CVATRequestError step=upload_media` с причиной CVAT. Смоук: `failed_step=upload_media`, `DecompressionBombError` |
 | 9 | Верхний determinate-бар — один на окно, не мульти-диаграммный: при N бегущих `_on_stages_updated` перерисовывал его по каждой → мельтешение, не подписано какая диаграмма | UX-дыра (клиент, Волна 2) | убрать верхний бар; прогресс — в активную кнопку-стадию (per-diagram + per-stage заливка), кнопка зеленеет на завершении | ✅ сделано 2026-07-08 (`feat/observability`): заливка `N%` в кнопке бегущего этапа + верхний бар убран; проверено визуально на фикстурах |
 
 Правило: пункт отсюда либо становится своей мини-волной, либо явно закрывается как «не делаем». Молча не растворяется.

@@ -116,3 +116,28 @@
 **Отложено:** предохранитель статуса в телах задач (Вариант 2) — если поймаем остаточную микро-гонку на стыке стадий; клиентская кнопка → Волна 2 (§9 #4).
 
 **Код-дельта (`feat/observability`):** `worker/utils/db_helpers.py` (фикс), `app/api/cvat.py` (лог-строки `rejected`), `tests/observability/test_start_stage_commit.py` *(new)*.
+
+---
+
+## 9. Смоук: закрытие DoD-дыры Волны 1 — `create-task`/`fetch` пишут `cvat_validation` (2026-07-08)
+
+Догоняющая сессия по §8.5 RUNBOOK. Цель — убедиться, что интерактивные CVAT-эндпоинты пишут строку в `/stages` и болевой `upload_media` виден с причиной.
+
+**Как эмулировали (реальный оверсайз, прод-путь кода не трогали):** загрузили разовую тестовую диаграмму маленьким PNG (аплоад перекодирует картинку через Pillow → большой файл напрямую не залить — 400), подменили в контейнере `original/image.png` на 20000×10000 (~200 Мпикс > лимита Pillow), дёрнули `POST /api/cvat/<uid>/create-task`.
+
+| Что делали | Ожидали | Получили | Баг? |
+|---|---|---|---|
+| create-task на оверсайзе (1-й прогон) | строка `cvat_validation` FAILED | строки НЕТ; ответ как у старого эндпоинта | **инфра**: `pid_api` крутил старый код (uvicorn без `--reload`) |
+| `docker restart pid_api` + повтор | строка появляется | `cvat_validation/failed/failed_step=create_task/error_code=cvat_timeout` («Job for task N not created after 30 attempts») | нет (но `upload_media` не загорелся) |
+| Разбор «почему не `upload_media`» | синхронный отказ `/data` | большой файл CVAT отвергает **асинхронно**: `POST /data`→202, Pillow падает в фоне; `GET /api/tasks/{id}/status` → `state=Failed`+traceback | находка (§0.2) |
+| Вариант b (`_wait_for_data`) + restart + повтор | `failed_step=upload_media` с причиной | `cvat_validation/failed/upload_media/cvat_request`, msg `PIL.Image.DecompressionBombError: Image size (200000000 pixels) exceeds limit…`; упало быстро; `attempt=2` | нет ✅ |
+| `/api/diagrams/<uid>/stages` (путь клиента) | эндпоинт отдаёт строку | отдаёт `cvat_validation/failed/upload_media/cvat_request` | нет |
+| `pytest tests/observability` | зелёные | **51 passed** (43 + 8 новых) | нет |
+
+**Итог: пройдено.** DoD «видно в `/stages` и в окне ошибки клиента» закрыт: `fetch`-сбой зажигает богатое окно (статус→ERROR → строка `cvat_validation`), `create-task`-сбой — inline-причина + строка в `/stages` (Вариант A). Болевой `upload_media` виден с настоящей причиной CVAT.
+
+**Гочи:**
+- **Деплой:** uvicorn/worker без `--reload` → правки кода подхватываются только `docker restart pid_api` / `pid_worker` (код бинд-маунтится `./app:/app/app`, пересборка не нужна). Без рестарта смоук гоняет старый код — легко принять за баг.
+- **Атрибуция `upload_media`:** синхронный `/data`-отказ ловит `_cvat_op`; асинхронный (реальный большой файл) — `_wait_for_data` по task-status. Оба → `failed_step=upload_media`.
+
+**Код-дельта (`feat/observability`):** `app/services/cvat_client.py` (двухфазный `create_task`, `_cvat_op(step=)`, `_wait_for_data`), `app/api/cvat.py` (async `_start_cvat_stage`/`_fail_cvat_stage` + проводка), `tests/observability/test_cvat_stage_rows.py` *(new, 8 тестов)*, `docs/observability/RUNBOOK_execution_plan.md` (§8/§8.4/§9 #8/§8.5).
