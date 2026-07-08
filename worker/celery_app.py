@@ -7,7 +7,7 @@ import os
 import sys
 
 from celery import Celery
-from celery.signals import worker_process_init
+from celery.signals import setup_logging as celery_setup_logging, worker_process_init
 
 from app.core.logging import get_logger, setup_logging
 
@@ -112,6 +112,16 @@ class _StdoutToLogger:
 
     def __getattr__(self, name):
         return getattr(self._original, name)
+
+
+@celery_setup_logging.connect
+def _use_project_logging(**_kwargs) -> None:
+    """Забрать настройку логов у Celery целиком.
+
+    Без этого Celery хайджекает root-логгер и наш формат/ContextFilter в задачах
+    теряется (видно по смоуку: логи задач в celery-формате, без блока uid=...).
+    """
+    setup_logging()
 
 
 @worker_process_init.connect
