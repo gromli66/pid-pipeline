@@ -38,7 +38,7 @@ def step(name: str, logger: logging.Logger, **fields) -> Iterator[None]:
     except PipelineError as exc:
         exc.step = exc.step or name
         logger.error(
-            "step.error",
+            f"step.error code={exc.code}",
             extra={"step": name, "event": "error", "code": exc.code},
             exc_info=True,
         )
@@ -50,7 +50,7 @@ def step(name: str, logger: logging.Logger, **fields) -> Iterator[None]:
             str(exc), stage=_ctx.get().get("phase"), step=name, cause=exc
         )
         logger.error(
-            "step.error",
+            f"step.error code={wrapped.code}",
             extra={"step": name, "event": "error", "code": wrapped.code},
             exc_info=True,
         )
