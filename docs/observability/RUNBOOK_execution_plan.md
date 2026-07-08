@@ -126,7 +126,7 @@
 **Расширение объёма (решено 2026-07-08, по §0.2):** реальные ошибки клиентов — ДВЕ семьи, не только CVAT-транспорт:
 - **A. Состояние** — `Cannot fetch annotations: status is '…', expected 'validating_bbox'`: не сбой CVAT, а неверный статус диаграммы. Причина: клиентский «возврат на проверку» не делал реального отката (rollback→reopen), статус висел на `skeletonizing`. Введён `StageStateError` (`stage_state_invalid`) + warning-лог на предусловии `confirm`.
 - **B. CVAT-транспорт** — `Export … 400 not finished` / таймаут / 5xx: типизируем `CVATExportError`/… (осталось, см. ниже).
-- Новый `POST /api/diagrams/{uid}/reopen-bbox-validation` — «жёсткий стоп»: revoke бегущей стадии (по `celery_task_id`) → сброс артефактов после `detected` → статус `validating_bbox` → переоткрытие ТОЙ ЖЕ CVAT-job. Решение с пользователем: **жёсткий стоп, ручную разметку в CVAT не теряем** (таск не пересоздаётся).
+- Новый `POST /api/cvat/{uid}/reopen-bbox-validation` — «жёсткий стоп»: revoke бегущей стадии (по `celery_task_id`) → сброс артефактов после `detected` → статус `validating_bbox` → переоткрытие ТОЙ ЖЕ CVAT-job. Решение с пользователем: **жёсткий стоп, ручную разметку в CVAT не теряем** (таск не пересоздаётся).
 
 **Сделано (2026-07-08):** `errors.py` (CVAT-листья + `StageStateError`), `app/api/cvat.py` (reopen + лог confirm), `tests/observability/test_cvat_errors.py` — `pytest tests/observability -v` = 22 зелёных.
 **Осталось по Волне 1:** `cvat_client.py` в CVAT-типы + логи; `detection.py:254-322` `except CVATError`; полная инструментовка `fetch` (`step("confirm")`/`persist_validated` + `CVATExportError`); httpx-мок тесты. Клиентская кнопка «Проверка элементов» → звать `reopen-bbox-validation` (см. §9).
