@@ -123,6 +123,14 @@
 **Тесты:** `tests/test_cvat_errors.py` — мок httpx: `500→CVATRequestError`, таймаут→`CVATTimeoutError`, пустой zip→`CVATExportError`, нет json→`CVATExportError`; assert тип + запись stage-полей + строка лога.
 **[нужен ты]:** прислать реальный текст ошибки подтверждения (сверить, что ветка совпала); smoke — одно подтверждение CVAT на стенде, глянуть логи `api` (`docker logs pid_api | grep <uid>`).
 
+**Расширение объёма (решено 2026-07-08, по §0.2):** реальные ошибки клиентов — ДВЕ семьи, не только CVAT-транспорт:
+- **A. Состояние** — `Cannot fetch annotations: status is '…', expected 'validating_bbox'`: не сбой CVAT, а неверный статус диаграммы. Причина: клиентский «возврат на проверку» не делал реального отката (rollback→reopen), статус висел на `skeletonizing`. Введён `StageStateError` (`stage_state_invalid`) + warning-лог на предусловии `confirm`.
+- **B. CVAT-транспорт** — `Export … 400 not finished` / таймаут / 5xx: типизируем `CVATExportError`/… (осталось, см. ниже).
+- Новый `POST /api/diagrams/{uid}/reopen-bbox-validation` — «жёсткий стоп»: revoke бегущей стадии (по `celery_task_id`) → сброс артефактов после `detected` → статус `validating_bbox` → переоткрытие ТОЙ ЖЕ CVAT-job. Решение с пользователем: **жёсткий стоп, ручную разметку в CVAT не теряем** (таск не пересоздаётся).
+
+**Сделано (2026-07-08):** `errors.py` (CVAT-листья + `StageStateError`), `app/api/cvat.py` (reopen + лог confirm), `tests/observability/test_cvat_errors.py` — `pytest tests/observability -v` = 22 зелёных.
+**Осталось по Волне 1:** `cvat_client.py` в CVAT-типы + логи; `detection.py:254-322` `except CVATError`; полная инструментовка `fetch` (`step("confirm")`/`persist_validated` + `CVATExportError`); httpx-мок тесты. Клиентская кнопка «Проверка элементов» → звать `reopen-bbox-validation` (см. §9).
+
 ### Волна 2 — Клиент: прогресс + окно ошибки  (на фикстурах, без пайплайна)
 **Цель/DoD:** прогресс-бар детерминированный (фаза + под-шаг + ETA); при FAILED-стадии — окно с `error_traceback`/`phase`/`step`/`code` + «Копировать/Сохранить».
 **Файлы:** `ui/services/status_provider.py` (+опрос `/stages`), `ui/windows/main_window.py` (`progress_bar` determinate), `ui/services/progress_model.py` *(new)*, `ui/widgets/error_report_dialog.py` *(new)*, `ui/widgets/diagram_workspace.py` (открыть отчёт из `_apply_error_status`), `app/api/stats.py` *(new — `/api/stats/stage-durations`)*, малое поле `current_step` на стадии (чтобы показывать под-шаг).
@@ -163,8 +171,8 @@
 
 | Волна | Статус | Ветка/PR | Дата |
 |---|---|---|---|
-| 0 Фундамент | ⬜ не начата | | |
-| 1 CVAT | ⬜ | | |
+| 0 Фундамент | ✅ готово (смоук на стенде) | feat/observability | 2026-07-08 |
+| 1 CVAT | 🔄 в работе (reopen + типы готовы; транспорт остался) | feat/observability | 2026-07-08 |
 | 2 Клиент | ⬜ | | |
 | 3 detection | ⬜ | | |
 | 3 segmentation/skeleton/graph | ⬜ | | |
@@ -174,6 +182,26 @@
 
 (обновляй статусы по мере закрытия — так новый чат сразу видит, где мы)
 
+### 8.1 Волна 0 (Фундамент) — закрыто 2026-07-08
+
+**Сделано (ветка `feat/observability`):**
+- `app/core/errors.py` — иерархия `PipelineError` (Artifact*/ModelLoad/Inference→GpuOOM/CVATError-стаб).
+- `app/core/obs.py` — `bind`/`step`/`load_artifact`/`persist_artifact`.
+- `app/core/logging.py` — `ContextFilter` (uid/phase/step/attempt/task_id), корреляционный `LOG_FORMAT`, `LOG_LEVEL`/`LOG_LEVEL_LIBS`/`LOG_OVERRIDES`.
+- `app/models/stage.py` + `alembic/versions/0007_add_error_code_failed_step.py` — колонки `error_code`/`failed_step` (миграция применена на стенде).
+- `worker/utils/db_helpers.py` — `fail_stage(exc=…)` пишет `error_code`/`failed_step`.
+- `app/schemas/diagram.py` + `app/api/diagrams.py` — `celery_task_id`/`error_code`/`failed_step` в `/stages`.
+- `worker/celery_app.py` — логи воркера через сигнал Celery `setup_logging` + мост `stdout→logging` (после fork).
+- `docker-compose.yml` — `json-file` ротация (20m×5) на 5 сервисах P&ID.
+- Тесты: `tests/observability/` (errors/obs/db_helpers/logging) — 19 зелёных; смоук на стенде пройден.
+
+**Решения (наследуются волнами):**
+- `error_code`/`failed_step` — только на `ProcessingStage`, НЕ на `Diagram`.
+- `fail_stage` умеет писать код/шаг, но call-sites `exc=` в Волне 0 НЕ проводим — каждая стадийная волна проводит свои.
+- Ротация docker-логов — только 5 сервисов P&ID; CVAT-стек (10) не трогаем.
+- Логи воркера держатся на сигнале Celery `setup_logging` (иначе Celery хайджекает root и наш формат в задачах теряется).
+- Тесты волн живут в `tests/observability/`, гоняются отдельно (`pytest tests/observability -v`); старую `tests/` не трогаем.
+
 ---
 
 ## 9. Parking lot (найденное вне объёма — по §0.2)
@@ -182,6 +210,9 @@
 
 | # | Что нашли (файл/место) | Тип (баг/долг/пробел дизайна) | Предложение | Решение |
 |---|---|---|---|---|
-| — | *(пусто)* | | | |
+| 1 | Celery хайджекает root-логгер → логи задач не в нашем формате (смоук Волны 0) | баг инфры | сигнал `setup_logging` вместо голого `worker_process_init` | ✅ решено в Волне 0 (`celery_app.py`) |
+| 2 | `pytest tests/` рушится на сборке (`cv2`/`torch`/`celery` нет в anaconda) + устаревшие тесты (`test_refactoring*`, `test_stage7_graph_flow`, cp1251 в `.read_text`) | тех-долг тест-инфры | изолировали тесты волн в `tests/observability/`; полная чистка — на `pr0/fix-test-infra` (importorskip + xfail) | ⬜ отложено (pr0) |
+| 3 | Индекс git на смонтированной папке ловит `index.lock`/«удаления» (сценарий §0.1) | инфра-риск | восстановление: `del .git\index.lock` + `del .git\index` + `git reset` | ✅ подтверждено, задокументировано (§0.1) |
+| 4 | Кнопка «Проверка элементов» в клиенте не зовёт бэкенд-откат — переоткрывает CVAT визуально (источник ошибки `status is skeletonizing`) | баг флоу (клиент) | подключить кнопку к `POST /reopen-bbox-validation` + открыть возвращённый `cvat_url` | ⬜ клиентская правка (Волна 2 / точечно) |
 
 Правило: пункт отсюда либо становится своей мини-волной, либо явно закрывается как «не делаем». Молча не растворяется.
