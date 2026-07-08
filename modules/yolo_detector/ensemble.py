@@ -42,6 +42,15 @@ from modules.yolo_detector.detector import NodeDetector
 from modules.yolo_detector.preprocessing import binarize_for_yolo
 from modules.yolo_detector.config import CLASS_NAMES, REVERSE_REINDEX
 
+# Наблюдаемость (Волна 3, §9 #7): под-под-шаги COMPUTE ансамбля видимы в логах.
+# `obs.step` — тонкий лог-примитив без ML-зависимостей; связность modules→app.core
+# осознанная (детектор всегда исполняется внутри worker'а, app на PYTHONPATH).
+from app.core.logging import get_logger
+from app.core.obs import step
+from app.core.errors import ConfigError, InferenceError, PipelineError
+
+logger = get_logger(__name__)
+
 
 class EnsembleDetector:
     """
@@ -392,11 +401,25 @@ class EnsembleDetector:
         all_model_detections = []
         per_model_results = []
         for detector, cfg in self._detectors:
-            dets = detector.detect(
-                img,
-                return_absolute=False,
-                apply_reverse_mapping=False,  # reverse mapping после слияния
-            )
+            # Под-под-шаг COMPUTE: инференс одной модели ансамбля (SAHI tiling+
+            # inference внутри одного вызова get_sliced_prediction). Логируем
+            # границы → на CPU видно движение по моделям (RUNBOOK §9 #7);
+            # неожиданный сбой → InferenceError с проставленным step.
+            with step("inference", logger, model=f"tile{cfg['tile_size']}",
+                      tile=cfg["tile_size"], weight=cfg["weight"]):
+                try:
+                    dets = detector.detect(
+                        img,
+                        return_absolute=False,
+                        apply_reverse_mapping=False,  # reverse mapping после слияния
+                    )
+                except PipelineError:
+                    raise
+                except Exception as exc:
+                    raise InferenceError(
+                        f"inference failed (tile={cfg['tile_size']})",
+                        step="inference", cause=exc,
+                    ) from exc
             all_model_detections.append((dets, cfg["weight"]))
             per_model_results.append(dets)
 
@@ -405,26 +428,30 @@ class EnsembleDetector:
             all_model_detections
         )
 
-        merge_fn = {
-            "wbf": self._merge_wbf,
-            "nms": self._merge_nms,
-            "soft_nms": self._merge_soft_nms,
-        }
-        if self.merge_strategy not in merge_fn:
-            raise ValueError(
-                f"Неизвестная стратегия: {self.merge_strategy}. "
-                f"Доступные: {list(merge_fn.keys())}"
-            )
+        # Под-под-шаг COMPUTE: слияние предсказаний моделей (WBF/NMS/Soft-NMS).
+        with step("fusion", logger, strategy=self.merge_strategy,
+                  n_models=len(self._detectors)):
+            merge_fn = {
+                "wbf": self._merge_wbf,
+                "nms": self._merge_nms,
+                "soft_nms": self._merge_soft_nms,
+            }
+            if self.merge_strategy not in merge_fn:
+                raise ConfigError(
+                    f"Неизвестная стратегия: {self.merge_strategy}. "
+                    f"Доступные: {list(merge_fn.keys())}",
+                    step="fusion",
+                )
 
-        # Адаптивный per-class WBF, если заданы per-class веса (только для wbf)
-        if self.merge_strategy == "wbf" and self.per_class_weights:
-            merged = self._merge_wbf_adaptive(
-                boxes_list, scores_list, labels_list, weights
-            )
-        else:
-            merged = merge_fn[self.merge_strategy](
-                boxes_list, scores_list, labels_list, weights
-            )
+            # Адаптивный per-class WBF, если заданы per-class веса (только для wbf)
+            if self.merge_strategy == "wbf" and self.per_class_weights:
+                merged = self._merge_wbf_adaptive(
+                    boxes_list, scores_list, labels_list, weights
+                )
+            else:
+                merged = merge_fn[self.merge_strategy](
+                    boxes_list, scores_list, labels_list, weights
+                )
 
         # Добавить bbox в абсолютных координатах
         # (его проставляет одиночный NodeDetector; нужен resolve_overlaps и др.)
