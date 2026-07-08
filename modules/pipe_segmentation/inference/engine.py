@@ -35,6 +35,35 @@ from pipe_segmentation.inference.preprocessing import (
 from pipe_segmentation.inference.postprocessing import post_process_mask
 from pipe_segmentation.inference.tta import predict_with_tta
 
+# --- Наблюдаемость (Волна 4): под-под-шаги COMPUTE через obs.step --------------
+# engine.py исполняется и в worker'е (app на PYTHONPATH), и в standalone-CLI
+# (`python -m pipe_segmentation infer/test`, где app недоступен). Поэтому слой obs
+# импортируется опционально: в CLI он вырождается в no-op и инференс не ломается.
+try:
+    from app.core.logging import get_logger
+    from app.core.obs import step
+    from app.core.errors import InferenceError, GpuOutOfMemoryError, PipelineError
+
+    logger = get_logger(__name__)
+except Exception:  # standalone pipe_segmentation: app не на PYTHONPATH
+    import logging as _logging
+    from contextlib import contextmanager
+
+    logger = _logging.getLogger(__name__)
+
+    @contextmanager
+    def step(_name, _logger, **_fields):
+        yield
+
+    class PipelineError(Exception):
+        pass
+
+    class InferenceError(PipelineError):
+        pass
+
+    class GpuOutOfMemoryError(InferenceError):
+        pass
+
 
 class TiledInference:
     """
@@ -128,98 +157,120 @@ class TiledInference:
         
         height, width = image.shape[:2]
         
-        # Бинаризация изображения "на лету"
-        if self.binarize:
-            image = preprocess_image(
-                image, 
-                binarize=True, 
-                binarize_method=self.binarize_method
+        # tiling: бинаризация + расчёт позиций тайлов (под-под-шаг COMPUTE)
+        with step("tiling", logger, image=f"{height}x{width}",
+                  tile=self.tile_size, stride=self.stride, binarize=self.binarize):
+            # Бинаризация изображения "на лету"
+            if self.binarize:
+                image = preprocess_image(
+                    image,
+                    binarize=True,
+                    binarize_method=self.binarize_method
+                )
+
+            # Если node_mask не указан — используем zeros
+            if node_mask is None:
+                node_mask = np.zeros((height, width), dtype=np.uint8)
+
+            # Вычисляем позиции тайлов
+            positions = calculate_tile_positions(
+                height, width,
+                self.tile_size, self.stride
             )
-        
-        # Если node_mask не указан — используем zeros
-        if node_mask is None:
-            node_mask = np.zeros((height, width), dtype=np.uint8)
-        
-        # Вычисляем позиции тайлов
-        positions = calculate_tile_positions(
-            height, width,
-            self.tile_size, self.stride
-        )
-        
+
         # Создаём буферы для накопления результатов
         prob_accumulator = np.zeros((height, width), dtype=np.float32)
         weight_accumulator = np.zeros((height, width), dtype=np.float32)
         
-        # Обрабатываем батчами
-        for batch_start in range(0, len(positions), self.batch_size):
-            batch_end = min(batch_start + self.batch_size, len(positions))
-            batch_positions = positions[batch_start:batch_end]
-            
-            # Извлекаем тайлы
-            rgb_tiles = []
-            node_tiles = []
-            
-            for y, x in batch_positions:
-                rgb_tile = extract_tile(image, y, x, self.tile_size)
-                rgb_tiles.append(rgb_tile)
+        # inference: батчи тайлов через модель (+TTA внутри _run_inference).
+        # Один шаг на весь цикл — на CPU видно движение фазы; сбой инференса
+        # → InferenceError / OOM → GpuOutOfMemoryError с проставленным step.
+        with step("inference", logger, n_tiles=len(positions),
+                  batch_size=self.batch_size, use_tta=self.use_tta, device=self.device):
+            # Обрабатываем батчами
+            for batch_start in range(0, len(positions), self.batch_size):
+                batch_end = min(batch_start + self.batch_size, len(positions))
+                batch_positions = positions[batch_start:batch_end]
+
+                # Извлекаем тайлы
+                rgb_tiles = []
+                node_tiles = []
+
+                for y, x in batch_positions:
+                    rgb_tile = extract_tile(image, y, x, self.tile_size)
+                    rgb_tiles.append(rgb_tile)
+                    if self.in_channels == 4:
+                        node_tile = extract_tile(node_mask, y, x, self.tile_size)
+                        node_tiles.append(node_tile)
+
+                # Подготавливаем батч (бинаризация уже сделана выше)
                 if self.in_channels == 4:
-                    node_tile = extract_tile(node_mask, y, x, self.tile_size)
-                    node_tiles.append(node_tile)
-            
-            # Подготавливаем батч (бинаризация уже сделана выше)
-            if self.in_channels == 4:
-                batch_tensor = prepare_batch_from_tiles(
-                    rgb_tiles, node_tiles, binarize=False
-                )
-            else:
-                from pipe_segmentation.inference.preprocessing import (
-                    prepare_batch_from_tiles_rgb,
-                )
-                batch_tensor = prepare_batch_from_tiles_rgb(
-                    rgb_tiles, binarize=False
-                )
-            batch_tensor = batch_tensor.to(self.device)
-            
-            # Инференс
-            with torch.no_grad():
-                if self.use_amp:
-                    with torch.cuda.amp.autocast():
-                        predictions = self._run_inference(batch_tensor)
+                    batch_tensor = prepare_batch_from_tiles(
+                        rgb_tiles, node_tiles, binarize=False
+                    )
                 else:
-                    predictions = self._run_inference(batch_tensor)
-            
-            # Собираем результаты
-            predictions_np = predictions.cpu().numpy()
-            
-            for i, (y, x) in enumerate(batch_positions):
-                pred_tile = predictions_np[i, 0]  # [H, W]
-                
-                # Добавляем с весами блендинга
-                y_end = min(y + self.tile_size, height)
-                x_end = min(x + self.tile_size, width)
-                
-                tile_h = y_end - y
-                tile_w = x_end - x
-                
-                prob_accumulator[y:y_end, x:x_end] += \
-                    pred_tile[:tile_h, :tile_w] * self.blend_mask[:tile_h, :tile_w]
-                weight_accumulator[y:y_end, x:x_end] += \
-                    self.blend_mask[:tile_h, :tile_w]
+                    from pipe_segmentation.inference.preprocessing import (
+                        prepare_batch_from_tiles_rgb,
+                    )
+                    batch_tensor = prepare_batch_from_tiles_rgb(
+                        rgb_tiles, binarize=False
+                    )
+                batch_tensor = batch_tensor.to(self.device)
+
+                # Инференс
+                try:
+                    with torch.no_grad():
+                        if self.use_amp:
+                            with torch.amp.autocast('cuda'):
+                                predictions = self._run_inference(batch_tensor)
+                        else:
+                            predictions = self._run_inference(batch_tensor)
+                except PipelineError:
+                    raise
+                except Exception as exc:
+                    _oom_cls = getattr(torch.cuda, "OutOfMemoryError", None)
+                    oom = (isinstance(_oom_cls, type) and isinstance(exc, _oom_cls)) \
+                        or "out of memory" in str(exc).lower()
+                    err = GpuOutOfMemoryError if oom else InferenceError
+                    raise err(
+                        f"inference failed (tile={self.tile_size}, batch@{batch_start})",
+                        step="inference", cause=exc,
+                    ) from exc
+
+                # Собираем результаты
+                predictions_np = predictions.cpu().numpy()
+
+                for i, (y, x) in enumerate(batch_positions):
+                    pred_tile = predictions_np[i, 0]  # [H, W]
+
+                    # Добавляем с весами блендинга
+                    y_end = min(y + self.tile_size, height)
+                    x_end = min(x + self.tile_size, width)
+
+                    tile_h = y_end - y
+                    tile_w = x_end - x
+
+                    prob_accumulator[y:y_end, x:x_end] += \
+                        pred_tile[:tile_h, :tile_w] * self.blend_mask[:tile_h, :tile_w]
+                    weight_accumulator[y:y_end, x:x_end] += \
+                        self.blend_mask[:tile_h, :tile_w]
         
-        # Нормализуем по весам
-        weight_accumulator = np.maximum(weight_accumulator, 1e-8)
-        prob_map = prob_accumulator / weight_accumulator
-        
-        # Бинаризация
-        binary_mask = (prob_map > self.threshold).astype(np.uint8) * 255
-        
-        # Постобработка
-        if postprocess:
-            cfg_pp = postprocess_config if postprocess_config is not None else self.postprocess_config
-            binary_mask = post_process_mask(
-                binary_mask,
-                **(cfg_pp or {})
-            )
+        # stitch: нормализация накопителей + бинаризация + постобработка маски
+        with step("stitch", logger, threshold=self.threshold, postprocess=postprocess):
+            # Нормализуем по весам
+            weight_accumulator = np.maximum(weight_accumulator, 1e-8)
+            prob_map = prob_accumulator / weight_accumulator
+
+            # Бинаризация
+            binary_mask = (prob_map > self.threshold).astype(np.uint8) * 255
+
+            # Постобработка
+            if postprocess:
+                cfg_pp = postprocess_config if postprocess_config is not None else self.postprocess_config
+                binary_mask = post_process_mask(
+                    binary_mask,
+                    **(cfg_pp or {})
+                )
         
         elapsed_time = time.time() - start_time
         

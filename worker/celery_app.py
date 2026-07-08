@@ -7,9 +7,10 @@ import os
 import sys
 
 from celery import Celery
-from celery.signals import setup_logging as celery_setup_logging, worker_process_init
+from celery.signals import setup_logging as celery_setup_logging, worker_process_init, task_prerun
 
 from app.core.logging import get_logger, setup_logging
+from app.core import obs
 
 # Получаем настройки из переменных окружения
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6380/0")
@@ -133,3 +134,15 @@ def _init_worker_logging(**_kwargs) -> None:
     """
     setup_logging()
     sys.stdout = _StdoutToLogger(get_logger("worker.stdout"), sys.stdout)
+
+
+@task_prerun.connect
+def _reset_obs_context(**_kwargs) -> None:
+    """Обнулить корреляционный контекст перед каждой задачей.
+
+    ``contextvars`` в prefork-воркере не сбрасывается между задачами → без этого
+    неинструментированная стадия наследует uid/phase/task предыдущей (смоук Волны 4:
+    skeleton логировался с контекстом detection). Инструментированные задачи затем
+    зовут ``obs.bind`` поверх чистого контекста — поведение то же.
+    """
+    obs.reset()

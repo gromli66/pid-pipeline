@@ -27,6 +27,18 @@ def bind(**kw) -> None:
     _ctx.set({**_ctx.get(), **kw})
 
 
+def reset() -> None:
+    """Обнулить корреляционный контекст (в начале каждой задачи).
+
+    В prefork-воркере ``contextvars`` живёт весь процесс и НЕ обнуляется между
+    задачами Celery. Без сброса неинструментированная стадия наследует
+    ``uid``/``phase``/``task`` предыдущей задачи (смоук Волны 4: skeleton
+    логировался как ``phase=detecting`` с task детекции). Вызывается из
+    ``task_prerun`` → каждая задача стартует с чистым контекстом (незаполненные
+    поля → ``-``, а не чужие значения)."""
+    _ctx.set({})
+
+
 @contextmanager
 def step(name: str, logger: logging.Logger, **fields) -> Iterator[None]:
     """Обернуть под-шаг: лог ``start``/``end`` + ``duration_ms``; сбой →

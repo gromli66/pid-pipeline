@@ -18,7 +18,8 @@ from typing import Optional
 # Формат логов: стабильные корреляционные поля (заполняются ContextFilter).
 LOG_FORMAT = (
     "%(asctime)s | %(levelname)-8s | %(name)s | "
-    "uid=%(uid)s phase=%(phase)s step=%(step)s attempt=%(attempt)s task=%(task_id)s | "
+    "uid=%(uid)s phase=%(phase)s step=%(step)s attempt=%(attempt)s task=%(task_id)s "
+    "dur=%(duration_ms)s | "
     "%(message)s"
 )
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -82,8 +83,8 @@ class ColoredFormatter(logging.Formatter):
 class ContextFilter(logging.Filter):
     """Инъекция корреляционного контекста (obs.bind / step) в каждую запись.
 
-    uid/phase/attempt/task_id — из obs._ctx; step — из extra под-шага;
-    чего в контексте нет — подставляется "-".
+    uid/phase/attempt/task_id — из obs._ctx; step/duration_ms — из extra под-шага
+    (step() пишет duration_ms в extra на step.end); чего нет — подставляется "-".
     """
 
     def __init__(self) -> None:
@@ -96,6 +97,10 @@ class ContextFilter(logging.Filter):
         for field in _CTX_FIELDS:
             if not hasattr(record, field):
                 setattr(record, field, ctx.get(field, "-"))
+        # duration_ms — не из контекста, а из extra step.end; иначе LOG_FORMAT
+        # упал бы на записях без него.
+        if not hasattr(record, "duration_ms"):
+            record.duration_ms = "-"
         return True
 
 

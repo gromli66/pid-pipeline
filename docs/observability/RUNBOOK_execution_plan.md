@@ -175,6 +175,7 @@
 **Ограничение:** p50 по `stage_type` без учёта размера картинки → мажет на выбросах (detection/segmentation/ocr масштабируются с разрешением). Приемлемо (p50 — центр, кратно лучше GPU-статики); бакетить по мегапикселям — позже, если больно.
 **Тесты:** p50-запрос на фикстурных строках стадий (исключения / только `completed` / окно); клиент — визуально бар на CPU-длительностях.
 **[нужен ты]:** снять первый CPU-p50 с боя для сидов; визуалка бара.
+**Наблюдение (2026-07-08, GPU-стенд, из `dur=` Волны 4):** статические `_DEFAULT_BUDGETS` (`progress_model.py`: detection 60с, segmentation 90с, skeleton 20с, junction 30с) ≈ **×4–6 от реальных** длительностей стенда (detection/segmentation ~14с, skeleton ~3.3с, junction ~5.8с) → клиентский ETA/бюджет мажет ~×5. Подтверждает разворот: тянуть p50 из БД, не хардкодить. NB: это **GPU**-числа стенда — НЕ CPU-сид для боя (его снимать на бою, там реал наоборот *медленнее* бюджета).
 
 ### Волна финальная — недельная сводка
 Тот же `/api/stats/stage-durations` расширяем (или scheduled-задача): p50/p95/max по стадиям, `queue_wait`, пик одновременности, близость к `soft_time_limit`, failure-rate. Один эндпоинт — две цели (бюджеты + сводка). По цифрам возвращаемся к параллелизму.
@@ -209,8 +210,9 @@
 | 0 Фундамент | ✅ готово (смоук на стенде) | feat/observability | 2026-07-08 |
 | 1 CVAT | ✅ готово; DoD-дыра закрыта — `create-task`/`fetch` пишут `cvat_validation` в `/stages` (async-хелпер, Вариант A); болевой `upload_media` ловится опросом task-status (большой файл = асинхронный отказ CVAT). Клиент — Вариант A. Смоук на стенде зелёный (§8.5) | feat/observability | 2026-07-08 |
 | 2 Клиент | ✅ проверено визуально: окно ошибки (FAILED), прогресс-заливка в кнопке (RUNNING; верхний бар убран, §9 #9), reopen-диалог «Проверка элементов». Отложено осознанно: `stats`-эндпоинт, `current_step` | feat/observability | 2026-07-08 |
-| 3 detection | ⬜ | | |
-| 3 segmentation/skeleton/graph | ⬜ | | |
+| 3 detection | ✅ smoke (§8.6, uid 6e7144d5) | feat/observability | 2026-07-08 |
+| 3 segmentation | ✅ smoke (uid 6e7144d5); baseline+tiling/inference/stitch видны; +фикс протечки контекста (§9 #11) | feat/observability | 2026-07-08 |
+| 3 skeleton/graph | ⬜ | | |
 | 3 ocr/junction/contours/fxml | ⬜ | | |
 | 3 upload/frame | ⬜ | | |
 | Fin недельная сводка | ⬜ | | |
@@ -320,6 +322,28 @@
 
 ---
 
+### 8.7 Волна 4 — segmentation (2026-07-08, ✅ smoke passed)
+
+Под-под-шаги COMPUTE сегментации видны в логах; raise'ы типизированы; немые `except: pass` закрыты. По образцу Волны 3 (Вариант A) — инструментированы и задача, и движок tiled-инференса.
+
+**Сделано (`feat/observability`):**
+- `worker/tasks/segmentation.py` — `obs.bind(uid/phase=segmenting/task_id/attempt)` + баннер (image/wh/model/tile/overlap/device); канон под-шагов `obs.step()`: `load_inputs`/`load_model`/`compute`/`persist_artifacts`. Raise'ы типизированы: project config → `ConfigError`, диаграмма не найдена → `PipelineError`, нет/битый образ → `ArtifactMissingError`, нет чекпоинта → `ModelLoadError`. Внешний `except` → `logger.error(exc_info=True)` + `fail_stage(exc=exc)` (`error_code`/`failed_step` доезжают до `/stages`); `SoftTimeLimitExceeded` → +traceback. `get_logger` вместо `logging.getLogger`.
+- Немые `except: pass` (node_mask helpers `segmentation.py:91/131/135`) → `logger.warning(exc_info=True)` + прежний bbox/zeros-fallback; overlay-viz `except` → `exc_info=True` (best-effort, широкий тип осознанно).
+- `modules/pipe_segmentation/inference/engine.py` (**Вариант A**) — под-под-шаги внутри `TiledInference.predict()`: `step("tiling")` (бинаризация+позиции) / `step("inference")` (батч-цикл) / `step("stitch")` (нормализация+бинаризация+постобработка). Сбой инференса → `InferenceError`, OOM → `GpuOutOfMemoryError` (оба `step=inference`).
+- `tests/observability/test_segmentation_errors.py` — fault-тесты движка (типизация под-под-шагов, границы `tiling/inference/stitch` в логах, passthrough `PipelineError`, коды листьев). Изоляция cv2/torch/tqdm + pipe-листья (§9 #2).
+- `app/core/errors.py` — без изменений (переиспользуем листья Волн 0/3).
+
+**Решения (§0.2 — наследуются волнами):**
+- **TTA свёрнута в `inference`:** канон §1 называет tiling/inference/tta/stitch, но TTA идёт покадрово внутри `_run_inference` (в батч-цикле) — чистой последовательной границы нет; отдельный `step` на батч дал бы десятки строк start/end (против §1 «чистые in-memory не оборачиваем»). Логируем `tiling/inference/stitch`; TTA — часть `inference`. Зеркалит detection («tiling+inference не разделяются — SAHI внутри одного вызова», §8.6).
+- **`engine.py` — optional-import obs:** движок импортится и standalone-CLI (`python -m pipe_segmentation infer/test`, где `app` не на PYTHONPATH). `from app.core…` обёрнут в `try/except` → no-op `step` + локальные заглушки ошибок; в worker'е (app на PYTHONPATH) работает реальный `obs`. Отличие от `ensemble.py` (top-level import): `yolo_detector` не standalone-пакет, `pipe_segmentation` — да (свой `__main__`/`cli.py`).
+- **281 `print` в `pipe_segmentation` — НЕ мигрируем:** все в тренировке/CLI (`cli.py` 121, `architecture.py` 36, `trainer.py` 28, `coco_to_masks` 26, `tiling` 17 в `ImageTiler`…); рантайм-путь инференса (`engine/tta/postprocessing/preprocessing`) и task-файл — **0 `print`**. На stdout→logging мост Волны 0 (как `print` детектора, §8.6). DoD «print→0» на рантайме выполнен.
+
+**Smoke (стенд, GPU, 2026-07-08, uid `6e7144d5`, 4964×3509):** баннер + `step=load_inputs/load_model/compute/persist_artifacts`, внутри `compute` — `step=tiling/inference/stitch` (inference ≈7 c по таймстампам); `Segmentation done: 24 tiles, 7.8s, coverage 1.1%`; пайплайн ушёл дальше (skeleton→junction), поведение сохранено. Побочно всплыла и закрыта протечка контекста (§9 #11): `obs.bind` тёк в неинструментированные стадии → сброс в `task_prerun` (`obs.reset()`); skeleton/junction теперь честный `-`, segmentation/detection — без изменений.
+
+**Гоча деплоя (напоминание):** воркерный код бинд-маунтится → после правок `docker restart pid_worker` (пересборка не нужна).
+
+---
+
 ## 9. Parking lot (найденное вне объёма — по §0.2)
 
 Сюда чат заносит всё, что всплыло, но не входит в текущую волну. Ты решаешь: взять отдельной волной, сделать сейчас, или отклонить.
@@ -335,6 +359,9 @@
 | 7 | detection пишет «SAHI загружено» и молчит — под-под-шаги (tiling/inference/fusion) не логируются, стадия выглядит зависшей (всплыло в Волне 2 при обсуждении под-шага) | долг обсёрвабилити (worker) | обернуть под-под-шаги detection в `obs.step()` — тогда в логах видно движение | ✅ Волна 3 (§8.6, smoke 2026-07-08): в логах баннер + `step=load_inputs/load_model/compute/postprocess/persist_artifacts`, внутри `compute` — 3× `step=inference` (по модели) + `step=fusion`. Вариант A; связность `modules→app.core.obs` принята |
 | 8 | Сбой `create-task` (CVAT отверг большой файл — Pillow) виден плохо: причина (`body`) была только в `extra` → не в `docker logs`; эндпоинт синхронный, без `obs.bind` и без строки `ProcessingStage` → новое окно ошибки Волны 2 его не ловит | долг обсёрвабилити (CVAT) | вынести `op/http_status/body` в текст лога и в исключение; `obs.bind(uid)` в `create-task`; (остаток) сделать `create-task` трекаемой стадией | ✅ закрыто 2026-07-08 (`feat/observability`, §8.5): `create-task`/`fetch` пишут строку `cvat_validation` (async-хелпер, Вариант A), под-шаги через `failed_step`. **Находка:** большой файл CVAT отвергает АСИНХРОННО (`POST /data`→202, Pillow падает в фоне) → всплывал слепым таймаутом `_wait_for_job`. Реализован Вариант b: после `/data` опрос `GET /tasks/{id}/status`, при `state=Failed` → `CVATRequestError step=upload_media` с причиной CVAT. Смоук: `failed_step=upload_media`, `DecompressionBombError` |
 | 9 | Верхний determinate-бар — один на окно, не мульти-диаграммный: при N бегущих `_on_stages_updated` перерисовывал его по каждой → мельтешение, не подписано какая диаграмма | UX-дыра (клиент, Волна 2) | убрать верхний бар; прогресс — в активную кнопку-стадию (per-diagram + per-stage заливка), кнопка зеленеет на завершении | ✅ сделано 2026-07-08 (`feat/observability`): заливка `N%` в кнопке бегущего этапа + верхний бар убран; проверено визуально на фикстурах |
-| 10 | `duration_ms` под-шага пишется в structured-extra `step.end`, но не в текстовом `LOG_FORMAT` — в `docker logs` длительность видна только по таймстампам start/end (всплыло на smoke Волны 3) | долг обсёрвабилити (формат логов) | опц. `dur=%(duration_ms)s` в `LOG_FORMAT` (Волна 0, общая схема) или ms в текст сообщения `step.end`; иначе ждать JSON-стока | ⬜ решить: делать сейчас или ждать JSON. NB: это про длительность в ТЕКСТЕ лога; ETA-бюджеты клиента — отдельный путь (`duration_seconds` из БД, §5 «бюджеты из БД»), не логи |
+| 10 | `duration_ms` под-шага пишется в structured-extra `step.end`, но не в текстовом `LOG_FORMAT` — в `docker logs` длительность видна только по таймстампам start/end (всплыло на smoke Волны 3) | долг обсёрвабилити (формат логов) | опц. `dur=%(duration_ms)s` в `LOG_FORMAT` (Волна 0, общая схема) или ms в текст сообщения `step.end`; иначе ждать JSON-стока | ✅ решено 2026-07-08 (`feat/observability`, Волна 4): `dur=%(duration_ms)s` в `LOG_FORMAT` + дефолт `-` в `ContextFilter` (записи без под-шага). NB: это про длительность в ТЕКСТЕ лога; ETA-бюджеты клиента — отдельный путь (`duration_seconds` из БД, §5 «бюджеты из БД»), не логи |
+| 11 | `obs.bind` протекал между задачами: `contextvars` в prefork-воркере не обнулялся → неинструментированная стадия (skeleton/junction/direction) логировалась с `uid/phase/task` предыдущей задачи (смоук Волны 4: skeleton = `phase=detecting` + task детекции; под нагрузкой/мультидиаграммно мог бы взять ЧУЖОЙ uid) | баг обсёрвабилити (Волна 0) | сброс контекста в сигнале `task_prerun` (`obs.reset()`) — каждая задача стартует с чистого; инструментированные биндят поверх | ✅ решено 2026-07-08 (`feat/observability`): `obs.reset()` + `@task_prerun.connect` в `celery_app.py`. Неинструментир. стадии теперь честный `-` до своих волн (поведение инструментированных не изменилось) |
+| 12 | `torch.cuda.amp.autocast()` deprecated (FutureWarning, `engine.py:224`, смоук Волны 4) | долг (пред-существующий, не-obs) | → `torch.amp.autocast('cuda')`, поведение то же | ✅ фикс 2026-07-08 (`feat/observability`, точечно — согласовано) |
+| 13 | `[POSTPROCESS]`-логи модуля `postprocessing` идут на `WARNING`, хотя информационные (смоук Волны 4: `[POSTPROCESS] TOTAL: 0.49s` как warning — шум) | долг обсёрвабилити (уровень логов) | снизить до `INFO`/`DEBUG` в волне skeleton/graph (там же трогаем модули сегментации) | ⬜ отложено (не трогаем сейчас) |
 
 Правило: пункт отсюда либо становится своей мини-волной, либо явно закрывается как «не делаем». Молча не растворяется.

@@ -9,7 +9,6 @@ Segmentation Task — U2-Net++ сегментация труб.
 """
 
 import json
-import logging
 import os
 import traceback
 from pathlib import Path
@@ -21,8 +20,16 @@ from celery.exceptions import SoftTimeLimitExceeded
 
 from worker.celery_app import celery_app
 from worker.utils.db_helpers import set_diagram_error, check_deleted, upsert_artifact, start_stage, complete_stage, fail_stage
+from app.core import obs
+from app.core.errors import (
+    ArtifactMissingError,
+    ConfigError,
+    ModelLoadError,
+    PipelineError,
+)
+from app.core.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +96,7 @@ def _rle_to_mask(segmentation, height: int, width: int) -> np.ndarray:
                 return mask_utils.decode(compressed_rle)
 
     except Exception:
-        pass
+        logger.warning("rle decode failed, using empty mask", exc_info=True)
 
     return np.zeros((height, width), dtype=np.uint8)
 
@@ -129,11 +136,12 @@ def _process_annotation(ann: dict, height: int, width: int) -> np.ndarray:
             mask = _bbox_to_mask(ann["bbox"], height, width)
 
     except Exception:
+        logger.warning("annotation processing failed, falling back to bbox", exc_info=True)
         if "bbox" in ann:
             try:
                 mask = _bbox_to_mask(ann["bbox"], height, width)
             except Exception:
-                pass
+                logger.warning("bbox fallback failed for annotation", exc_info=True)
 
     return mask
 
@@ -218,6 +226,15 @@ def task_segment_pipes(
     db = SessionLocal()
     stage = None
 
+    # Корреляционный контекст фазы: uid/phase/task_id/attempt в каждой строке
+    # лога (в т.ч. под-под-шаги engine) через ContextFilter (Волна 0).
+    obs.bind(
+        uid=str(diagram_uid),
+        phase="segmenting",
+        task_id=self.request.id,
+        attempt=self.request.retries,
+    )
+
     try:
         logger.info("Starting pipe segmentation for %s", diagram_uid)
 
@@ -233,7 +250,9 @@ def task_segment_pipes(
         project_loader = get_project_loader()
         project_config = project_loader.load(project_code)
         if not project_config:
-            raise ValueError(f"Project config '{project_code}' not found")
+            raise ConfigError(
+                f"Project config '{project_code}' not found", stage="segmenting"
+            )
 
         seg_cfg = project_config.segmentation
         logger.info("Project: %s, weights: %s", project_config.name, seg_cfg.weights)
@@ -241,7 +260,10 @@ def task_segment_pipes(
         # ===== 2. Diagram from DB =====
         diagram = db.query(Diagram).filter(Diagram.uid == diagram_uid).first()
         if not diagram:
-            raise ValueError(f"Diagram {diagram_uid} not found")
+            raise PipelineError(
+                f"Diagram {diagram_uid} not found",
+                stage="segmenting", diagram_uid=str(diagram_uid),
+            )
 
         if check_deleted(db, diagram_uid):
             logger.info("Diagram %s is deleted, aborting", diagram_uid)
@@ -269,101 +291,110 @@ def task_segment_pipes(
         from app.models.stage import StageType
         stage = start_stage(db, diagram_uid, StageType.SEGMENTATION, celery_task_id=self.request.id)
 
-        # ===== 3. Paths =====
+        # ===== 3. LOAD_INPUTS: изображение + node_mask из COCO =====
         storage_path = Path(os.getenv("STORAGE_PATH", "./storage/diagrams"))
         diagram_dir = storage_path / str(diagram_uid)
-
-        image_path = diagram_dir / "original" / "image.png"
-        if not image_path.exists():
-            for ext in (".jpg", ".jpeg", ".tiff", ".tif"):
-                alt = image_path.with_suffix(ext)
-                if alt.exists():
-                    image_path = alt
-                    break
-            else:
-                raise FileNotFoundError(f"Image not found: {image_path}")
-
         seg_dir = diagram_dir / "segmentation"
-        seg_dir.mkdir(parents=True, exist_ok=True)
 
-        logger.info("Image: %s (%dx%d)", image_path.name,
-                     diagram.image_width or 0, diagram.image_height or 0)
+        with obs.step("load_inputs", logger, artifact="image"):
+            image_path = diagram_dir / "original" / "image.png"
+            if not image_path.exists():
+                for ext in (".jpg", ".jpeg", ".tiff", ".tif"):
+                    alt = image_path.with_suffix(ext)
+                    if alt.exists():
+                        image_path = alt
+                        break
+                else:
+                    raise ArtifactMissingError(
+                        f"Image not found: {image_path}", stage="segmenting"
+                    )
 
-        # ===== 4. Генерация node_mask =====
-        coco_path = diagram_dir / "detection" / "coco_validated.json"
-        if not coco_path.exists():
-            # Fallback на predicted
-            coco_path = diagram_dir / "detection" / "coco_predicted.json"
+            seg_dir.mkdir(parents=True, exist_ok=True)
+
+            # node_mask из COCO (validated → predicted fallback)
+            coco_path = diagram_dir / "detection" / "coco_validated.json"
+            if not coco_path.exists():
+                coco_path = diagram_dir / "detection" / "coco_predicted.json"
+                if coco_path.exists():
+                    logger.warning("coco_validated.json not found, using coco_predicted.json")
+
+            image_bgr = cv2.imread(str(image_path))
+            if image_bgr is None:
+                raise ArtifactMissingError(
+                    f"Failed to read image: {image_path}", stage="segmenting"
+                )
+
+            h, w = image_bgr.shape[:2]
+            image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+
             if coco_path.exists():
-                logger.warning("coco_validated.json not found, using coco_predicted.json")
+                node_mask = generate_node_mask(coco_path, h, w)
+                node_pixels = int(np.sum(node_mask > 0))
+                logger.info("Node mask generated: %d non-zero pixels", node_pixels)
+            else:
+                logger.warning("No COCO annotations found, using empty node mask")
+                node_mask = np.zeros((h, w), dtype=np.uint8)
 
-        image_bgr = cv2.imread(str(image_path))
-        if image_bgr is None:
-            raise ValueError(f"Failed to read image: {image_path}")
+            node_mask_path = seg_dir / "node_mask.png"
+            cv2.imwrite(str(node_mask_path), node_mask)
 
-        h, w = image_bgr.shape[:2]
-        image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+        # ===== 4. LOAD_MODEL: чекпоинт + U2-Net++ + движок tiled inference =====
+        with obs.step("load_model", logger):
+            from worker.utils.device import resolve_device
 
-        if coco_path.exists():
-            node_mask = generate_node_mask(coco_path, h, w)
-            node_pixels = int(np.sum(node_mask > 0))
-            logger.info("Node mask generated: %d non-zero pixels", node_pixels)
-        else:
-            logger.warning("No COCO annotations found, using empty node mask")
-            node_mask = np.zeros((h, w), dtype=np.uint8)
+            weights_a = Path(seg_cfg.weights)
+            if not weights_a.is_absolute():
+                weights_a = Path("/app") / weights_a
+            if not weights_a.exists():
+                raise ModelLoadError(
+                    f"Checkpoint not found: {weights_a}", stage="segmenting"
+                )
 
-        node_mask_path = seg_dir / "node_mask.png"
-        cv2.imwrite(str(node_mask_path), node_mask)
+            device = resolve_device()
 
-        # ===== 5. Single-model inference (A_600, 3-канальная RGB) =====
-        weights_a = Path(seg_cfg.weights)
-        if not weights_a.is_absolute():
-            weights_a = Path("/app") / weights_a
-        if not weights_a.exists():
-            raise FileNotFoundError(f"Checkpoint not found: {weights_a}")
+            model = create_model(
+                architecture=seg_cfg.architecture,
+                encoder_name=seg_cfg.encoder_name,
+                encoder_weights=None,
+                in_channels=seg_cfg.in_channels,
+                classes=seg_cfg.classes,
+                decoder_attention_type=seg_cfg.decoder_attention_type,
+                dual_head=seg_cfg.dual_head_a,
+                verbose=False,
+            )
+            load_checkpoint(str(weights_a), model, device=device, verbose=False)
 
-        from worker.utils.device import resolve_device
-        device = resolve_device()
+            engine = TiledInference(
+                model=model,
+                device=device,
+                tile_size=seg_cfg.tile_size,
+                overlap=seg_cfg.overlap,
+                batch_size=seg_cfg.batch_size,
+                threshold=seg_cfg.threshold,
+                use_tta=seg_cfg.use_tta,
+                binarize=seg_cfg.binarize,
+                binarize_method=seg_cfg.binarize_method,
+                in_channels=seg_cfg.in_channels,
+            )
+
+        # ===== Баннер: входы / размеры / модель (DoD §4) =====
         logger.info(
-            "Loading model (%s, %s/%s, in_ch=%d) on %s ...",
+            "segmentation: start image=%s wh=%dx%d model=%s(%s/%s in_ch=%d) "
+            "tile=%d overlap=%d tta=%s device=%s",
+            image_path.name, w, h,
             weights_a.name, seg_cfg.architecture, seg_cfg.encoder_name,
-            seg_cfg.in_channels, device,
+            seg_cfg.in_channels, seg_cfg.tile_size, seg_cfg.overlap,
+            seg_cfg.use_tta, device,
+            extra={"event": "banner"},
         )
 
-        model = create_model(
-            architecture=seg_cfg.architecture,
-            encoder_name=seg_cfg.encoder_name,
-            encoder_weights=None,
-            in_channels=seg_cfg.in_channels,
-            classes=seg_cfg.classes,
-            decoder_attention_type=seg_cfg.decoder_attention_type,
-            dual_head=seg_cfg.dual_head_a,
-            verbose=False,
-        )
-        load_checkpoint(str(weights_a), model, device=device, verbose=False)
-
-        engine = TiledInference(
-            model=model,
-            device=device,
-            tile_size=seg_cfg.tile_size,
-            overlap=seg_cfg.overlap,
-            batch_size=seg_cfg.batch_size,
-            threshold=seg_cfg.threshold,
-            use_tta=seg_cfg.use_tta,
-            binarize=seg_cfg.binarize,
-            binarize_method=seg_cfg.binarize_method,
-            in_channels=seg_cfg.in_channels,
-        )
-
-        logger.info(
-            "Running tiled inference (tile=%d, overlap=%d) ...",
-            seg_cfg.tile_size, seg_cfg.overlap,
-        )
-        result = engine.predict(
-            image_rgb, node_mask,
-            postprocess=seg_cfg.postprocess,
-            postprocess_config=seg_cfg.postprocess_config or None,
-        )
+        # ===== 5. COMPUTE: tiled inference (tiling/inference/stitch внутри engine) =====
+        with obs.step("compute", logger, tile=seg_cfg.tile_size, overlap=seg_cfg.overlap):
+            result = engine.predict(
+                image_rgb, node_mask,
+                postprocess=seg_cfg.postprocess,
+                postprocess_config=seg_cfg.postprocess_config or None,
+            )
 
         # Освобождение GPU (у TiledInference нет free_memory())
         del engine, model
@@ -376,46 +407,48 @@ def task_segment_pipes(
             result["n_tiles"], result["time_sec"], result.get("coverage_pct", 0),
         )
 
-        pipe_mask_path = seg_dir / "pipe_mask.png"
-        cv2.imwrite(str(pipe_mask_path), pipe_mask)
+        # ===== 6. PERSIST_ARTIFACTS: pipe_mask + overlay + запись в БД =====
+        with obs.step("persist_artifacts", logger):
+            pipe_mask_path = seg_dir / "pipe_mask.png"
+            cv2.imwrite(str(pipe_mask_path), pipe_mask)
 
-        # ===== 5b. Overlay визуализация =====
-        overlay_path = None
-        if project_config.save_visualizations:
-            overlay_path = seg_dir / "segmentation_overlay.png"
-            try:
-                overlay = image_bgr.copy()
-                # Зелёный полупрозрачный overlay на pipe_mask
-                green = np.zeros_like(overlay)
-                green[:, :, 1] = 255  # зелёный канал
-                mask_bool = pipe_mask > 127
-                alpha = 0.4
-                overlay[mask_bool] = cv2.addWeighted(
-                    overlay[mask_bool], 1 - alpha,
-                    green[mask_bool], alpha, 0,
-                )
-                # Красный контур node_mask
-                node_bool = node_mask > 127
-                node_contours, _ = cv2.findContours(
-                    node_bool.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE,
-                )
-                cv2.drawContours(overlay, node_contours, -1, (0, 0, 255), 2)
-                cv2.imwrite(str(overlay_path), overlay)
-                logger.info("Segmentation overlay saved: %s", overlay_path.name)
-            except Exception as viz_exc:
-                logger.warning("Failed to create overlay: %s", viz_exc)
-                overlay_path = None
+            # Overlay визуализация (best-effort — не роняет стадию)
+            overlay_path = None
+            if project_config.save_visualizations:
+                overlay_path = seg_dir / "segmentation_overlay.png"
+                try:
+                    overlay = image_bgr.copy()
+                    # Зелёный полупрозрачный overlay на pipe_mask
+                    green = np.zeros_like(overlay)
+                    green[:, :, 1] = 255  # зелёный канал
+                    mask_bool = pipe_mask > 127
+                    alpha = 0.4
+                    overlay[mask_bool] = cv2.addWeighted(
+                        overlay[mask_bool], 1 - alpha,
+                        green[mask_bool], alpha, 0,
+                    )
+                    # Красный контур node_mask
+                    node_bool = node_mask > 127
+                    node_contours, _ = cv2.findContours(
+                        node_bool.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE,
+                    )
+                    cv2.drawContours(overlay, node_contours, -1, (0, 0, 255), 2)
+                    cv2.imwrite(str(overlay_path), overlay)
+                    logger.info("Segmentation overlay saved: %s", overlay_path.name)
+                except Exception as viz_exc:
+                    logger.warning("Failed to create overlay: %s", viz_exc, exc_info=True)
+                    overlay_path = None
 
-        # ===== 6. Артефакты в БД =====
-        artifacts_to_save = [
-            (ArtifactType.NODE_MASK, node_mask_path),
-            (ArtifactType.PIPE_MASK, pipe_mask_path),
-        ]
-        if overlay_path and overlay_path.exists():
-            artifacts_to_save.append((ArtifactType.SEGMENTATION_OVERLAY, overlay_path))
+            # Артефакты в БД
+            artifacts_to_save = [
+                (ArtifactType.NODE_MASK, node_mask_path),
+                (ArtifactType.PIPE_MASK, pipe_mask_path),
+            ]
+            if overlay_path and overlay_path.exists():
+                artifacts_to_save.append((ArtifactType.SEGMENTATION_OVERLAY, overlay_path))
 
-        for art_type, art_path in artifacts_to_save:
-            upsert_artifact(db, diagram_uid, art_type, str(art_path), storage_path, "image/png")
+            for art_type, art_path in artifacts_to_save:
+                upsert_artifact(db, diagram_uid, art_type, str(art_path), storage_path, "image/png")
 
         # ===== 7. Обновление статуса =====
         diagram.segmentation_pixels = int(np.sum(pipe_mask > 0))
@@ -445,21 +478,23 @@ def task_segment_pipes(
         }
 
     except SoftTimeLimitExceeded:
-        logger.error("Segmentation timed out for %s", diagram_uid)
-        fail_stage(stage, "Segmentation timed out (59 min limit)")
+        logger.error("Segmentation timed out (59 min limit)", exc_info=True)
+        fail_stage(stage, "Segmentation timed out (59 min limit)", traceback.format_exc())
         set_diagram_error(db, diagram_uid, "Segmentation timed out (59 min limit)", "segmenting")
         raise
 
     except Exception as exc:
-        logger.error("Segmentation failed for %s: %s", diagram_uid, exc)
-        logger.debug(traceback.format_exc())
+        # exc_info=True + exc= в fail_stage → error_code/failed_step/traceback
+        # доезжают до /stages (DoD §4). Под-под-шаг сбоя (tiling/inference/stitch)
+        # проставляется obs.step() и всплывает в failed_step.
+        logger.error("Segmentation failed: %s", exc, exc_info=True)
 
         if self.request.retries < self.max_retries:
-            fail_stage(stage, str(exc)[:500], traceback.format_exc())
-            logger.info("Retrying (%d/%d) ...", self.request.retries + 1, self.max_retries)
+            fail_stage(stage, str(exc)[:500], traceback.format_exc(), exc=exc)
+            logger.warning("Retrying (%d/%d)", self.request.retries + 1, self.max_retries)
             raise self.retry(exc=exc)
 
-        fail_stage(stage, str(exc)[:500], traceback.format_exc())
+        fail_stage(stage, str(exc)[:500], traceback.format_exc(), exc=exc)
         set_diagram_error(db, diagram_uid, str(exc)[:500], "segmenting")
         raise
 

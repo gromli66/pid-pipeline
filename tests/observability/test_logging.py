@@ -57,6 +57,17 @@ def test_does_not_overwrite_extra_step():
     assert rec.step == "compute"  # контекст не перетирает уже заданное поле
 
 
+def test_duration_ms_default_and_from_extra():
+    # обычная запись — duration_ms нет → "-" (иначе LOG_FORMAT падает)
+    rec = _record()
+    ContextFilter().filter(rec)
+    assert rec.duration_ms == "-"
+    # step.end кладёт duration_ms в extra → сохраняется (виден в тексте лога)
+    rec2 = _record(duration_ms=1234)
+    ContextFilter().filter(rec2)
+    assert rec2.duration_ms == 1234
+
+
 def test_parse_overrides():
     assert _parse_overrides("httpx:ERROR, sqlalchemy:INFO ") == {
         "httpx": "ERROR",
