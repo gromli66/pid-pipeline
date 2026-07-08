@@ -5,6 +5,9 @@
 отдельная семья (неверный статус диаграммы), НЕ CVAT-сбой.
 """
 
+import httpx
+import pytest
+
 from app.core.errors import (
     CVATConnectionError,
     CVATError,
@@ -15,6 +18,7 @@ from app.core.errors import (
     PipelineError,
     StageStateError,
 )
+from app.services.cvat_client import _cvat_op
 
 
 def test_cvat_leaf_codes():
@@ -46,3 +50,48 @@ def test_stage_state_error():
     assert issubclass(StageStateError, PipelineError)
     assert not issubclass(StageStateError, CVATError)  # это не CVAT-сбой, а предусловие
     assert err.step == "confirm"
+
+
+def _http_error(code: int) -> None:
+    """Бросить httpx.HTTPStatusError с заданным статусом (как raise_for_status)."""
+    req = httpx.Request("GET", "http://cvat/api/x")
+    resp = httpx.Response(code, text="boom body", request=req)
+    raise httpx.HTTPStatusError(str(code), request=req, response=resp)
+
+
+def test_cvat_op_http_status_to_request_error():
+    with pytest.raises(CVATRequestError) as ei:
+        with _cvat_op("login"):
+            _http_error(500)
+    assert ei.value.code == "cvat_request"
+
+
+def test_cvat_op_timeout():
+    with pytest.raises(CVATTimeoutError):
+        with _cvat_op("export_annotations"):
+            raise httpx.ReadTimeout("slow")
+
+
+def test_cvat_op_connect():
+    with pytest.raises(CVATConnectionError):
+        with _cvat_op("login"):
+            raise httpx.ConnectError("connection refused")
+
+
+def test_cvat_op_wrap_overrides_type():
+    # import/export: любой httpx-сбой мапится в свой доменный тип
+    with pytest.raises(CVATImportError):
+        with _cvat_op("import_annotations", wrap=CVATImportError):
+            _http_error(500)
+    with pytest.raises(CVATExportError):
+        with _cvat_op("export_annotations", wrap=CVATExportError):
+            _http_error(400)
+
+
+def test_cvat_op_passes_domain_error_unchanged():
+    # доменный CVATError (напр. export «не готов») не переоборачивается
+    orig = CVATExportError("Export not ready after 60 attempts")
+    with pytest.raises(CVATExportError) as ei:
+        with _cvat_op("export_annotations", wrap=CVATExportError):
+            raise orig
+    assert ei.value is orig

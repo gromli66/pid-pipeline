@@ -4,13 +4,66 @@ CVAT Client - взаимодействие с CVAT API.
 Синхронная версия с persistent connection для Celery workers и API.
 """
 
+import functools
 import httpx
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 
 from app.config import settings
+from app.core.logging import get_logger
+from app.core.errors import (
+    CVATConnectionError,
+    CVATError,
+    CVATExportError,
+    CVATImportError,
+    CVATRequestError,
+    CVATTimeoutError,
+)
+
+logger = get_logger(__name__)
+
+
+@contextmanager
+def _cvat_op(op: str, *, wrap: Optional[type] = None, **fields):
+    """httpx-ошибки CVAT → доменные CVAT-типы + строка лога.
+
+    Доменные (CVATError) пропускаем как есть; `wrap` переопределяет тип для
+    конкретной операции (import/export); не-httpx/не-CVAT — наверх (это баги).
+    """
+    t0 = time.perf_counter()
+    try:
+        yield
+    except CVATError:
+        raise
+    except httpx.HTTPStatusError as exc:
+        cls = wrap or CVATRequestError
+        logger.error("cvat.error", extra={
+            "op": op, "event": "error", "code": cls.code,
+            "http_status": exc.response.status_code, "body": exc.response.text[:500],
+            "duration_ms": round((time.perf_counter() - t0) * 1000), **fields}, exc_info=True)
+        raise cls(f"CVAT {op} → HTTP {exc.response.status_code}", cause=exc) from exc
+    except httpx.TimeoutException as exc:
+        cls = wrap or CVATTimeoutError
+        logger.error("cvat.error", extra={"op": op, "event": "error", "code": cls.code, **fields}, exc_info=True)
+        raise cls(f"CVAT {op}: timeout", cause=exc) from exc
+    except httpx.RequestError as exc:
+        cls = wrap or CVATConnectionError
+        logger.error("cvat.error", extra={"op": op, "event": "error", "code": cls.code, **fields}, exc_info=True)
+        raise cls(f"CVAT {op}: {exc}", cause=exc) from exc
+
+
+def _cvat_call(op: str, *, wrap: Optional[type] = None):
+    """Декоратор: обернуть сетевой метод клиента в _cvat_op."""
+    def deco(fn):
+        @functools.wraps(fn)
+        def inner(*args, **kwargs):
+            with _cvat_op(op, wrap=wrap):
+                return fn(*args, **kwargs)
+        return inner
+    return deco
 
 
 @dataclass
@@ -77,6 +130,7 @@ class CVATClient:
 
         return headers
 
+    @_cvat_call("login")
     def login(self, username: str, password: str) -> str:
         """Авторизация в CVAT."""
         response = self._client.post(
@@ -197,6 +251,7 @@ class CVATClient:
         response.raise_for_status()
         return len(missing)
 
+    @_cvat_call("get_or_create_project")
     def get_or_create_project(
         self,
         name: str,
@@ -220,6 +275,7 @@ class CVATClient:
             return project_id
         return self.create_project(name, labels)
 
+    @_cvat_call("create_task")
     def create_task(
         self,
         project_id: int,
@@ -263,6 +319,7 @@ class CVATClient:
 
         return task_id, job_id
 
+    @_cvat_call("wait_for_job")
     def _wait_for_job(
         self,
         task_id: int,
@@ -284,8 +341,9 @@ class CVATClient:
 
             time.sleep(delay)
 
-        raise TimeoutError(f"Job for task {task_id} not created after {max_attempts} attempts")
+        raise CVATTimeoutError(f"Job for task {task_id} not created after {max_attempts} attempts")
 
+    @_cvat_call("import_annotations", wrap=CVATImportError)
     def import_annotations(
         self,
         task_id: int,
@@ -308,6 +366,7 @@ class CVATClient:
             )
             response.raise_for_status()
 
+    @_cvat_call("export_annotations", wrap=CVATExportError)
     def export_annotations(
         self,
         task_id: int,
@@ -341,7 +400,7 @@ class CVATClient:
 
         # 202 = экспорт запущен, 200/201 = уже готов
         if response.status_code not in (200, 201, 202):
-            raise Exception(f"Failed to request export: {response.status_code} {response.text}")
+            raise CVATExportError(f"Failed to request export: {response.status_code} {response.text[:200]}")
 
         # Шаг 2: Ждём готовности и скачиваем
         max_attempts = 60
@@ -369,12 +428,12 @@ class CVATClient:
                 # CVAT 2.25: экспорт ещё готовится — это не ошибка, ждём дальше
                 continue
             else:
-                raise Exception(f"Export download failed: {response.status_code} {response.text}")
+                raise CVATExportError(f"Export download failed: {response.status_code} {response.text[:200]}")
         else:
-            raise TimeoutError(f"Export not ready after {max_attempts} attempts")
+            raise CVATExportError(f"Export not ready after {max_attempts} attempts")
 
         if len(response.content) < 50:
-            raise Exception(f"Export returned empty: {len(response.content)} bytes")
+            raise CVATExportError(f"Export returned empty: {len(response.content)} bytes")
 
         if output_path is None:
             output_path = Path(f"task_{task_id}_annotations.zip")
