@@ -125,11 +125,30 @@
 
 **Расширение объёма (решено 2026-07-08, по §0.2):** реальные ошибки клиентов — ДВЕ семьи, не только CVAT-транспорт:
 - **A. Состояние** — `Cannot fetch annotations: status is '…', expected 'validating_bbox'`: не сбой CVAT, а неверный статус диаграммы. Причина: клиентский «возврат на проверку» не делал реального отката (rollback→reopen), статус висел на `skeletonizing`. Введён `StageStateError` (`stage_state_invalid`) + warning-лог на предусловии `confirm`.
-- **B. CVAT-транспорт** — `Export … 400 not finished` / таймаут / 5xx: типизируем `CVATExportError`/… (осталось, см. ниже).
+- **B. CVAT-транспорт** — `Export … 400 not finished` / таймаут / 5xx: типизированы `CVATExportError`/… (сделано, см. ниже).
 - Новый `POST /api/cvat/{uid}/reopen-bbox-validation` — «жёсткий стоп»: revoke бегущей стадии (по `celery_task_id`) → сброс артефактов после `detected` → статус `validating_bbox` → переоткрытие ТОЙ ЖЕ CVAT-job. Решение с пользователем: **жёсткий стоп, ручную разметку в CVAT не теряем** (таск не пересоздаётся).
+  - Механика (проверено по коду): `rollback` откатывает на любой **стабильный** этап, включая `detected` (не только на рамку — частая путаница); `open-validation` переоткрывает ТУ ЖЕ CVAT-job по `cvat_task_id`, а `rollback` сам CVAT-таск не трогает → поэтому ручная разметка сохраняется. `validating_bbox` — транзитный, целью отката быть не может (только `detected` + переоткрытие).
 
-**Сделано (2026-07-08):** `errors.py` (CVAT-листья + `StageStateError`), `app/api/cvat.py` (reopen + лог confirm), `tests/observability/test_cvat_errors.py` — `pytest tests/observability -v` = 22 зелёных.
-**Осталось по Волне 1:** `cvat_client.py` в CVAT-типы + логи; `detection.py:254-322` `except CVATError`; полная инструментовка `fetch` (`step("confirm")`/`persist_validated` + `CVATExportError`); httpx-мок тесты. Клиентская кнопка «Проверка элементов» → звать `reopen-bbox-validation` (см. §9).
+**Сделано (2026-07-08, код закрыт):**
+- `errors.py` — CVAT-листья (`CVATConnectionError/Timeout/Request/Import/Export`) + `StageStateError`.
+- `app/api/cvat.py` — `POST /api/cvat/{uid}/reopen-bbox-validation` (жёсткий стоп) + `StageStateError`-warning на предусловии `confirm` + `obs.bind`/`step("confirm")` вокруг экспорта.
+- `app/services/cvat_client.py` — `_cvat_op`/`_cvat_call`: httpx → CVAT-типы + строка лога (op/http_status/тело-срез/тайминг); обёрнуты `login`/`get_or_create_project`/`create_task`/`_wait_for_job`/`import`/`export`.
+- `worker/tasks/detection.py` — `except CVATError` (CVAT non-fatal + warning-лог + `error_code` на стадии; не-CVAT наверх).
+- `app/core/obs.py` — `code` в сообщении `step.error` (виден в консоли без чтения traceback).
+- `tests/observability/test_cvat_errors.py` — типы + httpx-мок (`500→Request`, `timeout→Timeout`, `connect→Connection`, `wrap→Import/Export`, доменный пропуск). `pytest tests/observability -v` = **27 зелёных**.
+- Смоук на стенде: reopen (разметка в CVAT сохранена), confirm в неверном статусе → `StageStateError`, CVAT down → `step=confirm code=cvat_export`.
+
+**Осталось по Волне 1:**
+- `step("persist_validated")` в `fetch` — **отложено осознанно** (быстрые DB-writes, наблюдаемости мало, риск на ре-отступ 34 строк). Можно добить при желании.
+- Клиентская кнопка «Проверка элементов» → звать `reopen-bbox-validation` + открыть `cvat_url` (клиент, Волна 2 — §9).
+
+**Тесты наблюдаемости — `tests/observability/` (отдельный прогон: `pytest tests/observability -v`, сейчас 27 зелёных):**
+- `test_errors.py` — иерархия `PipelineError`, стабильные `code`, корреляционные поля (`stage`/`step`/`diagram_uid`/`cause`).
+- `test_obs.py` — `step()`: лог start/end + `duration_ms`; сбой → типизированная ошибка с проставленным `step`; `load_artifact`.
+- `test_logging.py` — `ContextFilter` (инъекция uid/phase/step/attempt/task_id; дефолт `-`), парсер `LOG_OVERRIDES`.
+- `test_db_helpers_errorcode.py` — `fail_stage(exc=…)` пишет `error_code`/`failed_step` (типизир. exc → code/step; обычный → имя типа; без exc → NULL).
+- `test_cvat_errors.py` — типы CVAT + `StageStateError`; httpx-мок `_cvat_op` (`500→Request`, `timeout→Timeout`, `connect→Connection`, `wrap→Import/Export`, доменный пропуск).
+> Изолированы намеренно: старую `tests/` не трогаем, полный `pytest tests/` чинится отдельно на `pr0/fix-test-infra` (§9).
 
 ### Волна 2 — Клиент: прогресс + окно ошибки  (на фикстурах, без пайплайна)
 **Цель/DoD:** прогресс-бар детерминированный (фаза + под-шаг + ETA); при FAILED-стадии — окно с `error_traceback`/`phase`/`step`/`code` + «Копировать/Сохранить».
