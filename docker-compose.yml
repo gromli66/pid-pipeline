@@ -270,6 +270,7 @@ services:
       - cvat_data:/home/django/data
       - cvat_keys:/home/django/keys
       - cvat_logs:/home/django/logs
+      - ./cvat_patch/pil_unbomb.pth:/opt/venv/lib/python3.10/site-packages/pil_unbomb.pth:ro
     depends_on:
       cvat_db:
         condition: service_healthy
@@ -307,6 +308,7 @@ services:
       - cvat_data:/home/django/data
       - cvat_keys:/home/django/keys
       - cvat_logs:/home/django/logs
+      - ./cvat_patch/pil_unbomb.pth:/opt/venv/lib/python3.10/site-packages/pil_unbomb.pth:ro
     depends_on:
       - cvat_server
     restart: unless-stopped
@@ -330,6 +332,7 @@ services:
       - cvat_data:/home/django/data
       - cvat_keys:/home/django/keys
       - cvat_logs:/home/django/logs
+      - ./cvat_patch/pil_unbomb.pth:/opt/venv/lib/python3.10/site-packages/pil_unbomb.pth:ro
     depends_on:
       - cvat_server
     restart: unless-stopped
@@ -358,6 +361,7 @@ services:
       - cvat_data:/home/django/data
       - cvat_keys:/home/django/keys
       - cvat_logs:/home/django/logs
+      - ./cvat_patch/pil_unbomb.pth:/opt/venv/lib/python3.10/site-packages/pil_unbomb.pth:ro
     depends_on:
       - cvat_server
     restart: unless-stopped
