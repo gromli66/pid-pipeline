@@ -164,6 +164,8 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def _show_progress(self, message: str):
+        # Ad-hoc операции (загрузка и т.п.) — неопределённый «бегунок».
+        self.progress_bar.setRange(0, 0)
         self.progress_label.setText(message)
         self.progress_frame.show()
 

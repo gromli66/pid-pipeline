@@ -40,18 +40,26 @@ def _cvat_op(op: str, *, wrap: Optional[type] = None, **fields):
         raise
     except httpx.HTTPStatusError as exc:
         cls = wrap or CVATRequestError
-        logger.error("cvat.error", extra={
-            "op": op, "event": "error", "code": cls.code,
-            "http_status": exc.response.status_code, "body": exc.response.text[:500],
-            "duration_ms": round((time.perf_counter() - t0) * 1000), **fields}, exc_info=True)
-        raise cls(f"CVAT {op} → HTTP {exc.response.status_code}", cause=exc) from exc
+        status = exc.response.status_code
+        body = exc.response.text[:200]
+        # op/status/body — в ТЕКСТ сообщения (видно в docker logs) и в extra (для JSON-стока).
+        logger.error(
+            f"cvat.error op={op} → HTTP {status} body={body!r}",
+            extra={"op": op, "event": "error", "code": cls.code,
+                   "http_status": status, "body": exc.response.text[:500],
+                   "duration_ms": round((time.perf_counter() - t0) * 1000), **fields},
+            exc_info=True)
+        # Причина CVAT (body) — и в исключении → доходит до клиента через HTTPException.
+        raise cls(f"CVAT {op} → HTTP {status}: {body}", cause=exc) from exc
     except httpx.TimeoutException as exc:
         cls = wrap or CVATTimeoutError
-        logger.error("cvat.error", extra={"op": op, "event": "error", "code": cls.code, **fields}, exc_info=True)
+        logger.error(f"cvat.error op={op} → timeout",
+                     extra={"op": op, "event": "error", "code": cls.code, **fields}, exc_info=True)
         raise cls(f"CVAT {op}: timeout", cause=exc) from exc
     except httpx.RequestError as exc:
         cls = wrap or CVATConnectionError
-        logger.error("cvat.error", extra={"op": op, "event": "error", "code": cls.code, **fields}, exc_info=True)
+        logger.error(f"cvat.error op={op} → {exc}",
+                     extra={"op": op, "event": "error", "code": cls.code, **fields}, exc_info=True)
         raise cls(f"CVAT {op}: {exc}", cause=exc) from exc
 
 

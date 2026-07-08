@@ -66,6 +66,17 @@ def test_cvat_op_http_status_to_request_error():
     assert ei.value.code == "cvat_request"
 
 
+def test_cvat_op_http_status_carries_body_in_message():
+    # Причина от CVAT (тело ответа) попадает в текст исключения → видно и в
+    # docker logs, и в клиентском окне «Не удалось…» (§9 #8).
+    with pytest.raises(CVATRequestError) as ei:
+        with _cvat_op("create_task"):
+            _http_error(400)
+    msg = str(ei.value)
+    assert "400" in msg
+    assert "boom body" in msg
+
+
 def test_cvat_op_timeout():
     with pytest.raises(CVATTimeoutError):
         with _cvat_op("export_annotations"):

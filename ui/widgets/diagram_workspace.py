@@ -238,6 +238,21 @@ _BTN_STYLE_RED = """
 """
 
 
+def _btn_fill_style(frac: float) -> str:
+    """Стиль кнопки бегущего этапа с заливкой прогресса: зелёное слева до frac, синее справа."""
+    f = max(0.02, min(0.98, frac))
+    g = min(f + 0.006, 0.999)
+    return (
+        "QPushButton {"
+        "  background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+        f"    stop:0 #43A047, stop:{f:.3f} #43A047,"
+        f"    stop:{g:.3f} #2196F3, stop:1 #2196F3);"
+        "  color: white; font-weight: bold;"
+        "  padding: 6px 10px; border-radius: 4px; border: none;"
+        "}"
+    )
+
+
 # =====================================================================
 # GIF активного этапа
 # =====================================================================
@@ -634,13 +649,16 @@ class DiagramWorkspace(QWidget):
         import warnings
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
-            try:
-                self.status_provider.status_updated.disconnect(
-                    self._on_status_updated,
-                )
-            except (RuntimeError, TypeError):
-                pass
+            for _sig, _slot in (
+                (self.status_provider.status_updated, self._on_status_updated),
+                (self.status_provider.stages_updated, self._on_stages_updated),
+            ):
+                try:
+                    _sig.disconnect(_slot)
+                except (RuntimeError, TypeError):
+                    pass
         self.status_provider.status_updated.connect(self._on_status_updated)
+        self.status_provider.stages_updated.connect(self._on_stages_updated)
 
     def cleanup(self):
         """Вызвать при уходе из workspace."""
@@ -651,12 +669,14 @@ class DiagramWorkspace(QWidget):
         import warnings
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
-            try:
-                self.status_provider.status_updated.disconnect(
-                    self._on_status_updated,
-                )
-            except (RuntimeError, TypeError):
-                pass
+            for _sig, _slot in (
+                (self.status_provider.status_updated, self._on_status_updated),
+                (self.status_provider.stages_updated, self._on_stages_updated),
+            ):
+                try:
+                    _sig.disconnect(_slot)
+                except (RuntimeError, TypeError):
+                    pass
 
     # =================================================================
     # Refresh
@@ -991,8 +1011,7 @@ class DiagramWorkspace(QWidget):
                     best_status = done
             elif sstatus == "failed":
                 if key:
-                    failed[key] = (s.get("error_message") or "",
-                                   s.get("error_traceback") or "")
+                    failed[key] = s  # полная строка ProcessingStage (для окна отчёта)
             elif sstatus == "running":
                 if key:
                     running_keys.add(key)
@@ -1034,7 +1053,8 @@ class DiagramWorkspace(QWidget):
 
         # Overlay упавших этапов — красная бусина + красная retry-кнопка
         self._stage_errors = failed
-        for key, (msg, _tb) in failed.items():
+        for key, s in failed.items():
+            msg = s.get("error_message") or ""
             idx = _KEY_IDX.get(key)
             if idx is not None:
                 self.beads.set_state(idx, BeadState.ERROR)
@@ -1043,25 +1063,24 @@ class DiagramWorkspace(QWidget):
                 btn.setEnabled(True)
                 btn.setText(f"🔄 {_KEY_LABELS.get(key, key)}")
                 btn.setStyleSheet(_BTN_STYLE_RED)
-                short = (msg or "").strip().splitlines()[0] if msg else ""
+                short = msg.strip().splitlines()[0] if msg else ""
                 btn.setToolTip(
                     (f"Ошибка: {short}\n" if short else "")
                     + "Нажмите — показать лог и перезапустить"
                 )
 
     def _show_stage_error_dialog(self, key: str, original_handler):
-        """Показать лог упавшего этапа и предложить перезапуск только его."""
-        msg, tb = getattr(self, "_stage_errors", {}).get(key, ("", ""))
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Icon.Warning)
-        box.setWindowTitle(f"Этап «{key}» — ошибка")
-        box.setText(msg or "Этап завершился с ошибкой.")
-        if tb:
-            box.setDetailedText(tb)
-        retry_btn = box.addButton("🔄 Перезапустить", QMessageBox.ButtonRole.AcceptRole)
-        box.addButton("Закрыть", QMessageBox.ButtonRole.RejectRole)
-        box.exec()
-        if box.clickedButton() is retry_btn:
+        """Окно отчёта об ошибке этапа (traceback/phase/step/code + копировать/сохранить)."""
+        stage = getattr(self, "_stage_errors", {}).get(key) or {}
+        _KEY_LABELS = {k: v for k, v in self._BUTTON_DEFS}
+        from ui.widgets.error_report_dialog import ErrorReportDialog
+        dlg = ErrorReportDialog(
+            stage,
+            parent=self,
+            phase_label=_KEY_LABELS.get(key, key),
+            diagram_name=self._diagram_name,
+        )
+        if dlg.exec_retry():
             original_handler()
 
     # =================================================================
@@ -1321,6 +1340,14 @@ class DiagramWorkspace(QWidget):
         if key in getattr(self, "_stage_errors", {}):
             self._show_stage_error_dialog(key, original_handler)
             return
+
+        # CVAT «Проверка элементов»: первый вход и жёсткий возврат к bbox с
+        # позднего этапа целиком в _open_cvat (§9 #4). Общий rollback-диалог
+        # (он не ревокает бегущую авто-стадию) для cvat не применяем.
+        if key == "cvat":
+            original_handler()
+            return
+
         status = self._last_status
         _, completed, _ = _buttons_for_status(status)
 
@@ -1659,12 +1686,27 @@ class DiagramWorkspace(QWidget):
                 self.api_client.create_cvat_task(self._uid)
                 diagram = self.api_client.get_diagram(self._uid)
 
-            # Перевести в VALIDATING_BBOX если нужно
-            if diagram.status == DiagramStatus.DETECTED:
+            status = diagram.status
+            if status == DiagramStatus.DETECTED:
+                # Первый вход: detected → validating_bbox.
                 result = self.api_client.open_cvat_validation(self._uid)
                 cvat_url = result.get("cvat_url")
-            else:
+            elif status == DiagramStatus.VALIDATING_BBOX:
+                # Уже в проверке — просто открыть ту же job.
                 cvat_url = self.api_client.get_cvat_url(self._uid)
+            else:
+                # §9 #4: возврат к проверке элементов с более позднего этапа.
+                # Жёсткий стоп + переоткрытие ТОЙ ЖЕ CVAT-job (ручная разметка цела).
+                if not self._confirm_reopen_bbox():
+                    return
+                result = self.api_client.reopen_bbox_validation(self._uid)
+                cvat_url = result.get("cvat_url")
+                deleted = result.get("deleted_artifacts", 0)
+                self.status_message.emit(
+                    f"↩ Возврат к проверке элементов: сброшено {deleted} артефактов",
+                    4000,
+                )
+                self._refresh_status()
 
             if not cvat_url:
                 QMessageBox.warning(self, "Ошибка", "CVAT URL не найден")
@@ -1689,6 +1731,18 @@ class DiagramWorkspace(QWidget):
                 self, "Ошибка",
                 f"Не удалось открыть CVAT:\n{exc.message}",
             )
+
+    def _confirm_reopen_bbox(self) -> bool:
+        """Подтверждение жёсткого возврата к проверке элементов (§9 #4)."""
+        reply = QMessageBox.question(
+            self, "Проверка элементов",
+            "Диаграмма уже прошла проверку элементов.\n"
+            "Вернуться к ней? Текущая обработка будет остановлена, "
+            "а последующие артефакты — удалены.\n\n"
+            "Ручная разметка в CVAT сохранится.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        return reply == QMessageBox.StandardButton.Yes
 
     @Slot()
     def _open_junction(self):
@@ -2015,6 +2069,29 @@ class DiagramWorkspace(QWidget):
     # =================================================================
     # Status Provider callback
     # =================================================================
+
+    @Slot(str, object)
+    def _on_stages_updated(self, uid: str, stages):
+        """Заливка активной кнопки-стадии по её прогрессу (per-diagram + per-stage)."""
+        if uid != self._uid:
+            return
+        from ui.services.progress_model import compute_progress
+        ps = compute_progress(stages)
+        key = (
+            _STAGE_TYPE_TO_KEY.get(ps.running_stage)
+            if ps.state == "running" and ps.running_stage else None
+        )
+        if key and ps.stage_percent is not None and key in self._action_buttons:
+            btn = self._action_buttons[key]
+            label = dict(self._BUTTON_DEFS).get(key, key)
+            btn.setStyleSheet(_btn_fill_style(ps.stage_percent / 100.0))
+            btn.setText(f"{label} · {ps.stage_percent}%")
+            self._filled_key = key
+            return
+        # Нет заливаемой авто-стадии → снять прежнюю заливку (вернуть базовый вид).
+        if getattr(self, "_filled_key", None):
+            self._filled_key = None
+            self._update_buttons(self._last_status)
 
     @Slot(str, object)
     def _on_status_updated(self, uid: str, status_info):

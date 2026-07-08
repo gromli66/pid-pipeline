@@ -408,6 +408,15 @@ class APIClient:
         result = self._request("GET", f"/api/cvat/{uid}/cvat-url")
         return result.get("cvat_url", "")
 
+    def reopen_bbox_validation(self, uid: str) -> Dict[str, Any]:
+        """Жёсткий возврат к проверке bbox с позднего этапа (§9 #4).
+
+        Стоп текущей стадии (revoke) + сброс артефактов после `detected` +
+        статус `validating_bbox` + переоткрытие ТОЙ ЖЕ CVAT-job (ручная разметка
+        сохраняется). Возвращает {status, cvat_url, revoked_tasks, deleted_artifacts}.
+        """
+        return self._request("POST", f"/api/cvat/{uid}/reopen-bbox-validation")
+
     def create_cvat_task(self, uid: str) -> Dict[str, Any]:
         """Создать CVAT task для диаграммы."""
         return self._request("POST", f"/api/cvat/{uid}/create-task")

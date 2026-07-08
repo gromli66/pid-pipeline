@@ -555,6 +555,9 @@ async def create_cvat_task_endpoint(
     from app.services.project_loader import get_project_loader
     import asyncio
 
+    # Тегируем логи запроса uid (в т.ч. cvat.error из create_task в рабочем потоке).
+    obs.bind(uid=str(uid), phase="cvat_validation")
+
     result = await db.execute(select(Diagram).where(Diagram.uid == uid))
     diagram = result.scalar_one_or_none()
 

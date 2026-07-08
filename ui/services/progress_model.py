@@ -1,0 +1,269 @@
+"""
+Progress Model — детерминированный прогресс пайплайна из строк ProcessingStage.
+
+Чистый Python (без Qt) — тестируется headless (без QApplication).
+Источник данных: APIClient.get_stages(uid) / GET /api/diagrams/{uid}/stages.
+
+Прогресс — по-этапный (канон пайплайна), взвешенный по бюджетам стадий.
+ETA — динамическая: считается на клиенте из elapsed текущей стадии + бюджетов
+оставшихся; калибруется по фактическим длительностям уже завершённых стадий
+ЭТОЙ ЖЕ диаграммы. Никаких обращений к серверу сверх опроса /stages, который
+клиент и так делает (без нагрузки на сервер).
+"""
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Optional
+
+
+# Канонический порядок авто-пайплайна (значения ProcessingStage.stage_type).
+# Совпадает с _STAGE_TYPE_TO_KEY/_STAGE_DONE_STATUS в diagram_workspace.
+_PIPELINE = [
+    "upload",
+    "frame_removal",
+    "detection",
+    "cvat_validation",
+    "segmentation",
+    "skeletonization",
+    "mask_validation",
+    "junction_classification",
+    "final_skeletonization",
+    "graph_building",
+    "graph_validation",
+    "contour_extraction",
+    "ocr",
+    "fxml_generation",
+]
+
+# Человекочитаемые подписи фаз (для лейбла прогресс-бара).
+_STAGE_LABELS = {
+    "upload": "Загрузка",
+    "frame_removal": "Очистка рамки",
+    "detection": "Поиск элементов",
+    "cvat_validation": "Проверка элементов",
+    "segmentation": "Выделение труб",
+    "skeletonization": "Скелетизация",
+    "mask_validation": "Проверка труб",
+    "junction_classification": "Проверка узлов",
+    "final_skeletonization": "Скелетизация (финал)",
+    "graph_building": "Сборка схемы",
+    "graph_validation": "Проверка схемы",
+    "contour_extraction": "Контуры элемента",
+    "ocr": "Распознавание текста",
+    "fxml_generation": "Экспорт",
+}
+
+# Дефолтные бюджеты стадий (сек) — ПРОВИЗОРНЫЕ, тюнятся с первых прогонов.
+# None = ручная/await-стадия (оператор): в ETA не учитываем, в проценте — номинал.
+_DEFAULT_BUDGETS = {
+    "upload": 5,
+    "frame_removal": None,
+    "detection": 60,
+    "cvat_validation": None,
+    "segmentation": 90,
+    "skeletonization": 20,
+    "mask_validation": None,
+    "junction_classification": 30,
+    "final_skeletonization": 20,
+    "graph_building": 25,
+    "graph_validation": None,
+    "contour_extraction": 40,
+    "ocr": 45,
+    "fxml_generation": 15,
+}
+
+# Номинальный вес ручной стадии в проценте (у неё budget=None).
+_MANUAL_WEIGHT = 15.0
+# Доля веса бегущей ручной стадии (не знаем elapsed-бюджета → фиксируем середину).
+_MANUAL_RUNNING_FRAC = 0.5
+# Потолок вклада бегущей авто-стадии, пока не пришёл её completed.
+_RUNNING_CAP = 0.95
+# Границы калибровочного коэффициента ETA.
+_CAL_MIN, _CAL_MAX = 0.5, 2.0
+
+
+@dataclass
+class ProgressState:
+    """Снимок прогресса для UI."""
+    state: str                      # "idle" | "running" | "failed" | "completed"
+    percent: int                    # 0..100
+    phase_label: str                # подпись текущей фазы
+    running_stage: Optional[str]    # stage_type бегущей стадии (или None)
+    eta_seconds: Optional[int]      # None — неизвестно / ждёт оператора
+    stage_percent: Optional[int] = None  # % своей бегущей авто-стадии; None у ручной/нет бегущей
+    failed_stage: Optional[str] = None
+
+
+def _parse_dt(value) -> Optional[datetime]:
+    """ISO-строка (или datetime) → naive datetime; мусор → None."""
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    s = str(value)
+    if s.endswith("Z"):
+        s = s[:-1]
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        try:
+            return datetime.fromisoformat(s.split(".")[0])
+        except ValueError:
+            return None
+
+
+def _weight(stage_type: str, budgets: dict) -> float:
+    """Вес стадии в проценте: бюджет сек, ручная (None) → номинал."""
+    b = budgets.get(stage_type, None)
+    return float(b) if b else _MANUAL_WEIGHT
+
+
+def _status_of(stage_row) -> str:
+    return (stage_row.get("status") or "").lower() if stage_row else "pending"
+
+
+def _calibration(latest: dict, budgets: dict) -> float:
+    """Коэффициент скорости этой машины по завершённым авто-стадиям.
+
+    Медиана (факт/бюджет) по completed-стадиям с известным бюджетом; клампится
+    в [0.5, 2.0]. Нет данных → 1.0. Делает ETA динамичной без сервера.
+    """
+    ratios = []
+    for st, s in latest.items():
+        if _status_of(s) != "completed":
+            continue
+        b = budgets.get(st)
+        actual = s.get("duration_seconds")
+        if b and actual and actual > 0:
+            ratios.append(actual / b)
+    if not ratios:
+        return 1.0
+    ratios.sort()
+    mid = len(ratios) // 2
+    median = ratios[mid] if len(ratios) % 2 else (ratios[mid - 1] + ratios[mid]) / 2
+    return max(_CAL_MIN, min(_CAL_MAX, median))
+
+
+def compute_progress(stages, *, now: Optional[datetime] = None,
+                     budgets: Optional[dict] = None) -> ProgressState:
+    """Построить ProgressState из списка строк ProcessingStage (как из /stages).
+
+    stages: list[dict] с полями stage_type/status/started_at/duration_seconds.
+    now: точка отсчёта для elapsed/ETA (по умолчанию utcnow) — параметр для тестов.
+    budgets: перекрытие бюджетов (напр. с будущего /api/stats/stage-durations).
+    """
+    merged = dict(_DEFAULT_BUDGETS)
+    if budgets:
+        merged.update(budgets)
+    if now is None:
+        now = datetime.utcnow()
+
+    # Последняя попытка по каждому stage_type.
+    latest: dict = {}
+    for s in stages or []:
+        st = s.get("stage_type")
+        if st:
+            latest[st] = s
+
+    total_w = 0.0
+    done_w = 0.0
+    running_stage: Optional[str] = None
+    running_elapsed = 0.0
+    running_frac = 0.0
+    running_is_auto = False
+    failed_stage: Optional[str] = None
+
+    for st in _PIPELINE:
+        w = _weight(st, merged)
+        total_w += w
+        s = latest.get(st)
+        status = _status_of(s)
+
+        if status == "completed":
+            done_w += w
+        elif status == "running":
+            running_stage = st
+            started = _parse_dt(s.get("started_at"))
+            elapsed = (now - started).total_seconds() if started else 0.0
+            running_elapsed = elapsed if elapsed > 0 else 0.0
+            b = merged.get(st)
+            if b:
+                frac = min(max(running_elapsed / b, 0.0), _RUNNING_CAP)
+                running_is_auto = True
+            else:
+                frac = _MANUAL_RUNNING_FRAC
+            running_frac = frac
+            done_w += w * frac
+        elif status == "failed":
+            # Самый дальний по пайплайну упавший этап.
+            failed_stage = st
+        # skipped / pending → вклад 0
+
+    percent = int(round(100.0 * done_w / total_w)) if total_w else 0
+
+    fxml_done = _status_of(latest.get("fxml_generation")) == "completed"
+    if fxml_done:
+        percent = 100
+    percent = max(0, min(100, percent))
+
+    # Состояние.
+    if failed_stage is not None:
+        state = "failed"
+    elif fxml_done:
+        state = "completed"
+    elif running_stage is not None:
+        state = "running"
+    else:
+        state = "idle"
+
+    # ETA — только для бегущей авто-стадии.
+    eta_seconds: Optional[int] = None
+    if running_stage is not None and merged.get(running_stage):
+        k = _calibration(latest, merged)
+        remaining = max(merged[running_stage] - running_elapsed, 0.0)
+        idx = _PIPELINE.index(running_stage)
+        for st in _PIPELINE[idx + 1:]:
+            if _status_of(latest.get(st)) == "completed":
+                continue
+            b = merged.get(st)
+            if b:
+                remaining += b
+        eta_seconds = int(round(k * remaining))
+
+    # Подпись фазы.
+    if state == "running":
+        phase_label = _STAGE_LABELS.get(running_stage, running_stage)
+    elif state == "failed":
+        phase_label = f"Ошибка — {_STAGE_LABELS.get(failed_stage, failed_stage)}"
+    elif state == "completed":
+        phase_label = "Готово"
+    else:
+        phase_label = "Ожидание"
+
+    stage_percent = (
+        int(round(running_frac * 100))
+        if running_stage is not None and running_is_auto else None
+    )
+
+    return ProgressState(
+        state=state,
+        percent=percent,
+        phase_label=phase_label,
+        running_stage=running_stage,
+        eta_seconds=eta_seconds,
+        stage_percent=stage_percent,
+        failed_stage=failed_stage,
+    )
+
+
+def format_eta(seconds: Optional[int]) -> str:
+    """ETA сек → короткая подпись: '~1 мин 20 с' / '~15 с' / '' если None."""
+    if seconds is None or seconds < 0:
+        return ""
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"~{seconds} с"
+    minutes, sec = divmod(seconds, 60)
+    if sec:
+        return f"~{minutes} мин {sec} с"
+    return f"~{minutes} мин"
