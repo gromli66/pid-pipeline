@@ -260,14 +260,16 @@ async def fetch_cvat_annotations(
     storage_path = Path(settings.STORAGE_PATH)
     detection_dir = storage_path / str(diagram.uid) / "detection"
     
+    obs.bind(uid=str(uid), phase="cvat_validation")
     try:
         # Долгая операция ВНЕ транзакции (может занять минуты)
         # ⚠️ НЕ оборачивать в db.begin() — это заблокирует БД!
-        coco_path, yolo_path, annotation_count = await asyncio.to_thread(
-            _fetch_cvat_annotations_sync,
-            diagram.cvat_task_id,
-            detection_dir,
-        )
+        with obs.step("confirm", logger, cvat_task_id=diagram.cvat_task_id):
+            coco_path, yolo_path, annotation_count = await asyncio.to_thread(
+                _fetch_cvat_annotations_sync,
+                diagram.cvat_task_id,
+                detection_dir,
+            )
         
         # Быстрые DB writes после долгой операции (неявная транзакция)
         # Upsert артефакт COCO_VALIDATED (удаляем старый при retry)

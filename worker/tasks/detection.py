@@ -11,6 +11,10 @@ from worker.celery_app import celery_app
 from celery.exceptions import SoftTimeLimitExceeded
 from worker.utils.db_helpers import set_diagram_error, check_deleted, upsert_artifact, start_stage, complete_stage, fail_stage
 from worker.utils.device import resolve_device
+from app.core.errors import CVATError
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def detections_to_yolo_txt(detections: list) -> str:
@@ -304,10 +308,19 @@ def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydrauli
             cvat_url = cvat_client.get_task_url(cvat_task_id, cvat_job_id)
             print(f"[LINK] CVAT URL: {cvat_url}")
 
-        except Exception as cvat_exc:
-            # CVAT ошибки не фатальны - детекция выполнена
-            print(f"[WARN] CVAT error (non-fatal): {cvat_exc}")
-            print(traceback.format_exc())
+        except CVATError as cvat_exc:
+            # CVAT-сбой не фатален для detection (сама детекция выполнена), но теперь
+            # видимый: типизированный + warning-лог + код на стадии. Не-CVAT ошибки
+            # НЕ ловим — они всплывают во внешний except (retry/fail).
+            logger.warning(
+                "detection: CVAT step failed (non-fatal)",
+                extra={"uid": str(diagram_uid), "phase": "detecting",
+                       "step": "export_to_cvat", "event": "error", "code": cvat_exc.code},
+                exc_info=True,
+            )
+            if stage is not None:
+                stage.error_code = cvat_exc.code
+                stage.error_message = str(cvat_exc)[:500]
 
         # ===== 8. Обновляем диаграмму в БД =====
         diagram.status = DiagramStatus.DETECTED
