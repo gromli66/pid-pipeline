@@ -236,7 +236,7 @@ async def fetch_cvat_annotations(
     
     if diagram.status != DiagramStatus.VALIDATING_BBOX:
         logger.warning(
-            "confirm rejected: wrong state",
+            f"confirm rejected: wrong state code={StageStateError.code} from_status={diagram.status.value}",
             extra={"uid": str(uid), "phase": "cvat_validation", "step": "confirm",
                    "event": "error", "code": StageStateError.code,
                    "from_status": diagram.status.value, "expected": "validating_bbox"},
@@ -361,7 +361,7 @@ async def reopen_bbox_validation(
     from_status = diagram.status
     if from_status in _NOT_REOPENABLE:
         logger.warning(
-            "reopen rejected: wrong state",
+            f"reopen rejected: wrong state code={StageStateError.code} from_status={from_status.value}",
             extra={"uid": str(uid), "phase": "cvat_validation", "step": "reopen_validation",
                    "event": "error", "code": StageStateError.code, "from_status": from_status.value},
         )

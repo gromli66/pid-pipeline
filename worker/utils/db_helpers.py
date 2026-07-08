@@ -159,7 +159,7 @@ def start_stage(db, diagram_uid: str, stage_type, celery_task_id: str = None):
         celery_task_id: optional Celery task ID
 
     Returns:
-        ProcessingStage instance (already added to session, not yet committed)
+        ProcessingStage instance (RUNNING, закоммичена — видна другим сессиям)
     """
     from app.models.stage import ProcessingStage, StageStatus
 
@@ -183,7 +183,11 @@ def start_stage(db, diagram_uid: str, stage_type, celery_task_id: str = None):
     )
     stage.start()
     db.add(stage)
-    db.flush()
+    # commit, не flush: RUNNING-строка должна быть видна ДРУГОЙ сессии сразу.
+    # reopen-bbox-validation ищет бегущие стадии (RUNNING/PENDING) в отдельной
+    # сессии, чтобы их revoke'нуть. При flush строка не закоммичена всю стадию —
+    # reopen её не видит, ничего не ревокает, задача добегает и корраптит статус.
+    db.commit()
     return stage
 
 

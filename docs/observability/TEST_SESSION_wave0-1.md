@@ -16,7 +16,7 @@
 - `reopen-bbox-validation` (жёсткий возврат на проверку) + понятная ошибка подтверждения в неверном статусе.
 
 **НЕ покрыто (осознанно, будет позже):**
-- CVAT-транспортные типы (export/timeout/5xx) → **пункт 2 Волны 1**. До него ошибки CVAT — старым generic-способом.
+- ~~CVAT-транспортные типы (export/timeout/5xx)~~ → **уже сделаны в Волне 1** (типизированы + лог `code=cvat_*`; проверено §5.3). Осталась generic-обёртка только в теле HTTP-ответа (500) — эндпоинт CVAT-тип на HTTP-статус не мапит (осознанно).
 - клиентская кнопка «Проверка элементов» → reopen → **Волна 2 / точечно** (§9). Пока reopen только через API.
 - реальные `uid/phase/step` в логах СТАДИЙ (не reopen/confirm) → появятся, когда инструментируем задачи (стадийные волны). Сейчас там `-`.
 
@@ -67,23 +67,52 @@
 ---
 
 ## 5. Как ломать (fault-инъекции) — ожидаемое
-- [ ] **Подтверждение в неверном статусе** (исходный баг): довести до `skeletonizing` → POST `fetch-annotations` → HTTP 400, внятный текст «Нельзя подтвердить: диаграмма в статусе '…', ожидается 'validating_bbox'…»; в логах `confirm rejected` с `uid`+`from_status`+`code=stage_state_invalid`.
-- [ ] **Reopen из раннего статуса** (`uploaded`/`detected`) → HTTP 409 «Нельзя переоткрыть…»; лог `reopen rejected`.
-- [ ] **CVAT недоступен**: `docker stop cvat_server` → подтвердить → ошибка. ⚠️ пока СТАРОЕ generic-сообщение; после **пункта 2** здесь будет типизированная `CVATConnectionError`/… + строка лога с http-статусом. (не забыть `docker start cvat_server`.)
-- [ ] **Export не готов** (ошибка №3, `400 ... not been finished yet`): гонка экспорта — пока generic; после пункта 2 → `CVATExportError`.
+- [x] **Подтверждение в неверном статусе** (исходный баг): довести до `skeletonizing` → POST `fetch-annotations` → HTTP 400, внятный текст «Нельзя подтвердить: диаграмма в статусе '…', ожидается 'validating_bbox'…»; в логах `confirm rejected` с `uid`+`from_status`+`code=stage_state_invalid`. ✅ репро через `validated_bbox`: `HTTP 400`, лог `code=stage_state_invalid from_status=validated_bbox`.
+- [x] **Reopen из раннего статуса** (`uploaded`/`detected`) → HTTP 409 «Нельзя переоткрыть…»; лог `reopen rejected`. ✅ на `validating_bbox` (тот же reject-путь): `HTTP 409` + лог.
+- [x] **CVAT недоступен**: `docker stop cvat_server` → подтвердить → `HTTP 500`. Лог **уже типизирован**: `step=confirm code=cvat_export` + `cvat.error` (op/http_status/тело-срез). Тело HTTP-ответа — generic (`Failed to fetch annotations: …`): эндпоинт CVAT-тип на HTTP-статус не мапит (осознанно). (не забыть `docker start cvat_server`.)
+- [x] **Export не готов** (`400 ... not been finished yet`): тип `CVATExportError`/`cvat_export` **уже есть** (тот же путь, что §5.3). Гонку экспорта детерминированно живьём не воспроизвести — покрыто юнит-тестом `test_cvat_errors.py`.
 
 ---
 
 ## 6. Чек-лист приёмки
-- [ ] Полный прогон из клиента — без регрессий.
-- [ ] Reopen: сброс downstream + разметка CVAT сохранена + подтверждение после проходит.
-- [ ] Жёсткий стоп реально останавливает бегущую стадию (revoked>0, задача не дописывает).
-- [ ] Ошибки состояния — внятные + залогированы по `uid` (`confirm rejected` / `reopen rejected`).
-- [ ] `/stages` отдаёт новые поля; логи в новом формате; ротация настроена.
+- [x] Полный прогон из клиента — без регрессий. *(fe4832f8 → FXML, 10 стадий `completed`)*
+- [x] Reopen: сброс downstream + разметка CVAT сохранена + подтверждение после проходит. *(§4-A)*
+- [x] Жёсткий стоп реально останавливает бегущую стадию (revoked>0, задача не дописывает). *(после фикса §9 #5: `revoked=1`, статус держится)*
+- [x] Ошибки состояния — внятные + залогированы по `uid` (`confirm rejected` / `reopen rejected`). *(§5.1–5.2)*
+- [x] `/stages` отдаёт новые поля; логи в новом формате; ротация настроена. *(§3)*
 
 ---
 
 ## 7. Заметки по сессии (заполнять по ходу)
+
+> Сессия 2026-07-08 (`feat/observability`). Стенд: Windows/PowerShell, `curl.exe`, docker-compose.
+
 | Что делали | Ожидали | Получили | Баг? |
 |---|---|---|---|
-| | | | |
+| §1–§3: сервисы, миграция, формат логов, `/stages`, ротация | Up; `0007…(head)`; `uid=… phase=… step=…`; поля `celery_task_id/error_code/failed_step`; `json-file 20m×5` | всё ✓; Celery-логи в нашем формате; `worker.stdout` теги от `print()` | нет |
+| §2 полный прогон из клиента (`fe4832f8`) до FXML | UX как раньше, без регрессий | все 10 стадий `completed`, `error_code=null`; FXML сгенерён | нет |
+| §4-A reopen с завершённой стадии | `validating_bbox`, тот же CVAT-таск, `deleted>0`, `revoked=0`, разметка цела, confirm после проходит | всё ✓ (`deleted_artifacts:20`, разметка на месте, confirm→`validated_bbox`) | нет |
+| §4-B reopen на бегущей сегментации | `revoked>0`, стадия убита, статус не уезжает | `revoked_tasks:0`, сегментация дожила до `succeeded`, статус уехал в `skeletonized` | **ДА** → §9 #5 |
+| §4-B повтор после фикса (`start_stage` flush→commit) | `revoked≥1`, статус остаётся `validating_bbox` | `revoked_tasks:1`, статус `validating_bbox`; `pytest tests/observability` = 29 passed | нет (исправлено) |
+| §5.1 confirm в неверном статусе | HTTP 400 + `confirm rejected` с `code`/`from_status` | `HTTP 400`; лог `code=stage_state_invalid from_status=validated_bbox` | нет |
+| §5.2 reopen из невозвратного статуса | HTTP 409 + `reopen rejected` | `HTTP 409`; лог `reopen rejected … code=stage_state_invalid` | нет |
+| §5.3 CVAT недоступен (`docker stop cvat_server`) | ошибка + типизированный лог | `HTTP 500`; лог `step.error code=cvat_export` + `cvat.error` (уже типизировано — §0/§5 «pending» устарели) | нет |
+| §5.4 export не готов (`400 not finished`) | `CVATExportError` | не воспроизводили (гонка); тип `cvat_export` покрыт `test_cvat_errors.py` + §5.3 | н/д |
+
+---
+
+## 8. Итог сессии (2026-07-08)
+
+**Вердикт: пройдено.** §1–§6 зелёные; наблюдаемость Волн 0–1 подтверждена вживую на стенде.
+
+**Что проверили:** корреляционный формат логов + мост `worker.stdout` + Celery-логи в нашем формате; `/stages` (`celery_task_id`/`error_code`/`failed_step`, `null` на успехе); ротация `json-file 20m×5`; полный прогон из клиента до FXML без регрессий (10 стадий `completed`); reopen сценарии A/B; состояние-ошибки (`confirm`/`reopen rejected`, HTTP 400/409); CVAT-транспорт-ошибки (`code=cvat_export`).
+
+**Что нашли и почему починили:**
+- **Баг (§9 #5): reopen не останавливал бегущую стадию.** `start_stage` коммитил RUNNING-строку только `flush()` → reopen читает стадии в ОТДЕЛЬНОЙ сессии и незакоммиченную строку не видит → `revoked_tasks=0`, чейн добегает и перетирает статус (гонка: уезжал в `skeletonized`). Это ломало DoD Волны 1 «жёсткий стоп». **Фикс (Вариант 1):** `flush()`→`commit()` в `start_stage` + регресс-тест `test_start_stage_commit.py`. Перепроверено: `revoked 0→1`, статус держится; `pytest tests/observability` = 29 passed.
+- **Наблюдаемость (правка по ходу):** в `confirm`/`reopen rejected` вынес `code`/`from_status` в текст лог-строки (были только в `extra`, невидимы в `docker logs`).
+- **Находка №2:** CVAT-транспорт уже типизирован (`code=cvat_export`); §0/§5 «pending» устарели — поправлено.
+- **#6 (`/status` без `status`)** — ложная тревога (артефакт копипаста), закрыто.
+
+**Отложено:** предохранитель статуса в телах задач (Вариант 2) — если поймаем остаточную микро-гонку на стыке стадий; клиентская кнопка → Волна 2 (§9 #4).
+
+**Код-дельта (`feat/observability`):** `worker/utils/db_helpers.py` (фикс), `app/api/cvat.py` (лог-строки `rejected`), `tests/observability/test_start_stage_commit.py` *(new)*.
