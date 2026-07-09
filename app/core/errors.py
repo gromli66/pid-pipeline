@@ -165,3 +165,17 @@ class StageStateError(PipelineError):
     """
 
     code = "stage_state_invalid"
+
+
+# --- Upload (Волна 3 — upload/frame) -----------------------------------------
+
+class InvalidUploadError(PipelineError):
+    """Загруженный файл нечитаем/повреждён.
+
+    Не ``ArtifactMissingError`` — файл ЕСТЬ (получен в теле запроса), но контент
+    невалиден: битый/пустой PDF, номер страницы вне диапазона, изображение не
+    декодируется PIL. Пользовательский upload — единственное место пайплайна,
+    где вход не был провалидирован предыдущей стадией.
+    """
+
+    code = "invalid_upload"
