@@ -216,7 +216,7 @@
 | 3 segmentation | ✅ smoke (uid 6e7144d5); baseline+tiling/inference/stitch видны; +фикс протечки контекста (§9 #11) | feat/observability | 2026-07-08 |
 | 3 skeleton/graph | ✅ код+тесты (9 новых: skeleton 5 / graph 4; `pytest tests/observability`); [нужен ты] smoke на стенде + `docker restart pid_worker` | feat/observability | 2026-07-09 |
 | 3 ocr/junction/contours/fxml (+direction) | ✅ код+тесты (118; +27); смоук стенд uid `6e7144d5`: ocr/junction/direction/fxml ✓, contours [нужен ты] (не фаернул в окне) | feat/observability | 2026-07-09 |
-| 3 upload/frame | ⬜ | | |
+| 3 upload/frame | ✅ код+тесты (upload — облегчённо, без ProcessingStage; frame_removal — полный §8.5-канон); `pytest tests/observability`=124 passed, 0 skipped | feat/observability | 2026-07-09 |
 | Бюджеты из БД (CPU-ETA) | ✅ код+тесты (13 новых; `pytest tests/observability`=75); эндпоинт на стенде (GPU-p50); [нужен ты] клиент-ребилд+визуалка, деплой `app/` на бой (§8.8) | feat/observability | 2026-07-09 |
 | Fin недельная сводка | ⬜ | | |
 
@@ -556,3 +556,126 @@ STL → +traceback). `print` у всех задач = 0 (DoD чист). Пять
 **Находки инструментария → §9 #19 (рецидив протечки sys.modules в fault-тестах — фикс фикстурой-изоляцией) и #20 (смонтированная папка блокирует unlink из песочницы — бэкапы в /tmp, cowork-delete).**
 
 **[нужен ты]:** коммит fxml + этот RUNBOOK; смоук contours (см. выше); деплой на бой — `docker restart pid_worker pid_worker_ocr` (код бинд-маунтится, пересборка не нужна). Смоук-логи `batch3_*.log` в корне — удалить.
+
+### 8.15 Волна 3 — upload/frame (закрытие под-волны, финал Волны 3)
+
+Последняя под-волна Волны 3. Ни upload, ни frame_removal не имеют файла в
+`worker/tasks/` — обе живут в `app/api/*.py` (async, `AsyncSession`); воркерные sync
+`start_stage`/`fail_stage` не годятся ни там, ни там. Развилка §0.2 (заявленная в
+кикоффе) разрешилась не бинарно: frame_removal — однозначно ручная/await (как и
+предполагалось, budget=None), но upload оказался третьим случаем — авто по
+содержанию (нет оператора, один POST), но механически тоже async-эндпоинт, а не
+worker. Канон §8.5 (async-хелперы, не воркерный `start_stage`) лёг на обе, но с
+разным наполнением.
+
+**Сделано (`feat/observability`):**
+- `app/core/errors.py` — лист `InvalidUploadError` (`invalid_upload`), by-need:
+  битый upload-контент (PDF/изображение) — не `ArtifactMissingError` (файл ЕСТЬ,
+  контент невалиден, а не отсутствует).
+- `app/api/diagrams.py::upload_diagram` — облегчённая инструментовка (решение
+  пользователя, см. ниже): `obs.bind(uid, phase="upload")` + баннер после создания
+  диаграммы; канон `obs.step("compute")` (PDF-рендер/PIL-декод) →
+  `obs.step("persist_artifacts")` (save_file×1-2/Artifact/commit/refresh); PDF/image
+  raise → `InvalidUploadError` (HTTPException 400 с тем же текстом, что раньше);
+  прочий неожиданный сбой → generic `PipelineError` (авто-обёртка `obs.step`) →
+  HTTPException 500. Guard-clause 400/409/413/500 (unknown project, bad ext, oversize,
+  duplicate, отсутствие PyMuPDF) — не типизированы, оставлены как есть (прецедент
+  `cvat.py`: precondition-гварды тоже не `PipelineError`). Без ProcessingStage-строки:
+  `StageType.UPLOAD` остаётся неиспользуемым, как и до этой волны.
+- `app/api/frame.py` — полный §8.5-канон. `/start` заводит RUNNING-строку
+  `frame_removal` на реальном переходе UPLOADED→CLEANING_FRAME (не на идемпотентном
+  повторном входе). `/complete` и `/skip` закрывают найденную RUNNING-строку; если
+  её нет (клиент не звал `/start` — `_FRAME_EDITABLE` это допускает) —
+  самовосстановление: заводят-и-сразу-закрывают новую. `/save` (повторяемый под-шаг,
+  не терминальный) — `obs.step("persist_artifacts")` вокруг бэкапа/save_file/Artifact;
+  сбой типизируется и логируется, но НЕ проваливает stage-строку (оператор просто
+  повторяет `/save`). `/skip` — тот же `obs.step`, но сбой ЗАКРЫВАЕТ строку
+  (терминальная операция). Guard-clause 400/404 — не типизированы (тот же прецедент).
+- `app/api/frame_stage_helpers.py` *(new)* — `start_frame_stage`/
+  `get_running_frame_stage`/`fail_frame_stage`, зеркалят `_start_cvat_stage`/
+  `_fail_cvat_stage` (`app/api/cvat.py`, Волна 1). Вынесены из `frame.py` в отдельный
+  файл — см. «Проблема найдена и решена» ниже.
+- `tests/observability/test_upload_errors.py` *(new, 4)* — контракт `InvalidUploadError`
+  (код/иерархия/корреляционные поля).
+- `tests/observability/test_frame_errors.py` *(new, 2)* — `fail_frame_stage` (код/шаг
+  из exc, фоллбэк на `default_step`) по образцу `test_fail_cvat_stage_*`; грузится ПО
+  ПУТИ из `frame_stage_helpers.py`.
+
+**Решения (§0.2 — три развилки, спрошены у пользователя):**
+1. **upload — облегчённая версия**, не полный трекинг: типизация/логи через
+   `obs.bind`/`obs.step`, БЕЗ ProcessingStage-строки. `StageType.UPLOAD` остаётся
+   неиспользуемым; `/stages` для upload по-прежнему пуст.
+2. **Новый лист `InvalidUploadError`** заведён (а не голый `HTTPException`) —
+   отдельная семья от `ArtifactMissingError` (контент битый, а не отсутствует).
+3. **Самовосстановление** в `/complete`/`/skip` frame.py, если `/start` не звали
+   (заводят-и-сразу-закрывают RUNNING→COMPLETED строку вместо пропуска записи).
+
+Мелкие решения без вопроса (§0.2 п.1, отмечены в чате): guard-clause 400/404/409/413
+во всех файлах — не типизированы (прецедент `cvat.py`); отказ диска
+(`storage.save_file`/`shutil.copy2`) — просто `obs.step`, без нового листа (авто-generic
+`PipelineError`, как junction/detection не заводили лист под `cv2.imwrite`); внешний
+`except` всегда переводит в `HTTPException` (не даём `PipelineError` долететь до
+глобального `app.exception_handler(Exception)` в `main.py` — иначе двойной лог).
+
+**Проблема найдена и решена (в тот же день, по факту первого прогона пользователем):**
+Первый `pytest tests/observability -v` дал `122 passed, 1 skipped` вместо ожидаемых
+124 — `test_frame_errors.py` целиком скипнулся на коллекции. Причина: `aiofiles` нет
+в `.venv311` (тот же прецедент уже документировал `test_cvat_stage_rows.py` для
+`cvat.py`/`storage.py` — но `frame.py`, в отличие от `cvat.py`, не может обойти
+`StorageService`, ему она реально нужна для сохранения очищенного изображения).
+Фикс: три чистых async-хелпера, ничего не знающие про storage/aiofiles/fastapi,
+вынесены в `app/api/frame_stage_helpers.py` (только `sqlalchemy`+`app.models.stage`);
+`frame.py` импортирует их как обычно — рантайм не изменился, только структура файла.
+`test_frame_errors.py` теперь грузит `frame_stage_helpers.py` по пути и не скипает.
+Повторный прогон — **124 passed, 0 skipped**.
+
+**Инсайды (на будущее, для следующих волн/чатов):**
+- Не каждая стадия из §5 — worker-задача. `app/api/*.py`-эндпоинты с `AsyncSession`
+  стоит проверять на «а вообще есть ли worker-файл» ДО того, как тянуть авто-COMPUTE
+  канон — иначе легко потратить время на канон, который физически некуда положить
+  (нет sync `Session` для воркерных `start_stage`/`fail_stage`). «Ручная/интерактивная»
+  и «async-эндпоинт, а не worker» — разные оси; upload показал, что бывает
+  пересечение (авто по сути, но механически как ручная).
+- `aiofiles` — реальный, повторяемый разрыв между `.venv311` (тест-среда) и
+  Docker-образом `pid_api` (там он есть). Любой новый тест, трогающий
+  `app/api/*.py`-модуль, который импортирует (прямо или транзитивно через
+  `app.services.storage`) `StorageService`, столкнётся с этим же — решение уже есть
+  (чистые хелперы в отдельном файле без storage-зависимости + загрузка по пути),
+  не нужно каждый раз изобретать заново.
+- `StageType.UPLOAD` и `StageType.FRAME_REMOVAL` были заведены в enum ещё в Волне
+  0/§8.8, но ни разу не писались в БД до этой под-волны — «есть в enum» не значит
+  «инструментировано»; стоит перепроверять грепом использования, а не только
+  наличием в модели, когда берём стадию в работу.
+
+**Верификация (финал):**
+- `pytest tests/observability -v` = **124 passed, 0 skipped** (пользователь, `.venv311`).
+- `py_compile` всех 6 файлов — OK (в чате); `print(` в правленых модулях — 0.
+- `git diff`/`git status` (Windows, источник правды §0.1) — дифы совпадают с
+  ожидаемыми; `git ls-files -v app/api/diagrams.py` = `H` (обычный трекаемый файл,
+  без assume-unchanged).
+
+**Коммит (`feat/observability`, git — только пользователь, §0.1):**
+```powershell
+git add app/core/errors.py app/api/diagrams.py tests/observability/test_upload_errors.py
+git commit -m "obs(upload): typed InvalidUploadError + obs.bind/step logging, no stage row" -m "RUNBOOK Wave3 upload/frame sub-wave. Light-touch instrumentation (user decision): obs.bind + obs.step(compute/persist_artifacts) + typed raise for malformed PDF/image; guard-clause 4xx untouched (precedent: cvat.py). StageType.UPLOAD intentionally still unused."
+
+git add app/api/frame.py app/api/frame_stage_helpers.py tests/observability/test_frame_errors.py
+git commit -m "obs(frame_removal): full §8.5 async-helper canon (start/save/complete/skip)" -m "Mirrors _start_cvat_stage/_fail_cvat_stage. start/complete/skip write ProcessingStage(frame_removal); self-heal in complete/skip if /start was skipped. /save failures typed+logged but don't fail the stage (repeatable sub-step). Helpers extracted to frame_stage_helpers.py so tests avoid frame.py's aiofiles transitive import (same gap test_cvat_stage_rows.py already documented)."
+
+git add docs/observability/RUNBOOK_execution_plan.md
+git commit -m "docs: close RUNBOOK Wave 3 upload/frame sub-wave (§8.15)"
+```
+
+**[нужен ты]:**
+1. Смоук на стенде: (a) новая диаграмма через upload — happy path (регрессий нет,
+   `docker logs pid_api | grep <uid>` → `phase=upload` баннер + `step=compute`/
+   `step=persist_artifacts` start/end+dur); (b) сбой upload — намеренно битый PDF/PNG
+   → HTTP 400 с тем же текстом, что и до правки; (c) frame: `/start`→`/save`(1-2 раза)
+   →`/complete` — в `/stages` появляется строка `frame_removal` (`completed`); (d)
+   `/skip` без предварительного `/start` — самовосстановление, строка `frame_removal`
+   всё равно появляется.
+2. Деплой: `docker restart pid_api` (весь диф — в `app/`, воркер не тронут).
+3. `git push` (ветка `feat/observability` уйдёт вперёд origin этими 3 коммитами).
+
+Волна 3 закрыта целиком (detection → segmentation/skeleton/graph →
+ocr/junction/contours/fxml → upload/frame).
