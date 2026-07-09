@@ -403,6 +403,15 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None, bridge_gap
     db = SessionLocal()
     stage = None
 
+    # Корреляционный контекст фазы (Волна 3): uid/phase/task_id/attempt → в каждую
+    # строку лога через ContextFilter (Волна 0).
+    obs.bind(
+        uid=str(diagram_uid),
+        phase="generating_fxml",
+        task_id=self.request.id,
+        attempt=self.request.retries,
+    )
+
     try:
         logger.info("Starting FXML generation for %s", diagram_uid)
 
@@ -412,7 +421,10 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None, bridge_gap
         # ===== 1. Diagram from DB =====
         diagram = db.query(Diagram).filter(Diagram.uid == diagram_uid).first()
         if not diagram:
-            raise ValueError(f"Diagram {diagram_uid} not found")
+            raise PipelineError(
+                f"Diagram {diagram_uid} not found",
+                stage="generating_fxml", diagram_uid=str(diagram_uid),
+            )
 
         if check_deleted(db, diagram_uid):
             logger.info("Diagram %s is deleted, aborting", diagram_uid)
@@ -455,31 +467,33 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None, bridge_gap
 
         # --- Input: graph JSON ---
         # Приоритет: graph_validated.json > graph.json
-        graph_validated_path = diagram_dir / "graph" / "graph_validated.json"
-        graph_json_path = diagram_dir / "graph" / "graph.json"
+        with obs.step("load_inputs", logger):
+            graph_validated_path = diagram_dir / "graph" / "graph_validated.json"
+            graph_json_path = diagram_dir / "graph" / "graph.json"
 
-        if graph_validated_path.exists():
-            input_graph_path = graph_validated_path
-            logger.info("Using validated graph: %s", input_graph_path)
-        elif graph_json_path.exists():
-            input_graph_path = graph_json_path
-            logger.info("Using original graph (no validated version): %s", input_graph_path)
-        else:
-            raise FileNotFoundError(
-                f"No graph JSON found. Checked:\n"
-                f"  {graph_validated_path}\n"
-                f"  {graph_json_path}"
-            )
+            if graph_validated_path.exists():
+                input_graph_path = graph_validated_path
+                logger.info("Using validated graph: %s", input_graph_path)
+            elif graph_json_path.exists():
+                input_graph_path = graph_json_path
+                logger.info("Using original graph (no validated version): %s", input_graph_path)
+            else:
+                raise ArtifactMissingError(
+                    f"No graph JSON found. Checked:\n"
+                    f"  {graph_validated_path}\n"
+                    f"  {graph_json_path}",
+                    stage="generating_fxml",
+                )
 
-        # --- Output dir ---
-        fxml_dir = diagram_dir / "fxml"
-        fxml_dir.mkdir(parents=True, exist_ok=True)
-        output_fxml_path = fxml_dir / "diagram.fxml"
+            # --- Output dir ---
+            fxml_dir = diagram_dir / "fxml"
+            fxml_dir.mkdir(parents=True, exist_ok=True)
+            output_fxml_path = fxml_dir / "diagram.fxml"
 
-        # ===== 3. Load graph =====
-        import json
-        with open(input_graph_path, 'r', encoding='utf-8') as f:
-            graph_data = json.load(f)
+            # ===== 3. Load graph =====
+            import json
+            with open(input_graph_path, 'r', encoding='utf-8') as f:
+                graph_data = json.load(f)
 
         nodes_count = len(graph_data.get('nodes', []))
         edges_count = len(graph_data.get('links', []))
@@ -562,7 +576,7 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None, bridge_gap
                     merged, len(contour_nodes),
                 )
             except Exception as e:
-                logger.warning("Contour merge failed (non-fatal): %s", e)
+                logger.warning("Contour merge failed (non-fatal): %s", e, exc_info=True)
         else:
             # Legacy fallback: old contour_extractor (if no SAM2 contours)
             original_image_path = diagram_dir / "original" / "image.png"
@@ -590,7 +604,7 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None, bridge_gap
                         skin_mapped_classes=set(CLASS_NAME_TO_SKIN.keys()),
                     )
                 except Exception as e:
-                    logger.warning("Legacy contour extraction failed (non-fatal): %s", e)
+                    logger.warning("Legacy contour extraction failed (non-fatal): %s", e, exc_info=True)
             else:
                 logger.info(
                     "Skipping contour extraction: no SAM2 contours and no image/mask for legacy",
@@ -599,13 +613,14 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None, bridge_gap
         # ===== 5. Generate FXML =====
         # '1920x1080' — экранный лист: генерируем в пикселях, затем стандартизируем.
         STD_1920 = "1920x1080"
-        gen_page_size = None if page_size == STD_1920 else page_size
-        page_info = f" (page: {page_size})" if page_size else " (original pixels)"
-        logger.info("Generating FXML%s...", page_info)
-        gen_kwargs = {"page_size": gen_page_size}
-        if bridge_gap is not None:
-            gen_kwargs["bridge_gap_factor"] = bridge_gap
-        fxml_content = generate_fxml(graph_data, **gen_kwargs)
+        with obs.step("compute", logger):
+            gen_page_size = None if page_size == STD_1920 else page_size
+            page_info = f" (page: {page_size})" if page_size else " (original pixels)"
+            logger.info("Generating FXML%s...", page_info)
+            gen_kwargs = {"page_size": gen_page_size}
+            if bridge_gap is not None:
+                gen_kwargs["bridge_gap_factor"] = bridge_gap
+            fxml_content = generate_fxml(graph_data, **gen_kwargs)
 
         # Экранный лист 1920x1080: привести к стандарту + убрать смещение скинов,
         # датчиков и невидимые разрывы мостов (tools/fxml_standardize.py). Остальные
@@ -628,40 +643,41 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None, bridge_gap
                 )
 
         # ===== 6. Save FXML =====
-        with open(output_fxml_path, 'w', encoding='utf-8') as f:
-            f.write(fxml_content)
+        with obs.step("persist_artifacts", logger):
+            with open(output_fxml_path, 'w', encoding='utf-8') as f:
+                f.write(fxml_content)
 
-        fxml_size = output_fxml_path.stat().st_size
-        logger.info(
-            "FXML generated: %s (%d bytes)",
-            output_fxml_path, fxml_size,
-        )
-
-        # ===== 7. Register artifact =====
-        # Удаляем старый FXML артефакт
-        old_fxml = (
-            db.query(Artifact)
-            .filter(
-                Artifact.diagram_uid == diagram_uid,
-                Artifact.artifact_type == ArtifactType.FXML,
+            fxml_size = output_fxml_path.stat().st_size
+            logger.info(
+                "FXML generated: %s (%d bytes)",
+                output_fxml_path, fxml_size,
             )
-            .first()
-        )
-        if old_fxml:
-            db.delete(old_fxml)
-            db.flush()
 
-        # Относительный путь для storage
-        rel_path = str(output_fxml_path.relative_to(storage_path))
+            # ===== 7. Register artifact =====
+            # Удаляем старый FXML артефакт
+            old_fxml = (
+                db.query(Artifact)
+                .filter(
+                    Artifact.diagram_uid == diagram_uid,
+                    Artifact.artifact_type == ArtifactType.FXML,
+                )
+                .first()
+            )
+            if old_fxml:
+                db.delete(old_fxml)
+                db.flush()
 
-        artifact = Artifact(
-            diagram_uid=diagram_uid,
-            artifact_type=ArtifactType.FXML,
-            file_path=rel_path,
-            file_size=fxml_size,
-            mime_type="application/xml",
-        )
-        db.add(artifact)
+            # Относительный путь для storage
+            rel_path = str(output_fxml_path.relative_to(storage_path))
+
+            artifact = Artifact(
+                diagram_uid=diagram_uid,
+                artifact_type=ArtifactType.FXML,
+                file_path=rel_path,
+                file_size=fxml_size,
+                mime_type="application/xml",
+            )
+            db.add(artifact)
 
         # ===== 8. COMPLETED =====
         diagram.status = DiagramStatus.COMPLETED
@@ -700,21 +716,22 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None, bridge_gap
         }
 
     except SoftTimeLimitExceeded:
-        logger.error("FXML generation timed out for %s", diagram_uid)
-        fail_stage(stage, "FXML generation timed out")
+        logger.error("FXML generation timed out for %s", diagram_uid, exc_info=True)
+        fail_stage(stage, "FXML generation timed out", traceback.format_exc())
         set_diagram_error(db, diagram_uid, "FXML generation timed out", "generating_fxml")
         raise
 
     except Exception as exc:
-        logger.error("FXML generation failed for %s: %s", diagram_uid, exc)
-        logger.debug(traceback.format_exc())
+        # exc_info=True + exc= в fail_stage → error_code/failed_step/traceback
+        # доезжают до /stages (DoD §4).
+        logger.error("FXML generation failed for %s: %s", diagram_uid, exc, exc_info=True)
 
         if self.request.retries < self.max_retries:
-            fail_stage(stage, str(exc)[:500], traceback.format_exc())
+            fail_stage(stage, str(exc)[:500], traceback.format_exc(), exc=exc)
             logger.info("Retrying (%d/%d) ...", self.request.retries + 1, self.max_retries)
             raise self.retry(exc=exc)
 
-        fail_stage(stage, str(exc)[:500], traceback.format_exc())
+        fail_stage(stage, str(exc)[:500], traceback.format_exc(), exc=exc)
         set_diagram_error(db, diagram_uid, str(exc)[:500], "generating_fxml")
         raise
 
