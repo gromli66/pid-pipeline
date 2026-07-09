@@ -171,3 +171,35 @@ def test_stage_percent_none_for_manual_and_idle():
     )
     assert manual.stage_percent is None          # ручная стадия — без %
     assert compute_progress([], now=NOW).stage_percent is None  # нет бегущей
+
+
+def test_parallel_running_each_stage_has_own_percent():
+    """graph_building и ocr бегут ОДНОВРЕМЕННО → у каждой свой %; foreground=ранняя.
+
+    Регресс §9 #15: раньше compute_progress брал ПОСЛЕДНЮЮ бегущую (ocr) →
+    running_stage=ocr, кнопка graph не заливалась. Теперь foreground = самая
+    ранняя (graph_building), а stage_percents несёт % для КАЖДОЙ.
+    """
+    stages = [
+        _stage("graph_building", "running", started_at="2026-07-08T09:59:50"),  # elapsed 10s
+        _stage("ocr", "running", started_at="2026-07-08T09:59:55"),             # elapsed 5s
+    ]
+    ps = compute_progress(stages, now=NOW)
+    assert ps.state == "running"
+    # foreground = самая ранняя бегущая, НЕ последняя
+    assert ps.running_stage == "graph_building"
+    # у каждой параллельной авто-стадии — своя процентовка
+    assert ps.stage_percents is not None
+    assert ps.stage_percents.get("graph_building", 0) > 0
+    assert ps.stage_percents.get("ocr", 0) > 0
+    # одиночный stage_percent соответствует foreground-стадии
+    assert ps.stage_percent == ps.stage_percents["graph_building"]
+
+
+def test_single_running_still_reports_stage_percents():
+    """Одиночная бегущая стадия по-прежнему в stage_percents (обратная совместимость)."""
+    stages = [_stage("detection", "running", started_at="2026-07-08T09:59:30")]
+    ps = compute_progress(stages, now=NOW)
+    assert ps.running_stage == "detection"
+    assert ps.stage_percents.get("detection", 0) > 0
+    assert ps.stage_percent == ps.stage_percents["detection"]

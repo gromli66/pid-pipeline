@@ -8,6 +8,14 @@ import sys
 import os
 import logging
 
+# Windows-консоль обычно cp1251: '→'/emoji в логах роняли StreamHandler
+# (UnicodeEncodeError) и строка терялась. UTF-8 + errors=replace — не падаем.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 # === Настройка логирования ===
 logging.basicConfig(
     level=logging.INFO,

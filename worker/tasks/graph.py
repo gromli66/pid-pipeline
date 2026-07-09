@@ -25,8 +25,11 @@ from celery.exceptions import SoftTimeLimitExceeded
 
 from worker.celery_app import celery_app
 from worker.utils.db_helpers import set_diagram_error, check_deleted, start_stage, complete_stage, fail_stage
+from app.core import obs
+from app.core.errors import ArtifactMissingError, PipelineError
+from app.core.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # =============================================================================
@@ -67,6 +70,15 @@ def task_build_graph(self, diagram_uid: str):
     db = SessionLocal()
     stage = None
 
+    # Корреляционный контекст фазы (Волна 3): uid/phase/task_id/attempt → в каждую
+    # строку лога (в т.ч. под-под-шаги builder) через ContextFilter (Волна 0).
+    obs.bind(
+        uid=str(diagram_uid),
+        phase="building_graph",
+        task_id=self.request.id,
+        attempt=self.request.retries,
+    )
+
     try:
         logger.info("Starting graph building for %s", diagram_uid)
 
@@ -76,7 +88,10 @@ def task_build_graph(self, diagram_uid: str):
         # ===== 1. Diagram from DB =====
         diagram = db.query(Diagram).filter(Diagram.uid == diagram_uid).first()
         if not diagram:
-            raise ValueError(f"Diagram {diagram_uid} not found")
+            raise PipelineError(
+                f"Diagram {diagram_uid} not found",
+                stage="building_graph", diagram_uid=str(diagram_uid),
+            )
 
         if check_deleted(db, diagram_uid):
             logger.info("Diagram %s is deleted, aborting", diagram_uid)
@@ -121,28 +136,34 @@ def task_build_graph(self, diagram_uid: str):
         # Skeleton final (из task_skeletonize_simple)
         skeleton_final_path = diagram_dir / "skeleton" / "skeleton_final.png"
         if not skeleton_final_path.exists():
-            raise FileNotFoundError(
+            raise ArtifactMissingError(
                 f"Skeleton final not found: {skeleton_final_path}. "
-                f"task_skeletonize_simple may not have completed."
+                f"task_skeletonize_simple may not have completed.",
+                stage="building_graph", step="load_inputs",
             )
 
         # Equipment mask (node_mask from segmentation)
         node_mask_path = diagram_dir / "segmentation" / "node_mask.png"
         if not node_mask_path.exists():
-            raise FileNotFoundError(f"Node mask not found: {node_mask_path}")
+            raise ArtifactMissingError(
+                f"Node mask not found: {node_mask_path}",
+                stage="building_graph", step="load_inputs",
+            )
 
         # Junction mask (validated)
         junction_mask_path = diagram_dir / "junction" / "junction_mask_validated.png"
         if not junction_mask_path.exists():
-            raise FileNotFoundError(
-                f"Junction mask validated not found: {junction_mask_path}"
+            raise ArtifactMissingError(
+                f"Junction mask validated not found: {junction_mask_path}",
+                stage="building_graph", step="load_inputs",
             )
 
         # Bridge mask (validated)
         bridge_mask_path = diagram_dir / "junction" / "bridge_mask_validated.png"
         if not bridge_mask_path.exists():
-            raise FileNotFoundError(
-                f"Bridge mask validated not found: {bridge_mask_path}"
+            raise ArtifactMissingError(
+                f"Bridge mask validated not found: {bridge_mask_path}",
+                stage="building_graph", step="load_inputs",
             )
 
         # COCO validated annotations
@@ -206,15 +227,16 @@ def task_build_graph(self, diagram_uid: str):
             debug=False,
         )
 
-        result = builder.build(
-            equipment_mask_path=str(node_mask_path),
-            connection_mask_path=str(junction_mask_path),
-            bridge_mask_path=str(bridge_mask_path),
-            skeleton_path=str(skeleton_final_path),
-            original_image_path=str(original_image_path) if original_image_path else None,
-            coco_path=str(coco_validated_path) if coco_validated_path else None,
-            image_filename="image.png",  # Имя файла в COCO JSON (storage convention)
-        )
+        with obs.step("compute", logger):
+            result = builder.build(
+                equipment_mask_path=str(node_mask_path),
+                connection_mask_path=str(junction_mask_path),
+                bridge_mask_path=str(bridge_mask_path),
+                skeleton_path=str(skeleton_final_path),
+                original_image_path=str(original_image_path) if original_image_path else None,
+                coco_path=str(coco_validated_path) if coco_validated_path else None,
+                image_filename="image.png",  # Имя файла в COCO JSON (storage convention)
+            )
 
         num_nodes = len(result['nodes'])
         num_edges = len(result['edges'])
@@ -226,30 +248,34 @@ def task_build_graph(self, diagram_uid: str):
         )
 
         # ===== 4. Save results =====
-        builder.save(
-            result=result,
-            output_dir=str(graph_dir),
-            graph_path=str(graph_json_path),
-            scheme_name="graph",
-        )
-
-        # builder.save() creates {scheme_name}_graph.png → graph_graph.png
-        # Rename to our standard name (only if visualizations enabled)
-        auto_viz_path = graph_dir / "graph_graph.png"
-
-        # Load project config for save_visualizations flag
+        # save_visualizations по умолчанию выключен → не рендерим дорогой оверлей
+        # (matplotlib ~54с на полном разрешении), как segmentation/junction.
         from app.services.project_loader import get_project_loader
         _save_vis = False
         try:
             _proj = get_project_loader().load(diagram.project_code)
             _save_vis = _proj.save_visualizations if _proj else False
         except Exception:
-            pass
+            logger.warning(
+                "graph: project config load failed for save_visualizations flag",
+                exc_info=True,
+            )
+
+        with obs.step("persist_artifacts", logger):
+            builder.save(
+                result=result,
+                output_dir=str(graph_dir),
+                graph_path=str(graph_json_path),
+                scheme_name="graph",
+                save_visualization=_save_vis,
+            )
+
+        # builder.save() создаёт {scheme_name}_graph.png → graph_graph.png только
+        # при save_visualization=True. Переименовать в наш стандарт.
+        auto_viz_path = graph_dir / "graph_graph.png"
 
         if _save_vis and auto_viz_path.exists():
             auto_viz_path.replace(graph_overlay_path)
-        elif auto_viz_path.exists():
-            auto_viz_path.unlink()  # remove unneeded visualization
 
         logger.info(
             "Saved: graph.json (%d bytes)%s",
@@ -314,21 +340,23 @@ def task_build_graph(self, diagram_uid: str):
         }
 
     except SoftTimeLimitExceeded:
-        logger.error("Graph building timed out for %s", diagram_uid)
-        fail_stage(stage, "Graph building timed out (29 min limit)")
+        logger.error("Graph building timed out for %s", diagram_uid, exc_info=True)
+        fail_stage(stage, "Graph building timed out (29 min limit)", traceback.format_exc())
         set_diagram_error(db, diagram_uid, "Graph building timed out (29 min limit)", "building_graph")
         raise
 
     except Exception as exc:
-        logger.error("Graph building failed for %s: %s", diagram_uid, exc)
-        logger.debug(traceback.format_exc())
+        # exc_info=True + exc= в fail_stage → error_code/failed_step/traceback
+        # доезжают до /stages (DoD §4). Под-под-шаг сбоя (load_masks/trace_edges/…)
+        # проставляется obs.step() и всплывает в failed_step.
+        logger.error("Graph building failed for %s: %s", diagram_uid, exc, exc_info=True)
 
         if self.request.retries < self.max_retries:
-            fail_stage(stage, str(exc)[:500], traceback.format_exc())
+            fail_stage(stage, str(exc)[:500], traceback.format_exc(), exc=exc)
             logger.info("Retrying (%d/%d) ...", self.request.retries + 1, self.max_retries)
             raise self.retry(exc=exc)
 
-        fail_stage(stage, str(exc)[:500], traceback.format_exc())
+        fail_stage(stage, str(exc)[:500], traceback.format_exc(), exc=exc)
         set_diagram_error(db, diagram_uid, str(exc)[:500], "building_graph")
         raise
 

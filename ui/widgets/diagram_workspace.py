@@ -837,6 +837,9 @@ class DiagramWorkspace(QWidget):
                 if "ocr" in self._action_buttons:
                     self._action_buttons["ocr"].setEnabled(True)
                     self._action_buttons["ocr"].setStyleSheet(_BTN_STYLE_GREEN)
+                    self._action_buttons["ocr"].setText("Распознавание текста")
+                    if getattr(self, "_filled_keys", None):
+                        self._filled_keys.pop("ocr", None)
                 if "ocr_binding" in self._action_buttons:
                     self._action_buttons["ocr_binding"].setEnabled(True)
                     self._action_buttons["ocr_binding"].setStyleSheet(_BTN_STYLE_YELLOW)
@@ -845,6 +848,15 @@ class DiagramWorkspace(QWidget):
                     self._action_buttons["edit_graph"].setEnabled(True)
                     self._action_buttons["edit_graph"].setStyleSheet(_BTN_STYLE_YELLOW)
                     self.beads.set_state(BEAD_EDIT_GRAPH, BeadState.AVAILABLE)
+            else:
+                # OCR ещё бежит, а основной опрос статуса на паузе (built/гейт →
+                # unwatch): тикаем заливку OCR-кнопки здесь, чтобы её % рос
+                # (своя процентовка параллельной стадии, §9 #15).
+                try:
+                    self._on_stages_updated(
+                        self._uid, self.api_client.get_stages(self._uid))
+                except Exception:
+                    pass
         except Exception:
             pass  # не блокируем UI
 
@@ -969,6 +981,36 @@ class DiagramWorkspace(QWidget):
                 label = _KEY_LABELS.get(key)
                 if label:
                     btn.setText(label)
+
+    def _restyle_button(self, key: str, status: DiagramStatus):
+        """Вернуть ОДНОЙ кнопке базовый вид по статусу, не трогая остальные.
+
+        Для снятия заливки с параллельной стадии, переставшей бежать, БЕЗ
+        _update_buttons (тот перерисовывает ВСЕ кнопки → стирал бы % соседней
+        ещё бегущей стадии — регрессия §8.10 / §9 #15).
+        """
+        btn = self._action_buttons.get(key)
+        if btn is None:
+            return
+        available, completed, processing = _buttons_for_status(status)
+        _mi = _MANUAL_INPROGRESS.get(status)
+        if _mi:
+            processing.discard(_mi[0])
+            available.add(_mi[0])
+        label = dict(self._BUTTON_DEFS).get(key, key)
+        if key in processing:
+            btn.setEnabled(False)
+            btn.setStyleSheet(_BTN_STYLE_BLUE)
+        elif key in available:
+            btn.setEnabled(True)
+            btn.setStyleSheet(_BTN_STYLE_YELLOW)
+        elif key in completed:
+            btn.setEnabled(True)
+            btn.setStyleSheet(_BTN_STYLE_GREEN)
+        else:
+            btn.setEnabled(False)
+            btn.setStyleSheet(_BTN_STYLE_GRAY)
+        btn.setText(label)
 
     def _apply_error_status(self, error_stage: str = None):
         """ERROR без «заморозки»: реконструировать прогресс из ProcessingStage.
@@ -2072,28 +2114,37 @@ class DiagramWorkspace(QWidget):
 
     @Slot(str, object)
     def _on_stages_updated(self, uid: str, stages):
-        """Заливка активной кнопки-стадии по её прогрессу (per-diagram + per-stage)."""
+        """Заливка бегущих кнопок-стадий (per-diagram, параллельно-безопасно).
+
+        КАЖДАЯ бегущая авто-стадия льёт СВОЮ кнопку своим %: graph и ocr бегут
+        одновременно → у каждой своя заливка (§9 #15). Снятие заливки — по одной
+        кнопке через _restyle_button (НЕ _update_buttons: тот трёт ВСЕ кнопки →
+        стирал бы % соседней ещё бегущей стадии, регрессия §8.10).
+        """
         if uid != self._uid:
             return
         from ui.services.progress_model import compute_progress
         # Бюджеты — p50 реальных длительностей с боевого железа (кэш на сессию);
         # {} при недоступности → progress_model берёт свой статический сид.
         ps = compute_progress(stages, budgets=self.api_client.get_stage_durations())
-        key = (
-            _STAGE_TYPE_TO_KEY.get(ps.running_stage)
-            if ps.state == "running" and ps.running_stage else None
-        )
-        if key and ps.stage_percent is not None and key in self._action_buttons:
-            btn = self._action_buttons[key]
-            label = dict(self._BUTTON_DEFS).get(key, key)
-            btn.setStyleSheet(_btn_fill_style(ps.stage_percent / 100.0))
-            btn.setText(f"{label} · {ps.stage_percent}%")
-            self._filled_key = key
-            return
-        # Нет заливаемой авто-стадии → снять прежнюю заливку (вернуть базовый вид).
-        if getattr(self, "_filled_key", None):
-            self._filled_key = None
-            self._update_buttons(self._last_status)
+
+        new_filled: dict = {}
+        if ps.state == "running":
+            for _st, _pct in (ps.stage_percents or {}).items():
+                _key = _STAGE_TYPE_TO_KEY.get(_st)
+                if _key and _key in self._action_buttons:
+                    new_filled[_key] = _pct
+
+        for _key, _pct in new_filled.items():
+            btn = self._action_buttons[_key]
+            label = dict(self._BUTTON_DEFS).get(_key, _key)
+            btn.setStyleSheet(_btn_fill_style(_pct / 100.0))
+            btn.setText(f"{label} · {_pct}%")
+        # Снять заливку с кнопок, переставших бежать (точечно, не _update_buttons).
+        for _key in getattr(self, "_filled_keys", {}):
+            if _key not in new_filled:
+                self._restyle_button(_key, self._last_status)
+        self._filled_keys = new_filled
 
     @Slot(str, object)
     def _on_status_updated(self, uid: str, status_info):

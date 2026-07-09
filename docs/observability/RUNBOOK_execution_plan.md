@@ -211,10 +211,10 @@
 |---|---|---|---|
 | 0 Фундамент | ✅ готово (смоук на стенде) | feat/observability | 2026-07-08 |
 | 1 CVAT | ✅ готово; DoD-дыра закрыта — `create-task`/`fetch` пишут `cvat_validation` в `/stages` (async-хелпер, Вариант A); болевой `upload_media` ловится опросом task-status (большой файл = асинхронный отказ CVAT). Клиент — Вариант A. Смоук на стенде зелёный (§8.5) | feat/observability | 2026-07-08 |
-| 2 Клиент | ✅ проверено визуально: окно ошибки (FAILED), прогресс-заливка в кнопке (RUNNING; верхний бар убран, §9 #9), reopen-диалог «Проверка элементов». Отложено осознанно: `stats`-эндпоинт, `current_step` | feat/observability | 2026-07-08 |
+| 2 Клиент | ✅ проверено визуально: окно ошибки (FAILED), прогресс-заливка в кнопке (RUNNING; верхний бар убран, §9 #9), reopen-диалог «Проверка элементов». Отложено осознанно: `stats`-эндпоинт, `current_step`. Добивка 2026-07-09: per-stage заливка graph/ocr + cp1251-лог (§8.11, §9 #15/#17) | feat/observability | 2026-07-09 |
 | 3 detection | ✅ smoke (§8.6, uid 6e7144d5) | feat/observability | 2026-07-08 |
 | 3 segmentation | ✅ smoke (uid 6e7144d5); baseline+tiling/inference/stitch видны; +фикс протечки контекста (§9 #11) | feat/observability | 2026-07-08 |
-| 3 skeleton/graph | ⬜ | | |
+| 3 skeleton/graph | ✅ код+тесты (9 новых: skeleton 5 / graph 4; `pytest tests/observability`); [нужен ты] smoke на стенде + `docker restart pid_worker` | feat/observability | 2026-07-09 |
 | 3 ocr/junction/contours/fxml | ⬜ | | |
 | 3 upload/frame | ⬜ | | |
 | Бюджеты из БД (CPU-ETA) | ✅ код+тесты (13 новых; `pytest tests/observability`=75); эндпоинт на стенде (GPU-p50); [нужен ты] клиент-ребилд+визуалка, деплой `app/` на бой (§8.8) | feat/observability | 2026-07-09 |
@@ -366,6 +366,10 @@
 | 11 | `obs.bind` протекал между задачами: `contextvars` в prefork-воркере не обнулялся → неинструментированная стадия (skeleton/junction/direction) логировалась с `uid/phase/task` предыдущей задачи (смоук Волны 4: skeleton = `phase=detecting` + task детекции; под нагрузкой/мультидиаграммно мог бы взять ЧУЖОЙ uid) | баг обсёрвабилити (Волна 0) | сброс контекста в сигнале `task_prerun` (`obs.reset()`) — каждая задача стартует с чистого; инструментированные биндят поверх | ✅ решено 2026-07-08 (`feat/observability`): `obs.reset()` + `@task_prerun.connect` в `celery_app.py`. Неинструментир. стадии теперь честный `-` до своих волн (поведение инструментированных не изменилось) |
 | 12 | `torch.cuda.amp.autocast()` deprecated (FutureWarning, `engine.py:224`, смоук Волны 4) | долг (пред-существующий, не-obs) | → `torch.amp.autocast('cuda')`, поведение то же | ✅ фикс 2026-07-08 (`feat/observability`, точечно — согласовано) |
 | 13 | `[POSTPROCESS]`-логи модуля `postprocessing` идут на `WARNING`, хотя информационные (смоук Волны 4: `[POSTPROCESS] TOTAL: 0.49s` как warning — шум) | долг обсёрвабилити (уровень логов) | снизить до `INFO`/`DEBUG` в волне skeleton/graph (там же трогаем модули сегментации) | ⬜ отложено (не трогаем сейчас) |
+| 14 | `skeleton_extension` — под-под-шаги COMPUTE (Вариант A) не инструментированы (§8.9): skeletonization ≈5.7с/GPU (не кандидат на дробление), модуль печатает `[SKEL_EXT] stage_N` на stdout→logging мост, `processing.py:396` уже делает `traceback.print_exc()` | долг обсёрвабилити (worker) | взять, если на CPU-бою skeleton «выглядит зависшей» несмотря на `[SKEL_EXT]`-тайминги | ⬜ отложено осознанно (§8.9) |
+| 15 | Клиентская заливка `%` не работала у `graph_building` и `ocr` (отдельная мини-волна Волны 2) | баг UX (клиент) | диагностика логами → точечный фикс | ✅ закрыто 2026-07-09 (`feat/observability`, §8.11). Логи ОПРОВЕРГЛИ гипотезу «опрос на паузе»: в `building_graph` опрос жив, но OCR бежит ПАРАЛЛЕЛЬНО и `compute_progress` брал ПОСЛЕДНЮЮ бегущую (`ocr`) → заливка уходила на кнопку OCR, `graph` не заливался; после `built` (гейт→`unwatch`) подача `stages_updated` вставала → OCR замерзал. Фикс: `ProgressState.stage_percents` (% на КАЖДУЮ бегущую авто-стадию), foreground=самая ранняя; `_on_stages_updated` льёт каждую кнопку своим %, снятие — точечный `_restyle_button` (не `_update_buttons`, регрессия §8.10); OCR тикает после `built` через `_ocr_poll_timer`. +2 теста |
+| 16 | Перф graph: `builder.save()` безусловно рендерил matplotlib-оверлей (~54с из 72.8с), задача `unlink`'ала его при `save_visualizations=False` | долг перф (вне obs) | рендер оверлея только под флагом | ✅ сделано 2026-07-09 (§8.10): `graph_building` при выкл. флаге ~72.8с→~18с, вывод идентичен |
+| 17 | Windows-клиент: stdout=cp1251 роняет StreamHandler на `→`/emoji в логах (`UnicodeEncodeError`) → строка ТЕРЯЕТСЯ (напр. `logger.info("Refresh: %s → %s")`, `"Status %s: %s → %s"`, `✅/🔍/📊`-сообщения); всплыло на диагностике §8.11 | долг обсёрвабилити (Windows) | `sys.stdout/stderr.reconfigure(encoding="utf-8", errors="replace")` в `ui/main.py` до `basicConfig` | ✅ закрыто 2026-07-09 (`feat/observability`, §8.11): reconfigure utf-8+replace; кириллица и раньше проходила (в cp1251), падали только не-cp1251 символы |
 
 Правило: пункт отсюда либо становится своей мини-волной, либо явно закрывается как «не делаем». Молча не растворяется.
 
@@ -405,3 +409,73 @@
 **Наблюдение — GPU-p50 стенда (2026-07-09, это НЕ CPU-сид для боя):** detection 19.6 · segmentation 12.8 · skeletonization 5.7 · final_skeletonization 5.2 · junction_classification 9.3 · contour_extraction 24.8 · graph_building 46.3 · ocr 86.5 · fxml_generation 0.07 · direction_classification 0.69 (сек). Ручные исключены.
 
 **[нужен ты]:** пересобрать клиент (`ui/`) + визуалка заливки кнопки-стадии на 1–2 диаграммах; при выкатке на бой — задеплоить `app/` + `docker restart pid_api` (эндпоинт сам даст CPU-p50); опц. пере-засев `_DEFAULT_BUDGETS` под CPU из первого боевого p50 (только холодный старт / стадии с `<5` наблюдений).
+
+---
+
+### 8.9 Волна 3 — skeleton/graph (2026-07-09)
+
+Инструментированы стадии SKELETONIZATION / FINAL_SKELETONIZATION / GRAPH_BUILDING по образцу Волн 3–4 (Вариант A). FXML_GENERATION (тот же `graph.py`) — НЕ трогали: это под-волна «ocr/junction/contours/fxml» (границы модулей чистые: `build_graph`→`builder.py`, `generate_fxml`→`graph_to_fxml.py`).
+
+**Сделано (`feat/observability`):**
+- `worker/tasks/skeleton.py` — обе задачи: `obs.bind(uid/phase=skeletonizing[_simple]/task_id/attempt)` + `get_logger`; канон `obs.step()`: `load_inputs`/`compute`/`persist_artifacts` (task1 без отдельного `postprocess` — `skeleton_to_mask` — в persist по факту, §1). Raise'ы типизированы: project config → `ConfigError`, диаграмма → `PipelineError`, входные маски/образ → `ArtifactMissingError`, сбой скелета (falsy-возврат / нет файла / нечитаем) → **`SkeletonizationError`** (`step=compute`). Немые `except OSError: pass` (temp-cleanup) → `logger.debug(exc_info=True)`; `except` bg-mask/refine/dispatch → `+exc_info=True`. Внешний `except`/`SoftTimeLimit` → `exc_info=True` + `fail_stage(..., exc=exc)` (`error_code`/`failed_step` доезжают до `/stages`).
+- `worker/tasks/graph.py` — только `task_build_graph`: `obs.bind(phase=building_graph)` + канон `compute`/`persist_artifacts` (+ `step=load_inputs` на raise'ах входов); raise'ы → `PipelineError`/`ArtifactMissingError`. **Немой `except Exception: pass` (`graph.py:246`, флаг ТЗ) → `logger.warning(exc_info=True)`** (флаг `save_visualizations` остаётся `False`). Внешний `except` → `exc=exc`+`exc_info`.
+- `modules/graph/core/builder.py` (**Вариант A**, optional-import obs как `engine.py`) — под-под-шаги COMPUTE в `build()`: `load_masks` / `bridge_preprocess` / `prepare_tracing` / **`trace_edges`** (доминанта; graph — самая медленная авто-стадия ≈46с/GPU → на CPU кратно дольше). Broad-`except` дампа сырого графа (`:349`, был `print`) → `logger.warning(exc_info=True)`.
+- `app/core/errors.py` — лист `SkeletonizationError` (`skeletonization_failed`), by-need (как `ConfigError` в детекции; граф своего листа не заводит — сбои `builder.build()` типизирует `obs.step`).
+- `tests/observability/test_skeleton_errors.py` (5) + `test_graph_errors.py` (4) — листья/иерархия, `fail_stage` довозит `error_code`/`failed_step`, обёртка/passthrough `obs.step`, границы под-под-шагов `builder.build()` (start/end+`duration_ms`). Изоляция §9 #2: cv2/scipy + graph.core-под-модули замоканы; scipy — через `monkeypatch.setitem` (не течёт в сессию).
+
+**Решения (§0.2 — спросил у пользователя, наследуются):**
+- **skeleton_extension — глубина «минимум» (решено с пользователем):** модуль (`processing.py`/`core.py` 1605 стр.) НЕ инструментируем под-под-шагами. Причина: skeletonization ≈5.7с/GPU (2-я по скорости авто-стадия) — не кандидат на проактивное дробление (§1); модуль уже печатает `[SKEL_EXT] stage_N` тайминги на stdout→logging мост; риск усечения кириллицы (§8.8). Задачный `step=compute` даёт `failed_step`+`duration`; `processing.py:396` уже делает `traceback.print_exc()` (не немой глотатель) → причина в логах. **Отложено → §9 #14.**
+- **fxml отложен:** `generate_fxml`/FXML_GENERATION — в свою под-волну; `except`-блоки `graph.py` (генерация fxml) не трогаем.
+- **`print`-модули (graph/core 128, skeleton_extension 185) — на stdout→logging мост** (DoD §4 «или явно через stdout-мост»), как §8.6/§8.7. Задачные файлы — 0 `print`. Wholesale-миграция не делается (surgical, §3).
+- **Гранулярность skeleton-задач:** `load_inputs`/`compute`/`persist` (без `load_model` — модели нет; без отдельного `postprocess`).
+
+**[нужен ты]:** `pytest tests/observability -v` (ожидаемо 75 старых + 9 новых); smoke на стенде — 1 диаграмма через skeleton→final_skeleton→graph, в логах баннер + `step=load_inputs/compute/persist_artifacts`, внутри graph-`compute` — `step=load_masks/bridge_preprocess/prepare_tracing/trace_edges`; `/stages` при искусственном сбое отдаёт `error_code`/`failed_step`. Деплой: `docker restart pid_worker` (worker+modules+app.core.errors), при желании и `pid_api` (errors.py под `app/`; `/stages` читает строкой — не обязателен).
+
+**§9 (parking lot) — добавить:**
+- **#13 (POSTPROCESS WARNING→INFO, `pipe_segmentation/postprocessing`):** остаётся отложенным — это segmentation-модуль, в этой волне его не трогали.
+- **#14 (новый):** skeleton_extension — под-под-шаги COMPUTE (Вариант A) отложены осознанно (см. решение выше). Взять, если на CPU-бою skeleton «выглядит зависшей» несмотря на `[SKEL_EXT]`-тайминги на мосту.
+
+---
+
+### 8.10 Мини-волна — клиентский прогресс кнопки-стадии (2026-07-09, §0.2)
+
+Всплыло на смоуке Волны 3 (пользователь): кнопка-стадия «Построение графа» залипала на ~18% и прыгала к 100%, пока уже бежал OCR; другие стадии — норма. Вне skeleton/graph (клиент, Волна 2 / «бюджеты из БД») — по §0.2 взято отдельной мини-волной с согласия.
+
+**Причина (по коду):** `ui/widgets/diagram_workspace.py::_on_stages_updated` при смене бегущей авто-стадии (graph→ocr) заливал НОВУЮ кнопку, но НЕ сбрасывал предыдущую — завершённый `graph_building` висел со старым текстом/заливкой «· 18%» до следующей полной перерисовки (`_update_buttons`), т.е. до смены статуса. Усугубляет `_open_tab` (намеренная пауза опроса `status_provider.unwatch` на время открытой вкладки — против мерцания CVAT/WebEngine, §comment): `graph_building` — самая длинная авто-стадия (смоук: **72.8с**), часто бежит при открытой вкладке валидации → её кнопка успевает получить лишь один ранний опрос (~18%) и застыть.
+
+**Фикс (surgical):** `_on_stages_updated` — при `prev_key != key` сбрасываем заливку предыдущей кнопки (`_update_buttons(self._last_status)`) перед заливкой новой; ветку «нет бегущей» сохранили. `progress_model.py` НЕ тронут (расчёт корректен — на OCR он и отдаёт `running_stage=ocr`). Тест — визуальный (Qt-виджет, как клиентские правки Волны 2; headless не гоняется без QApplication).
+**[нужен ты]:** клиент-ребилд + визуалка перехода graph→ocr (кнопка graph зеленеет, ocr заливается; «· 18%» не залипает).
+
+**§9 (parking lot) — добавить:**
+- **#15 (клиент, прогресс — ОТДЕЛЬНАЯ мини-волна Волны 2, новый чат):** заливка `%` есть у detection/segmentation/skeleton, НЕТ у `graph_building` и `ocr`. Диагноз: кнопка заливается только на приходящем `stages_updated`; graph/ocr бегут ПОСЛЕ ручных гейтов (валидация узлов / привязка), где опрос `status_provider` на паузе (`_open_tab`→`unwatch` + остановка на `_FINAL_STATUSES`: DETECTED_JUNCTIONS/BUILT/CONTOURS_*/OCR_*), а первый авто-чейн идёт при активном опросе → у него `%` есть. Маппинг `_STAGE_TYPE_TO_KEY` корректен, `StageType` совпадает с `_PIPELINE`. Пробный сброс предыдущей кнопки через `_update_buttons` дал регрессию (ресетит текст ВСЕХ кнопок → стёр % и graph, и ocr) → **ОТКАЧЕНО к оригиналу**. Варианты (нужна живая итерация — клиент из venv, Claude не гоняет): (a) debug в `_on_stages_updated` → тикает ли опрос во время graph/ocr; (b) локальный QTimer заливки по elapsed, независимо от сетевого опроса; (c) сузить `_FINAL_STATUSES` до истинных гейтов+терминалов. **Kickoff:** «Волна 2 добивка — клиентский прогресс graph/ocr, RUNBOOK §9 #15».
+- **#16 (перф graph, вне obs):** ✅ сделано 2026-07-09 (решено с пользователем «убрать рендеринг»). Было: `builder.save()` БЕЗУСЛОВНО рендерил matplotlib-оверлей (`plot_graph_overlay`, ~54с из 72.8с стадии), а задача `unlink`'ала его при `save_visualizations=False` → рендер впустую. Фикс: `save(save_visualization=...)` — `plot_graph_overlay` только под флагом; `graph.py` грузит `_save_vis` ДО `save`, передаёт флаг, мёртвый `unlink` убран. Вывод идентичен (оверлей сохраняется ровно когда `save_visualizations=True`, как раньше; артефакт `GRAPH_OVERLAY` отдаётся `/api/graph`), `graph_building` при выкл. флаге ~72.8с→~18с. По образцу segmentation/junction. Всплыло через obs-инструментовку Волны 3.
+
+---
+
+### 8.11 Мини-волна — клиентская заливка graph/ocr (per-stage %) (2026-07-09, §9 #15)
+
+Добивка Волны 2 (§9 #15, отдельный чат). Заливка `%` кнопки-стадии не работала у `graph_building` и `ocr`. Взято с живой итерацией (клиент из venv), т.к. GUI не гоняется headless.
+
+**Диагностика (Вариант a — временные `[WAVE2-DBG]`-логи в `_poll`/`watch`/`unwatch`/`_on_stages_updated`, сняты по закрытии):** прогон одной диаграммы через узлы→graph→ocr. Логи ОПРОВЕРГЛИ гипотезу §9 #15 («опрос `status_provider` на паузе во время graph/ocr»):
+- В фазе `building_graph` опрос ЖИВ (`final=False will_unwatch=False`, `stages_updated` каждые 2с).
+- НО `running_rows=['graph_building','ocr']` — OCR бежит ПАРАЛЛЕЛЬНО графу, и `compute_progress` перезаписывал `running_stage` последней бегущей → `ocr` (дальше по `_PIPELINE`). Заливка (`stage_percent`) уходила на кнопку **ocr**, `graph` не заливался вовсе.
+- На `built` (гейт): `will_unwatch=True` → `unwatch` (таймер стоп). OCR ещё бежал в фоне (артефакт +18с), но `stages_updated` больше не тикал → заливка OCR замерзала (~31%) до перекраски ocr-поллером в зелёную.
+
+**Сделано (`feat/observability`):**
+- `ui/services/progress_model.py` — `ProgressState.stage_percents: {stage_type: %}` для КАЖДОЙ бегущей авто-стадии; `running_stage`/ETA/`stage_percent`/label теперь = самая РАННЯЯ бегущая (foreground), а не последняя. Параллельные стадии считаются в `done_w` и `stage_percents`, но foreground не перебивают.
+- `ui/widgets/diagram_workspace.py` — `_on_stages_updated` льёт КАЖДУЮ бегущую кнопку своим % (graph и ocr одновременно); снятие заливки с переставшей бежать — новый `_restyle_button(key, status)` по ОДНОЙ кнопке (НЕ `_update_buttons` — тот трёт все → регрессия §8.10 / §9 #15). В `_check_ocr_artifact` (`_ocr_poll_timer`, 3с) добавлена подача заливки OCR после `built`, пока основной опрос на паузе; на готовности OCR — сброс текста кнопки.
+- `ui/main.py` — cp1251-фикс логов (§9 #17): `stdout/stderr.reconfigure(utf-8, errors=replace)` до `basicConfig`.
+- `tests/observability/test_progress_model.py` — +2 теста: параллельные `graph_building`+`ocr` (у каждой свой %, foreground=graph); одиночная стадия по-прежнему в `stage_percents` (обратная совместимость).
+- НЕ тронуты: `status_provider.py` (вернулся к HEAD после снятия debug), `_update_buttons`, `progress_model` ETA/калибровка, параллелизм.
+
+**Решения (§0.2 — спросил у пользователя):**
+- **Per-stage %, а не единый foreground.** Пользователь: у каждой параллельной стадии — своя процентовка. Поэтому `stage_percents` (все бегущие), а не только foreground; каждая кнопка заливается своим %.
+- **cp1251-лог — чиним заодно** (не отдельной волной): аддитивный reconfigure, поведение не меняет.
+- **Инструмент правок:** крупные кириллические файлы правились UTF-8-safe записью (py-heredoc), НЕ Edit/Write — по уроку §8.8 (усечение хвоста на многобайтном символе).
+
+**Верификация:**
+- `pytest tests/observability/test_progress_model.py` = **15 passed** (13 старых + 2 новых); полный `tests/observability` ожидаемо **77**.
+- `py_compile` всех правленых файлов; хвосты целы; `status_provider.py` — `git diff` пуст (debug снят подчистую).
+- Визуальная проверка на клиенте (пользователь, uid `6e7144d5`): graph и ocr заливаются каждый своим %, OCR тикает после `built` до зелёной, cp1251-спам в консоли ушёл.
+
+**Наблюдение:** OCR стартует ПАРАЛЛЕЛЬНО `building_graph` (не после гейтов графа, как подразумевал исходный §9 #15) и финиширует вскоре после `built`. Поэтому «честная» заливка OCR — в основном под foreground графа + короткий хвост через `_ocr_poll_timer`.

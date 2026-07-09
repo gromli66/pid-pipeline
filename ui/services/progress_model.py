@@ -92,6 +92,7 @@ class ProgressState:
     eta_seconds: Optional[int]      # None — неизвестно / ждёт оператора
     stage_percent: Optional[int] = None  # % своей бегущей авто-стадии; None у ручной/нет бегущей
     failed_stage: Optional[str] = None
+    stage_percents: Optional[dict] = None  # {stage_type: %} КАЖДОЙ бегущей авто-стадии (параллельно-безоп.)
 
 
 def _parse_dt(value) -> Optional[datetime]:
@@ -171,6 +172,7 @@ def compute_progress(stages, *, now: Optional[datetime] = None,
     running_elapsed = 0.0
     running_frac = 0.0
     running_is_auto = False
+    running_percents: dict = {}
     failed_stage: Optional[str] = None
 
     for st in _PIPELINE:
@@ -182,18 +184,27 @@ def compute_progress(stages, *, now: Optional[datetime] = None,
         if status == "completed":
             done_w += w
         elif status == "running":
-            running_stage = st
             started = _parse_dt(s.get("started_at"))
             elapsed = (now - started).total_seconds() if started else 0.0
-            running_elapsed = elapsed if elapsed > 0 else 0.0
+            _elapsed = elapsed if elapsed > 0 else 0.0
             b = merged.get(st)
             if b:
-                frac = min(max(running_elapsed / b, 0.0), _RUNNING_CAP)
-                running_is_auto = True
+                frac = min(max(_elapsed / b, 0.0), _RUNNING_CAP)
+                running_percents[st] = int(round(frac * 100))
+                _is_auto = True
             else:
                 frac = _MANUAL_RUNNING_FRAC
-            running_frac = frac
+                _is_auto = False
             done_w += w * frac
+            # foreground = САМАЯ РАННЯЯ бегущая (для label/ETA/одиночного stage_percent).
+            # Параллельные (напр. OCR при graph_building) идут в done_w и в
+            # running_percents (каждая льёт СВОЮ кнопку), но foreground не перебивают —
+            # иначе кнопка graph не заливалась бы (§9 #15).
+            if running_stage is None:
+                running_stage = st
+                running_elapsed = _elapsed
+                running_frac = frac
+                running_is_auto = _is_auto
         elif status == "failed":
             # Самый дальний по пайплайну упавший этап.
             failed_stage = st
@@ -253,6 +264,7 @@ def compute_progress(stages, *, now: Optional[datetime] = None,
         eta_seconds=eta_seconds,
         stage_percent=stage_percent,
         failed_stage=failed_stage,
+        stage_percents=running_percents,
     )
 
 

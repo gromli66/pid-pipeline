@@ -25,8 +25,16 @@ from celery.exceptions import SoftTimeLimitExceeded
 
 from worker.celery_app import celery_app
 from worker.utils.db_helpers import set_diagram_error, check_deleted, upsert_artifact, start_stage, complete_stage, fail_stage
+from app.core import obs
+from app.core.errors import (
+    ArtifactMissingError,
+    ConfigError,
+    PipelineError,
+    SkeletonizationError,
+)
+from app.core.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _save_mask_visualization(
@@ -95,6 +103,15 @@ def task_skeletonize(
     db = SessionLocal()
     stage = None
 
+    # Корреляционный контекст фазы (Волна 3): uid/phase/task_id/attempt → в каждую
+    # строку лога через ContextFilter (Волна 0).
+    obs.bind(
+        uid=str(diagram_uid),
+        phase="skeletonizing",
+        task_id=self.request.id,
+        attempt=self.request.retries,
+    )
+
     try:
         logger.info("Starting skeletonization for %s", diagram_uid)
 
@@ -108,14 +125,19 @@ def task_skeletonize(
         project_loader = get_project_loader()
         project_config = project_loader.load(project_code)
         if not project_config:
-            raise ValueError(f"Project config '{project_code}' not found")
+            raise ConfigError(
+                f"Project config '{project_code}' not found", stage="skeletonizing"
+            )
 
         skel_cfg = project_config.skeleton
 
         # ===== 2. Diagram from DB =====
         diagram = db.query(Diagram).filter(Diagram.uid == diagram_uid).first()
         if not diagram:
-            raise ValueError(f"Diagram {diagram_uid} not found")
+            raise PipelineError(
+                f"Diagram {diagram_uid} not found",
+                stage="skeletonizing", diagram_uid=str(diagram_uid),
+            )
 
         if check_deleted(db, diagram_uid):
             logger.info("Diagram %s is deleted, aborting", diagram_uid)
@@ -147,23 +169,30 @@ def task_skeletonize(
         diagram_dir = storage_path / str(diagram_uid)
 
         # Input files
-        image_path = diagram_dir / "original" / "image.png"
-        if not image_path.exists():
-            for ext in (".jpg", ".jpeg", ".tiff", ".tif"):
-                alt = image_path.with_suffix(ext)
-                if alt.exists():
-                    image_path = alt
-                    break
-            else:
-                raise FileNotFoundError(f"Image not found: {image_path}")
+        with obs.step("load_inputs", logger):
+            image_path = diagram_dir / "original" / "image.png"
+            if not image_path.exists():
+                for ext in (".jpg", ".jpeg", ".tiff", ".tif"):
+                    alt = image_path.with_suffix(ext)
+                    if alt.exists():
+                        image_path = alt
+                        break
+                else:
+                    raise ArtifactMissingError(
+                        f"Image not found: {image_path}", stage="skeletonizing"
+                    )
 
-        pipe_mask_path = diagram_dir / "segmentation" / "pipe_mask.png"
-        if not pipe_mask_path.exists():
-            raise FileNotFoundError(f"Pipe mask not found: {pipe_mask_path}")
+            pipe_mask_path = diagram_dir / "segmentation" / "pipe_mask.png"
+            if not pipe_mask_path.exists():
+                raise ArtifactMissingError(
+                    f"Pipe mask not found: {pipe_mask_path}", stage="skeletonizing"
+                )
 
-        node_mask_path = diagram_dir / "segmentation" / "node_mask.png"
-        if not node_mask_path.exists():
-            raise FileNotFoundError(f"Node mask not found: {node_mask_path}")
+            node_mask_path = diagram_dir / "segmentation" / "node_mask.png"
+            if not node_mask_path.exists():
+                raise ArtifactMissingError(
+                    f"Node mask not found: {node_mask_path}", stage="skeletonizing"
+                )
 
         # Output dirs
         skel_dir = diagram_dir / "skeleton"
@@ -225,7 +254,7 @@ def task_skeletonize(
                                 int(np.sum(bg_mask > 0)), ignore_cats,
                             )
                     except Exception as exc:
-                        logger.warning("Failed to build background_node_mask: %s", exc)
+                        logger.warning("Failed to build background_node_mask: %s", exc, exc_info=True)
 
             logger.info(
                 "Running skeleton extension (simple_mode=%s, bfs_iterations=%d) ...",
@@ -233,30 +262,40 @@ def task_skeletonize(
                 config["bfs_iterations"],
             )
 
-            success = process_single_image(
-                str(image_path),
-                str(pipe_mask_path),
-                str(node_mask_path),
-                protection_mask_path,
-                str(skeleton_output_path),
-                config,
-            )
+            with obs.step("compute", logger):
+                success = process_single_image(
+                    str(image_path),
+                    str(pipe_mask_path),
+                    str(node_mask_path),
+                    protection_mask_path,
+                    str(skeleton_output_path),
+                    config,
+                )
 
-            if not success:
-                raise RuntimeError("Skeleton extension returned failure")
+                if not success:
+                    raise SkeletonizationError(
+                        "Skeleton extension returned failure",
+                        stage="skeletonizing", step="compute",
+                    )
 
         finally:
             try:
                 os.unlink(protection_mask_path)
             except OSError:
-                pass
+                logger.debug("temp protection mask cleanup failed", exc_info=True)
 
         if not skeleton_output_path.exists():
-            raise RuntimeError(f"Skeleton file not created: {skeleton_output_path}")
+            raise SkeletonizationError(
+                f"Skeleton file not created: {skeleton_output_path}",
+                stage="skeletonizing", step="compute",
+            )
 
         skeleton_img = cv2.imread(str(skeleton_output_path), cv2.IMREAD_GRAYSCALE)
         if skeleton_img is None:
-            raise RuntimeError(f"Failed to read skeleton: {skeleton_output_path}")
+            raise SkeletonizationError(
+                f"Failed to read skeleton: {skeleton_output_path}",
+                stage="skeletonizing", step="compute",
+            )
 
         skeleton_pixels = int(np.sum(skeleton_img > 127))
         logger.info("Skeleton created: %d pixels", skeleton_pixels)
@@ -332,11 +371,12 @@ def task_skeletonize(
             )
 
         # ===== 6. Артефакты в БД =====
-        for art_type, art_path in [
-            (ArtifactType.SKELETON, skeleton_output_path),
-            (ArtifactType.SKELETON_MASK, skeleton_mask_output_path),
-        ]:
-            upsert_artifact(db, diagram_uid, art_type, str(art_path), storage_path, "image/png")
+        with obs.step("persist_artifacts", logger):
+            for art_type, art_path in [
+                (ArtifactType.SKELETON, skeleton_output_path),
+                (ArtifactType.SKELETON_MASK, skeleton_mask_output_path),
+            ]:
+                upsert_artifact(db, diagram_uid, art_type, str(art_path), storage_path, "image/png")
 
         # ===== 7. Обновление статуса =====
         diagram.status = DiagramStatus.SKELETONIZED
@@ -357,21 +397,22 @@ def task_skeletonize(
         }
 
     except SoftTimeLimitExceeded:
-        logger.error("Skeletonization timed out for %s", diagram_uid)
-        fail_stage(stage, "Skeletonization timed out (29 min limit)")
+        logger.error("Skeletonization timed out for %s", diagram_uid, exc_info=True)
+        fail_stage(stage, "Skeletonization timed out (29 min limit)", traceback.format_exc())
         set_diagram_error(db, diagram_uid, "Skeletonization timed out (29 min limit)", "skeletonizing")
         raise
 
     except Exception as exc:
-        logger.error("Skeletonization failed for %s: %s", diagram_uid, exc)
-        logger.debug(traceback.format_exc())
+        # exc_info=True + exc= в fail_stage → error_code/failed_step/traceback
+        # доезжают до /stages (DoD §4).
+        logger.error("Skeletonization failed for %s: %s", diagram_uid, exc, exc_info=True)
 
         if self.request.retries < self.max_retries:
-            fail_stage(stage, str(exc)[:500], traceback.format_exc())
+            fail_stage(stage, str(exc)[:500], traceback.format_exc(), exc=exc)
             logger.info("Retrying (%d/%d) ...", self.request.retries + 1, self.max_retries)
             raise self.retry(exc=exc)
 
-        fail_stage(stage, str(exc)[:500], traceback.format_exc())
+        fail_stage(stage, str(exc)[:500], traceback.format_exc(), exc=exc)
         set_diagram_error(db, diagram_uid, str(exc)[:500], "skeletonizing")
         raise
 
@@ -418,6 +459,15 @@ def task_skeletonize_simple(
     db = SessionLocal()
     stage = None
 
+    # Корреляционный контекст фазы (Волна 3): uid/phase/task_id/attempt → в каждую
+    # строку лога через ContextFilter (Волна 0).
+    obs.bind(
+        uid=str(diagram_uid),
+        phase="skeletonizing_simple",
+        task_id=self.request.id,
+        attempt=self.request.retries,
+    )
+
     try:
         logger.info("Starting simple skeletonization for %s", diagram_uid)
 
@@ -430,14 +480,20 @@ def task_skeletonize_simple(
         project_loader = get_project_loader()
         project_config = project_loader.load(project_code)
         if not project_config:
-            raise ValueError(f"Project config '{project_code}' not found")
+            raise ConfigError(
+                f"Project config '{project_code}' not found",
+                stage="skeletonizing_simple",
+            )
 
         skel_cfg = project_config.skeleton
 
         # ===== 2. Diagram from DB =====
         diagram = db.query(Diagram).filter(Diagram.uid == diagram_uid).first()
         if not diagram:
-            raise ValueError(f"Diagram {diagram_uid} not found")
+            raise PipelineError(
+                f"Diagram {diagram_uid} not found",
+                stage="skeletonizing_simple", diagram_uid=str(diagram_uid),
+            )
 
         if check_deleted(db, diagram_uid):
             logger.info("Diagram %s is deleted, aborting", diagram_uid)
@@ -465,29 +521,35 @@ def task_skeletonize_simple(
         diagram_dir = storage_path / str(diagram_uid)
 
         # Input: validated pipe mask
-        pipe_mask_path = diagram_dir / "segmentation" / "pipe_mask_validated.png"
-        if not pipe_mask_path.exists():
-            raise FileNotFoundError(
-                f"Validated pipe mask not found: {pipe_mask_path}"
-            )
+        with obs.step("load_inputs", logger):
+            pipe_mask_path = diagram_dir / "segmentation" / "pipe_mask_validated.png"
+            if not pipe_mask_path.exists():
+                raise ArtifactMissingError(
+                    f"Validated pipe mask not found: {pipe_mask_path}",
+                    stage="skeletonizing_simple",
+                )
 
-        # Node mask (обязательна для skeleton_extension)
-        node_mask_path = diagram_dir / "segmentation" / "node_mask.png"
-        if not node_mask_path.exists():
-            raise FileNotFoundError(
-                f"Node mask not found: {node_mask_path}"
-            )
+            # Node mask (обязательна для skeleton_extension)
+            node_mask_path = diagram_dir / "segmentation" / "node_mask.png"
+            if not node_mask_path.exists():
+                raise ArtifactMissingError(
+                    f"Node mask not found: {node_mask_path}",
+                    stage="skeletonizing_simple",
+                )
 
-        # Original image (нужна для skeleton_extension — adaptive threshold)
-        image_path = diagram_dir / "original" / "image.png"
-        if not image_path.exists():
-            for ext in (".jpg", ".jpeg", ".tiff", ".tif"):
-                alt = image_path.with_suffix(ext)
-                if alt.exists():
-                    image_path = alt
-                    break
-            else:
-                raise FileNotFoundError(f"Original image not found: {image_path}")
+            # Original image (нужна для skeleton_extension — adaptive threshold)
+            image_path = diagram_dir / "original" / "image.png"
+            if not image_path.exists():
+                for ext in (".jpg", ".jpeg", ".tiff", ".tif"):
+                    alt = image_path.with_suffix(ext)
+                    if alt.exists():
+                        image_path = alt
+                        break
+                else:
+                    raise ArtifactMissingError(
+                        f"Original image not found: {image_path}",
+                        stage="skeletonizing_simple",
+                    )
 
         # Output
         skel_dir = diagram_dir / "skeleton"
@@ -552,6 +614,7 @@ def task_skeletonize_simple(
             logger.warning(
                 "Mask refinement failed, using validated mask as-is: %s",
                 refine_exc,
+                exc_info=True,
             )
 
         # ===== 4. Skeleton Extension (simple_mode=True) =====
@@ -600,7 +663,7 @@ def task_skeletonize_simple(
                                 int(np.sum(bg_mask > 0)), ignore_cats,
                             )
                     except Exception as exc:
-                        logger.warning("Failed to build background_node_mask: %s", exc)
+                        logger.warning("Failed to build background_node_mask: %s", exc, exc_info=True)
 
             logger.info(
                 "Running skeleton extension simple_mode "
@@ -610,32 +673,40 @@ def task_skeletonize_simple(
                 config.get("max_line_length", 600),
             )
 
-            success = process_single_image(
-                str(image_path),
-                str(pipe_mask_path),
-                str(node_mask_path),
-                protection_mask_path,
-                str(skeleton_final_path),
-                config,
-            )
+            with obs.step("compute", logger):
+                success = process_single_image(
+                    str(image_path),
+                    str(pipe_mask_path),
+                    str(node_mask_path),
+                    protection_mask_path,
+                    str(skeleton_final_path),
+                    config,
+                )
 
-            if not success:
-                raise RuntimeError("Skeleton extension (simple_mode) returned failure")
+                if not success:
+                    raise SkeletonizationError(
+                        "Skeleton extension (simple_mode) returned failure",
+                        stage="skeletonizing_simple", step="compute",
+                    )
 
         finally:
             try:
                 os.unlink(protection_mask_path)
             except OSError:
-                pass
+                logger.debug("temp protection mask cleanup failed", exc_info=True)
 
         if not skeleton_final_path.exists():
-            raise RuntimeError(
-                f"Skeleton final file not created: {skeleton_final_path}"
+            raise SkeletonizationError(
+                f"Skeleton final file not created: {skeleton_final_path}",
+                stage="skeletonizing_simple", step="compute",
             )
 
         skeleton_img = cv2.imread(str(skeleton_final_path), cv2.IMREAD_GRAYSCALE)
         if skeleton_img is None:
-            raise RuntimeError(f"Failed to read skeleton: {skeleton_final_path}")
+            raise SkeletonizationError(
+                f"Failed to read skeleton: {skeleton_final_path}",
+                stage="skeletonizing_simple", step="compute",
+            )
 
         skeleton_pixels = int(np.sum(skeleton_img > 127))
 
@@ -659,27 +730,28 @@ def task_skeletonize_simple(
             logger.info("Skeleton created: %d pixels", skeleton_pixels)
 
         # ===== 5. Artifact in DB =====
-        # Remove old SKELETON_FINAL if exists
-        old = (
-            db.query(Artifact)
-            .filter(
-                Artifact.diagram_uid == diagram_uid,
-                Artifact.artifact_type == ArtifactType.SKELETON_FINAL,
+        with obs.step("persist_artifacts", logger):
+            # Remove old SKELETON_FINAL if exists
+            old = (
+                db.query(Artifact)
+                .filter(
+                    Artifact.diagram_uid == diagram_uid,
+                    Artifact.artifact_type == ArtifactType.SKELETON_FINAL,
+                )
+                .first()
             )
-            .first()
-        )
-        if old:
-            db.delete(old)
-            db.flush()
+            if old:
+                db.delete(old)
+                db.flush()
 
-        artifact = Artifact(
-            diagram_uid=diagram_uid,
-            artifact_type=ArtifactType.SKELETON_FINAL,
-            file_path=str(skeleton_final_path.relative_to(storage_path)),
-            file_size=skeleton_final_path.stat().st_size,
-            mime_type="image/png",
-        )
-        db.add(artifact)
+            artifact = Artifact(
+                diagram_uid=diagram_uid,
+                artifact_type=ArtifactType.SKELETON_FINAL,
+                file_path=str(skeleton_final_path.relative_to(storage_path)),
+                file_size=skeleton_final_path.stat().st_size,
+                mime_type="image/png",
+            )
+            db.add(artifact)
 
         # Update status → SKELETONIZED_FINAL (ready for junction detection)
         diagram.status = DiagramStatus.SKELETONIZED_FINAL
@@ -698,7 +770,10 @@ def task_skeletonize_simple(
             )
             logger.info("Auto-dispatched junction detection for %s", diagram_uid)
         except Exception as dispatch_exc:
-            logger.warning("Failed to auto-dispatch junction detection: %s", dispatch_exc)
+            logger.warning(
+                "Failed to auto-dispatch junction detection: %s",
+                dispatch_exc, exc_info=True,
+            )
 
         logger.info(
             "Simple skeletonization complete for %s: %d px",
@@ -713,22 +788,23 @@ def task_skeletonize_simple(
         }
 
     except SoftTimeLimitExceeded:
-        logger.error("Simple skeletonization timed out for %s", diagram_uid)
-        fail_stage(stage, "Simple skeletonization timed out")
+        logger.error("Simple skeletonization timed out for %s", diagram_uid, exc_info=True)
+        fail_stage(stage, "Simple skeletonization timed out", traceback.format_exc())
         set_diagram_error(db, diagram_uid, "Simple skeletonization timed out", "skeletonizing_simple")
         raise
 
     except Exception as exc:
+        # exc_info=True + exc= в fail_stage → error_code/failed_step/traceback
+        # доезжают до /stages (DoD §4).
         logger.error(
-            "Simple skeletonization failed for %s: %s", diagram_uid, exc
+            "Simple skeletonization failed for %s: %s", diagram_uid, exc, exc_info=True
         )
-        logger.debug(traceback.format_exc())
 
         if self.request.retries < self.max_retries:
-            fail_stage(stage, str(exc)[:500], traceback.format_exc())
+            fail_stage(stage, str(exc)[:500], traceback.format_exc(), exc=exc)
             raise self.retry(exc=exc)
 
-        fail_stage(stage, str(exc)[:500], traceback.format_exc())
+        fail_stage(stage, str(exc)[:500], traceback.format_exc(), exc=exc)
         set_diagram_error(db, diagram_uid, str(exc)[:500], "skeletonizing_simple")
         raise
 

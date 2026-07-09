@@ -88,6 +88,20 @@ class ConfigError(PipelineError):
     code = "config_invalid"
 
 
+# --- Скелетизация (Волна 3 — skeleton/graph) ---------------------------------
+
+class SkeletonizationError(PipelineError):
+    """Сбой вычисления скелета в COMPUTE-под-шаге.
+
+    Поднимается, когда вход есть, но `skeleton_extension` вернул неуспех, либо
+    скелет не создан/нечитаем. Отличается от `ArtifactMissingError` (нет ВХОДА):
+    здесь вход валиден, но вычисление не дало корректного выхода. Граф своего
+    листа не заводит — внутренние сбои `builder.build()` типизирует `obs.step`.
+    """
+
+    code = "skeletonization_failed"
+
+
 # --- CVAT (Волна 1) ----------------------------------------------------------
 
 class CVATError(PipelineError):

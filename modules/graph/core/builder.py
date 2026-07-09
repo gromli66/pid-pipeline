@@ -15,6 +15,24 @@ from .bridge_preprocessing import preprocess_bridges
 from .visualize import plot_graph_overlay, plot_statistics, plot_isolated_nodes_debug, plot_contact_points_debug
 from .export_json import export_graph_to_json
 
+# --- Наблюдаемость (Волна 3: skeleton/graph): под-под-шаги COMPUTE графа --------
+# builder.py исполняется и в worker'е (app на PYTHONPATH), и в standalone-CLI
+# (`python -m graph ...`). Слой obs импортируется опционально: в CLI → no-op,
+# построение графа не ломается (зеркалит engine.py из Волны 4).
+try:
+    from app.core.logging import get_logger
+    from app.core.obs import step as _obs_step
+    logger = get_logger(__name__)
+except Exception:  # standalone graph: app не на PYTHONPATH
+    import logging as _logging
+    from contextlib import contextmanager
+
+    logger = _logging.getLogger(__name__)
+
+    @contextmanager
+    def _obs_step(_name, _logger, **_fields):
+        yield
+
 
 class GraphBuilder:
     """
@@ -125,10 +143,11 @@ class GraphBuilder:
         if self.verbose:
             print("\n[1/6] Загрузка масок...")
         
-        equipment_mask = load_binary_mask(equipment_mask_path)
-        connection_mask = load_binary_mask(connection_mask_path)
-        bridge_mask = load_binary_mask(bridge_mask_path)
-        skeleton = load_binary_mask(skeleton_path)
+        with _obs_step("load_masks", logger):
+            equipment_mask = load_binary_mask(equipment_mask_path)
+            connection_mask = load_binary_mask(connection_mask_path)
+            bridge_mask = load_binary_mask(bridge_mask_path)
+            skeleton = load_binary_mask(skeleton_path)
         
         # Объединить connection + turn если есть
         if turn_mask_path and Path(turn_mask_path).exists():
@@ -154,13 +173,14 @@ class GraphBuilder:
         if self.verbose:
             print("\n[2/6] Bridge preprocessing...")
         
-        bridge_results = preprocess_bridges(
-            bridge_mask=bridge_mask,
-            connection_mask=connection_mask,
-            skeleton=skeleton,
-            dilation=self.node_dilation,
-            verbose=self.verbose
-        )
+        with _obs_step("bridge_preprocess", logger):
+            bridge_results = preprocess_bridges(
+                bridge_mask=bridge_mask,
+                connection_mask=connection_mask,
+                skeleton=skeleton,
+                dilation=self.node_dilation,
+                verbose=self.verbose
+            )
         
         valid_bridges_mask = bridge_results['valid_bridges_mask']
         invalid_bridges_mask = bridge_results['invalid_bridges_mask']
@@ -271,36 +291,38 @@ class GraphBuilder:
         if self.verbose:
             print("\n[4/6] Подготовка данных для трассировки...")
 
-        skeleton_cleaned, contact_map, bridge_contact_map = prepare_tracing_data(
-            skeleton=skeleton,
-            labeled_equipment=labeled_equipment,
-            labeled_connectors=labeled_connectors,
-            connector_offset=connector_offset,
-            valid_bridges_mask=valid_bridges_mask,
-            bridge_routing=bridge_routing,
-            dilation=self.node_dilation,
-            direction_axis=direction_axis,
-            debug=self.debug
-        )
+        with _obs_step("prepare_tracing", logger):
+            skeleton_cleaned, contact_map, bridge_contact_map = prepare_tracing_data(
+                skeleton=skeleton,
+                labeled_equipment=labeled_equipment,
+                labeled_connectors=labeled_connectors,
+                connector_offset=connector_offset,
+                valid_bridges_mask=valid_bridges_mask,
+                bridge_routing=bridge_routing,
+                dilation=self.node_dilation,
+                direction_axis=direction_axis,
+                debug=self.debug
+            )
         
         # ===== ЭТАП 2: ТРАССИРОВКА РЁБЕР (v3 — динамические узлы) =====
         if self.verbose:
             print("\n[5/6] Трассировка рёбер (v3)...")
         
-        edges, nodes = trace_edges_v3(
-            skeleton=skeleton_cleaned,
-            labeled_equipment=labeled_equipment,
-            labeled_connectors=labeled_connectors,
-            contact_map=contact_map,
-            bridge_contact_map=bridge_contact_map,
-            bridge_routing=bridge_routing,
-            equipment_mask=equipment_mask,
-            connection_mask=updated_connections_mask,
-            annotations=annotations,
-            max_path_length=self.max_path_length,
-            connector_offset=connector_offset,
-            debug=self.debug
-        )
+        with _obs_step("trace_edges", logger):
+            edges, nodes = trace_edges_v3(
+                skeleton=skeleton_cleaned,
+                labeled_equipment=labeled_equipment,
+                labeled_connectors=labeled_connectors,
+                contact_map=contact_map,
+                bridge_contact_map=bridge_contact_map,
+                bridge_routing=bridge_routing,
+                equipment_mask=equipment_mask,
+                connection_mask=updated_connections_mask,
+                annotations=annotations,
+                max_path_length=self.max_path_length,
+                connector_offset=connector_offset,
+                debug=self.debug
+            )
         
         # Вычислить статистики для рёбер
         for edge in edges:
@@ -346,8 +368,8 @@ class GraphBuilder:
                            ensure_ascii=False, default=_np_default)
             if self.verbose:
                 print(f"  [debug] сырой граф до пост-процесса: {_gdir / 'graph_raw_preprocess.json'}")
-        except Exception as _e:
-            print(f"  [debug] не удалось дампнуть сырой граф: {_e}")
+        except Exception:
+            logger.warning("graph: raw preprocess dump failed", exc_info=True)
 
         # ===== ЭТАП 5: NAPRAVLENIE =====
         # Ось/перпендикуляр боксов разрулены на этапе ТРАССИРОВКИ
@@ -434,7 +456,8 @@ class GraphBuilder:
         result: Dict,
         output_dir: str,
         graph_path: str,
-        scheme_name: str = "scheme"
+        scheme_name: str = "scheme",
+        save_visualization: bool = True,
     ) -> None:
         """
         Сохранить результаты построения графа.
@@ -444,6 +467,8 @@ class GraphBuilder:
             output_dir: Директория для визуализаций
             graph_path: Путь для JSON графа
             scheme_name: Имя схемы для файлов
+            save_visualization: рендерить оверлей графа (matplotlib, дорого на
+                полном разрешении). False → пропустить (виз не сохраняется).
         """
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -452,19 +477,22 @@ class GraphBuilder:
         graph_path.parent.mkdir(parents=True, exist_ok=True)
         
         # ===== ВИЗУАЛИЗАЦИЯ =====
-        viz_path = output_dir / f"{scheme_name}_graph.png"
-        plot_graph_overlay(
-            skeleton=result['skeleton_cleaned'],
-            labeled_nodes=result['labeled_nodes'],
-            nodes=result['nodes'],
-            edges=result['edges'],
-            output_path=str(viz_path),
-            original_image=result['original_image'],
-            show_node_labels=self.show_labels,
-            dpi=self.dpi,
-            valid_bridges_mask=result['valid_bridges_mask'],
-            bridge_info=result['bridge_info']
-        )
+        # Рендер оверлея дорогой (matplotlib dpi=150 на полном разрешении) —
+        # делаем только когда виз реально сохраняется (как segmentation/junction).
+        if save_visualization:
+            viz_path = output_dir / f"{scheme_name}_graph.png"
+            plot_graph_overlay(
+                skeleton=result['skeleton_cleaned'],
+                labeled_nodes=result['labeled_nodes'],
+                nodes=result['nodes'],
+                edges=result['edges'],
+                output_path=str(viz_path),
+                original_image=result['original_image'],
+                show_node_labels=self.show_labels,
+                dpi=self.dpi,
+                valid_bridges_mask=result['valid_bridges_mask'],
+                bridge_info=result['bridge_info']
+            )
         
         # ===== СТАТИСТИКА =====
         if self.save_stats:
