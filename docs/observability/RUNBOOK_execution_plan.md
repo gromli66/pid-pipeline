@@ -215,7 +215,7 @@
 | 3 detection | ✅ smoke (§8.6, uid 6e7144d5) | feat/observability | 2026-07-08 |
 | 3 segmentation | ✅ smoke (uid 6e7144d5); baseline+tiling/inference/stitch видны; +фикс протечки контекста (§9 #11) | feat/observability | 2026-07-08 |
 | 3 skeleton/graph | ✅ код+тесты (9 новых: skeleton 5 / graph 4; `pytest tests/observability`); [нужен ты] smoke на стенде + `docker restart pid_worker` | feat/observability | 2026-07-09 |
-| 3 ocr/junction/contours/fxml | ⬜ | | |
+| 3 ocr/junction/contours/fxml (+direction) | ✅ код+тесты (118; +27); смоук стенд uid `6e7144d5`: ocr/junction/direction/fxml ✓, contours [нужен ты] (не фаернул в окне) | feat/observability | 2026-07-09 |
 | 3 upload/frame | ⬜ | | |
 | Бюджеты из БД (CPU-ETA) | ✅ код+тесты (13 новых; `pytest tests/observability`=75); эндпоинт на стенде (GPU-p50); [нужен ты] клиент-ребилд+визуалка, деплой `app/` на бой (§8.8) | feat/observability | 2026-07-09 |
 | Fin недельная сводка | ⬜ | | |
@@ -371,6 +371,8 @@
 | 16 | Перф graph: `builder.save()` безусловно рендерил matplotlib-оверлей (~54с из 72.8с), задача `unlink`'ала его при `save_visualizations=False` | долг перф (вне obs) | рендер оверлея только под флагом | ✅ сделано 2026-07-09 (§8.10): `graph_building` при выкл. флаге ~72.8с→~18с, вывод идентичен |
 | 17 | Windows-клиент: stdout=cp1251 роняет StreamHandler на `→`/emoji в логах (`UnicodeEncodeError`) → строка ТЕРЯЕТСЯ (напр. `logger.info("Refresh: %s → %s")`, `"Status %s: %s → %s"`, `✅/🔍/📊`-сообщения); всплыло на диагностике §8.11 | долг обсёрвабилити (Windows) | `sys.stdout/stderr.reconfigure(encoding="utf-8", errors="replace")` в `ui/main.py` до `basicConfig` | ✅ закрыто 2026-07-09 (`feat/observability`, §8.11): reconfigure utf-8+replace; кириллица и раньше проходила (в cp1251), падали только не-cp1251 символы |
 | 18 | `[SKELETON_CONNECT]` тайминг-логи (skeletonize/find_endpoints/trace/pair_matching/TOTAL) в том же `postprocessing.py` — тоже на `WARNING`, тот же шум (найдено при #13, §0.2) | долг обсёрвабилити (уровень логов) | понизить до `INFO` вместе с #13 (один файл, один дефект, один путь вызова `post_process_mask`) | ✅ закрыто 2026-07-09 (`feat/observability`, §8.12): 5 логов `warning`→`info`, включено в #13 по решению пользователя |
+| 19 | Fault-тесты batch3, мокающие общие нативные модули (torch/cv2/tqdm) на уровне модуля (`sys.modules.setdefault`), текут в сессию pytest — рецидив §9 #2/§8.12 (test_junction уронил test_segmentation: engine.py `with torch.no_grad()` → `TypeError` на no_grad-passthrough-моке) | баг тест-инфры | мок общих модулей — через ФИКСТУРУ с `monkeypatch.setitem` (авто-restore) + свежий import + pop, НЕ на уровне модуля | ✅ исправлено 2026-07-09 (`feat/observability`): test_junction/test_contours на фикстуре-изоляции; 118 passed, сегментация зелёная |
+| 20 | Смонтированная папка репо блокирует `unlink`/`rm`/`mv` из песочницы («Operation not permitted» даже на свежесозданном файле); запись/усечение работают | инфра песочницы (обсёрвабилити-чат) | бэкапы для диффа — в `/tmp`, не в репо; удаление cowork-файлов — через `allow_cowork_file_delete` | ✅ подтверждено 2026-07-09; смоук-логи `batch3_*.log` в корне удаляет пользователь |
 
 Правило: пункт отсюда либо становится своей мини-волной, либо явно закрывается как «не делаем». Молча не растворяется.
 
@@ -523,3 +525,34 @@
 - Существующие тесты не задеты: `test_skeleton_errors` контракт тестирует абстрактно, skeleton_extension не импортит.
 
 **[нужен ты]:** `pytest tests/observability -v` у себя; smoke на стенде — 1 диаграмма через skeletonizing, в логах внутри `step=compute` теперь `step=skeletonize` и `step=bfs` (start/end+dur); при искусственном сбое skeletonize — `step=skeletonize` error в логах, стадия падает как и раньше (`compute`). Деплой: `docker restart pid_worker`. Коммит — ты (§0.1).
+
+---
+
+### 8.14 Волна 3 — ocr/junction/contours/fxml (+direction) (2026-07-09)
+
+Под-волна §8.4 batch 3 закрыта. Пять авто-стадий инструментированы по канону Волн 3–4
+(bind + баннер + `obs.step` LOAD_INPUTS/[LOAD_MODEL]/COMPUTE/[POSTPROCESS]/PERSIST;
+типизация raise в `PipelineError`-потомки; внешний `except` → `exc_info` + `fail_stage(exc=exc)`;
+STL → +traceback). `print` у всех задач = 0 (DoD чист). Пять per-stage коммитов + этот doc.
+
+**Сделано (`feat/observability`):**
+- **OCR** (`e2c73e5`) — `worker/tasks/ocr.py`: `bind(phase=ocr)` + канон load_inputs/compute/persist; raise → `ArtifactMissingError`; STL/except типизированы; `task_recognize_boxes` (ручной П3) — типизация + фикс `except: pass`. `modules/ocr/pipeline_clean.py` (Вариант A, optional-import): COMPUTE = **text_detect/recognize/postfilter** (§1); веса → `ModelLoadError`, образ → `ArtifactMissingError`. **Новый лист `OcrError` (`ocr_failed`)** в `app/core/errors.py` — сбой text_detect/recognize (решено с пользователем: доменный греппаемый код как `skeletonization_failed`; у OCR нет falsy-возврата как у skeleton). `worker_ocr` — тот же `celery_app`, context-reset §9 #11 покрывает. `test_ocr_errors.py` (7).
+- **junction** (`3b42210`) — `worker/tasks/junction.py`: `bind(phase=detecting_junctions)` + канон load_inputs/load_model/compute/postprocess/persist; 8 raise типизированы (Config/Pipeline/ArtifactMissing×6/ModelLoad). `modules/junction_segmentation/inference.py` (Вариант A, решено с пользователем — §1 «проактивно медленное на CPU»): `run_inference` под-под-шаги **tiling/inference/extract_points**; сбой инференса → `InferenceError`, OOM → `GpuOutOfMemoryError` (step=inference). `test_junction_errors.py` (7).
+- **contours** (`4860c66`) — `worker/tasks/contours.py`: `bind(phase=contour_extraction)` + канон; типизация Config/ArtifactMissing. `modules/sam2_contour.py`: `predict_batch` = равномерный цикл (не фазы), поэтому вместо фейковых под-шагов — **прогресс-лог `SAM2 contour node i/N`** (движение на CPU, §52, решено с пользователем) + сбой узла → `InferenceError(step=compute)`. Файл ASCII-only (стр.28) — правки по-английски. `test_contours_errors.py` (5).
+- **direction** (`3fd3e46`) — `worker/tasks/direction.py`: `bind(phase=direction_classification)` + канон load_inputs/compute/persist (без дробления — ~0.69с); типизация Config/ArtifactMissing; `except ImportError`(GPU-cleanup) → `debug`. Модуль `direction_classifier` не тронут (сбой классификации → `None`, обрабатывает задача). `test_direction_errors.py` (4, контрактный).
+- **fxml** (коммит по готовности) — `worker/tasks/graph.py::task_generate_fxml`: `bind(phase=generating_fxml)` + канон load_inputs/compute/persist; типизация Pipeline/ArtifactMissing; 2 non-fatal контур-`except` +`exc_info`. **`task_build_graph` (§8.9) НЕ тронут** (границы задач чистые, якоря проверены на уникальность). `graph_to_fxml.py` не инструментирован (fast). `test_fxml_errors.py` (4, контрактный).
+
+`errors.py` — только один новый лист `OcrError`; остальное переиспользует Волны 0/3/4 (Config/ArtifactMissing/ModelLoad/Inference/GpuOOM/Pipeline).
+
+**Решения (§0.2 — спрошены у пользователя, наследуются):**
+- **OcrError** заведён (by-need); **junction** — модуль инструментирован (tiled-инференс как segmentation); **contours** — под-под-шаги НЕ вешаем (цикл, не фазы) → CPU-видимость = прогресс-лог; **direction/fxml** — только task-level канон (быстрые, модули не трогаем).
+
+**Верификация:**
+- `pytest tests/observability` = **118 passed** (было 91 → +27: ocr 7 / junction 7 / contours 5 / direction 4 / fxml 4). Старые не сломаны.
+- Инструментовка модулей (pipeline_clean/inference/sam2_contour) прогнана стендалон-скриптами в песочнице (реальный `obs`, тяжёлые деп мок): под-под-шаги логируют start/end+`duration_ms`, типизация/passthrough корректны.
+- `py_compile` всех правленых файлов; крупные кириллические .py — UTF-8-safe py-heredoc, НЕ Edit/Write (§8.8); `sam2_contour` — ASCII-guard.
+- **Смоук на стенде (GPU, 2026-07-09, uid `6e7144d5`):** диаграмма до COMPLETED (регрессий нет). В логах: OCR `phase=ocr step=text_detect/recognize/postfilter` (compute 67.5с, recognize ~57с — доминанта видна); junction `step=tiling/inference/extract_points`; direction/fxml `load_inputs/compute/persist`; корреляция `uid/phase/step/task/dur=` в каждой строке. **contours — не фаернул в окне смоука** (не диспатчилась на ре-ране: артефакт был готов ранее; реальный `storage/` — в docker-volume, не под репо) → **[нужен ты]:** прогнать так, чтобы `task_extract_contours` отработала (свежая диаграмма через валидацию перекрёстков), ждём `phase=contour_extraction` + `SAM2 contour node i/N`. Код+тесты+стендалон готовы.
+
+**Находки инструментария → §9 #19 (рецидив протечки sys.modules в fault-тестах — фикс фикстурой-изоляцией) и #20 (смонтированная папка блокирует unlink из песочницы — бэкапы в /tmp, cowork-delete).**
+
+**[нужен ты]:** коммит fxml + этот RUNBOOK; смоук contours (см. выше); деплой на бой — `docker restart pid_worker pid_worker_ocr` (код бинд-маунтится, пересборка не нужна). Смоук-логи `batch3_*.log` в корне — удалить.
