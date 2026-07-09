@@ -102,6 +102,21 @@ class SkeletonizationError(PipelineError):
     code = "skeletonization_failed"
 
 
+# --- OCR (Волна 3 — ocr/junction/contours/fxml) ------------------------------
+
+class OcrError(PipelineError):
+    """Сбой распознавания текста в COMPUTE-под-шаге OCR.
+
+    Поднимается, когда вход валиден (образ/веса на месте), но детекция текста
+    (`text_detect`) или распознавание Surya (`recognize`) упали. Отдельный
+    воркер `worker_ocr` / отдельная стадия → доменный код `ocr_failed` в
+    `/stages` и логах, греппаемый как `skeletonization_failed`. Пустой результат
+    (текста нет) — НЕ ошибка; лист только для сбоя вычисления.
+    """
+
+    code = "ocr_failed"
+
+
 # --- CVAT (Волна 1) ----------------------------------------------------------
 
 class CVATError(PipelineError):
