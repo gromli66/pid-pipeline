@@ -35,6 +35,29 @@ from .model import JunctionSegModel
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 
+# --- Наблюдаемость (Волна 3: §8.4 batch3): под-под-шаги COMPUTE tiled-инференса --
+# inference.py исполняется и в worker'е (app на PYTHONPATH), и standalone-CLI
+# (`python -m junction_segmentation.inference`). Слой obs импортится опционально
+# (как engine.py): в CLI → no-op, инференс не ломается.
+try:
+    from app.core.obs import step as _obs_step
+    from app.core.errors import InferenceError, GpuOutOfMemoryError, PipelineError
+except Exception:  # standalone junction_segmentation: app не на PYTHONPATH
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _obs_step(_name, _logger, **_fields):
+        yield
+
+    class PipelineError(Exception):
+        pass
+
+    class InferenceError(PipelineError):
+        pass
+
+    class GpuOutOfMemoryError(InferenceError):
+        pass
+
 
 def gaussian_blend_mask(size: int, sigma_ratio: float = 0.25) -> np.ndarray:
     sigma = size * sigma_ratio
@@ -128,55 +151,67 @@ def run_inference(
     model.eval()
     t0 = time.time()
 
-    h, w = image.shape[:2]
-    blend = gaussian_blend_mask(tile_size)
+    with _obs_step("tiling", logger):
+        h, w = image.shape[:2]
+        blend = gaussian_blend_mask(tile_size)
 
-    tiled = TiledInferenceDataset(image, pipe_mask, skeleton, tile_size, overlap)
-    logger.info("Image %dx%d → %d tiles", w, h, len(tiled))
+        tiled = TiledInferenceDataset(image, pipe_mask, skeleton, tile_size, overlap)
+        logger.info("Image %dx%d → %d tiles", w, h, len(tiled))
 
-    prob_acc = np.zeros((2, h, w), dtype=np.float32)
-    weight_acc = np.zeros((h, w), dtype=np.float32)
+    with _obs_step("inference", logger):
+        prob_acc = np.zeros((2, h, w), dtype=np.float32)
+        weight_acc = np.zeros((h, w), dtype=np.float32)
 
-    batch_tensors = []
-    batch_positions = []
+        batch_tensors = []
+        batch_positions = []
 
-    for i in tqdm(range(len(tiled)), desc="  Inference", leave=False):
-        tensor, (ty, tx) = tiled.get_tile_tensor(i)
-        batch_tensors.append(tensor)
-        batch_positions.append((ty, tx))
+        try:
+            for i in tqdm(range(len(tiled)), desc="  Inference", leave=False):
+                tensor, (ty, tx) = tiled.get_tile_tensor(i)
+                batch_tensors.append(tensor)
+                batch_positions.append((ty, tx))
 
-        if len(batch_tensors) == batch_size or i == len(tiled) - 1:
-            batch_t = torch.stack(batch_tensors).to(device)
+                if len(batch_tensors) == batch_size or i == len(tiled) - 1:
+                    batch_t = torch.stack(batch_tensors).to(device)
 
-            with torch.amp.autocast("cuda", enabled=use_amp):
-                logits, _ = model(batch_t)
-                hm = torch.sigmoid(logits)
+                    with torch.amp.autocast("cuda", enabled=use_amp):
+                        logits, _ = model(batch_t)
+                        hm = torch.sigmoid(logits)
 
-            hm_np = hm.cpu().numpy()
+                    hm_np = hm.cpu().numpy()
 
-            for j, (ty, tx) in enumerate(batch_positions):
-                ts = tile_size
-                tile_h = min(ts, h - ty)
-                tile_w = min(ts, w - tx)
-                prob_acc[:, ty:ty+tile_h, tx:tx+tile_w] += (
-                    hm_np[j, :, :tile_h, :tile_w] * blend[:tile_h, :tile_w]
-                )
-                weight_acc[ty:ty+tile_h, tx:tx+tile_w] += blend[:tile_h, :tile_w]
+                    for j, (ty, tx) in enumerate(batch_positions):
+                        ts = tile_size
+                        tile_h = min(ts, h - ty)
+                        tile_w = min(ts, w - tx)
+                        prob_acc[:, ty:ty+tile_h, tx:tx+tile_w] += (
+                            hm_np[j, :, :tile_h, :tile_w] * blend[:tile_h, :tile_w]
+                        )
+                        weight_acc[ty:ty+tile_h, tx:tx+tile_w] += blend[:tile_h, :tile_w]
 
-            batch_tensors.clear()
-            batch_positions.clear()
+                    batch_tensors.clear()
+                    batch_positions.clear()
+        except PipelineError:
+            raise
+        except Exception as exc:
+            if "out of memory" in str(exc).lower():
+                raise GpuOutOfMemoryError(
+                    "GPU OOM during junction inference", step="inference", cause=exc
+                ) from exc
+            raise InferenceError(str(exc), step="inference", cause=exc) from exc
 
-    weight_acc = np.maximum(weight_acc, 1e-8)
-    pred_hm = prob_acc / weight_acc  # [2, H, W]
+        weight_acc = np.maximum(weight_acc, 1e-8)
+        pred_hm = prob_acc / weight_acc  # [2, H, W]
 
     # Extract points
-    j_peaks = extract_local_maxima(pred_hm[0], junction_threshold, nms_kernel)
-    b_peaks = extract_local_maxima(pred_hm[1], bridge_threshold, nms_kernel)
+    with _obs_step("extract_points", logger):
+        j_peaks = extract_local_maxima(pred_hm[0], junction_threshold, nms_kernel)
+        b_peaks = extract_local_maxima(pred_hm[1], bridge_threshold, nms_kernel)
 
-    junction_points = [{"x": int(x), "y": int(y), "confidence": round(float(c), 4)}
-                       for x, y, c in sorted(j_peaks, key=lambda p: -p[2])]
-    bridge_points = [{"x": int(x), "y": int(y), "confidence": round(float(c), 4)}
-                     for x, y, c in sorted(b_peaks, key=lambda p: -p[2])]
+        junction_points = [{"x": int(x), "y": int(y), "confidence": round(float(c), 4)}
+                           for x, y, c in sorted(j_peaks, key=lambda p: -p[2])]
+        bridge_points = [{"x": int(x), "y": int(y), "confidence": round(float(c), 4)}
+                         for x, y, c in sorted(b_peaks, key=lambda p: -p[2])]
 
     elapsed = time.time() - t0
 

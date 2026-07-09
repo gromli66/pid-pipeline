@@ -14,6 +14,10 @@ from enum import Enum
 
 logger = logging.getLogger(__name__)
 
+# TTL кэша бюджетов прогресса на клиенте (сек): p50-длительности стадий меняются
+# медленно, тянем раз в ~10 мин на инстанс APIClient (= на сессию).
+_STAGE_DURATIONS_TTL_SEC = 600.0
+
 
 class DiagramStatus(str, Enum):
     """Статусы диаграммы (зеркало backend)."""
@@ -115,6 +119,12 @@ class APIClient:
                 max_keepalive_connections=5,
             ),
         )
+
+        # Кэш бюджетов прогресса (p50 из /api/stats/stage-durations): на сессию,
+        # с TTL — реальный HTTP раз в _STAGE_DURATIONS_TTL_SEC, даже если метод
+        # дёргают на каждом обновлении стадий.
+        self._stage_durations_cache: Optional[Dict[str, float]] = None
+        self._stage_durations_expiry: float = 0.0
 
     def close(self):
         """Закрыть HTTP соединения."""
@@ -318,13 +328,35 @@ class APIClient:
         """Список этапов обработки (ProcessingStage) — для по-этапной изоляции ошибок.
 
         Каждый элемент: stage_type, status (pending/running/completed/failed/skipped),
-        attempt, error_message, error_traceback, started_at, completed_at, duration_seconds.
+        attempt, error_message, error_traceback, started_at, completed_at,
+        duration_seconds, current_step (под-шаг бегущей стадии, Волна B).
         """
         try:
             result = self._request("GET", f"/api/diagrams/{uid}/stages", retries=1)
             return result.get("stages", [])
         except APIError:
             return []
+
+    def get_stage_durations(self) -> Dict[str, float]:
+        """p50 длительностей стадий (сек) по stage_type — бюджеты прогресса.
+
+        Клиентский прогресс/ETA берёт бюджеты с боевого железа (CPU), а не
+        статический GPU-сид (§52). Кэш на сессию с TTL: метод зовут при обновлении
+        стадий (часто), но реальный HTTP — раз в _STAGE_DURATIONS_TTL_SEC.
+        Недоступность/ошибка → {} (progress_model берёт свой _DEFAULT_BUDGETS);
+        кэш не портим, повторим на следующем обновлении.
+        """
+        now = time.monotonic()
+        if self._stage_durations_cache is not None and now < self._stage_durations_expiry:
+            return self._stage_durations_cache
+        try:
+            result = self._request("GET", "/api/stats/stage-durations", retries=1)
+        except APIError:
+            return {}
+        budgets = result.get("budgets", {}) or {}
+        self._stage_durations_cache = budgets
+        self._stage_durations_expiry = now + _STAGE_DURATIONS_TTL_SEC
+        return budgets
 
     def delete_diagram(self, uid: str) -> bool:
         """Удалить диаграмму."""
@@ -407,6 +439,15 @@ class APIClient:
         """Получить URL CVAT задачи."""
         result = self._request("GET", f"/api/cvat/{uid}/cvat-url")
         return result.get("cvat_url", "")
+
+    def reopen_bbox_validation(self, uid: str) -> Dict[str, Any]:
+        """Жёсткий возврат к проверке bbox с позднего этапа (§9 #4).
+
+        Стоп текущей стадии (revoke) + сброс артефактов после `detected` +
+        статус `validating_bbox` + переоткрытие ТОЙ ЖЕ CVAT-job (ручная разметка
+        сохраняется). Возвращает {status, cvat_url, revoked_tasks, deleted_artifacts}.
+        """
+        return self._request("POST", f"/api/cvat/{uid}/reopen-bbox-validation")
 
     def create_cvat_task(self, uid: str) -> Dict[str, Any]:
         """Создать CVAT task для диаграммы."""

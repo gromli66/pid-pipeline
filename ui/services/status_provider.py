@@ -24,6 +24,7 @@ class StatusProvider(QObject):
     """
 
     status_updated = Signal(str, object)  # uid, DiagramStatusInfo
+    stages_updated = Signal(str, object)  # uid, list[stage dict] — для прогресса/ETA
     error_occurred = Signal(str, str)     # uid, error_message
 
     # Статусы, после которых polling останавливается.
@@ -97,6 +98,11 @@ class StatusProvider(QObject):
         for uid in list(self._watched_uids):
             try:
                 status_info = self.api_client.get_status(uid)
+
+                # Стадии — для детерминированного прогресс-бара / окна ошибки.
+                # Эмитим каждый опрос: ETA пересчитывается по elapsed (динамично).
+                self.stages_updated.emit(uid, self.api_client.get_stages(uid))
+
                 last = self._last_status.get(uid)
                 if last != status_info.status:
                     logger.info(
@@ -118,6 +124,7 @@ class StatusProvider(QObject):
             status_info = self.api_client.get_status(uid)
             self._last_status[uid] = status_info.status
             self.status_updated.emit(uid, status_info)
+            self.stages_updated.emit(uid, self.api_client.get_stages(uid))
             return status_info
         except APIError as exc:
             self.error_occurred.emit(uid, exc.message)

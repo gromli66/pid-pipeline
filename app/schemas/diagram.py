@@ -78,8 +78,12 @@ class ProcessingStageResponse(BaseModel):
     stage_type: str
     status: str
     attempt: int
+    celery_task_id: Optional[str] = None
     error_message: Optional[str] = None
     error_traceback: Optional[str] = None
+    error_code: Optional[str] = None
+    failed_step: Optional[str] = None
+    current_step: Optional[str] = None  # Волна B: под-шаг бегущей стадии
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     duration_seconds: Optional[float] = None

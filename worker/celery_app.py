@@ -2,8 +2,15 @@
 Celery Application Configuration.
 """
 
+import logging
 import os
+import sys
+
 from celery import Celery
+from celery.signals import setup_logging as celery_setup_logging, worker_process_init, task_prerun
+
+from app.core.logging import get_logger, setup_logging
+from app.core import obs
 
 # Получаем настройки из переменных окружения
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6380/0")
@@ -70,3 +77,72 @@ celery_app.conf.task_routes = {
     "worker.tasks.ocr.*": {"queue": "ocr"},
     "worker.tasks.contours.*": {"queue": "sam2"},
 }
+
+
+class _StdoutToLogger:
+    """Мост stdout→logging: строки print() уходят в лог (тегируются ContextFilter).
+
+    fileno/isatty делегируются исходному потоку, чтобы не ломать библиотеки,
+    которым нужен реальный дескриптор (subprocess, C-расширения).
+    """
+
+    def __init__(self, logger: logging.Logger, original, level: int = logging.INFO):
+        self._logger = logger
+        self._original = original
+        self._level = level
+        self._buf = ""
+
+    def write(self, msg: str) -> int:
+        self._buf += msg
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            if line.strip():
+                self._logger.log(self._level, line)
+        return len(msg)
+
+    def flush(self) -> None:
+        if self._buf.strip():
+            self._logger.log(self._level, self._buf.rstrip())
+        self._buf = ""
+
+    def isatty(self) -> bool:
+        return False
+
+    def fileno(self) -> int:
+        return self._original.fileno()
+
+    def __getattr__(self, name):
+        return getattr(self._original, name)
+
+
+@celery_setup_logging.connect
+def _use_project_logging(**_kwargs) -> None:
+    """Забрать настройку логов у Celery целиком.
+
+    Без этого Celery хайджекает root-логгер и наш формат/ContextFilter в задачах
+    теряется (видно по смоуку: логи задач в celery-формате, без блока uid=...).
+    """
+    setup_logging()
+
+
+@worker_process_init.connect
+def _init_worker_logging(**_kwargs) -> None:
+    """После fork: наш формат/фильтр логов + мост stdout→logging в каждом воркере.
+
+    Порядок важен: setup_logging() сначала (хендлер захватывает реальный stdout),
+    только потом подменяем sys.stdout — иначе цикл лог→stdout→лог.
+    """
+    setup_logging()
+    sys.stdout = _StdoutToLogger(get_logger("worker.stdout"), sys.stdout)
+
+
+@task_prerun.connect
+def _reset_obs_context(**_kwargs) -> None:
+    """Обнулить корреляционный контекст перед каждой задачей.
+
+    ``contextvars`` в prefork-воркере не сбрасывается между задачами → без этого
+    неинструментированная стадия наследует uid/phase/task предыдущей (смоук Волны 4:
+    skeleton логировался с контекстом detection). Инструментированные задачи затем
+    зовут ``obs.bind`` поверх чистого контекста — поведение то же.
+    """
+    obs.reset()

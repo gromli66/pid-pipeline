@@ -159,7 +159,7 @@ def start_stage(db, diagram_uid: str, stage_type, celery_task_id: str = None):
         celery_task_id: optional Celery task ID
 
     Returns:
-        ProcessingStage instance (already added to session, not yet committed)
+        ProcessingStage instance (RUNNING, закоммичена — видна другим сессиям)
     """
     from app.models.stage import ProcessingStage, StageStatus
 
@@ -183,7 +183,11 @@ def start_stage(db, diagram_uid: str, stage_type, celery_task_id: str = None):
     )
     stage.start()
     db.add(stage)
-    db.flush()
+    # commit, не flush: RUNNING-строка должна быть видна ДРУГОЙ сессии сразу.
+    # reopen-bbox-validation ищет бегущие стадии (RUNNING/PENDING) в отдельной
+    # сессии, чтобы их revoke'нуть. При flush строка не закоммичена всю стадию —
+    # reopen её не видит, ничего не ревокает, задача добегает и корраптит статус.
+    db.commit()
     return stage
 
 
@@ -193,7 +197,68 @@ def complete_stage(stage, metrics: dict = None) -> None:
         stage.complete(metrics)
 
 
-def fail_stage(stage, error: str, tb: str = None) -> None:
-    """Mark a ProcessingStage as FAILED."""
+def fail_stage(stage, error: str, tb: str = None, exc: BaseException = None) -> None:
+    """Mark a ProcessingStage as FAILED.
+
+    If ``exc`` is given, its domain ``error_code`` / ``failed_step`` are recorded
+    (Wave 0). Without ``exc`` the behavior is unchanged: both columns stay NULL.
+    """
     if stage is not None:
-        stage.fail(error[:2000], tb[:10000] if tb else None)
+        if exc is not None:
+            # .code бывает чужим (у SQLAlchemyError свой .code = None/"e3q8"):
+            # берём только непустую строку, иначе — имя типа (аудит 2026-07-09, R6).
+            code = getattr(exc, "code", None)
+            error_code = code if isinstance(code, str) and code else type(exc).__name__
+        else:
+            error_code = None
+        failed_step = getattr(exc, "step", None)
+        stage.fail(
+            error[:2000],
+            tb[:10000] if tb else None,
+            error_code=error_code,
+            failed_step=failed_step,
+        )
+
+
+def persist_failed_attempt(db, stage, error: str, tb: str = None, exc: BaseException = None) -> None:
+    """Зафиксировать FAILED-попытку ПЕРЕД ``raise self.retry(...)`` (аудит 2026-07-09, R2).
+
+    Без коммита строка попытки навсегда остаётся RUNNING (start_stage коммитит
+    RUNNING сразу), а error_code/failed_step/traceback нефинальных попыток
+    теряются. Порядок важен:
+    - ``rollback`` СНАЧАЛА — не тащим незакоммиченные изменения задачи в коммит
+      фейла (и не повторяем прежний баг ocr/contours/direction, где rollback
+      ПОСЛЕ fail_stage стирал сам фейл);
+    - сбой персиста глотаем с warning — он не должен маскировать Retry
+      (иначе задача уйдёт в FAILURE без оставшихся попыток).
+    """
+    try:
+        db.rollback()
+        fail_stage(stage, error, tb, exc=exc)
+        db.commit()
+    except Exception:
+        logger.warning("failed to persist FAILED attempt before retry", exc_info=True)
+
+
+def make_step_reporter(stage_id: int):
+    """Репортер ``current_step`` для ``obs.bind_step_sink`` (Волна B).
+
+    Пишет имя текущего под-шага ОТДЕЛЬНОЙ короткой сессией (UPDATE по id +
+    commit) — транзакцию задачи не трогаем (урок R2: чужой commit/rollback
+    в середине задачи опасен). Ошибки поднимаются наверх — их глотает
+    ``obs.step`` (наблюдаемость не роняет пайплайн).
+    """
+    def _report(step_name: str) -> None:
+        from app.db.session import SessionLocal
+        from app.models.stage import ProcessingStage
+
+        session = SessionLocal()
+        try:
+            session.query(ProcessingStage).filter(
+                ProcessingStage.id == stage_id
+            ).update({"current_step": str(step_name)[:64]})
+            session.commit()
+        finally:
+            session.close()
+
+    return _report

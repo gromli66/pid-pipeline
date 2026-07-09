@@ -4,13 +4,76 @@ CVAT Client - взаимодействие с CVAT API.
 Синхронная версия с persistent connection для Celery workers и API.
 """
 
+import functools
 import httpx
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 
 from app.config import settings
+from app.core.logging import get_logger
+from app.core.errors import (
+    CVATConnectionError,
+    CVATError,
+    CVATExportError,
+    CVATImportError,
+    CVATRequestError,
+    CVATTimeoutError,
+)
+
+logger = get_logger(__name__)
+
+
+@contextmanager
+def _cvat_op(op: str, *, wrap: Optional[type] = None, step: Optional[str] = None, **fields):
+    """httpx-ошибки CVAT → доменные CVAT-типы + строка лога.
+
+    Доменные (CVATError) пропускаем как есть; `wrap` переопределяет тип для
+    конкретной операции (import/export); не-httpx/не-CVAT — наверх (это баги).
+    `step` (если задан) проставляется на исключение → доезжает до `failed_step`
+    строки `cvat_validation` (напр. `upload_media` vs `task_shell`, RUNBOOK §8.4).
+    """
+    t0 = time.perf_counter()
+    try:
+        yield
+    except CVATError:
+        raise
+    except httpx.HTTPStatusError as exc:
+        cls = wrap or CVATRequestError
+        status = exc.response.status_code
+        body = exc.response.text[:200]
+        # op/status/body — в ТЕКСТ сообщения (видно в docker logs) и в extra (для JSON-стока).
+        logger.error(
+            f"cvat.error op={op} → HTTP {status} body={body!r}",
+            extra={"op": op, "event": "error", "code": cls.code,
+                   "http_status": status, "body": exc.response.text[:500],
+                   "duration_ms": round((time.perf_counter() - t0) * 1000), **fields},
+            exc_info=True)
+        # Причина CVAT (body) — и в исключении → доходит до клиента через HTTPException.
+        raise cls(f"CVAT {op} → HTTP {status}: {body}", cause=exc, step=step) from exc
+    except httpx.TimeoutException as exc:
+        cls = wrap or CVATTimeoutError
+        logger.error(f"cvat.error op={op} → timeout",
+                     extra={"op": op, "event": "error", "code": cls.code, **fields}, exc_info=True)
+        raise cls(f"CVAT {op}: timeout", cause=exc, step=step) from exc
+    except httpx.RequestError as exc:
+        cls = wrap or CVATConnectionError
+        logger.error(f"cvat.error op={op} → {exc}",
+                     extra={"op": op, "event": "error", "code": cls.code, **fields}, exc_info=True)
+        raise cls(f"CVAT {op}: {exc}", cause=exc, step=step) from exc
+
+
+def _cvat_call(op: str, *, wrap: Optional[type] = None):
+    """Декоратор: обернуть сетевой метод клиента в _cvat_op."""
+    def deco(fn):
+        @functools.wraps(fn)
+        def inner(*args, **kwargs):
+            with _cvat_op(op, wrap=wrap):
+                return fn(*args, **kwargs)
+        return inner
+    return deco
 
 
 @dataclass
@@ -77,6 +140,7 @@ class CVATClient:
 
         return headers
 
+    @_cvat_call("login")
     def login(self, username: str, password: str) -> str:
         """Авторизация в CVAT."""
         response = self._client.post(
@@ -197,6 +261,7 @@ class CVATClient:
         response.raise_for_status()
         return len(missing)
 
+    @_cvat_call("get_or_create_project")
     def get_or_create_project(
         self,
         name: str,
@@ -226,43 +291,90 @@ class CVATClient:
         name: str,
         image_path: Path,
     ) -> Tuple[int, int]:
-        """Создать task и загрузить изображение."""
+        """Создать task и загрузить изображение.
+
+        Две фазы обёрнуты РАЗДЕЛЬНО (RUNBOOK §8.4): оболочка задачи (POST /tasks)
+        vs загрузка медиа (POST /tasks/{id}/data). Так `failed_step` строки
+        `cvat_validation` отличает `upload_media` (CVAT отвергает большой файл —
+        реальная жалоба) от общего сбоя создания.
+        """
         image_path = Path(image_path)
 
-        # 1. Создаём task
-        response = self._client.post(
-            "/api/tasks",
-            headers={**self._get_headers(), "Content-Type": "application/json"},
-            json={
-                "name": name,
-                "project_id": project_id,
-            },
-        )
-        response.raise_for_status()
-        task_id = response.json()["id"]
-
-        # 2. Загружаем изображение (увеличенный timeout)
-        headers = self._get_headers()
-
-        with open(image_path, "rb") as f:
-            files = {"client_files[0]": (image_path.name, f, "image/png")}
+        # 1. Создаём оболочку task (POST /tasks)
+        with _cvat_op("create_task", step="task_shell"):
             response = self._client.post(
-                f"/api/tasks/{task_id}/data",
-                headers=headers,
-                files=files,
-                # use_cache=true — чанки генерируются лениво, по запросу,
-                # а не все сразу при создании задачи. Для больших цветных схем
-                # (~15000x7000) это резко ускоряет создание task.
-                data={"image_quality": 70, "use_cache": "true"},
-                timeout=self.timeout * 2,
+                "/api/tasks",
+                headers={**self._get_headers(), "Content-Type": "application/json"},
+                json={
+                    "name": name,
+                    "project_id": project_id,
+                },
             )
             response.raise_for_status()
+            task_id = response.json()["id"]
 
-        # 3. Ждём создания job
+        # 2. Загружаем изображение (POST /tasks/{id}/data, увеличенный timeout).
+        #    Болевой под-шаг upload_media: большой файл → Pillow/CVAT может отвергнуть.
+        with _cvat_op("upload_media", step="upload_media"):
+            headers = self._get_headers()
+            with open(image_path, "rb") as f:
+                files = {"client_files[0]": (image_path.name, f, "image/png")}
+                response = self._client.post(
+                    f"/api/tasks/{task_id}/data",
+                    headers=headers,
+                    files=files,
+                    # use_cache=true — чанки генерируются лениво, по запросу,
+                    # а не все сразу при создании задачи. Для больших цветных схем
+                    # (~15000x7000) это резко ускоряет создание task.
+                    data={"image_quality": 70, "use_cache": "true"},
+                    timeout=self.timeout * 2,
+                )
+                response.raise_for_status()
+
+            # CVAT принимает /data (202) и обрабатывает медиа в фоне; отказ
+            # (большой файл → Pillow) виден как state=Failed → ловим как upload_media
+            # с причиной CVAT, иначе он всплыл бы слепым таймаутом job (§9 #8, вар. b).
+            self._wait_for_data(task_id)
+
+        # 3. Ждём создания job (свой _cvat_call-wrapper)
         job_id = self._wait_for_job(task_id)
 
         return task_id, job_id
 
+    def _wait_for_data(
+        self,
+        task_id: int,
+        max_attempts: int = 60,
+        delay: float = 1.0,
+    ) -> None:
+        """Дождаться завершения фоновой обработки медиа после POST /data.
+
+        CVAT принимает /data (202) и обрабатывает изображение в rq-воркере;
+        отказ (например, большой файл → Pillow) виден в
+        ``GET /api/tasks/{id}/status`` как ``state=Failed``. Ловим его как
+        ``upload_media`` с причиной от CVAT (последняя строка traceback), иначе
+        сбой всплыл бы слепым таймаутом ``_wait_for_job`` (RUNBOOK §9 #8, b).
+        Вызывается ВНУТРИ ``_cvat_op("upload_media")`` — httpx-ошибки опроса тоже
+        атрибутируются на upload_media.
+        """
+        for _ in range(max_attempts):
+            response = self._client.get(
+                f"/api/tasks/{task_id}/status",
+                headers=self._get_headers(),
+            )
+            response.raise_for_status()
+            data = response.json()
+            state = data.get("state")
+            if state == "Failed":
+                msg = (data.get("message") or "").strip()
+                reason = msg.splitlines()[-1] if msg else "unknown"
+                raise CVATRequestError(f"CVAT rejected media: {reason}", step="upload_media")
+            if state == "Finished":
+                return
+            time.sleep(delay)
+        # Терминального состояния не дождались — не роняем ложно, пусть решает _wait_for_job.
+
+    @_cvat_call("wait_for_job")
     def _wait_for_job(
         self,
         task_id: int,
@@ -284,8 +396,9 @@ class CVATClient:
 
             time.sleep(delay)
 
-        raise TimeoutError(f"Job for task {task_id} not created after {max_attempts} attempts")
+        raise CVATTimeoutError(f"Job for task {task_id} not created after {max_attempts} attempts")
 
+    @_cvat_call("import_annotations", wrap=CVATImportError)
     def import_annotations(
         self,
         task_id: int,
@@ -308,6 +421,7 @@ class CVATClient:
             )
             response.raise_for_status()
 
+    @_cvat_call("export_annotations", wrap=CVATExportError)
     def export_annotations(
         self,
         task_id: int,
@@ -341,7 +455,7 @@ class CVATClient:
 
         # 202 = экспорт запущен, 200/201 = уже готов
         if response.status_code not in (200, 201, 202):
-            raise Exception(f"Failed to request export: {response.status_code} {response.text}")
+            raise CVATExportError(f"Failed to request export: {response.status_code} {response.text[:200]}")
 
         # Шаг 2: Ждём готовности и скачиваем
         max_attempts = 60
@@ -369,12 +483,12 @@ class CVATClient:
                 # CVAT 2.25: экспорт ещё готовится — это не ошибка, ждём дальше
                 continue
             else:
-                raise Exception(f"Export download failed: {response.status_code} {response.text}")
+                raise CVATExportError(f"Export download failed: {response.status_code} {response.text[:200]}")
         else:
-            raise TimeoutError(f"Export not ready after {max_attempts} attempts")
+            raise CVATExportError(f"Export not ready after {max_attempts} attempts")
 
         if len(response.content) < 50:
-            raise Exception(f"Export returned empty: {len(response.content)} bytes")
+            raise CVATExportError(f"Export returned empty: {len(response.content)} bytes")
 
         if output_path is None:
             output_path = Path(f"task_{task_id}_annotations.zip")

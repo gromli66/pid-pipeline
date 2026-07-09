@@ -18,6 +18,7 @@ from PySide6.QtCore import Qt, Slot, QTimer
 from PySide6.QtGui import QAction
 
 from ui.services.api_client import APIClient, APIError, DiagramStatus
+from ui.services.progress_model import substep_status_line
 from ui.services.status_provider import StatusProvider
 from ui.widgets.diagram_list import DiagramListWidget
 from ui.widgets.diagram_workspace import DiagramWorkspace
@@ -43,6 +44,7 @@ class MainWindow(QMainWindow):
         self.api_client = APIClient(os.environ.get("PID_API_URL", "http://localhost:8000"))
         self.status_provider = StatusProvider(self.api_client, parent=self)
         self.status_provider.status_updated.connect(self._on_status_updated)
+        self.status_provider.stages_updated.connect(self._on_stages_updated)
         self.status_provider.error_occurred.connect(self._on_status_error)
 
         # State
@@ -123,6 +125,12 @@ class MainWindow(QMainWindow):
         self.statusbar = QStatusBar()
         self.setStatusBar(self.statusbar)
 
+        # Подстадия бегущей авто-стадии открытой диаграммы (Волна B, current_step):
+        # «Выделение труб · прогон модели» — слева от значка API.
+        self.substep_label = QLabel()
+        self.substep_label.setStyleSheet("color: gray;")
+        self.statusbar.addPermanentWidget(self.substep_label)
+
         self.connection_label = QLabel()
         self.statusbar.addPermanentWidget(self.connection_label)
 
@@ -136,6 +144,7 @@ class MainWindow(QMainWindow):
         self.workspace.load_diagram(uid, name)
         self.stack.setCurrentIndex(1)
         self.action_upload.setVisible(False)
+        self.substep_label.clear()  # не показывать подстадию прошлой диаграммы
         self.setWindowTitle(f"{APP_TITLE} — {name}")
 
     @Slot()
@@ -143,6 +152,7 @@ class MainWindow(QMainWindow):
         """Вернуться в список диаграмм."""
         self.stack.setCurrentIndex(0)
         self.action_upload.setVisible(True)
+        self.substep_label.clear()
         self.setWindowTitle(APP_TITLE)
         self.diagram_list.load_diagrams()
 
@@ -164,6 +174,8 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def _show_progress(self, message: str):
+        # Ad-hoc операции (загрузка и т.п.) — неопределённый «бегунок».
+        self.progress_bar.setRange(0, 0)
         self.progress_label.setText(message)
         self.progress_frame.show()
 
@@ -236,6 +248,17 @@ class MainWindow(QMainWindow):
     def _on_status_updated(self, uid: str, status_info):
         if self.stack.currentIndex() == 0:
             self.diagram_list.load_diagrams()
+
+    @Slot(str, object)
+    def _on_stages_updated(self, uid: str, stages):
+        """Подстадия бегущей авто-стадии → статусбар у значка API (Волна B).
+
+        Только для диаграммы, открытой в workspace; ручные стадии/нет бегущей →
+        пустая строка (label очищается).
+        """
+        if self.stack.currentIndex() != 1 or uid != getattr(self.workspace, "_uid", None):
+            return
+        self.substep_label.setText(substep_status_line(stages))
 
     @Slot(str, str)
     def _on_status_error(self, uid: str, error_message: str):

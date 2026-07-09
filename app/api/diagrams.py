@@ -25,8 +25,13 @@ from app.schemas.diagram import (
 from app.services.storage import StorageService
 from app.services.project_loader import get_project_loader, ProjectLoader
 from app.config import settings
+from app.core import obs
+from app.core.errors import InvalidUploadError, PipelineError
+from app.core.logging import get_logger
 
 router = APIRouter()
+
+logger = get_logger(__name__)
 
 MAX_FILE_SIZE = 200 * 1024 * 1024  # 200MB
 
@@ -131,6 +136,12 @@ async def upload_diagram(
     db.add(diagram)
     await db.flush()
 
+    obs.bind(uid=str(diagram.uid), phase="upload")
+    logger.info(
+        "Starting upload for %s (project=%s, pdf=%s, filename=%s)",
+        diagram.uid, project_code, is_pdf, sanitized_name,
+    )
+
     # Сохраняем файл. PDF → рендерим выбранную страницу в PNG @300 DPI
     # (модели обучались на 300 DPI сканах); изображение сохраняем как есть.
     storage = StorageService()
@@ -144,61 +155,77 @@ async def upload_diagram(
                 status_code=500,
                 detail="PDF upload requires PyMuPDF on the server (pip install PyMuPDF).",
             )
-        pdf_bytes = await file.read()
-        try:
-            png_bytes, dimensions, _n_pages = render_pdf_page_to_png(
-                pdf_bytes,
-                page=page,
-                dpi=settings.PDF_RENDER_DPI,
-                max_side=settings.PDF_MAX_SIDE,
+
+    try:
+        with obs.step("compute", logger):
+            if is_pdf:
+                pdf_bytes = await file.read()
+                try:
+                    png_bytes, dimensions, _n_pages = render_pdf_page_to_png(
+                        pdf_bytes,
+                        page=page,
+                        dpi=settings.PDF_RENDER_DPI,
+                        max_side=settings.PDF_MAX_SIDE,
+                    )
+                except ValueError as exc:
+                    raise InvalidUploadError(
+                        f"PDF render failed: {exc}", stage="upload", diagram_uid=str(diagram.uid),
+                    ) from exc
+            else:
+                # Нормализуем любое изображение в канонический original/image.png,
+                # чтобы этап рамки и все downstream-этапы работали с одним именем файла
+                # (раньше JPG/TIFF сохранялись как image.jpg и часть читателей их не находила).
+                import io as _io
+                from PIL import Image as _Image
+                img_bytes = await file.read()
+                try:
+                    im = _Image.open(_io.BytesIO(img_bytes))
+                    dimensions = im.size
+                    if im.mode not in ("RGB", "L"):
+                        im = im.convert("RGB")
+                    buf = _io.BytesIO()
+                    im.save(buf, format="PNG")
+                    png_bytes = buf.getvalue()
+                except Exception as exc:
+                    raise InvalidUploadError(
+                        f"Invalid image: {exc}", stage="upload", diagram_uid=str(diagram.uid),
+                    ) from exc
+
+        with obs.step("persist_artifacts", logger):
+            if is_pdf:
+                # PNG — основное изображение pipeline (downstream читает original/image.png)
+                file_path, file_size = await storage.save_file(
+                    diagram.uid, "original", "image.png", png_bytes
+                )
+                # Исходный PDF сохраняем рядом (на случай перерендера в другом DPI)
+                await storage.save_file(diagram.uid, "original", "source.pdf", pdf_bytes)
+                mime_type = "image/png"
+            else:
+                file_path, file_size = await storage.save_file(
+                    diagram.uid, "original", "image.png", png_bytes
+                )
+                mime_type = "image/png"
+
+            diagram.image_width = dimensions[0] if dimensions else None
+            diagram.image_height = dimensions[1] if dimensions else None
+
+            # Артефакт (для PDF указывает на отрендеренный PNG)
+            artifact = Artifact(
+                diagram_uid=diagram.uid,
+                artifact_type=ArtifactType.ORIGINAL_IMAGE,
+                file_path=file_path,
+                file_size=file_size,
+                mime_type=mime_type,
             )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=f"PDF render failed: {exc}")
+            db.add(artifact)
 
-        # PNG — основное изображение pipeline (downstream читает original/image.png)
-        file_path, file_size = await storage.save_file(
-            diagram.uid, "original", "image.png", png_bytes
-        )
-        # Исходный PDF сохраняем рядом (на случай перерендера в другом DPI)
-        await storage.save_file(diagram.uid, "original", "source.pdf", pdf_bytes)
-        mime_type = "image/png"
-    else:
-        # Нормализуем любое изображение в канонический original/image.png,
-        # чтобы этап рамки и все downstream-этапы работали с одним именем файла
-        # (раньше JPG/TIFF сохранялись как image.jpg и часть читателей их не находила).
-        import io as _io
-        from PIL import Image as _Image
-        img_bytes = await file.read()
-        try:
-            im = _Image.open(_io.BytesIO(img_bytes))
-            dimensions = im.size
-            if im.mode not in ("RGB", "L"):
-                im = im.convert("RGB")
-            buf = _io.BytesIO()
-            im.save(buf, format="PNG")
-            png_bytes = buf.getvalue()
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid image: {exc}")
-        file_path, file_size = await storage.save_file(
-            diagram.uid, "original", "image.png", png_bytes
-        )
-        mime_type = "image/png"
+            await db.commit()
+            await db.refresh(diagram)
 
-    diagram.image_width = dimensions[0] if dimensions else None
-    diagram.image_height = dimensions[1] if dimensions else None
-
-    # Артефакт (для PDF указывает на отрендеренный PNG)
-    artifact = Artifact(
-        diagram_uid=diagram.uid,
-        artifact_type=ArtifactType.ORIGINAL_IMAGE,
-        file_path=file_path,
-        file_size=file_size,
-        mime_type=mime_type,
-    )
-    db.add(artifact)
-
-    await db.commit()
-    await db.refresh(diagram)
+    except InvalidUploadError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PipelineError as exc:
+        raise HTTPException(status_code=500, detail=f"Upload processing failed: {exc}") from exc
 
     return DiagramUploadResponse(
         uid=diagram.uid,
@@ -301,8 +328,12 @@ async def get_diagram_stages(uid: UUID, db: AsyncSession = Depends(get_async_db)
                 stage_type=stage.stage_type.value,
                 status=stage.status.value,
                 attempt=stage.attempt,
+                celery_task_id=stage.celery_task_id,
                 error_message=stage.error_message,
                 error_traceback=stage.error_traceback,
+                error_code=stage.error_code,
+                failed_step=stage.failed_step,
+                current_step=stage.current_step,
                 started_at=stage.started_at,
                 completed_at=stage.completed_at,
                 duration_seconds=stage.duration_seconds,

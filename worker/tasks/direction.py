@@ -33,9 +33,14 @@ from worker.utils.db_helpers import (
     start_stage,
     complete_stage,
     fail_stage,
+    persist_failed_attempt,
+    make_step_reporter,
 )
+from app.core import obs
+from app.core.errors import ArtifactMissingError, ConfigError, PipelineError
+from app.core.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _abs_weights(path_str: str) -> Path:
@@ -73,6 +78,16 @@ def task_classify_direction(self, diagram_uid: str):
 
     db = SessionLocal()
     stage = None
+
+    # Корреляционный контекст фазы (Волна 3): uid/phase/task_id/attempt → в каждую
+    # строку лога через ContextFilter (Волна 0).
+    obs.bind(
+        uid=str(diagram_uid),
+        phase="direction_classification",
+        task_id=self.request.id,
+        attempt=self.request.retries,
+    )
+
     try:
         # ===== 1. Диаграмма, базовые проверки =====
         diagram = db.query(Diagram).filter(Diagram.uid == diagram_uid).first()
@@ -88,7 +103,10 @@ def task_classify_direction(self, diagram_uid: str):
         loader = get_project_loader()
         project_config = loader.load(diagram.project_code)
         if not project_config:
-            raise RuntimeError(f"Project config not found for '{diagram.project_code}'")
+            raise ConfigError(
+                f"Project config not found for '{diagram.project_code}'",
+                stage="direction_classification",
+            )
 
         dc_cfg = project_config.direction_classification
         if not dc_cfg.enabled:
@@ -118,25 +136,27 @@ def task_classify_direction(self, diagram_uid: str):
             db, diagram_uid, StageType.DIRECTION_CLASSIFICATION,
             celery_task_id=self.request.id,
         )
+        obs.bind_step_sink(make_step_reporter(stage.id))  # current_step → клиент (Волна B)
         logger.info("Direction classification started for %s", diagram_uid)
 
         # ===== 4. Входные файлы =====
-        coco_path = diagram_dir / "detection" / "coco_validated.json"
-        if not coco_path.exists():
-            raise FileNotFoundError(f"COCO validated not found: {coco_path}")
+        with obs.step("load_inputs", logger):
+            coco_path = diagram_dir / "detection" / "coco_validated.json"
+            if not coco_path.exists():
+                raise ArtifactMissingError(f"COCO validated not found: {coco_path}", stage="direction_classification")
 
-        image_path = diagram_dir / "original" / "image.png"
-        if not image_path.exists():
-            for ext in (".jpg", ".jpeg", ".tiff", ".tif"):
-                alt = image_path.with_suffix(ext)
-                if alt.exists():
-                    image_path = alt
-                    break
-        if not image_path.exists():
-            raise FileNotFoundError(f"Original image not found in {diagram_dir / 'original'}")
+            image_path = diagram_dir / "original" / "image.png"
+            if not image_path.exists():
+                for ext in (".jpg", ".jpeg", ".tiff", ".tif"):
+                    alt = image_path.with_suffix(ext)
+                    if alt.exists():
+                        image_path = alt
+                        break
+            if not image_path.exists():
+                raise ArtifactMissingError(f"Original image not found in {diagram_dir / 'original'}", stage="direction_classification")
 
-        with open(coco_path, "r", encoding="utf-8") as f:
-            coco_data = json.load(f)
+            with open(coco_path, "r", encoding="utf-8") as f:
+                coco_data = json.load(f)
 
         categories = {c["id"]: c["name"] for c in coco_data.get("categories", [])}
 
@@ -157,23 +177,24 @@ def task_classify_direction(self, diagram_uid: str):
             return {"status": "empty", "diagram_uid": diagram_uid, "classified": 0}
 
         # ===== 6. Инференс =====
-        import cv2
-        from modules.direction_classifier import DirectionClassifier
+        with obs.step("compute", logger):
+            import cv2
+            from modules.direction_classifier import DirectionClassifier
 
-        image = cv2.imread(str(image_path))
-        if image is None:
-            raise RuntimeError(f"Failed to read image: {image_path}")
+            image = cv2.imread(str(image_path))
+            if image is None:
+                raise ArtifactMissingError(f"Failed to read image: {image_path}", stage="direction_classification")
 
-        from worker.utils.device import resolve_device
-        clf = DirectionClassifier(
-            weights=weights_path,
-            device=resolve_device(),
-            img_size=dc_cfg.img_size,
-            pad_frac=dc_cfg.pad_frac,
-        )
+            from worker.utils.device import resolve_device
+            clf = DirectionClassifier(
+                weights=weights_path,
+                device=resolve_device(),
+                img_size=dc_cfg.img_size,
+                pad_frac=dc_cfg.pad_frac,
+            )
 
-        bboxes = [ann["bbox"] for ann in target_anns]
-        preds = clf.predict_batch(image, bboxes)
+            bboxes = [ann["bbox"] for ann in target_anns]
+            preds = clf.predict_batch(image, bboxes)
 
         # ===== 7. Запись результатов в coco (на месте) =====
         classified = 0
@@ -200,13 +221,14 @@ def task_classify_direction(self, diagram_uid: str):
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
         except ImportError:
-            pass
+            logger.debug("torch not available for GPU cleanup", exc_info=True)
 
         # ===== 9. Атомарное сохранение coco_validated.json =====
-        tmp_path = coco_path.with_suffix(".json.tmp")
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(coco_data, f, ensure_ascii=False, indent=2)
-        tmp_path.replace(coco_path)
+        with obs.step("persist_artifacts", logger):
+            tmp_path = coco_path.with_suffix(".json.tmp")
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(coco_data, f, ensure_ascii=False, indent=2)
+            tmp_path.replace(coco_path)
 
         stats = {
             "targets": len(target_anns),
@@ -224,23 +246,22 @@ def task_classify_direction(self, diagram_uid: str):
         return {"status": "success", "diagram_uid": diagram_uid, "stats": stats}
 
     except SoftTimeLimitExceeded:
-        logger.error("[%s] Direction classification timed out", diagram_uid)
-        fail_stage(stage, "Direction classification timed out (9 min limit)")
+        logger.error("[%s] Direction classification timed out", diagram_uid, exc_info=True)
+        fail_stage(stage, "Direction classification timed out (9 min limit)", traceback.format_exc())
         set_diagram_error(db, diagram_uid, "Direction classification timed out", "direction_classification")
         db.rollback()
         raise
 
     except Exception as exc:
-        logger.error(
-            "[%s] Direction classification failed: %s\n%s",
-            diagram_uid, exc, traceback.format_exc(),
-        )
+        # exc_info=True + exc= в fail_stage → error_code/failed_step/traceback
+        # доезжают до /stages (DoD §4).
+        logger.error("[%s] Direction classification failed: %s", diagram_uid, exc, exc_info=True)
         if self.request.retries < self.max_retries:
-            fail_stage(stage, str(exc)[:500], traceback.format_exc())
-            db.rollback()
+            # rollback теперь ВНУТРИ (и ДО fail_stage): прежний порядок стирал сам фейл
+            persist_failed_attempt(db, stage, str(exc)[:500], traceback.format_exc(), exc=exc)
             raise self.retry(exc=exc)
 
-        fail_stage(stage, str(exc)[:500], traceback.format_exc())
+        fail_stage(stage, str(exc)[:500], traceback.format_exc(), exc=exc)
         set_diagram_error(db, diagram_uid, str(exc)[:500], "direction_classification")
         db.rollback()
         raise

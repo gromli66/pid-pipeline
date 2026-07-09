@@ -16,9 +16,17 @@ import numpy as np
 from celery.exceptions import SoftTimeLimitExceeded
 
 from worker.celery_app import celery_app
-from worker.utils.db_helpers import set_diagram_error, check_deleted, start_stage, complete_stage, fail_stage
+from worker.utils.db_helpers import set_diagram_error, check_deleted, start_stage, complete_stage, fail_stage, persist_failed_attempt, make_step_reporter
+from app.core import obs
+from app.core.errors import (
+    ArtifactMissingError,
+    ConfigError,
+    ModelLoadError,
+    PipelineError,
+)
+from app.core.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @celery_app.task(
@@ -50,6 +58,15 @@ def task_detect_junctions(
     db = SessionLocal()
     stage = None
 
+    # Корреляционный контекст фазы (Волна 3): uid/phase/task_id/attempt → в каждую
+    # строку лога через ContextFilter (Волна 0).
+    obs.bind(
+        uid=str(diagram_uid),
+        phase="detecting_junctions",
+        task_id=self.request.id,
+        attempt=self.request.retries,
+    )
+
     try:
         logger.info("Starting junction detection for %s", diagram_uid)
 
@@ -70,14 +87,20 @@ def task_detect_junctions(
         project_loader = get_project_loader()
         project_config = project_loader.load(project_code)
         if not project_config:
-            raise ValueError(f"Project config '{project_code}' not found")
+            raise ConfigError(
+                f"Project config '{project_code}' not found",
+                stage="detecting_junctions",
+            )
 
         jcfg = project_config.junction_seg
 
         # ===== 2. Diagram from DB =====
         diagram = db.query(Diagram).filter(Diagram.uid == diagram_uid).first()
         if not diagram:
-            raise ValueError(f"Diagram {diagram_uid} not found")
+            raise PipelineError(
+                f"Diagram {diagram_uid} not found",
+                stage="detecting_junctions", diagram_uid=str(diagram_uid),
+            )
 
         if check_deleted(db, diagram_uid):
             logger.info("Diagram %s is deleted, aborting", diagram_uid)
@@ -103,6 +126,7 @@ def task_detect_junctions(
         # ===== Processing Stage tracking =====
         from app.models.stage import StageType
         stage = start_stage(db, diagram_uid, StageType.JUNCTION_CLASSIFICATION, celery_task_id=self.request.id)
+        obs.bind_step_sink(make_step_reporter(stage.id))  # current_step → клиент (Волна B)
 
         diagram.status = DiagramStatus.DETECTING_JUNCTIONS
         db.commit()
@@ -111,67 +135,69 @@ def task_detect_junctions(
         storage_path = Path(os.getenv("STORAGE_PATH", "./storage/diagrams"))
         diagram_dir = storage_path / str(diagram_uid)
 
-        image_path = diagram_dir / "original" / "image.png"
-        if not image_path.exists():
-            for ext in (".jpg", ".jpeg", ".tiff", ".tif"):
-                alt = image_path.with_suffix(ext)
-                if alt.exists():
-                    image_path = alt
-                    break
-            else:
-                raise FileNotFoundError(f"Image not found: {image_path}")
+        with obs.step("load_inputs", logger):
+            image_path = diagram_dir / "original" / "image.png"
+            if not image_path.exists():
+                for ext in (".jpg", ".jpeg", ".tiff", ".tif"):
+                    alt = image_path.with_suffix(ext)
+                    if alt.exists():
+                        image_path = alt
+                        break
+                else:
+                    raise ArtifactMissingError(f"Image not found: {image_path}", stage="detecting_junctions")
 
-        # Prefer refined > validated > original pipe mask
-        pipe_mask_path = diagram_dir / "segmentation" / "pipe_mask_refined.png"
-        if not pipe_mask_path.exists():
-            pipe_mask_path = diagram_dir / "segmentation" / "pipe_mask_validated.png"
-        if not pipe_mask_path.exists():
-            pipe_mask_path = diagram_dir / "segmentation" / "pipe_mask.png"
-        if not pipe_mask_path.exists():
-            raise FileNotFoundError(f"Pipe mask not found in {diagram_dir / 'segmentation'}")
+            # Prefer refined > validated > original pipe mask
+            pipe_mask_path = diagram_dir / "segmentation" / "pipe_mask_refined.png"
+            if not pipe_mask_path.exists():
+                pipe_mask_path = diagram_dir / "segmentation" / "pipe_mask_validated.png"
+            if not pipe_mask_path.exists():
+                pipe_mask_path = diagram_dir / "segmentation" / "pipe_mask.png"
+            if not pipe_mask_path.exists():
+                raise ArtifactMissingError(f"Pipe mask not found in {diagram_dir / 'segmentation'}", stage="detecting_junctions")
 
-        skeleton_path = diagram_dir / "skeleton" / "skeleton_final.png"
-        if not skeleton_path.exists():
-            raise FileNotFoundError(f"skeleton_final.png not found: {skeleton_path}")
+            skeleton_path = diagram_dir / "skeleton" / "skeleton_final.png"
+            if not skeleton_path.exists():
+                raise ArtifactMissingError(f"skeleton_final.png not found: {skeleton_path}", stage="detecting_junctions")
 
-        junction_dir = diagram_dir / "junction"
-        junction_dir.mkdir(parents=True, exist_ok=True)
+            junction_dir = diagram_dir / "junction"
+            junction_dir.mkdir(parents=True, exist_ok=True)
 
-        # ===== 4. Load inputs =====
-        img_bgr = cv2.imread(str(image_path))
-        if img_bgr is None:
-            raise FileNotFoundError(f"Cannot read image: {image_path}")
-        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-        h, w = img_rgb.shape[:2]
+            # ===== 4. Load inputs =====
+            img_bgr = cv2.imread(str(image_path))
+            if img_bgr is None:
+                raise ArtifactMissingError(f"Cannot read image: {image_path}", stage="detecting_junctions")
+            img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+            h, w = img_rgb.shape[:2]
 
-        pipe_mask = cv2.imread(str(pipe_mask_path), cv2.IMREAD_GRAYSCALE)
-        if pipe_mask is None:
-            raise FileNotFoundError(f"Cannot read pipe mask: {pipe_mask_path}")
+            pipe_mask = cv2.imread(str(pipe_mask_path), cv2.IMREAD_GRAYSCALE)
+            if pipe_mask is None:
+                raise ArtifactMissingError(f"Cannot read pipe mask: {pipe_mask_path}", stage="detecting_junctions")
 
-        skeleton = cv2.imread(str(skeleton_path), cv2.IMREAD_GRAYSCALE)
-        if skeleton is None:
-            raise FileNotFoundError(f"Cannot read skeleton: {skeleton_path}")
+            skeleton = cv2.imread(str(skeleton_path), cv2.IMREAD_GRAYSCALE)
+            if skeleton is None:
+                raise ArtifactMissingError(f"Cannot read skeleton: {skeleton_path}", stage="detecting_junctions")
 
         # ===== 5. Load model =====
-        from worker.utils.device import resolve_device
-        device = torch.device(resolve_device())
-        weights = Path(jcfg.weights)
-        if not weights.is_absolute():
-            weights = Path("/app") / weights
-        if not weights.exists():
-            raise FileNotFoundError(f"Junction seg weights not found: {weights}")
+        with obs.step("load_model", logger):
+            from worker.utils.device import resolve_device
+            device = torch.device(resolve_device())
+            weights = Path(jcfg.weights)
+            if not weights.is_absolute():
+                weights = Path("/app") / weights
+            if not weights.exists():
+                raise ModelLoadError(f"Junction seg weights not found: {weights}")
 
-        logger.info("Loading junction segmentation model on %s ...", device)
+            logger.info("Loading junction segmentation model on %s ...", device)
 
-        ckpt = torch.load(str(weights), map_location="cpu", weights_only=True)
-        cfg = JunctConfig()
-        for k, v in ckpt.get("config", {}).items():
-            if hasattr(cfg, k):
-                setattr(cfg, k, v)
+            ckpt = torch.load(str(weights), map_location="cpu", weights_only=True)
+            cfg = JunctConfig()
+            for k, v in ckpt.get("config", {}).items():
+                if hasattr(cfg, k):
+                    setattr(cfg, k, v)
 
-        model = JunctionSegModel(cfg).to(device)
-        model.load_state_dict(ckpt["model_state_dict"])
-        model.eval()
+            model = JunctionSegModel(cfg).to(device)
+            model.load_state_dict(ckpt["model_state_dict"])
+            model.eval()
 
         logger.info(
             "Model loaded (epoch %d), running tiled inference (tile=%d, overlap=%d) ...",
@@ -181,16 +207,17 @@ def task_detect_junctions(
         )
 
         # ===== 6. Run inference =====
-        result = run_inference(
-            model, img_rgb, pipe_mask, skeleton, device,
-            tile_size=jcfg.tile_size,
-            overlap=jcfg.overlap,
-            batch_size=jcfg.batch_size,
-            junction_threshold=jcfg.junction_threshold,
-            bridge_threshold=jcfg.bridge_threshold,
-            nms_kernel=jcfg.nms_kernel,
-            use_amp=True,
-        )
+        with obs.step("compute", logger):
+            result = run_inference(
+                model, img_rgb, pipe_mask, skeleton, device,
+                tile_size=jcfg.tile_size,
+                overlap=jcfg.overlap,
+                batch_size=jcfg.batch_size,
+                junction_threshold=jcfg.junction_threshold,
+                bridge_threshold=jcfg.bridge_threshold,
+                nms_kernel=jcfg.nms_kernel,
+                use_amp=True,
+            )
 
         junctions = result["junction_points"]
         bridges = result["bridge_points"]
@@ -200,21 +227,22 @@ def task_detect_junctions(
         )
 
         # ===== 7. Save outputs =====
-        j_mask = create_binary_mask(h, w, junctions, jcfg.square_size)
-        b_mask = create_binary_mask(h, w, bridges, jcfg.square_size)
-        cv2.imwrite(str(junction_dir / "junction_mask.png"), j_mask)
-        cv2.imwrite(str(junction_dir / "bridge_mask.png"), b_mask)
+        with obs.step("postprocess", logger):
+            j_mask = create_binary_mask(h, w, junctions, jcfg.square_size)
+            b_mask = create_binary_mask(h, w, bridges, jcfg.square_size)
+            cv2.imwrite(str(junction_dir / "junction_mask.png"), j_mask)
+            cv2.imwrite(str(junction_dir / "bridge_mask.png"), b_mask)
 
-        import json
-        with open(junction_dir / "points.json", "w") as f:
-            json.dump({
-                "junctions": junctions,
-                "bridges": bridges,
-                "junction_threshold": jcfg.junction_threshold,
-                "bridge_threshold": jcfg.bridge_threshold,
-                "n_tiles": result["n_tiles"],
-                "time_sec": round(result["time_sec"], 2),
-            }, f, indent=2)
+            import json
+            with open(junction_dir / "points.json", "w") as f:
+                json.dump({
+                    "junctions": junctions,
+                    "bridges": bridges,
+                    "junction_threshold": jcfg.junction_threshold,
+                    "bridge_threshold": jcfg.bridge_threshold,
+                    "n_tiles": result["n_tiles"],
+                    "time_sec": round(result["time_sec"], 2),
+                }, f, indent=2)
 
         if project_config.save_visualizations:
             vis = create_visualization(img_rgb, skeleton, junctions, bridges, jcfg.square_size)
@@ -229,32 +257,33 @@ def task_detect_junctions(
             torch.cuda.empty_cache()
 
         # ===== 8. Артефакты в БД =====
-        # Remove old artifacts if re-running
-        for art_type in (ArtifactType.JUNCTION_MASK, ArtifactType.BRIDGE_MASK):
-            old = (
-                db.query(Artifact)
-                .filter(
-                    Artifact.diagram_uid == diagram_uid,
-                    Artifact.artifact_type == art_type,
+        with obs.step("persist_artifacts", logger):
+            # Remove old artifacts if re-running
+            for art_type in (ArtifactType.JUNCTION_MASK, ArtifactType.BRIDGE_MASK):
+                old = (
+                    db.query(Artifact)
+                    .filter(
+                        Artifact.diagram_uid == diagram_uid,
+                        Artifact.artifact_type == art_type,
+                    )
+                    .first()
                 )
-                .first()
-            )
-            if old:
-                db.delete(old)
-                db.flush()
+                if old:
+                    db.delete(old)
+                    db.flush()
 
-        for art_type, art_path in [
-            (ArtifactType.JUNCTION_MASK, junction_dir / "junction_mask.png"),
-            (ArtifactType.BRIDGE_MASK, junction_dir / "bridge_mask.png"),
-        ]:
-            artifact = Artifact(
-                diagram_uid=diagram_uid,
-                artifact_type=art_type,
-                file_path=str(art_path.relative_to(storage_path)),
-                file_size=art_path.stat().st_size,
-                mime_type="image/png",
-            )
-            db.add(artifact)
+            for art_type, art_path in [
+                (ArtifactType.JUNCTION_MASK, junction_dir / "junction_mask.png"),
+                (ArtifactType.BRIDGE_MASK, junction_dir / "bridge_mask.png"),
+            ]:
+                artifact = Artifact(
+                    diagram_uid=diagram_uid,
+                    artifact_type=art_type,
+                    file_path=str(art_path.relative_to(storage_path)),
+                    file_size=art_path.stat().st_size,
+                    mime_type="image/png",
+                )
+                db.add(artifact)
 
         # ===== 9. Обновление статуса =====
         diagram.junction_count = len(junctions)
@@ -283,21 +312,22 @@ def task_detect_junctions(
         }
 
     except SoftTimeLimitExceeded:
-        logger.error("Junction detection timed out for %s", diagram_uid)
-        fail_stage(stage, "Junction detection timed out (19 min limit)")
+        logger.error("Junction detection timed out for %s", diagram_uid, exc_info=True)
+        fail_stage(stage, "Junction detection timed out (19 min limit)", traceback.format_exc())
         set_diagram_error(db, diagram_uid, "Junction detection timed out (19 min limit)", "detecting_junctions")
         raise
 
     except Exception as exc:
-        logger.error("Junction detection failed for %s: %s", diagram_uid, exc)
-        logger.debug(traceback.format_exc())
+        # exc_info=True + exc= в fail_stage → error_code/failed_step/traceback
+        # доезжают до /stages (DoD §4).
+        logger.error("Junction detection failed for %s: %s", diagram_uid, exc, exc_info=True)
 
         if self.request.retries < self.max_retries:
-            fail_stage(stage, str(exc)[:500], traceback.format_exc())
+            persist_failed_attempt(db, stage, str(exc)[:500], traceback.format_exc(), exc=exc)
             logger.info("Retrying (%d/%d) ...", self.request.retries + 1, self.max_retries)
             raise self.retry(exc=exc)
 
-        fail_stage(stage, str(exc)[:500], traceback.format_exc())
+        fail_stage(stage, str(exc)[:500], traceback.format_exc(), exc=exc)
         set_diagram_error(db, diagram_uid, str(exc)[:500], "detecting_junctions")
         raise
 

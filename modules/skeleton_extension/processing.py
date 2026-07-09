@@ -32,6 +32,26 @@ from .visualization import (
 )
 
 
+# --- Наблюдаемость (§9 #14: под-под-шаги COMPUTE skeleton_extension) -----------
+# processing.py исполняется в worker'е (app на PYTHONPATH) и standalone (CLI).
+# Слой obs импортируется опционально: в standalone → no-op, скелетизация не
+# ломается (зеркалит engine.py/builder.py, §8.9). Задачный step=compute
+# (worker/tasks/skeleton.py) остаётся; здесь — под-под-шаги внутри него.
+try:
+    from app.core.logging import get_logger
+    from app.core.obs import step as _obs_step
+    logger = get_logger(__name__)
+except Exception:  # standalone: app не на PYTHONPATH
+    import logging as _logging
+    from contextlib import contextmanager
+
+    logger = _logging.getLogger(__name__)
+
+    @contextmanager
+    def _obs_step(_name, _logger, **_fields):
+        yield
+
+
 def process_single_image(original_path, prediction_path, nodes_path, output_path, skeleton_output_path, config):
     """Обработать одно изображение"""
     try:
@@ -105,10 +125,11 @@ def process_single_image(original_path, prediction_path, nodes_path, output_path
 
         # Скелетонизация
         _t0 = time.time()
-        if DEBUG:
-            print("🦴 Скелетонизация prediction...")
-        prediction_binary = (prediction > 127).astype(np.uint8)
-        skeleton = skeletonize(prediction_binary).astype(np.uint8) * 255
+        with _obs_step("skeletonize", logger):
+            if DEBUG:
+                print("🦴 Скелетонизация prediction...")
+            prediction_binary = (prediction > 127).astype(np.uint8)
+            skeleton = skeletonize(prediction_binary).astype(np.uint8) * 255
         print(f"[SKEL_EXT] skeletonize: {time.time()-_t0:.2f}s")
 
         # Флаг простого режима
@@ -211,93 +232,94 @@ def process_single_image(original_path, prediction_path, nodes_path, output_path
         # ЭТАП 5: BFS ПОИСК СОЕДИНЕНИЙ
         # ========================================
         _t_bfs = time.time()
-        if len(remaining_endpoints) > 0 and BFS_ITERATIONS > 0:
-            # Пересоздаём endpoint_to_component и labels для BFS
-            skeleton_binary_for_bfs = (skeleton_final > 127).astype(np.uint8)
-            num_components, labels = cv2.connectedComponents(skeleton_binary_for_bfs)
+        with _obs_step("bfs", logger):
+            if len(remaining_endpoints) > 0 and BFS_ITERATIONS > 0:
+                # Пересоздаём endpoint_to_component и labels для BFS
+                skeleton_binary_for_bfs = (skeleton_final > 127).astype(np.uint8)
+                num_components, labels = cv2.connectedComponents(skeleton_binary_for_bfs)
 
-            endpoint_to_component = {}
-            for ep_idx, ep in enumerate(endpoints_work):
-                y, x = ep[0], ep[1]
-                # Endpoint может быть не на скелете после обработки, ищем ближайшую точку
-                if labels[y, x] > 0:
-                    endpoint_to_component[ep_idx] = labels[y, x]
-                else:
-                    # Ищем в окрестности 3x3
-                    found = False
-                    for dy in [-1, 0, 1]:
-                        for dx in [-1, 0, 1]:
-                            ny, nx = y + dy, x + dx
-                            if 0 <= ny < labels.shape[0] and 0 <= nx < labels.shape[1]:
-                                if labels[ny, nx] > 0:
-                                    endpoint_to_component[ep_idx] = labels[ny, nx]
-                                    found = True
-                                    break
-                        if found:
-                            break
-                    if not found:
-                        endpoint_to_component[ep_idx] = 0
+                endpoint_to_component = {}
+                for ep_idx, ep in enumerate(endpoints_work):
+                    y, x = ep[0], ep[1]
+                    # Endpoint может быть не на скелете после обработки, ищем ближайшую точку
+                    if labels[y, x] > 0:
+                        endpoint_to_component[ep_idx] = labels[y, x]
+                    else:
+                        # Ищем в окрестности 3x3
+                        found = False
+                        for dy in [-1, 0, 1]:
+                            for dx in [-1, 0, 1]:
+                                ny, nx = y + dy, x + dx
+                                if 0 <= ny < labels.shape[0] and 0 <= nx < labels.shape[1]:
+                                    if labels[ny, nx] > 0:
+                                        endpoint_to_component[ep_idx] = labels[ny, nx]
+                                        found = True
+                                        break
+                            if found:
+                                break
+                        if not found:
+                            endpoint_to_component[ep_idx] = 0
 
-            all_connected_eps = connected_eps.copy()
+                all_connected_eps = connected_eps.copy()
 
-            for iteration in range(BFS_ITERATIONS):
-                if DEBUG:
-                    print(f"\n{'=' * 50}")
-                    print(f"BFS Итерация {iteration + 1}/{BFS_ITERATIONS}")
-                    print(f"{'=' * 50}")
-
-                # Текущие оставшиеся endpoints
-                current_remaining = [ep for idx, ep in enumerate(endpoints_work) if idx not in all_connected_eps]
-                current_remaining_indices = [idx for idx, ep in enumerate(endpoints_work) if
-                                             idx not in all_connected_eps]
-
-                if len(current_remaining) == 0:
+                for iteration in range(BFS_ITERATIONS):
                     if DEBUG:
-                        print("   Все endpoints соединены!")
-                    break
+                        print(f"\n{'=' * 50}")
+                        print(f"BFS Итерация {iteration + 1}/{BFS_ITERATIONS}")
+                        print(f"{'=' * 50}")
 
-                bfs_mask, bfs_info, newly_connected, all_bfs_paths = bfs_connect_endpoints(
-                    current_remaining, current_remaining_indices,
-                    skeleton_final, nodes, original, final_protection_mask,
-                    endpoint_to_component, endpoints_work,
-                    all_connected_eps, labels, config, verbose=DEBUG
-                )
+                    # Текущие оставшиеся endpoints
+                    current_remaining = [ep for idx, ep in enumerate(endpoints_work) if idx not in all_connected_eps]
+                    current_remaining_indices = [idx for idx, ep in enumerate(endpoints_work) if
+                                                 idx not in all_connected_eps]
 
-                # Обновляем скелет
-                skeleton_final[bfs_mask > 0] = 255
-                all_connected_eps.update(newly_connected)
+                    if len(current_remaining) == 0:
+                        if DEBUG:
+                            print("   Все endpoints соединены!")
+                        break
 
-                # Визуализация BFS
-                if DEBUG:
-                    viz_bfs = visualize_bfs_paths(
-                        original, skeleton_final, nodes, final_protection_mask,
-                        all_bfs_paths, current_remaining, newly_connected
+                    bfs_mask, bfs_info, newly_connected, all_bfs_paths = bfs_connect_endpoints(
+                        current_remaining, current_remaining_indices,
+                        skeleton_final, nodes, original, final_protection_mask,
+                        endpoint_to_component, endpoints_work,
+                        all_connected_eps, labels, config, verbose=DEBUG
                     )
-                    bfs_viz_path = output_path.replace('.png', f'_stage5_bfs_iter{iteration + 1}.png')
-                    cv2.imwrite(bfs_viz_path, viz_bfs)
-                    print(f"   💾 Визуализация BFS: {os.path.basename(bfs_viz_path)}")
 
-                if len(newly_connected) == 0:
+                    # Обновляем скелет
+                    skeleton_final[bfs_mask > 0] = 255
+                    all_connected_eps.update(newly_connected)
+
+                    # Визуализация BFS
                     if DEBUG:
-                        print("   Нет новых соединений, останавливаем BFS")
-                    break
+                        viz_bfs = visualize_bfs_paths(
+                            original, skeleton_final, nodes, final_protection_mask,
+                            all_bfs_paths, current_remaining, newly_connected
+                        )
+                        bfs_viz_path = output_path.replace('.png', f'_stage5_bfs_iter{iteration + 1}.png')
+                        cv2.imwrite(bfs_viz_path, viz_bfs)
+                        print(f"   💾 Визуализация BFS: {os.path.basename(bfs_viz_path)}")
 
-            connected_eps = all_connected_eps
+                    if len(newly_connected) == 0:
+                        if DEBUG:
+                            print("   Нет новых соединений, останавливаем BFS")
+                        break
 
-            # Финальная статистика
-            final_remaining = len([idx for idx in range(len(endpoints_work)) if idx not in connected_eps])
-            print(f"\n📊 Итого:")
-            print(f"   Endpoints соединено: {len(connected_eps)}/{len(endpoints_work)}")
-            print(f"   Endpoints осталось: {final_remaining}")
-            print(f"[SKEL_EXT] stage_5_bfs: {time.time()-_t_bfs:.2f}s")
+                connected_eps = all_connected_eps
 
-            # Диагностика несоединённых endpoints (только в debug)
-            if DEBUG and final_remaining > 0:
-                unconnected_indices = [idx for idx in range(len(endpoints_work)) if idx not in connected_eps]
-                diagnose_unconnected_endpoints(
-                    unconnected_indices, endpoints_work, skeleton_final, nodes, original,
-                    final_protection_mask, endpoint_to_component, labels, config
-                )
+                # Финальная статистика
+                final_remaining = len([idx for idx in range(len(endpoints_work)) if idx not in connected_eps])
+                print(f"\n📊 Итого:")
+                print(f"   Endpoints соединено: {len(connected_eps)}/{len(endpoints_work)}")
+                print(f"   Endpoints осталось: {final_remaining}")
+                print(f"[SKEL_EXT] stage_5_bfs: {time.time()-_t_bfs:.2f}s")
+
+                # Диагностика несоединённых endpoints (только в debug)
+                if DEBUG and final_remaining > 0:
+                    unconnected_indices = [idx for idx in range(len(endpoints_work)) if idx not in connected_eps]
+                    diagnose_unconnected_endpoints(
+                        unconnected_indices, endpoints_work, skeleton_final, nodes, original,
+                        final_protection_mask, endpoint_to_component, labels, config
+                    )
 
         # ========================================
         # ЭТАП 6: ОБРАБОТКА ORPHAN КОМПОНЕНТ
@@ -395,6 +417,5 @@ def process_single_image(original_path, prediction_path, nodes_path, output_path
 
     except Exception as e:
         print(f"   ❌ Ошибка: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error("skeleton_extension: сбой process_single_image: %s", e, exc_info=True)
         return False

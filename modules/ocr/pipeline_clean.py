@@ -11,7 +11,6 @@ pipeline_clean.py — ЧИСТЫЙ OCR для P&ID (доменная детек�
 """
 from __future__ import annotations
 
-import logging
 import os
 import time
 from pathlib import Path
@@ -22,7 +21,42 @@ from modules.ocr.text_detect_yolo import predict_tiled, merge_overlap
 from modules.ocr.recognize_surya import load_surya_recognizer, recognize_boxes
 from modules.ocr.text_filter import junk_reason, dedup
 
-logger = logging.getLogger(__name__)
+# --- Наблюдаемость (Волна 3: ocr/junction/contours/fxml): под-под-шаги COMPUTE --
+# pipeline_clean исполняется в worker_ocr (app на PYTHONPATH); слой obs импортится
+# опционально (как engine.py/builder.py) — при standalone-запуске modules/ocr он
+# вырождается в no-op, OCR не ломается.
+try:
+    from app.core.logging import get_logger
+    from app.core.obs import step as _obs_step
+    from app.core.errors import (
+        ArtifactMissingError,
+        ModelLoadError,
+        OcrError,
+        PipelineError,
+    )
+
+    logger = get_logger(__name__)
+except Exception:  # standalone modules/ocr: app не на PYTHONPATH
+    import logging as _logging
+    from contextlib import contextmanager
+
+    logger = _logging.getLogger(__name__)
+
+    @contextmanager
+    def _obs_step(_name, _logger, **_fields):
+        yield
+
+    class PipelineError(Exception):
+        pass
+
+    class ArtifactMissingError(PipelineError):
+        pass
+
+    class ModelLoadError(PipelineError):
+        pass
+
+    class OcrError(PipelineError):
+        pass
 
 
 def _yolo_device(device: str):
@@ -63,53 +97,66 @@ def run_ocr_pipeline_clean(
 
     model_path = Path(model_path)
     if not model_path.exists():
-        raise FileNotFoundError(f"YOLO text-detector weights not found: {model_path}")
+        raise ModelLoadError(f"YOLO text-detector weights not found: {model_path}")
 
     _ensure_torch_device(device)
     bgr = cv2.imread(str(image_path))
     if bgr is None:
-        raise FileNotFoundError(f"Cannot read image: {image_path}")
+        raise ArtifactMissingError(f"Cannot read image: {image_path}")
 
     t0 = time.perf_counter()
 
-    # -- Детекция: YOLO тайлинг + схлопывание фрагментов/вложенных --
-    ymodel = YOLO(str(model_path))
-    boxes = predict_tiled(ymodel, bgr, tile, overlap, conf, _yolo_device(device))
-    n_raw = len(boxes)
-    if merge:
-        boxes = merge_overlap(boxes)
+    # -- Детекция: YOLO тайлинг + схлопывание фрагментов/вложенных (text_detect) --
+    with _obs_step("text_detect", logger):
+        try:
+            ymodel = YOLO(str(model_path))
+            boxes = predict_tiled(ymodel, bgr, tile, overlap, conf, _yolo_device(device))
+            n_raw = len(boxes)
+            if merge:
+                boxes = merge_overlap(boxes)
+        except PipelineError:
+            raise
+        except Exception as exc:
+            raise OcrError(str(exc), step="text_detect", cause=exc) from exc
     t1 = time.perf_counter()
 
     # -- Распознавание: Surya (расширение/паддинг/выбеление, вертикаль->вправо) --
-    rec = load_surya_recognizer()
-    texts = recognize_boxes(rec, bgr, boxes, expand_frac=expand_frac,
-                            pad_frac=pad_frac, whiten=whiten, batch=rec_batch)
+    with _obs_step("recognize", logger):
+        try:
+            rec = load_surya_recognizer()
+            texts = recognize_boxes(rec, bgr, boxes, expand_frac=expand_frac,
+                                    pad_frac=pad_frac, whiten=whiten, batch=rec_batch)
+        except PipelineError:
+            raise
+        except Exception as exc:
+            raise OcrError(str(exc), step="recognize", cause=exc) from exc
     t2 = time.perf_counter()
 
-    # -- Сборка + фильтр мусора --
-    items = []
-    n_junk = 0
-    for b, (t, cf) in zip(boxes, texts):
-        jr = junk_reason(t, cf) if filter_junk else None
-        if jr:
-            n_junk += 1
-            continue
-        items.append({
-            "bbox": [int(v) for v in b],
-            "text": t,
-            "source": "yolo_surya",
-            "confidence": round(float(cf), 3),
-            "conf": round(float(cf), 3),   # служебный для dedup
-        })
+    # -- Сборка + фильтр мусора (postfilter) --
+    with _obs_step("postfilter", logger):
+        items = []
+        n_junk = 0
+        for b, (t, cf) in zip(boxes, texts):
+            jr = junk_reason(t, cf) if filter_junk else None
+            if jr:
+                n_junk += 1
+                continue
+            items.append({
+                "bbox": [int(v) for v in b],
+                "text": t,
+                "source": "yolo_surya",
+                "confidence": round(float(cf), 3),
+                "conf": round(float(cf), 3),   # служебный для dedup
+            })
 
-    # -- Дедупликация вложенных/дублей --
-    if filter_junk:
-        items, dropped = dedup(items)
-    else:
-        dropped = []
+        # -- Дедупликация вложенных/дублей --
+        if filter_junk:
+            items, dropped = dedup(items)
+        else:
+            dropped = []
 
-    for it in items:
-        it.pop("conf", None)  # служебный ключ убираем из результата
+        for it in items:
+            it.pop("conf", None)  # служебный ключ убираем из результата
 
     elapsed = time.perf_counter() - t0
     logger.info(
@@ -153,7 +200,7 @@ def recognize_given_boxes(
     _ensure_torch_device(device)
     bgr = cv2.imread(str(image_path))
     if bgr is None:
-        raise FileNotFoundError(f"Cannot read image: {image_path}")
+        raise ArtifactMissingError(f"Cannot read image: {image_path}")
     if not boxes:
         return []
 
