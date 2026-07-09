@@ -376,6 +376,7 @@
 | 19 | Fault-тесты batch3, мокающие общие нативные модули (torch/cv2/tqdm) на уровне модуля (`sys.modules.setdefault`), текут в сессию pytest — рецидив §9 #2/§8.12 (test_junction уронил test_segmentation: engine.py `with torch.no_grad()` → `TypeError` на no_grad-passthrough-моке) | баг тест-инфры | мок общих модулей — через ФИКСТУРУ с `monkeypatch.setitem` (авто-restore) + свежий import + pop, НЕ на уровне модуля | ✅ исправлено 2026-07-09 (`feat/observability`): test_junction/test_contours на фикстуре-изоляции; 118 passed, сегментация зелёная |
 | 20 | Смонтированная папка репо блокирует `unlink`/`rm`/`mv` из песочницы («Operation not permitted» даже на свежесозданном файле); запись/усечение работают | инфра песочницы (обсёрвабилити-чат) | бэкапы для диффа — в `/tmp`, не в репо; удаление cowork-файлов — через `allow_cowork_file_delete` | ✅ подтверждено 2026-07-09; смоук-логи `batch3_*.log` в корне удаляет пользователь |
 | 21 | `queue_wait` в недельной сводке (§8.16): `started_at−created_at`≈0 — строка `processing_stages` рождается уже на старте стадии (`start_stage`: `created_at`≈`started_at`), ожидание в очереди Celery/Redis до подхвата воркером нигде не пишется | пробел данных (обсёрвабилити) | сейчас — прокси Q4 (межстадийный зазор `next.started_at−prev.completed_at`, zero-code); точный — штамп `enqueued_at` при диспатче + миграция → `started_at−enqueued_at` | ⬜ прокси Q4 закрывает сейчас (выбор пользователя 2026-07-09); инструментовка `enqueued_at` — отдельной мини-волной, если прокси окажется мало |
+| 22 | Остаток предмержевого аудита 2026-07-09 (мерж НЕ блокирует): R3 гонка start_stage↔reopen (сужена, не закрыта), R4 вечные RUNNING-строки CVAT/frame-стадий при kill/двойном `/start`, R5 PendingRollbackError при сбое commit в try (cvat.py/frame.py), R7 guard от повторного `setup_logging` поверх stdout-моста, R8 `HTTPException` внутри `obs.step` → 500, R9 клиент (aware-datetime TypeError, clock-skew в elapsed, negative-cache stage-durations, reopen POST retries=3), R10 поллинг 2×HTTP/тик в GUI-потоке + `error_traceback` в каждом ответе /stages, + MINOR-список (канон-отклонения шагов, мёртвые импорты, `!= "" or True` и др.) | риски/долг (аудит) | Волна C после мержа, по выбору пользователя | ⬜ детали и минимальные фиксы — `docs/observability/AUDIT_pre_merge_2026-07-09.md` §5/§7 |
 
 Правило: пункт отсюда либо становится своей мини-волной, либо явно закрывается как «не делаем». Молча не растворяется.
 
@@ -720,3 +721,42 @@ ocr/junction/contours/fxml → upload/frame).
 3. В репо коммитить нечего, кроме этого RUNBOOK (сам .sql — разовый инструмент вне репо; захочешь сохранить — положи в `tools/` отдельным коммитом).
 
 Параллелизм НЕ трогали (§1) — только собрали инструмент для его замера.
+
+---
+
+### 8.17 Волна A — предмержевые фиксы по аудиту (2026-07-09)
+
+**Контекст:** полный предмержевой разбор ветки перед мержем в deploy: построчное ревью всех рантайм-диффов (3 независимых прохода по зонам worker / core+api / modules+ui), полный прогон тестов с дифф-сравнением против deploy, симуляция мержа в песочнице. Отчёт: `docs/observability/AUDIT_pre_merge_2026-07-09.md` (C1–C3, R1–R11, MINOR).
+
+**Сделано (файлы — чатом; git — только ты):**
+- **C1** `app/core/obs.py` — `step()` больше не оборачивает `SoftTimeLimitExceeded` в `PipelineError` (passthrough + лог `code=timeout`). Обёртка делала задачные `except SoftTimeLimitExceeded` мёртвым кодом → таймаут уходил в generic-ветку retry (до 3× времени впустую, искажённое сообщение). +2 regress-теста (`test_obs.py`).
+- **C2** `cvat_patch/pil_unbomb.pth` — добавлен в ветку байт-в-байт с origin/deploy (blob `69c0c3d`): volume-строки уехали в коммит §8.11 без самого файла; чистый checkout feat давал каталог-пустышку вместо файла → Pillow-bomb для больших схем возвращался.
+- **C3** `tests/observability/test_graph_errors.py` — изоляция sys.modules переведена на фикстурный паттерн (`gb`, как в test_junction_errors, §9 #19): модуль-уровневый `setdefault` загрязнял сессию уже на этапе КОЛЛЕКЦИИ pytest → 13 падений `test_direction_nodes.py` в полном прогоне.
+- **R2** `worker/utils/db_helpers.py::persist_failed_attempt` *(new)* + 9 retry-веток (detection / segmentation / skeleton×2 / graph×2 / junction / ocr / contours / direction): FAILED-попытка коммитится ПЕРЕД `raise self.retry` (порядок: rollback → fail_stage → commit; сбой персиста глотается — не маскирует Retry). Раньше: вечная RUNNING-строка на каждый ретраенный аттемпт + потеря error_code/traceback нефинальных попыток; в ocr/contours/direction `db.rollback()` ПОСЛЕ fail_stage вовсе стирал фейл. +3 теста (`test_persist_failed_attempt.py`).
+- **R6** `app/models/stage.py::fail` — клэмп `error_code`/`failed_step` под String(64)/String(32) через `str(...)[:N]`; в `fail_stage`/`_fail_cvat_stage`/`fail_frame_stage` `.code` берётся только непустой строкой (у `SQLAlchemyError` свой `.code=None`/"e3q8" — затирал имя типа). +2 теста (`test_db_helpers_errorcode.py`).
+- **R1/A6 (решение пользователя)** `worker/tasks/detection.py` — возвращена deploy-семантика CVAT-блока: не-CVAT сбой (парсинг ответа, конфиг экспортёра, tempfile/zip) снова non-fatal (warning + `error_code=cvat_export_failed` на стадии); CVATError-ветка Волны 1 не тронута. Сужение до `except CVATError` делало такие сбои фатальными, а ретраи плодили дубликаты CVAT-задач (`create_task` не идемпотентен).
+
+**DoD:** `tests/observability` **131/131**; полный прогон = deploy-бейзлайн (22 failed — все предсуществующие env/legacy, новых НЕТ; 13 `direction_nodes` ушли); случайный порядок (3 сида) стабилен. Прогоны — из чистой копии `git archive` (маунт-фантомы §9 #3 в обход).
+
+**Мерж (после твоего коммита волны):** локальный deploy отстаёт от `origin/deploy` на 2 Pillow-коммита (ce683c8+5a31331) → ff невозможен, обычный merge; симуляция конфликтов не нашла (compose объединяется: logging-якоря + pil_unbomb-вольюмы; pth-строки совпали байт-в-байт). Порядок: `git fetch` → починка индекса при необходимости (§0.1) → `checkout deploy && pull --ff-only` → `merge feat/observability` → тесты → push. На сервере: **`alembic upgrade head` ДО перезапуска воркеров** (R11 — модель селектит error_code/failed_step). Полный чеклист — AUDIT §3.
+
+**Осталось [нужен ты]:** закоммитить Волну A в feat (список файлов — `git status`); решить судьбу Волны C (§9 #22). Следующая волна — **B: current_step** (подстадия в статусбар клиента у 🟢 API; дизайн — AUDIT §6, каталог подшагов согласован в чате).
+
+---
+
+### 8.18 Волна B — current_step: подстадия бегущей стадии в клиенте (2026-07-09)
+
+Закрывает осознанно отложенное поле `current_step` Волны 2 (§9-заметки «Под-шаг в UI отложен»). Цель пользователя: на CPU-стенде видно, что медленная авто-стадия жива («не просто сегментация, а тайлинг/запуск модели…»). Решение пользователя: подписи в клиенте — русские.
+
+**Механика (сквозная):**
+- **БД:** `alembic/versions/0008_add_current_step.py` — `processing_stages.current_step VARCHAR(64) NULL` (metadata-only, как 0007). Модель: колонка + очистка в `complete()`/`fail()` (под-шаг актуален только у RUNNING).
+- **obs:** `bind_step_sink(sink)` — отдельная contextvar (НЕ в `_ctx`: тот инъектируется в лог-строки); `step()` зовёт `sink(name)` на старте каждого под-шага, сбой репортера глотается (наблюдаемость не роняет пайплайн); `reset()` в `task_prerun` снимает привязку.
+- **worker:** `db_helpers.make_step_reporter(stage_id)` — UPDATE по id ОТДЕЛЬНОЙ короткой сессией + commit (транзакцию задачи не трогаем, урок R2). Привязка после `start_stage` во всех 10 точках (detection/segmentation/skeleton×2/graph×2/junction/ocr/contours/direction). Записей — по числу под-шагов (3–8 на стадию), не по тайлам.
+- **API:** `current_step` в `ProcessingStageResponse` → `/stages` (лишних запросов нет; поле Optional — старый клиент/сервер совместимы).
+- **Клиент:** `progress_model.substep_status_line(stages)` (чистый Python, headless) — самая ранняя бегущая АВТО-стадия (бюджет ≠ None) с current_step → «Выделение труб · прогон модели»; словарь `_STEP_LABELS` (RU), неизвестный шаг — тех-имя как есть; ручные стадии скрыты. `main_window`: серый QLabel слева от `🟢 API`, подписан на `stages_updated` (тот же 2-сек поллинг), только для открытой в workspace диаграммы; чистится при навигации.
+
+**Тесты (+14):** `test_obs.py` (+2: sink на вложенных шагах / reset снимает; сбой sink не роняет step), `test_current_step.py` (5: UPDATE по id, обрезка до 64, закрытие сессии при сбое, очистка на complete/fail, поле в схеме), `test_substep_status_line.py` (7: авто/ручные/параллель/старый сервер/неизвестный шаг; загрузка модуля ПО ПУТИ, минуя PySide6-`__init__`, как test_progress_model).
+
+**DoD:** `tests/observability` **145/145**; полный прогон = deploy-бейзлайн (новых падений нет); alembic — одна голова `0008`. Канон-отклонения имён шагов (direction: load_model внутри compute; junction: артефакты в postprocess; graph: load_inputs без обёртки) НЕ трогали (surgical) — подписи от этого не ломаются, выравнивание — кандидат Волны C (§9 #22).
+
+**[нужен ты]:** коммит вместе с Волной A; на стенде после мержа: `alembic upgrade head` (0007+0008) ДО перезапуска воркеров; пересборка клиента; смоук — открыть бегущую диаграмму и смотреть подпись у `🟢 API`.

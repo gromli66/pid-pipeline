@@ -56,3 +56,28 @@ def test_without_exc_is_backward_compatible():
 def test_none_stage_is_noop():
     # существующий контракт сохранён: None-stage не роняет вызов
     fail_stage(None, "boom", "TRACE", exc=ValueError("x"))
+
+
+def test_foreign_none_code_falls_back_to_type_name():
+    # R6 (аудит 2026-07-09): у SQLAlchemyError есть свой .code (None/"e3q8") —
+    # не-строка/пустое не должны затирать имя типа.
+    stage = _new_stage()
+
+    class WeirdError(Exception):
+        code = None  # как sqlalchemy.exc.SQLAlchemyError
+
+    fail_stage(stage, "boom", None, exc=WeirdError("x"))
+
+    assert stage.error_code == "WeirdError"
+
+
+def test_oversized_code_and_step_truncated_to_columns():
+    # R6: переполнение String(64)/String(32) не должно ронять сам fail-write.
+    stage = _new_stage()
+    exc = InferenceError("boom", step="s" * 100)
+    exc.code = "c" * 100
+
+    fail_stage(stage, "boom", None, exc=exc)
+
+    assert stage.error_code == "c" * 64
+    assert stage.failed_step == "s" * 32

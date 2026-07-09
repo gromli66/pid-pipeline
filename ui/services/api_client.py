@@ -328,7 +328,8 @@ class APIClient:
         """Список этапов обработки (ProcessingStage) — для по-этапной изоляции ошибок.
 
         Каждый элемент: stage_type, status (pending/running/completed/failed/skipped),
-        attempt, error_message, error_traceback, started_at, completed_at, duration_seconds.
+        attempt, error_message, error_traceback, started_at, completed_at,
+        duration_seconds, current_step (под-шаг бегущей стадии, Волна B).
         """
         try:
             result = self._request("GET", f"/api/diagrams/{uid}/stages", retries=1)

@@ -16,7 +16,7 @@ import numpy as np
 from celery.exceptions import SoftTimeLimitExceeded
 
 from worker.celery_app import celery_app
-from worker.utils.db_helpers import set_diagram_error, check_deleted, start_stage, complete_stage, fail_stage
+from worker.utils.db_helpers import set_diagram_error, check_deleted, start_stage, complete_stage, fail_stage, persist_failed_attempt, make_step_reporter
 from app.core import obs
 from app.core.errors import (
     ArtifactMissingError,
@@ -126,6 +126,7 @@ def task_detect_junctions(
         # ===== Processing Stage tracking =====
         from app.models.stage import StageType
         stage = start_stage(db, diagram_uid, StageType.JUNCTION_CLASSIFICATION, celery_task_id=self.request.id)
+        obs.bind_step_sink(make_step_reporter(stage.id))  # current_step → клиент (Волна B)
 
         diagram.status = DiagramStatus.DETECTING_JUNCTIONS
         db.commit()
@@ -322,7 +323,7 @@ def task_detect_junctions(
         logger.error("Junction detection failed for %s: %s", diagram_uid, exc, exc_info=True)
 
         if self.request.retries < self.max_retries:
-            fail_stage(stage, str(exc)[:500], traceback.format_exc(), exc=exc)
+            persist_failed_attempt(db, stage, str(exc)[:500], traceback.format_exc(), exc=exc)
             logger.info("Retrying (%d/%d) ...", self.request.retries + 1, self.max_retries)
             raise self.retry(exc=exc)
 

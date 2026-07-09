@@ -71,10 +71,13 @@ def _fail_cvat_stage(stage: ProcessingStage, exc: BaseException, *, default_step
     Зеркалит воркерный `fail_stage`: `error_code` = `exc.code` (или имя типа),
     `failed_step` = `exc.step` (проставлен `_cvat_op`/`obs.step`), иначе — `default_step`.
     """
+    # .code бывает чужим (у SQLAlchemyError свой .code = None/"e3q8"): берём
+    # только непустую строку, иначе — имя типа (аудит 2026-07-09, R6).
+    code = getattr(exc, "code", None)
     stage.fail(
         str(exc)[:2000],
         traceback.format_exc()[:10000],
-        error_code=getattr(exc, "code", type(exc).__name__),
+        error_code=code if isinstance(code, str) and code else type(exc).__name__,
         failed_step=getattr(exc, "step", None) or default_step,
     )
 

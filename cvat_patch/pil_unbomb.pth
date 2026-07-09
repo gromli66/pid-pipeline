@@ -1,0 +1,2 @@
+# Raise Pillow's decompression-bomb ceiling for large P&ID scans.
+import PIL.Image; PIL.Image.MAX_IMAGE_PIXELS = None

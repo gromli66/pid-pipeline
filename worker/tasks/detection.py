@@ -9,7 +9,7 @@ from pathlib import Path
 
 from worker.celery_app import celery_app
 from celery.exceptions import SoftTimeLimitExceeded
-from worker.utils.db_helpers import set_diagram_error, check_deleted, upsert_artifact, start_stage, complete_stage, fail_stage
+from worker.utils.db_helpers import set_diagram_error, check_deleted, upsert_artifact, start_stage, complete_stage, fail_stage, persist_failed_attempt, make_step_reporter
 from worker.utils.device import resolve_device
 from app.core import obs
 from app.core.errors import (
@@ -144,6 +144,7 @@ def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydrauli
         # ===== Processing Stage tracking =====
         from app.models.stage import StageType
         stage = start_stage(db, diagram_uid, StageType.DETECTION, celery_task_id=self.request.id)
+        obs.bind_step_sink(make_step_reporter(stage.id))  # current_step → клиент (Волна B)
 
         # ===== 3. LOAD_INPUTS: путь к изображению =====
         storage_path = Path(os.getenv("STORAGE_PATH", "./storage/diagrams"))
@@ -381,8 +382,7 @@ def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydrauli
 
         except CVATError as cvat_exc:
             # CVAT-сбой не фатален для detection (сама детекция выполнена), но теперь
-            # видимый: типизированный + warning-лог + код на стадии. Не-CVAT ошибки
-            # НЕ ловим — они всплывают во внешний except (retry/fail).
+            # видимый: типизированный + warning-лог + код на стадии.
             logger.warning(
                 "detection: CVAT step failed (non-fatal)",
                 extra={"uid": str(diagram_uid), "phase": "detecting",
@@ -391,6 +391,21 @@ def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydrauli
             )
             if stage is not None:
                 stage.error_code = cvat_exc.code
+                stage.error_message = str(cvat_exc)[:500]
+        except Exception as cvat_exc:
+            # Не-CVAT сбой CVAT-блока (парсинг ответа, конфиг экспортёра, tempfile/zip):
+            # как в deploy — non-fatal (детекция выполнена, разметку можно догрузить).
+            # Фатальность гоняла бы полный GPU-пересчёт ретраями и плодила дубликаты
+            # CVAT-задач — create_task не идемпотентен (аудит 2026-07-09, R1/A6).
+            logger.warning(
+                "detection: CVAT step failed (non-fatal, non-CVAT error)",
+                extra={"uid": str(diagram_uid), "phase": "detecting",
+                       "step": "export_to_cvat", "event": "error",
+                       "code": "cvat_export_failed"},
+                exc_info=True,
+            )
+            if stage is not None:
+                stage.error_code = "cvat_export_failed"
                 stage.error_message = str(cvat_exc)[:500]
 
         # ===== 10. Обновляем диаграмму в БД =====
@@ -434,7 +449,7 @@ def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydrauli
 
         # Retry или fail -- НЕ ставим ERROR до исчерпания всех попыток
         if self.request.retries < self.max_retries:
-            fail_stage(stage, str(exc)[:500], traceback.format_exc(), exc=exc)
+            persist_failed_attempt(db, stage, str(exc)[:500], traceback.format_exc(), exc=exc)
             logger.warning(
                 "detection: retrying (%d/%d)",
                 self.request.retries + 1, self.max_retries,

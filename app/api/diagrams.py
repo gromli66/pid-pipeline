@@ -333,6 +333,7 @@ async def get_diagram_stages(uid: UUID, db: AsyncSession = Depends(get_async_db)
                 error_traceback=stage.error_traceback,
                 error_code=stage.error_code,
                 failed_step=stage.failed_step,
+                current_step=stage.current_step,
                 started_at=stage.started_at,
                 completed_at=stage.completed_at,
                 duration_seconds=stage.duration_seconds,

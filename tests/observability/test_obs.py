@@ -90,6 +90,73 @@ def test_step_wraps_unexpected(caplog):
     assert err_recs[0].exc_info is not None
 
 
+def test_step_soft_time_limit_passthrough(caplog):
+    """C1 (аудит 2026-07-09): SoftTimeLimitExceeded НЕ оборачивается в
+    PipelineError — иначе задачные ``except SoftTimeLimitExceeded`` мертвы
+    и таймаут уходит в generic-ветку retry."""
+    celery_exc = pytest.importorskip("celery.exceptions")
+    caplog.set_level(logging.INFO)
+
+    with pytest.raises(celery_exc.SoftTimeLimitExceeded):
+        with obs.step("compute", log):
+            raise celery_exc.SoftTimeLimitExceeded()
+
+    err_recs = [r for r in caplog.records if getattr(r, "event", None) == "error"]
+    assert len(err_recs) == 1
+    assert err_recs[0].code == "timeout"
+    # end на сбое не логируется
+    assert not [r for r in caplog.records if getattr(r, "event", None) == "end"]
+
+
+def test_step_soft_time_limit_passthrough_nested(caplog):
+    """Passthrough работает сквозь вложенные step'ы (compute → inference)."""
+    celery_exc = pytest.importorskip("celery.exceptions")
+    caplog.set_level(logging.INFO)
+
+    with pytest.raises(celery_exc.SoftTimeLimitExceeded):
+        with obs.step("compute", log):
+            with obs.step("inference", log):
+                raise celery_exc.SoftTimeLimitExceeded()
+
+
+def test_step_reports_to_sink_and_reset_unbinds(caplog):
+    """Волна B: step() зовёт репортер на старте каждого под-шага (и вложенных);
+    reset() (task_prerun) снимает привязку — чужая задача ничего не репортит."""
+    caplog.set_level(logging.INFO)
+    seen = []
+    obs.bind_step_sink(seen.append)
+    try:
+        with obs.step("compute", log):
+            with obs.step("inference", log):
+                pass
+        assert seen == ["compute", "inference"]
+
+        obs.reset()
+        with obs.step("postprocess", log):
+            pass
+        assert seen == ["compute", "inference"]  # после reset репортер снят
+    finally:
+        obs.reset()
+
+
+def test_step_sink_failure_does_not_break_step(caplog):
+    """Сбой репортера (БД недоступна и т.п.) глотается — пайплайн не падает."""
+    caplog.set_level(logging.DEBUG)
+
+    def boom(name):
+        raise RuntimeError("sink down")
+
+    obs.bind_step_sink(boom)
+    try:
+        with obs.step("compute", log):
+            pass  # не поднимает
+    finally:
+        obs.reset()
+
+    ends = [r for r in caplog.records if getattr(r, "event", None) == "end"]
+    assert len(ends) == 1  # шаг штатно закрылся
+
+
 def test_load_artifact_missing_raises(tmp_path):
     missing = tmp_path / "nope.png"
     with pytest.raises(ArtifactMissingError) as ei:

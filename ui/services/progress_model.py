@@ -53,6 +53,58 @@ _STAGE_LABELS = {
     "fxml_generation": "Экспорт",
 }
 
+# Русские подписи под-шагов (Волна B): current_step из /stages → статусбар.
+# Неизвестное имя показываем как есть (тех-имя, как в логах воркера).
+_STEP_LABELS = {
+    # канон задач
+    "load_inputs": "чтение входов",
+    "load_model": "загрузка модели",
+    "compute": "вычисление",
+    "postprocess": "постобработка",
+    "persist_artifacts": "сохранение результатов",
+    # под-под-шаги COMPUTE (модули)
+    "tiling": "нарезка на тайлы",
+    "inference": "прогон модели",
+    "stitch": "сшивка результата",
+    "fusion": "слияние детекций",
+    "extract_points": "извлечение точек",
+    "skeletonize": "скелетизация",
+    "bfs": "соединение концов",
+    "load_masks": "чтение масок",
+    "bridge_preprocess": "обработка мостов",
+    "prepare_tracing": "подготовка трассировки",
+    "trace_edges": "трассировка линий",
+    "text_detect": "поиск текста",
+    "recognize": "распознавание",
+    "postfilter": "фильтрация",
+}
+
+
+def substep_status_line(stages) -> str:
+    """Строка статусбара «Стадия · под-шаг» (Волна B, current_step).
+
+    Берётся самая ранняя по пайплайну БЕГУЩАЯ АВТО-стадия с заполненным
+    ``current_step`` (ручные пропускаем — там ждём оператора; авто без
+    current_step — ещё не отрепортила или старый сервер). Нет такой → "".
+    Чистый Python — тестируется headless.
+    """
+    latest = {}
+    for s in stages or []:
+        st = s.get("stage_type")
+        if st:
+            latest[st] = s
+    for st in _PIPELINE:
+        s = latest.get(st)
+        if _status_of(s) != "running":
+            continue
+        if _DEFAULT_BUDGETS.get(st) is None:
+            continue  # ручная стадия
+        step = s.get("current_step")
+        if step:
+            return f"{_STAGE_LABELS.get(st, st)} · {_STEP_LABELS.get(step, step)}"
+    return ""
+
+
 # Дефолтные бюджеты стадий (сек) — ПРОВИЗОРНЫЕ, тюнятся с первых прогонов.
 # None = ручная/await-стадия (оператор): в ETA не учитываем, в проценте — номинал.
 _DEFAULT_BUDGETS = {
