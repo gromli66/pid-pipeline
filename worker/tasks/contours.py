@@ -29,8 +29,11 @@ from worker.utils.db_helpers import (
     complete_stage,
     fail_stage,
 )
+from app.core import obs
+from app.core.errors import ArtifactMissingError, ConfigError, PipelineError
+from app.core.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class _NumpyEncoder(json.JSONEncoder):
@@ -76,6 +79,16 @@ def task_extract_contours(self, diagram_uid: str, ann_ids=None):
 
     db = SessionLocal()
     stage = None
+
+    # Корреляционный контекст фазы (Волна 3): uid/phase/task_id/attempt → в каждую
+    # строку лога через ContextFilter (Волна 0).
+    obs.bind(
+        uid=str(diagram_uid),
+        phase="contour_extraction",
+        task_id=self.request.id,
+        attempt=self.request.retries,
+    )
+
     try:
         # ===== 1. Load diagram, basic checks =====
         diagram = db.query(Diagram).filter(
@@ -105,8 +118,9 @@ def task_extract_contours(self, diagram_uid: str, ann_ids=None):
         loader = get_project_loader()
         project_config = loader.load(diagram.project_code)
         if not project_config:
-            raise RuntimeError(
-                f"Project config not found for '{diagram.project_code}'"
+            raise ConfigError(
+                f"Project config not found for '{diagram.project_code}'",
+                stage="contour_extraction",
             )
 
         ce_cfg = project_config.contour_extraction
@@ -128,57 +142,61 @@ def task_extract_contours(self, diagram_uid: str, ann_ids=None):
 
         # ===== 5. Load input files =====
         # Original image
-        original_image_path = diagram_dir / "original" / "image.png"
-        if not original_image_path.exists():
-            for ext in (".jpg", ".jpeg", ".tiff", ".tif"):
-                alt = original_image_path.with_suffix(ext)
-                if alt.exists():
-                    original_image_path = alt
-                    break
-        if not original_image_path.exists():
-            raise FileNotFoundError(
-                f"Original image not found: {diagram_dir / 'original'}"
+        with obs.step("load_inputs", logger):
+            original_image_path = diagram_dir / "original" / "image.png"
+            if not original_image_path.exists():
+                for ext in (".jpg", ".jpeg", ".tiff", ".tif"):
+                    alt = original_image_path.with_suffix(ext)
+                    if alt.exists():
+                        original_image_path = alt
+                        break
+            if not original_image_path.exists():
+                raise ArtifactMissingError(
+                    f"Original image not found: {diagram_dir / 'original'}",
+                    stage="contour_extraction",
+                )
+
+            # COCO validated annotations
+            coco_path = diagram_dir / "detection" / "coco_validated.json"
+            if not coco_path.exists():
+                raise ArtifactMissingError(
+                    f"COCO validated not found: {coco_path}",
+                    stage="contour_extraction",
+                )
+
+            # Pipe mask (refined > validated > raw)
+            pipe_mask_path = diagram_dir / "segmentation" / "pipe_mask_refined.png"
+            if not pipe_mask_path.exists():
+                pipe_mask_path = diagram_dir / "segmentation" / "pipe_mask_validated.png"
+            if not pipe_mask_path.exists():
+                pipe_mask_path = diagram_dir / "segmentation" / "pipe_mask.png"
+            if not pipe_mask_path.exists():
+                raise ArtifactMissingError(
+                    f"No pipe mask found in {diagram_dir / 'segmentation'}",
+                    stage="contour_extraction",
+                )
+
+            logger.info(
+                "[%s] Inputs: image=%s, coco=%s, pipe_mask=%s",
+                diagram_uid,
+                original_image_path.name,
+                coco_path.name,
+                pipe_mask_path.name,
             )
 
-        # COCO validated annotations
-        coco_path = diagram_dir / "detection" / "coco_validated.json"
-        if not coco_path.exists():
-            raise FileNotFoundError(
-                f"COCO validated not found: {coco_path}"
-            )
+            # ===== 6. Load data =====
+            import cv2
 
-        # Pipe mask (refined > validated > raw)
-        pipe_mask_path = diagram_dir / "segmentation" / "pipe_mask_refined.png"
-        if not pipe_mask_path.exists():
-            pipe_mask_path = diagram_dir / "segmentation" / "pipe_mask_validated.png"
-        if not pipe_mask_path.exists():
-            pipe_mask_path = diagram_dir / "segmentation" / "pipe_mask.png"
-        if not pipe_mask_path.exists():
-            raise FileNotFoundError(
-                f"No pipe mask found in {diagram_dir / 'segmentation'}"
-            )
+            image = cv2.imread(str(original_image_path))
+            if image is None:
+                raise ArtifactMissingError(f"Failed to read image: {original_image_path}", stage="contour_extraction")
 
-        logger.info(
-            "[%s] Inputs: image=%s, coco=%s, pipe_mask=%s",
-            diagram_uid,
-            original_image_path.name,
-            coco_path.name,
-            pipe_mask_path.name,
-        )
+            pipe_mask = cv2.imread(str(pipe_mask_path), cv2.IMREAD_GRAYSCALE)
+            if pipe_mask is None:
+                raise ArtifactMissingError(f"Failed to read pipe mask: {pipe_mask_path}", stage="contour_extraction")
 
-        # ===== 6. Load data =====
-        import cv2
-
-        image = cv2.imread(str(original_image_path))
-        if image is None:
-            raise RuntimeError(f"Failed to read image: {original_image_path}")
-
-        pipe_mask = cv2.imread(str(pipe_mask_path), cv2.IMREAD_GRAYSCALE)
-        if pipe_mask is None:
-            raise RuntimeError(f"Failed to read pipe mask: {pipe_mask_path}")
-
-        with open(coco_path, "r", encoding="utf-8") as f:
-            coco_data = json.load(f)
+            with open(coco_path, "r", encoding="utf-8") as f:
+                coco_data = json.load(f)
 
         # ===== 7. Filter eligible annotations =====
         categories = {
@@ -227,22 +245,24 @@ def task_extract_contours(self, diagram_uid: str, ann_ids=None):
         from modules.sam2_contour import get_contour_extractor
 
         from worker.utils.device import resolve_device
-        extractor = get_contour_extractor(
-            checkpoint=ce_cfg.checkpoint,
-            checkpoint_v8=None,
-            device=resolve_device(),
-            target_size=1024,
-            snap_dp_eps=ce_cfg.snap_dp_eps,
-            snap_threshold=ce_cfg.snap_threshold,
-            snap_min_edge=ce_cfg.snap_min_edge,
-            confidence_threshold=ce_cfg.confidence_threshold,
-        )
+        with obs.step("load_model", logger):
+            extractor = get_contour_extractor(
+                checkpoint=ce_cfg.checkpoint,
+                checkpoint_v8=None,
+                device=resolve_device(),
+                target_size=1024,
+                snap_dp_eps=ce_cfg.snap_dp_eps,
+                snap_threshold=ce_cfg.snap_threshold,
+                snap_min_edge=ce_cfg.snap_min_edge,
+                confidence_threshold=ce_cfg.confidence_threshold,
+            )
 
-        raw_results = extractor.predict_batch(
-            image=image,
-            detections=eligible_anns,
-            pipe_mask=pipe_mask,
-        )
+        with obs.step("compute", logger):
+            raw_results = extractor.predict_batch(
+                image=image,
+                detections=eligible_anns,
+                pipe_mask=pipe_mask,
+            )
 
         logger.info(
             "[%s] SAM2 inference done: %d results", diagram_uid, len(raw_results)
@@ -261,10 +281,11 @@ def task_extract_contours(self, diagram_uid: str, ann_ids=None):
             diagram_uid, raw_results, categories, eligible_anns,
         )
 
-        _save_and_register(
-            db, diagram_uid, contours_dir, storage_path,
-            result_data, stage,
-        )
+        with obs.step("persist_artifacts", logger):
+            _save_and_register(
+                db, diagram_uid, contours_dir, storage_path,
+                result_data, stage,
+            )
 
         logger.info(
             "[%s] Contour extraction completed: %d auto, %d review, %d skipped",
@@ -281,8 +302,8 @@ def task_extract_contours(self, diagram_uid: str, ann_ids=None):
         }
 
     except SoftTimeLimitExceeded:
-        logger.error("[%s] Contour extraction timed out", diagram_uid)
-        fail_stage(stage, "Contour extraction timed out (9 min limit)")
+        logger.error("[%s] Contour extraction timed out", diagram_uid, exc_info=True)
+        fail_stage(stage, "Contour extraction timed out (9 min limit)", traceback.format_exc())
         set_diagram_error(
             db, diagram_uid,
             "Contour extraction timed out", "contour_extraction",
@@ -291,17 +312,16 @@ def task_extract_contours(self, diagram_uid: str, ann_ids=None):
         raise
 
     except Exception as exc:
-        logger.error(
-            "[%s] Contour extraction failed: %s\n%s",
-            diagram_uid, exc, traceback.format_exc(),
-        )
+        # exc_info=True + exc= в fail_stage → error_code/failed_step/traceback
+        # доезжают до /stages (DoD §4).
+        logger.error("[%s] Contour extraction failed: %s", diagram_uid, exc, exc_info=True)
 
         if self.request.retries < self.max_retries:
-            fail_stage(stage, str(exc)[:500], traceback.format_exc())
+            fail_stage(stage, str(exc)[:500], traceback.format_exc(), exc=exc)
             db.rollback()
             raise self.retry(exc=exc)
 
-        fail_stage(stage, str(exc)[:500], traceback.format_exc())
+        fail_stage(stage, str(exc)[:500], traceback.format_exc(), exc=exc)
         set_diagram_error(
             db, diagram_uid, str(exc)[:500], "contour_extraction",
         )

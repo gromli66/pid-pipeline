@@ -40,6 +40,26 @@ import torch.nn as nn
 import torch.nn.functional as F
 from scipy.ndimage import distance_transform_edt
 
+# --- Observability (Wave 3, batch3): progress + typed inference in predict_batch.
+# sam2_contour runs in worker (app on PYTHONPATH) and standalone CLI; obs imported
+# optionally (like engine.py): CLI -> no-op logger + stub errors. ASCII-only file.
+try:
+    from app.core.logging import get_logger
+    from app.core.errors import InferenceError, PipelineError
+    logger = get_logger(__name__)
+except Exception:  # standalone: app not on PYTHONPATH
+    import logging as _logging
+    logger = _logging.getLogger(__name__)
+
+    class PipelineError(Exception):
+        def __init__(self, message="", **_kw):
+            super().__init__(message)
+            self.step = _kw.get("step")
+            self.cause = _kw.get("cause")
+
+    class InferenceError(PipelineError):
+        pass
+
 
 # ================================================================
 # SAM2 Model Setup
@@ -627,7 +647,9 @@ class ContourExtractor:
             List of result dicts, one per detection (same format as predict()).
         """
         results = []
-        for det in detections:
+        n = len(detections)
+        log_every = max(1, n // 10)  # ~10 progress lines per batch (CPU visibility)
+        for _idx, det in enumerate(detections, 1):
             bbox = det.get('bbox')
             if not bbox:
                 continue
@@ -643,13 +665,25 @@ class ContourExtractor:
             # Other annotations = all detections except current
             other_anns = [d for d in detections if d is not det]
 
-            result = self.predict(
-                image=image,
-                rough_bbox=bbox,
-                rough_polygon=rough_polygon,
-                pipe_mask=pipe_mask,
-                other_anns=other_anns,
-            )
+            # Progress in logs -> movement visible on CPU (~25s batch, obs batch3);
+            # typed per-node failure -> InferenceError(step=compute).
+            if _idx % log_every == 0 or _idx == n:
+                logger.info("SAM2 contour node %d/%d", _idx, n)
+            try:
+                result = self.predict(
+                    image=image,
+                    rough_bbox=bbox,
+                    rough_polygon=rough_polygon,
+                    pipe_mask=pipe_mask,
+                    other_anns=other_anns,
+                )
+            except PipelineError:
+                raise
+            except Exception as exc:
+                raise InferenceError(
+                    "SAM2 contour inference failed (ann_id=%s)" % det.get('id'),
+                    step="compute", cause=exc,
+                ) from exc
             result['ann_id'] = det.get('id')
             result['category_id'] = det.get('category_id')
             results.append(result)
