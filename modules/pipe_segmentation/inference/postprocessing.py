@@ -58,7 +58,7 @@ def post_process_mask(
 
     t_total = time.time()
     h, w = mask.shape
-    logger.warning("[POSTPROCESS] Start (%dx%d, %.1f Mpx)", w, h, h * w / 1e6)
+    logger.info("[POSTPROCESS] Start (%dx%d, %.1f Mpx)", w, h, h * w / 1e6)
 
     # Приводим к бинарному
     if mask.max() <= 1:
@@ -70,7 +70,7 @@ def post_process_mask(
     if remove_small_objects > 0:
         t0 = time.time()
         binary = remove_small_components(binary, remove_small_objects)
-        logger.warning("[POSTPROCESS] 1_remove_small: %.2fs", time.time() - t0)
+        logger.info("[POSTPROCESS] 1_remove_small: %.2fs", time.time() - t0)
 
     # 2. Удаление рамки чертежа
     if remove_border_frame is None:
@@ -82,7 +82,7 @@ def post_process_mask(
             margin=remove_border_frame.get('margin', 30),
             min_length_ratio=remove_border_frame.get('min_length_ratio', 0.5),
         )
-        logger.warning("[POSTPROCESS] 2_remove_frame: %.2fs", time.time() - t0)
+        logger.info("[POSTPROCESS] 2_remove_frame: %.2fs", time.time() - t0)
 
     # 3. Скелетное соединение разрывов
     if skeleton_gap_fill is None:
@@ -96,7 +96,7 @@ def post_process_mask(
             min_segment_length=skeleton_gap_fill.get('min_segment_length', 15),
             verify_path=skeleton_gap_fill.get('verify_path', True),
         )
-        logger.warning("[POSTPROCESS] 3_skeleton_gap_fill: %.2fs", time.time() - t0)
+        logger.info("[POSTPROCESS] 3_skeleton_gap_fill: %.2fs", time.time() - t0)
 
     # 4. Минимальная морфология (по умолчанию выключена: kernel=0)
     if closing_kernel_size > 0:
@@ -106,7 +106,7 @@ def post_process_mask(
             (closing_kernel_size, closing_kernel_size)
         )
         binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
-        logger.warning("[POSTPROCESS] 4_closing: %.2fs", time.time() - t0)
+        logger.info("[POSTPROCESS] 4_closing: %.2fs", time.time() - t0)
 
     if opening_kernel_size > 0:
         t0 = time.time()
@@ -115,7 +115,7 @@ def post_process_mask(
             (opening_kernel_size, opening_kernel_size)
         )
         binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
-        logger.warning("[POSTPROCESS] 4_opening: %.2fs", time.time() - t0)
+        logger.info("[POSTPROCESS] 4_opening: %.2fs", time.time() - t0)
 
     # 5. Заполнение дыр
     if fill_holes is None:
@@ -126,15 +126,15 @@ def post_process_mask(
             binary,
             max_hole_size=fill_holes.get('max_hole_size', 500)
         )
-        logger.warning("[POSTPROCESS] 5_fill_holes: %.2fs", time.time() - t0)
+        logger.info("[POSTPROCESS] 5_fill_holes: %.2fs", time.time() - t0)
 
     # 6. Финальная очистка мелких компонент
     if remove_small_objects > 0:
         t0 = time.time()
         binary = remove_small_components(binary, remove_small_objects)
-        logger.warning("[POSTPROCESS] 6_final_cleanup: %.2fs", time.time() - t0)
+        logger.info("[POSTPROCESS] 6_final_cleanup: %.2fs", time.time() - t0)
 
-    logger.warning("[POSTPROCESS] TOTAL: %.2fs", time.time() - t_total)
+    logger.info("[POSTPROCESS] TOTAL: %.2fs", time.time() - t_total)
     return binary * 255
 
 
@@ -237,7 +237,7 @@ def smart_skeleton_connect(
     # Скелетонизация
     skeleton = _fast_skeletonize(mask)
     t_skel = time.time()
-    logger.warning("[SKELETON_CONNECT] skeletonize: %.2fs (mask %dx%d, %d nonzero px)",
+    logger.info("[SKELETON_CONNECT] skeletonize: %.2fs (mask %dx%d, %d nonzero px)",
                    t_skel - t0, mask.shape[1], mask.shape[0], int(mask.sum()))
     if skeleton.sum() < 10:
         return mask
@@ -245,7 +245,7 @@ def smart_skeleton_connect(
     # Endpoints
     endpoints = _find_endpoints(skeleton)
     t_ep = time.time()
-    logger.warning("[SKELETON_CONNECT] find_endpoints: %.2fs (%d endpoints)",
+    logger.info("[SKELETON_CONNECT] find_endpoints: %.2fs (%d endpoints)",
                    t_ep - t_skel, len(endpoints))
     if len(endpoints) < 2:
         return mask
@@ -262,7 +262,7 @@ def smart_skeleton_connect(
                 'thickness': thickness,
             })
     t_trace = time.time()
-    logger.warning("[SKELETON_CONNECT] trace_directions+thickness: %.2fs (%d valid eps)",
+    logger.info("[SKELETON_CONNECT] trace_directions+thickness: %.2fs (%d valid eps)",
                    t_trace - t_ep, len(ep_data))
 
     # Ищем пары для соединения
@@ -326,9 +326,9 @@ def smart_skeleton_connect(
             n_connected += 1
 
     t_match = time.time()
-    logger.warning("[SKELETON_CONNECT] pair_matching: %.2fs (%d pairs connected)",
+    logger.info("[SKELETON_CONNECT] pair_matching: %.2fs (%d pairs connected)",
                    t_match - t_trace, n_connected)
-    logger.warning("[SKELETON_CONNECT] TOTAL: %.2fs", t_match - t0)
+    logger.info("[SKELETON_CONNECT] TOTAL: %.2fs", t_match - t0)
 
     return result
 
