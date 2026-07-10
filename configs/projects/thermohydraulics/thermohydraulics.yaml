@@ -162,7 +162,7 @@ segmentation:
   overlap: 128
   batch_size: 4
   threshold: 0.5
-  use_tta: true
+  use_tta: false   # off: TTA daet <0.5% Dice za x4 vremeni na held-out (benchmark) - ne opravdan na CPU, ubiraet timeout
   binarize: false                      # A_600 обучена на сыром RGB — НЕ бинаризовать
   binarize_method: "adaptive"
   postprocess: true
