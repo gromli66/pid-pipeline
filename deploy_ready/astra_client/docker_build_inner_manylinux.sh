@@ -44,6 +44,8 @@ PID_API_URL=http://REPLACE_WITH_SERVER_IP:8000
 # Отрисовка GL: software — универсально для Astra и виртуалок.
 # При наличии нормального GPU можно сменить на gles.
 PID_GL_BACKEND=software
+# Софт-рендер Qt Quick: без него не работает встроенный CVAT (WebEngine).
+QT_QUICK_BACKEND=software
 CFG
 
 # version.txt — клиент показывает версию в заголовке окна.

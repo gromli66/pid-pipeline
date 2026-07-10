@@ -18,7 +18,7 @@ ResponsiveToolbar — тулбар в одну строку с авто-подг
 `toolbar_container` — QWidget, внутри которого лежит горизонтальный layout кнопок.
 """
 
-from PySide6.QtCore import QObject, QEvent
+from PySide6.QtCore import QObject, QEvent, QTimer
 from PySide6.QtWidgets import (
     QWidget, QAbstractButton, QLabel, QAbstractSpinBox, QHBoxLayout, QLayout,
 )
@@ -43,6 +43,16 @@ class ResponsiveToolbar(QObject):
         self._base_pt: float | None = None
         self._compacted = False
         self._applying = False
+        # Ширина контейнера на момент последнего применённого прохода:
+        # если не изменилась — пересчёт не нужен (разрыв петли relayout).
+        self._last_avail: int | None = None
+        # Дебаунс: серия Resize/Show схлопывается в один отложенный проход.
+        # Таймер — ребёнок контроллера: при deleteLater контейнера умирает
+        # вместе с ним, отложенный вызов не придёт в уничтоженный объект.
+        self._apply_timer = QTimer(self)
+        self._apply_timer.setSingleShot(True)
+        self._apply_timer.setInterval(0)
+        self._apply_timer.timeout.connect(self._apply)
         container.installEventFilter(self)
 
     # -- helpers --
@@ -95,6 +105,10 @@ class ResponsiveToolbar(QObject):
     def _apply(self):
         if self._applying:
             return
+        avail = self._c.width()
+        if avail == self._last_avail:
+            # Ширина не менялась — результат прошлого прохода актуален.
+            return
         ch = self._children()
         if not ch:
             return
@@ -115,9 +129,9 @@ class ResponsiveToolbar(QObject):
 
             needed = sum(max(w.sizeHint().width(), 1) for w in ch)
             needed += _BASE_SPACING * max(0, len(ch) - 1) + self._margins_width()
-            avail = self._c.width()
             if needed <= 0 or avail <= 0:
                 return
+            self._last_avail = avail
 
             ratio = min(1.0, avail / needed)
 
@@ -135,10 +149,18 @@ class ResponsiveToolbar(QObject):
 
     # -- event filter --
     def eventFilter(self, obj, ev):
-        if obj is self._c and ev.type() in (
-            QEvent.Type.Resize, QEvent.Type.Show, QEvent.Type.LayoutRequest,
-        ):
-            self._apply()
+        # LayoutRequest намеренно НЕ обрабатывается: setFont внутри _apply()
+        # постит LayoutRequest, что замыкало вечную асинхронную петлю
+        # relayout (мигание тулбара на Astra при ratio < 1).
+        if obj is self._c:
+            t = ev.type()
+            if t == QEvent.Type.Show:
+                # До показа ширины контейнера фиктивны — форсируем пересчёт.
+                self._last_avail = None
+                self._apply_timer.start()
+            elif t == QEvent.Type.Resize:
+                self._apply_timer.start()
+        # События никогда не поглощаем (единственный eventFilter клиента).
         return False
 
 

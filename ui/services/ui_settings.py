@@ -36,6 +36,16 @@ class UISettings:
     def autosave_interval_sec(self, val: int):
         self._qs.setValue("autosave/interval_sec", val)
 
+    # --- Импорт ---
+    @property
+    def last_import_dir(self) -> str:
+        """Папка последнего импорта изображения/PDF (стартовая для диалога)."""
+        return self._qs.value("import/last_dir", "", type=str)
+
+    @last_import_dir.setter
+    def last_import_dir(self, val: str):
+        self._qs.setValue("import/last_dir", val)
+
     # --- Appearance (оформление, по диаграмме) ---
     def get_appearance(self, uid: str, key: str, default):
         """Прочитать настройку оформления для конкретной диаграммы.

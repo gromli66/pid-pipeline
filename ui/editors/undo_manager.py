@@ -106,17 +106,23 @@ class UndoManager:
     def __init__(self, max_steps: int = 100):
         self.undo_stack: deque[Command] = deque(maxlen=max_steps)
         self.redo_stack: deque[Command] = deque(maxlen=max_steps)
+        # Монотонный счётчик мутаций (execute / push_executed / undo / redo).
+        # В отличие от stack_depth не «застывает» при переполнении deque
+        # и не совпадает ложно после undo + повторных правок.
+        self._revision: int = 0
 
     def execute(self, command: Command):
         """Выполнить команду и добавить в undo-стек."""
         command.execute()
         self.undo_stack.append(command)
         self.redo_stack.clear()
+        self._revision += 1
 
     def push_executed(self, command: Command):
         """Добавить уже выполненную команду (для drag, waypoint move)."""
         self.undo_stack.append(command)
         self.redo_stack.clear()
+        self._revision += 1
 
     def undo(self) -> Optional[str]:
         """Отменить последнее действие.
@@ -129,6 +135,7 @@ class UndoManager:
         cmd = self.undo_stack.pop()
         cmd.undo()
         self.redo_stack.append(cmd)
+        self._revision += 1
         return cmd.description
 
     def redo(self) -> Optional[str]:
@@ -142,6 +149,7 @@ class UndoManager:
         cmd = self.redo_stack.pop()
         cmd.redo()
         self.undo_stack.append(cmd)
+        self._revision += 1
         return cmd.description
 
     @property
@@ -154,8 +162,13 @@ class UndoManager:
 
     @property
     def stack_depth(self) -> int:
-        """Глубина undo-стека. Для has_unsaved_changes."""
+        """Глубина undo-стека."""
         return len(self.undo_stack)
+
+    @property
+    def revision(self) -> int:
+        """Монотонный счётчик мутаций. Для has_unsaved_changes."""
+        return self._revision
 
     def clear(self):
         """Очистить оба стека."""

@@ -129,7 +129,7 @@ class GraphValidationWindow(QMainWindow):
 
         # State
         self._artifacts: dict = {}
-        self._saved_stack_depth: int = 0
+        self._saved_revision: int = 0  # undo_mgr.revision на момент последнего save
 
         self.setWindowTitle(f"Валидация графа — {diagram_name}")
         self.setMinimumSize(1200, 800)
@@ -301,7 +301,7 @@ class GraphValidationWindow(QMainWindow):
         coco_path = str(artifacts.get("coco_validated", ""))
 
         if self.graph_editor.load_data(image_path, graph_path, coco_path):
-            self._saved_stack_depth = self.graph_editor.undo_mgr.stack_depth
+            self._saved_revision = self.graph_editor.undo_mgr.revision
             stats = self.graph_editor.model.compute_statistics()
             self.statusbar.showMessage(
                 f"Загружено: {self.diagram_name} | "
@@ -346,7 +346,7 @@ class GraphValidationWindow(QMainWindow):
         if self.graph_editor.load_data(
             image_path, graph_path, coco_path or ""
         ):
-            self._saved_stack_depth = self.graph_editor.undo_mgr.stack_depth
+            self._saved_revision = self.graph_editor.undo_mgr.revision
             stats = self.graph_editor.model.compute_statistics()
             self.statusbar.showMessage(
                 f"Загружено: {Path(image_path).name} | "
@@ -418,39 +418,41 @@ class GraphValidationWindow(QMainWindow):
     # === Change detection ===
 
     def _has_unsaved_changes(self) -> bool:
-        return self.graph_editor.undo_mgr.stack_depth != self._saved_stack_depth
+        return self.graph_editor.undo_mgr.revision != self._saved_revision
 
     # === Save ===
 
     @Slot()
-    def _save_graph(self):
-        """Сохранить валидированный граф на сервер."""
+    def _save_graph(self) -> bool:
+        """Сохранить валидированный граф на сервер. Возвращает True при успехе."""
         try:
             QApplication.setOverrideCursor(Qt.WaitCursor)
 
             # Сохраняем во временный файл
             graph_path = self.temp_dir / "graph_validated.json"
             if not self.graph_editor.save_graph(str(graph_path)):
-                QApplication.restoreOverrideCursor()
-                return
+                return False
 
             # Загружаем на сервер
             self.statusbar.showMessage("Загрузка графа на сервер...")
             self.api_client.upload_validated_graph(self.uid, graph_path)
 
-            self._saved_stack_depth = self.graph_editor.undo_mgr.stack_depth
+            self._saved_revision = self.graph_editor.undo_mgr.revision
             self.statusbar.showMessage("✅ Граф сохранён", 5000)
+            return True
 
         except APIError as exc:
             QMessageBox.warning(
                 self, "Ошибка",
                 f"Не удалось сохранить граф:\n{exc.message}",
             )
+            return False
         except Exception as exc:
             QMessageBox.warning(
                 self, "Ошибка",
                 f"Не удалось сохранить граф:\n{exc}",
             )
+            return False
         finally:
             QApplication.restoreOverrideCursor()
 
@@ -458,19 +460,22 @@ class GraphValidationWindow(QMainWindow):
 
     @Slot()
     def _complete_validation(self):
-        """Завершить валидацию графа."""
+        """Завершить валидацию графа.
+
+        Save безусловный: дырти-флаг может ложно давать «нет изменений»,
+        а complete без свежего graph_validated теряет правки в FXML.
+        """
         if self._has_unsaved_changes():
             reply = QMessageBox.question(
                 self, "Сохранение",
-                "Граф не сохранён. Сохранить перед завершением?",
-                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                "Несохранённые изменения будут сохранены. Продолжить?",
+                QMessageBox.Yes | QMessageBox.Cancel,
             )
-            if reply == QMessageBox.Cancel:
+            if reply != QMessageBox.Yes:
                 return
-            if reply == QMessageBox.Yes:
-                self._save_graph()
-                if self._has_unsaved_changes():
-                    return  # Сохранение не удалось
+
+        if not self._save_graph():
+            return
 
         try:
             QApplication.setOverrideCursor(Qt.WaitCursor)

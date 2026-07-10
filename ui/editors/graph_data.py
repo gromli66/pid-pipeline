@@ -262,6 +262,15 @@ class GraphDataModel:
             n for n in self.graph_data.get('nodes', []) if n.get('id') != node_id
         ]
 
+        # Привязки текст-блоков к удалённому узлу и его рёбрам слетают
+        # (блоки остаются непривязанными на последней позиции).
+        removed_keys = set(connected_keys)
+        self.bindings = [
+            b for b in self.bindings
+            if b.get('node_id') != node_id
+            and self.binding_edge_key(b) not in removed_keys
+        ]
+
         return node_backup, edges_backup
 
     def update_node(self, node_id: str, updates: dict):
@@ -303,6 +312,10 @@ class GraphDataModel:
                 if self.edge_key(e['source'], e['target']) != key
             ]
             self.graph_data['links'] = self.edges_data
+            # Привязки текст-блоков к удалённому ребру слетают
+            self.bindings = [
+                b for b in self.bindings if self.binding_edge_key(b) != key
+            ]
         return removed
 
     def update_edge(self, key: tuple[str, str], updates: dict):
@@ -485,7 +498,21 @@ class GraphDataModel:
         return removed
 
     def set_binding(self, binding: dict):
-        """Добавить/заменить привязку блока (один блок — одна привязка)."""
+        """Добавить/заменить привязку блока (один блок — одна привязка).
+
+        Необязательные поля авто-позиции блока у цели:
+          side ∈ {top, right, left, bottom} — сторона bbox цели;
+          gap (float) — отступ блока от границы цели, px.
+        Без них блок лежит где лежал (обратная совместимость).
+        """
+        side = binding.get("side")
+        if side is not None and side not in ("top", "right", "left", "bottom"):
+            binding.pop("side", None)
+        if binding.get("gap") is not None:
+            try:
+                binding["gap"] = float(binding["gap"])
+            except (TypeError, ValueError):
+                binding.pop("gap", None)
         bid = binding.get("block_id")
         self.bindings = [b for b in self.bindings if b.get("block_id") != bid]
         self.bindings.append(binding)
@@ -507,4 +534,12 @@ class GraphDataModel:
         for b in self.bindings:
             if b.get("block_id") == block_id:
                 return b
+        return None
+
+    def binding_edge_key(self, binding: dict) -> Optional[tuple]:
+        """edge_key привязки ('a|b') → канонический tuple-ключ ребра или None."""
+        ek = binding.get("edge_key")
+        if ek and "|" in str(ek):
+            a, b = str(ek).split("|", 1)
+            return self.edge_key(a, b)
         return None

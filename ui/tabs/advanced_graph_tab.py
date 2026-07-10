@@ -466,6 +466,10 @@ class AdvancedGraphTab(SimpleGraphTab):
         self._recog_pending_ids = pending_ids
         self.status_label.setText(f"Распознавание {len(boxes)} блоков…")
         self.btn_recognize.setEnabled(False)
+        # Гонка с фоновым потоком: save/confirm до прихода результата
+        # зафиксировали бы граф без распознанного текста.
+        self.btn_save.setEnabled(False)
+        self.btn_confirm.setEnabled(False)
 
         self._recog_thread = QThread()
         self._recog_worker = _RecognizeWorker(self.api_client, self.uid, boxes)
@@ -482,6 +486,8 @@ class AdvancedGraphTab(SimpleGraphTab):
             self._recog_thread = None
             self._recog_worker = None
         self.btn_recognize.setEnabled(True)
+        self.btn_save.setEnabled(True)
+        self.btn_confirm.setEnabled(True)
 
     @Slot(list)
     def _on_recognize_done(self, results: list):

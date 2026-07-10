@@ -527,6 +527,8 @@ class OcrBindingTab(AppearanceMixin, QWidget):
                 n += 1
         self._recog_pending = []
         self.btn_recognize.setEnabled(True)
+        # Распознанный текст — несохранённое изменение (autosave + close-guard)
+        self._saved = False
         self.editor.refresh_ocr_layer()
         self.status_label.setText(f"Распознано {n}/{len(results)} блоков")
 
