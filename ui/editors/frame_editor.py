@@ -7,10 +7,12 @@ Frame Editor — переиспользуемый QGraphicsView-редактор
 Инструменты:
   🔲 Полигон (внешнее) — обвести внутреннюю часть чертежа; всё СНАРУЖИ → фон.
   ⬛ Бокс (внутреннее)  — прямоугольник; всё ВНУТРИ → фон (штамп/таблица).
+  ✂ Обрезать            — прямоугольник; всё ВНУТРИ остаётся, остальное
+                           отрезается (лист уменьшается, DPI сохраняется).
 
 Публичное API (для вкладки):
   load_image(path) -> bool          загрузить исходное изображение
-  set_tool("polygon"|"box")          выбрать инструмент
+  set_tool("polygon"|"box"|"crop")   выбрать инструмент
   undo()                             отменить последнюю операцию
   save_image(path)                   сохранить очищенное (RGB888, DPI сохраняется)
   has_edits -> bool                  были ли применены правки
@@ -29,7 +31,7 @@ from PySide6.QtWidgets import (
     QMessageBox, QGraphicsView, QGraphicsScene,
     QGraphicsPixmapItem, QGraphicsRectItem,
 )
-from PySide6.QtCore import Qt, QRectF
+from PySide6.QtCore import Qt, QRect, QRectF
 from PySide6.QtGui import (
     QKeySequence, QAction, QImage, QPixmap, QColor,
     QPainter, QPainterPath, QBrush, QPen,
@@ -172,7 +174,7 @@ MAX_UNDO = 30
 
 
 class FrameRemoverView(QGraphicsView):
-    """QGraphicsView для удаления рамок: полигон (внешнее) + бокс (внутреннее)."""
+    """QGraphicsView для удаления рамок: полигон (внешнее) + бокс (внутреннее) + обрезка."""
 
     SCENE_PAD = 0.3  # 30% padding вокруг изображения
 
@@ -188,7 +190,7 @@ class FrameRemoverView(QGraphicsView):
         self.img_h = 0
         self.image_item: QGraphicsPixmapItem | None = None
 
-        # Инструмент: "polygon" | "box"
+        # Инструмент: "polygon" | "box" | "crop"
         self.tool = "polygon"
 
         # Undo
@@ -202,6 +204,11 @@ class FrameRemoverView(QGraphicsView):
         self._box_drawing = False
         self._box_start = None  # (x, y)
         self._box_preview: QGraphicsRectItem | None = None
+
+        # Crop draw state (отдельное состояние, не делится с box)
+        self._crop_drawing = False
+        self._crop_start = None  # (x, y)
+        self._crop_preview: QGraphicsRectItem | None = None
 
         # View setup
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -259,6 +266,38 @@ class FrameRemoverView(QGraphicsView):
             Qt.AspectRatioMode.KeepAspectRatio,
         )
 
+    def _reset_scene_keep_undo(self):
+        """Пересобрать сцену под новый размер self.image, НЕ очищая undo_stack.
+
+        Как _rebuild_scene, но для смены размера внутри сессии (crop / его undo):
+        история правок должна пережить пересборку. Cleanup'ы рисования — ДО
+        scene.clear(): overlay/preview снимают item'ы через removeItem, после
+        clear() это были бы уже удалённые объекты.
+        """
+        self._cleanup_polygon()
+        self._cleanup_box()
+        self._cleanup_crop()
+        self.scene_obj.clear()
+
+        self.image_item = QGraphicsPixmapItem(QPixmap.fromImage(self.image))
+        self.image_item.setZValue(0)
+        self.scene_obj.addItem(self.image_item)
+
+        pad_x = self.img_w * self.SCENE_PAD
+        pad_y = self.img_h * self.SCENE_PAD
+        self.setSceneRect(QRectF(
+            -pad_x, -pad_y,
+            self.img_w + pad_x * 2,
+            self.img_h + pad_y * 2,
+        ))
+        self.fitInView(
+            QRectF(0, 0, self.img_w, self.img_h),
+            Qt.AspectRatioMode.KeepAspectRatio,
+        )
+        # Рисование сброшено — вернуть пан/курсор (как _apply_polygon)
+        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+
     def _refresh_pixmap(self):
         """Обновить отображение после изменения self.image."""
         if self.image_item:
@@ -270,10 +309,16 @@ class FrameRemoverView(QGraphicsView):
         # Отменить текущее рисование при смене инструмента
         self._cleanup_polygon()
         self._cleanup_box()
+        self._cleanup_crop()
         self.tool = tool
         if tool == "polygon":
             self._start_polygon()
-        self._status(f"Инструмент: {'Полигон (внешнее)' if tool == 'polygon' else 'Бокс (внутреннее)'}")
+        names = {
+            "polygon": "Полигон (внешнее)",
+            "box": "Бокс (внутреннее)",
+            "crop": "Обрезать (оставить выделенное)",
+        }
+        self._status(f"Инструмент: {names.get(tool, tool)}")
 
     # ── Polygon (удалить внешнее) ─────────────────────────
 
@@ -393,15 +438,103 @@ class FrameRemoverView(QGraphicsView):
         self._box_drawing = False
         self._box_start = None
 
+    # ── Crop (обрезать лист: оставить внутреннее) ─────────
+
+    def _start_crop(self, scene_pos):
+        x, y = int(scene_pos.x()), int(scene_pos.y())
+        if not (0 <= x < self.img_w and 0 <= y < self.img_h):
+            return
+        self._crop_start = (x, y)
+        self._crop_drawing = True
+
+        # Зелёное превью — область, которая ОСТАНЕТСЯ (красное = удаление)
+        self._crop_preview = QGraphicsRectItem()
+        self._crop_preview.setPen(QPen(QColor(60, 200, 90), 2, Qt.PenStyle.DashLine))
+        self._crop_preview.setBrush(QBrush(QColor(60, 200, 90, 40)))
+        self._crop_preview.setZValue(100)
+        self.scene_obj.addItem(self._crop_preview)
+
+    def _update_crop_preview(self, scene_pos):
+        if not self._crop_drawing or not self._crop_start:
+            return
+        x1, y1 = self._crop_start
+        x2 = max(0, min(int(scene_pos.x()), self.img_w))
+        y2 = max(0, min(int(scene_pos.y()), self.img_h))
+        self._crop_preview.setRect(QRectF(
+            min(x1, x2), min(y1, y2),
+            abs(x2 - x1), abs(y2 - y1),
+        ))
+
+    def _finish_crop(self, scene_pos):
+        if not self._crop_drawing or not self._crop_start:
+            return
+        x1, y1 = self._crop_start
+        x2 = max(0, min(int(scene_pos.x()), self.img_w))
+        y2 = max(0, min(int(scene_pos.y()), self.img_h))
+
+        # Убрать preview
+        self._cleanup_crop()
+
+        self._apply_crop(x1, y1, x2, y2)
+
+    def _apply_crop(self, x1: int, y1: int, x2: int, y2: int):
+        """Обрезать self.image по прямоугольнику: внутреннее остаётся.
+
+        Попиксельный QImage.copy(QRect) без пересэмплирования; DPI переносится,
+        поэтому дальше по пайплайну (save_image) уходит лист меньшего размера
+        в том же качестве.
+        """
+        l, t = max(0, min(x1, x2)), max(0, min(y1, y2))
+        r, b = min(self.img_w, max(x1, x2)), min(self.img_h, max(y1, y2))
+        w, h = r - l, b - t
+
+        # Вырожденный прямоугольник
+        if w < 5 or h < 5:
+            self._status("Слишком маленькая область обрезки, отменено.")
+            return
+
+        backup = self.image.copy()
+        self.image = self.image.copy(QRect(l, t, w, h))
+        self.image.setDotsPerMeterX(self._dpm_x)
+        self.image.setDotsPerMeterY(self._dpm_y)
+        self.img_w = self.image.width()
+        self.img_h = self.image.height()
+
+        self.undo_stack.append(backup)
+        # Размер сцены изменился — пересобрать, сохранив историю
+        # (заодно вернёт ScrollHandDrag/ArrowCursor)
+        self._reset_scene_keep_undo()
+        self._status(
+            f"Лист обрезан до {w}×{h}px, DPI сохранён. Ctrl+Z — вернуть исходный размер."
+        )
+
+    def _cleanup_crop(self):
+        if self._crop_preview:
+            self.scene_obj.removeItem(self._crop_preview)
+            self._crop_preview = None
+        self._crop_drawing = False
+        self._crop_start = None
+
     # ── Undo ──────────────────────────────────────────────
 
     def undo(self):
         if not self.undo_stack:
             self._status("Нечего отменять.")
             return
-        self.image = self.undo_stack.pop()
-        self._refresh_pixmap()
-        self._status("Отменено.")
+        popped = self.undo_stack.pop()
+        size_changed = (
+            popped.width() != self.img_w or popped.height() != self.img_h
+        )
+        self.image = popped
+        if size_changed:
+            # Отмена crop: восстановить размеры и сцену, undo_stack не трогать
+            self.img_w = self.image.width()
+            self.img_h = self.image.height()
+            self._reset_scene_keep_undo()
+            self._status(f"Отменено (размер восстановлен: {self.img_w}×{self.img_h}px).")
+        else:
+            self._refresh_pixmap()
+            self._status("Отменено.")
 
     # ── Save ──────────────────────────────────────────────
 
@@ -466,6 +599,12 @@ class FrameRemoverView(QGraphicsView):
                 self._start_box(pos)
                 return
 
+        # ── Crop mode ──
+        if self.tool == "crop":
+            if event.button() == Qt.MouseButton.LeftButton:
+                self._start_crop(pos)
+                return
+
         super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent):
@@ -489,6 +628,11 @@ class FrameRemoverView(QGraphicsView):
             self._update_box_preview(pos)
             return
 
+        # Crop preview
+        if self.tool == "crop" and self._crop_drawing:
+            self._update_crop_preview(pos)
+            return
+
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent):
@@ -496,6 +640,11 @@ class FrameRemoverView(QGraphicsView):
             if event.button() == Qt.MouseButton.LeftButton:
                 pos = self.mapToScene(event.position().toPoint())
                 self._finish_box(pos)
+            return
+        if self.tool == "crop" and self._crop_drawing:
+            if event.button() == Qt.MouseButton.LeftButton:
+                pos = self.mapToScene(event.position().toPoint())
+                self._finish_crop(pos)
             return
         super().mouseReleaseEvent(event)
 
@@ -527,6 +676,15 @@ class FrameRemoverView(QGraphicsView):
             if event.key() == Qt.Key.Key_Escape:
                 self._cleanup_box()
                 self._status("Бокс отменён.")
+                return
+
+        # Crop hotkeys (только пока crop реально рисуется — не красть Esc у других)
+        if self.tool == "crop" and self._crop_drawing:
+            if event.key() == Qt.Key.Key_Escape:
+                self._cleanup_crop()
+                self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+                self.setCursor(Qt.CursorShape.ArrowCursor)
+                self._status("Обрезка отменена.")
                 return
 
         # Global undo (вне рисования)

@@ -697,7 +697,9 @@ async def complete_simple_graph_validation(
             detail=f"Cannot complete simple validation: status is '{diagram.status.value}'",
         )
 
-    # Проверить/скопировать GRAPH_VALIDATED
+    # Проверить наличие GRAPH_VALIDATED.
+    # Раньше здесь молча копировался GRAPH_JSON — дальше пайплайн шёл по
+    # устаревшему графу без ручных правок. Теперь требуем сохранение.
     validated_result = await db.execute(
         select(Artifact).where(
             Artifact.diagram_uid == uid,
@@ -705,39 +707,11 @@ async def complete_simple_graph_validation(
         )
     )
     if not validated_result.scalar_one_or_none():
-        original_result = await db.execute(
-            select(Artifact).where(
-                Artifact.diagram_uid == uid,
-                Artifact.artifact_type == ArtifactType.GRAPH_JSON,
-            )
+        raise HTTPException(
+            status_code=400,
+            detail="Граф не сохранён — сначала сохраните правки "
+                   "(кнопка «Сохранить»), затем подтвердите.",
         )
-        original_artifact = original_result.scalar_one_or_none()
-        if not original_artifact:
-            raise HTTPException(
-                status_code=400,
-                detail="No graph found. Save the graph before completing.",
-            )
-
-        storage = StorageService()
-        original_path = storage.base_path / original_artifact.file_path
-        if not original_path.exists():
-            raise HTTPException(
-                status_code=400,
-                detail=f"Original graph file not found: {original_artifact.file_path}",
-            )
-
-        validated_path = original_path.parent / "graph_validated.json"
-        await asyncio.to_thread(shutil.copy2, str(original_path), str(validated_path))
-
-        artifact = Artifact(
-            diagram_uid=uid,
-            artifact_type=ArtifactType.GRAPH_VALIDATED,
-            file_path=str(validated_path.relative_to(storage.base_path)),
-            file_size=validated_path.stat().st_size,
-            mime_type="application/json",
-        )
-        db.add(artifact)
-        await db.flush()
 
     # === Safety-net слияния OCR -> граф ===
     # Основное слияние — в конце OCR-таска. Здесь на случай, если OCR уже готов
@@ -939,8 +913,9 @@ async def complete_graph_validation(
             detail=f"Cannot complete graph validation: status is '{diagram.status.value}'",
         )
 
-    # Проверяем наличие GRAPH_VALIDATED
-    # Если нет — копируем GRAPH_JSON как validated
+    # Проверяем наличие GRAPH_VALIDATED.
+    # Раньше здесь молча копировался GRAPH_JSON — FXML генерировался из
+    # устаревшего графа без ручных правок. Теперь требуем сохранение.
     validated_result = await db.execute(
         select(Artifact).where(
             Artifact.diagram_uid == uid,
@@ -948,44 +923,11 @@ async def complete_graph_validation(
         )
     )
     if not validated_result.scalar_one_or_none():
-        # Ищем оригинальный GRAPH_JSON
-        original_result = await db.execute(
-            select(Artifact).where(
-                Artifact.diagram_uid == uid,
-                Artifact.artifact_type == ArtifactType.GRAPH_JSON,
-            )
+        raise HTTPException(
+            status_code=400,
+            detail="Граф не сохранён — сначала сохраните правки "
+                   "(кнопка «Сохранить»), затем подтвердите.",
         )
-        original_artifact = original_result.scalar_one_or_none()
-        if not original_artifact:
-            raise HTTPException(
-                status_code=400,
-                detail="No graph_json or graph_validated artifact found. "
-                       "Save the graph before completing validation.",
-            )
-
-        # Копируем как validated
-        storage = StorageService()
-        original_path = storage.base_path / original_artifact.file_path
-        if not original_path.exists():
-            raise HTTPException(
-                status_code=400,
-                detail=f"Original graph file not found: {original_artifact.file_path}",
-            )
-
-        validated_filename = "graph_validated.json"
-        validated_path = original_path.parent / validated_filename
-
-        await asyncio.to_thread(shutil.copy2, str(original_path), str(validated_path))
-
-        artifact = Artifact(
-            diagram_uid=uid,
-            artifact_type=ArtifactType.GRAPH_VALIDATED,
-            file_path=str(validated_path.relative_to(storage.base_path)),
-            file_size=validated_path.stat().st_size,
-            mime_type="application/json",
-        )
-        db.add(artifact)
-        await db.flush()
 
     # Обновляем статус
     # Если пришли из OCR_BOUND (после привязки + редактор) → сразу GENERATING_FXML

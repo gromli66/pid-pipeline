@@ -196,8 +196,8 @@ class ProgressBeads(QWidget):
                                  QPointF(p2.x() - r, p2.y()))
 
         # Бусины
-        label_font = QFont("Segoe UI", 9)
-        date_font = QFont("Segoe UI", 7)
+        label_font = QFont(self.font().family(), 9)
+        date_font = QFont(self.font().family(), 7)
         label_fm = QFontMetrics(label_font)
         date_fm = QFontMetrics(date_font)
 

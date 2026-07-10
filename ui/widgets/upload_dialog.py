@@ -15,6 +15,8 @@ from PySide6.QtWidgets import (
     QSpinBox, QLabel, QHBoxLayout, QWidget,
 )
 
+from ui.services.ui_settings import UISettings
+
 _PDF_EXT = ".pdf"
 
 
@@ -79,12 +81,15 @@ class UploadDialog(QDialog):
         self.warn_label.setVisible(visible)
 
     def _browse_file(self):
+        # Стартовая папка — из последнего импорта (несуществующий путь
+        # QFileDialog молча заменит дефолтной папкой).
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Выберите файл", "",
+            self, "Выберите файл", UISettings.instance().last_import_dir,
             "P&ID файлы (*.png *.jpg *.jpeg *.tiff *.tif *.pdf)"
         )
         if not file_path:
             return
+        UISettings.instance().last_import_dir = str(Path(file_path).parent)
         self.file_input.setText(file_path)
 
         if Path(file_path).suffix.lower() == _PDF_EXT:

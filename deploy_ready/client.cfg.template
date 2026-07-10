@@ -4,3 +4,7 @@ PID_API_URL=http://REPLACE_WITH_SERVER_IP:8000
 # Отрисовка интерфейса. По умолчанию gles (без мигания CVAT, нужна встроенная графика).
 # Если на конкретной машине CVAT мигает или не открывается — поставь software:
 PID_GL_BACKEND=gles
+
+# Софт-рендер Qt Quick: без него не работает встроенный CVAT (WebEngine)
+# на машинах без нормального GL:
+QT_QUICK_BACKEND=software

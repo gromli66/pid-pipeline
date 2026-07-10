@@ -46,6 +46,9 @@ _load_client_cfg()
 os.environ.setdefault("PID_API_URL", "http://REPLACE_WITH_SERVER_IP:8000")
 # PID_GL_BACKEND НЕ форсируем: по умолчанию gles (ANGLE, без мигания CVAT),
 # при необходимости переопределяется в client.cfg (например, software).
+# Софт-рендер Qt Quick: без него WebEngine (вкладка CVAT) не поднимается
+# на Astra/VM без GPU; env/client.cfg имеют приоритет (setdefault).
+os.environ.setdefault("QT_QUICK_BACKEND", "software")
 
 from ui.main import main  # noqa: E402
 

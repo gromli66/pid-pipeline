@@ -46,8 +46,14 @@ class RemoveEdgeCommand(Command):
         self._node_b = node_b
         self._key = model.edge_key(node_a, node_b)
         self._removed_data = None
+        self._removed_bindings: list[dict] = []
 
     def execute(self):
+        # remove_edge чистит привязки текст-блоков к ребру — сохранить для undo
+        self._removed_bindings = [
+            b for b in self._model.bindings
+            if self._model.binding_edge_key(b) == self._key
+        ]
         self._removed_data = self._model.remove_edge(self._key)
         self._editor.remove_edge_item(self._key)
         self._editor.update_node_color(self._node_a)
@@ -59,6 +65,8 @@ class RemoveEdgeCommand(Command):
             self._editor.create_edge_item(self._key, self._removed_data)
             self._editor.update_node_color(self._node_a)
             self._editor.update_node_color(self._node_b)
+            for b in self._removed_bindings:
+                self._model.set_binding(b)
 
     @property
     def description(self):
@@ -89,11 +97,18 @@ class AddConnectorOnEdgeCommand(Command):
         self._edge2_data: dict | None = None
         self._edge1_key: tuple | None = None
         self._edge2_key: tuple | None = None
+        self._removed_bindings: list[dict] = []
 
     def execute(self):
         actual_source = self._old_edge_data['source']
         actual_target = self._old_edge_data['target']
         old_waypoints = self._old_edge_data.get('waypoints', [])
+
+        # Привязки текст-блоков к разбиваемому ребру слетают — сохранить для undo
+        self._removed_bindings = [
+            b for b in self._model.bindings
+            if self._model.binding_edge_key(b) == self._edge_key
+        ]
 
         # Удаляем старое ребро из модели
         self._model.remove_edge(self._edge_key)
@@ -156,6 +171,8 @@ class AddConnectorOnEdgeCommand(Command):
                              self._old_edge_data['target'],
                              self._old_edge_data)
         self._editor.create_edge_item(self._edge_key, self._old_edge_data)
+        for b in self._removed_bindings:
+            self._model.set_binding(b)
 
     def redo(self):
         # Переиспользуем сохранённые ID и данные
@@ -199,10 +216,19 @@ class DeleteNodeCommand(Command):
         self._edges_backup: list[dict] = []
         self._edge_keys: list[tuple] = []
         self._neighbors: list[str] = []
+        self._removed_bindings: list[dict] = []
 
     def execute(self):
         # Запомнить соседей для обновления цветов
         self._edge_keys = self._model.get_connected_edges(self._node_id)
+        # remove_node чистит привязки текст-блоков к узлу и его рёбрам —
+        # сохранить для undo
+        edge_keys = set(self._edge_keys)
+        self._removed_bindings = [
+            b for b in self._model.bindings
+            if b.get('node_id') == self._node_id
+            or self._model.binding_edge_key(b) in edge_keys
+        ]
         self._neighbors = []
         for key in self._edge_keys:
             other = key[0] if key[1] == self._node_id else key[1]
@@ -235,6 +261,10 @@ class DeleteNodeCommand(Command):
         for edge_data in self._edges_backup:
             key = self._model.add_edge(edge_data['source'], edge_data['target'], edge_data)
             self._editor.create_edge_item(key, edge_data)
+
+        # Восстановить привязки текст-блоков
+        for b in self._removed_bindings:
+            self._model.set_binding(b)
 
         # Обновить цвета
         self._editor.update_node_color(self._node_id)

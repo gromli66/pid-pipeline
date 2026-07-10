@@ -43,6 +43,17 @@ _MIN_BLOCK_SIZE = 5.0
 _BLOCK_Z = 50.0
 _LINE_Z = 48.0
 _BORDER_W = 2.0
+# Отступ привязанного блока от границы цели (авто-позиция side+gap), px.
+_BIND_GAP = 6.0
+# Порог «вертикальный» блок: h > w * 1.3 (квадрат — горизонтальный).
+# Продублировано из modules/graph_to_fxml.py:_TEXT_VERTICAL_RATIO —
+# менять синхронно, иначе редактор разойдётся с итоговым FXML.
+_TEXT_VERTICAL_RATIO = 1.3
+
+
+def _block_is_vertical(x1: float, y1: float, x2: float, y2: float) -> bool:
+    """Вертикальный текст-блок (текст пишется снизу вверх) — по аспекту bbox."""
+    return (y2 - y1) > (x2 - x1) * _TEXT_VERTICAL_RATIO
 
 
 class OcrLayerMixin:
@@ -66,10 +77,13 @@ class OcrLayerMixin:
         self._ocr_add_start: tuple[float, float] | None = None
         self._ocr_hl_restore: list = []
         self._selected_ocr: set[str] = set()  # Shift-выделенные блоки (зелёные)
+        self._ocr_clipboard: list[tuple[list, str]] = []  # буфер копипаста: [(bbox, text), ...]
         # Ручки изменения размера текст-блока (только в состоянии 'ocr').
         self._ocr_resize_overlay = None       # ResizableNodeOverlay | None
         self._ocr_resize_block_id: str | None = None
         self._ocr_resize_lock = False         # тело не двигать, пока показаны ручки
+        # Отложенный Ctrl+ЛКМ-клик по узлу (вращение привязок по часовой).
+        self._ocr_rotate_nid: str | None = None
 
     # -----------------------------------------------------------------
     # Отрисовка
@@ -96,11 +110,23 @@ class OcrLayerMixin:
         bbox = blk.get("bbox")
         if not bbox or len(bbox) != 4:
             return
+        binding = self.model.find_binding(blk.get("id"))
+        bound = binding is not None
+
+        # Привязка с side/gap: позиция блока производная от ТЕКУЩЕЙ геометрии
+        # цели (следование за перемещением/resize). Производную синкаем в
+        # blk['bbox'], чтобы hit-test/выделение/сохранение видели актуальное
+        # положение. Старые привязки без side — блок лежит где лежал.
+        if bound and binding.get("side"):
+            w0 = max(1.0, float(bbox[2]) - float(bbox[0]))
+            h0 = max(1.0, float(bbox[3]) - float(bbox[1]))
+            eff = self._bound_block_bbox(binding, w0, h0)
+            if eff is not None:
+                blk["bbox"] = eff
+                bbox = eff
         x1, y1, x2, y2 = [float(v) for v in bbox]
         w, h = max(1.0, x2 - x1), max(1.0, y2 - y1)
 
-        binding = self.model.find_binding(blk.get("id"))
-        bound = binding is not None
         text = (blk.get("text") or "").strip()
 
         # Линия привязки блок → цель — золотой пунктир (как в «бусине»).
@@ -131,7 +157,10 @@ class OcrLayerMixin:
         rect.setVisible(visible)
         self.scene.addItem(rect)
 
-        # Подпись — НАД боксом с тёмной подложкой (унифицировано с «бусиной»).
+        # Подпись с тёмной подложкой (унифицировано с «бусиной»).
+        # Горизонтальный блок — над боксом; вертикальный (h > w*1.3) — снизу
+        # вверх вдоль левой стенки с поворотом -90° (имитация Rotate angle="-90"
+        # сценбилдера).
         label = None
         bg = None
         if text:
@@ -139,10 +168,21 @@ class OcrLayerMixin:
             fm = QFontMetricsF(font)
             th = fm.height()
             tw = fm.horizontalAdvance(text)
-            lx, ly = x1, y1 - th - 2
-            if ly < 0:
-                ly = y2 + 2
-            bg = QGraphicsRectItem(lx - 1, ly - 1, min(tw + 4, w + 4), th + 2)
+            if _block_is_vertical(x1, y1, x2, y2):
+                # Точка поворота — pos подписи (origin (0,0)): текст от нижнего-
+                # левого угла блока идёт вверх, толщина строки — вправо.
+                lx, ly = x1 - th - 2, y2
+                if lx < 0:
+                    lx = x2 + 2   # не влезла слева — вдоль правой стенки
+                rot = -90.0
+                bl = min(tw + 4, h + 4)
+                bg = QGraphicsRectItem(lx - 1, ly - bl + 1, th + 2, bl)
+            else:
+                lx, ly = x1, y1 - th - 2
+                if ly < 0:
+                    ly = y2 + 2
+                rot = 0.0
+                bg = QGraphicsRectItem(lx - 1, ly - 1, min(tw + 4, w + 4), th + 2)
             bg.setPen(QPen(Qt.PenStyle.NoPen))
             bg.setBrush(QBrush(_COLOR_TEXT_BG))
             bg.setZValue(_BLOCK_Z + 1)
@@ -152,6 +192,7 @@ class OcrLayerMixin:
             label.setBrush(QBrush(_COLOR_TEXT))
             label.setFont(font)
             label.setPos(lx, ly)
+            label.setRotation(rot)
             label.setZValue(_BLOCK_Z + 2)
             label.setVisible(visible)
             self.scene.addItem(label)
@@ -170,7 +211,7 @@ class OcrLayerMixin:
                 self._selected_ocr.add(bid)
             self.refresh_ocr_layer()
             self.update_status(
-                f"Выделено блоков: {len(self._selected_ocr)} (Ctrl+ПКМ — удалить)"
+                f"Выделено блоков: {len(self._selected_ocr)} (Delete — удалить)"
             )
         else:
             self._start_rubber_band(x, y)
@@ -195,7 +236,7 @@ class OcrLayerMixin:
         self.update_status(f"Выделено блоков: {len(self._selected_ocr)}")
 
     def _delete_selected_ocr_blocks(self):
-        """Удалить все выделенные (Shift) блоки — Ctrl+ПКМ по выделенному."""
+        """Удалить все выделенные блоки — клавиша Delete."""
         if not self._selected_ocr:
             return
         cmd = self._ocr_push_snapshot("Удалить выделенные блоки")
@@ -273,6 +314,154 @@ class OcrLayerMixin:
                     return ((sp[1] + tp[1]) / 2.0, (sp[0] + tp[0]) / 2.0)
         return None
 
+    def _binding_target_bbox(self, binding: dict):
+        """bbox цели привязки [x1, y1, x2, y2].
+
+        Узел — реальный bbox оборудования или виртуальный бокс коннектора
+        (_get_node_bbox); ребро — вырожденный бокс в midpoint (согласовано
+        с _binding_target_center). None — цель не найдена.
+        """
+        node_id = binding.get("node_id")
+        if node_id and node_id in self.nodes:
+            return [float(v) for v in self._get_node_bbox(node_id)]
+        if binding.get("edge_key"):
+            c = self._binding_target_center(binding)
+            if c is not None:
+                return [c[0], c[1], c[0], c[1]]
+        return None
+
+    @staticmethod
+    def _nearest_bind_side(target_bbox: list, ref_bbox: list) -> str:
+        """Сторона цели для авто-позиции: по «выходам» центра ИСХОДНОГО
+        положения текста (ref_bbox) за грани bbox цели. Не зависит от формы
+        бокса и от места броска — привязка детерминирована:
+          • выход только по одной оси → та сторона;
+          • по обеим осям (угловая зона) → большее смещение побеждает;
+          • центр внутри бокса → ближайшая изнутри грань;
+          • равенство (в т.ч. вырожденная цель) → right.
+        """
+        tx1, ty1, tx2, ty2 = target_bbox
+        cx = (ref_bbox[0] + ref_bbox[2]) / 2.0
+        cy = (ref_bbox[1] + ref_bbox[3]) / 2.0
+        dx = (cx - tx2) if cx > tx2 else (cx - tx1) if cx < tx1 else 0.0
+        dy = (cy - ty2) if cy > ty2 else (cy - ty1) if cy < ty1 else 0.0
+        if dx or dy:
+            if abs(dx) >= abs(dy):
+                return "right" if dx > 0 else "left"
+            return "bottom" if dy > 0 else "top"
+        side, best = "right", tx2 - cx
+        for s, d in (("left", cx - tx1), ("top", cy - ty1), ("bottom", ty2 - cy)):
+            if d < best:
+                side, best = s, d
+        return side
+
+    def _bound_block_bbox(self, binding: dict, w: float, h: float):
+        """Производный bbox привязанного блока: у стороны side цели с отступом gap.
+
+        Блок центрируется по стороне, размер (w, h) сохраняется. None — если
+        side не задан или цель не найдена (рисуем по blk['bbox'] как раньше).
+        """
+        side = binding.get("side")
+        if side not in ("top", "right", "left", "bottom"):
+            return None
+        tb = self._binding_target_bbox(binding)
+        if tb is None:
+            return None
+        gap = float(binding.get("gap", _BIND_GAP))
+        tcx = (tb[0] + tb[2]) / 2.0
+        tcy = (tb[1] + tb[3]) / 2.0
+        if side == "top":
+            x1, y1 = tcx - w / 2.0, tb[1] - gap - h
+        elif side == "bottom":
+            x1, y1 = tcx - w / 2.0, tb[3] + gap
+        elif side == "left":
+            x1, y1 = tb[0] - gap - w, tcy - h / 2.0
+        else:  # right
+            x1, y1 = tb[2] + gap, tcy - h / 2.0
+        return [x1, y1, x1 + w, y1 + h]
+
+    def _attach_binding_position(self, binding: dict, blk: dict,
+                                 ref_bbox: list | None = None) -> bool:
+        """Момент привязки: выбрать сторону цели, записать side+gap в binding
+        и поставить блок по центру этой стороны (размер сохраняется).
+
+        Сторона считается от ИСХОДНОГО положения блока (ref_bbox — bbox,
+        снятый в момент захвата), а не от места броска. Без ref_bbox — от
+        текущего bbox блока. Returns True, если авто-позиция вычислена.
+        """
+        bbox = blk.get("bbox")
+        if not bbox or len(bbox) != 4:
+            return False
+        tb = self._binding_target_bbox(binding)
+        if tb is None:
+            return False
+        ref = ref_bbox if (ref_bbox and len(ref_bbox) == 4) else bbox
+        binding["side"] = self._nearest_bind_side(tb, [float(v) for v in ref])
+        binding["gap"] = _BIND_GAP
+        w = max(1.0, float(bbox[2]) - float(bbox[0]))
+        h = max(1.0, float(bbox[3]) - float(bbox[1]))
+        eff = self._bound_block_bbox(binding, w, h)
+        if eff is not None:
+            blk["bbox"] = eff
+        return True
+
+    # Порядок вращения стороны привязки по часовой стрелке.
+    _BIND_SIDE_CW = {"right": "bottom", "bottom": "left", "left": "top",
+                     "top": "right"}
+
+    def _rotate_node_bindings(self, node_id: str) -> bool:
+        """Повернуть ВСЕ привязки узла на следующую сторону по часовой.
+
+        right → bottom → left → top → right. Привязка без side сначала
+        получает сторону от ТЕКУЩЕГО положения блока (правило «выходов»
+        _nearest_bind_side), затем поворачивается. Позиция блока производная
+        (side+gap) — перерисовка сама переставит блок к новой стороне.
+        Один шаг undo на весь узел. Returns True, если было что вращать.
+        """
+        binds = [b for b in self.model.bindings if b.get("node_id") == node_id]
+        if not binds:
+            return False
+        cmd = self._ocr_push_snapshot("Повернуть привязки")
+        for b in binds:
+            side = b.get("side")
+            if side not in self._BIND_SIDE_CW:
+                side = "right"
+                blk = self.model.find_text_block(b.get("block_id"))
+                tb = self._binding_target_bbox(b)
+                bb = blk.get("bbox") if blk else None
+                if tb is not None and bb and len(bb) == 4:
+                    side = self._nearest_bind_side(tb, [float(v) for v in bb])
+            b["side"] = self._BIND_SIDE_CW[side]
+            if b.get("gap") is None:
+                b["gap"] = _BIND_GAP
+        self._ocr_commit(cmd)
+        self.refresh_ocr_layer()
+        self.update_status(
+            f"Привязки узла {node_id} повернуты по часовой ({len(binds)})")
+        return True
+
+    def _refresh_ocr_layer_for_node(self, node_id: str):
+        """Гранулярно перерисовать блоки, привязанные к узлу/его рёбрам.
+
+        Для живого следования при drag узла: полный refresh_ocr_layer на каждый
+        кадр пересоздаёт ВЕСЬ слой (лаги на софт-рендере Astra) — здесь
+        пересоздаются item'ы только затронутых блоков. Вне состояния 'ocr'
+        слой скрыт — ничего не делаем (производная позиция пересчитается при
+        ближайшем refresh_ocr_layer/_redraw_all).
+        """
+        if getattr(self, "display_regime", "base") != "ocr":
+            return
+        for b in self.model.bindings:
+            if not b.get("side"):
+                continue
+            hit = b.get("node_id") == node_id
+            if not hit:
+                ek = b.get("edge_key")
+                if ek and "|" in str(ek):
+                    hit = node_id in str(ek).split("|", 1)
+            if hit and b.get("block_id"):
+                self._redraw_single_ocr_block(b.get("block_id"))
+
     def _refresh_ocr_layer_visibility(self):
         """Показать/скрыть слой под текущее состояние (ocr — видно)."""
         visible = getattr(self, "display_regime", "base") == "ocr"
@@ -333,6 +522,98 @@ class OcrLayerMixin:
         self.refresh_ocr_layer()
         self.update_status("Блок добавлен — нажмите «Распознать добавленные»")
 
+    def _ocr_copy_blocks(self):
+        """Ctrl+C в ОКР: приоритет у блока под курсором.
+
+        Блок под курсором вне выделения → выделение переключается на него;
+        блок в составе выделения или курсор в пустоте → копируется текущее
+        выделение. Скопированное остаётся выделенным (зелёная рамка) —
+        видно, что именно в буфере; Esc для смены копируемого не нужен.
+        """
+        pos = self._cursor_scene_pos()
+        cur = self._ocr_block_at(pos.x(), pos.y())
+        if cur is not None and cur not in self._selected_ocr:
+            self._selected_ocr = {cur}
+            self.refresh_ocr_layer()
+        clip = []
+        for bid in list(self._selected_ocr):
+            blk = self.model.find_text_block(bid)
+            if not blk or blk.get("merged_into") is not None:
+                continue
+            bbox = blk.get("bbox")
+            if not bbox or len(bbox) != 4:
+                continue
+            clip.append(([float(v) for v in bbox], blk.get("text") or ""))
+        if not clip:
+            self.update_status("Копировать: выделите блоки или наведите курсор на блок")
+            return
+        self._ocr_clipboard = clip
+        self.update_status(f"Скопировано блоков: {len(clip)} (Ctrl+V — вставить)")
+
+    def _ocr_paste_blocks(self, dx: float, dy: float):
+        """Зафиксировать вставку буфера блоков в ОКР со сдвигом (dx, dy).
+
+        Вызывается фиксацией призрака (Ctrl+V → призрак → Ctrl+ЛКМ).
+        Копии всегда непривязанные (binding не наследуется). Вся вставка —
+        один snapshot, т.е. отменяется одним Ctrl+Z.
+        """
+        clip = self._ocr_clipboard
+        if not clip:
+            self.update_status("Буфер блоков пуст — сначала Ctrl+C")
+            return
+        cmd = self._ocr_push_snapshot("Копировать блоки")
+        new_ids = []
+        for bbox, text in clip:
+            blk = self.model.create_text_block(
+                [bbox[0] + dx, bbox[1] + dy, bbox[2] + dx, bbox[3] + dy],
+                text=text, source="manual")
+            # set_binding НЕ вызываем — копия создаётся непривязанной
+            self.model.add_text_block(blk)
+            new_ids.append(blk["id"])
+        self._ocr_commit(cmd)
+        self._selected_ocr = set(new_ids)
+        self.refresh_ocr_layer()
+        self.update_status(f"Вставлено блоков: {len(new_ids)}")
+
+    def _ghost_label_items(self, bbox: list, text: str) -> list:
+        """Item'ы призрачной подписи текст-блока (подложка + текст) для
+        предпросмотра вставки. Прозрачность даёт группа призрака.
+
+        Геометрия синхронна с _draw_ocr_block: горизонтальный — верх-лево
+        над рамкой (fallback вниз), вертикальный (h > w*1.3) — низ-лево
+        вдоль левой стенки с поворотом -90° (fallback вдоль правой).
+        """
+        text = (text or "").strip()
+        if not text or not bbox or len(bbox) != 4:
+            return []
+        x1, y1, x2, y2 = [float(v) for v in bbox]
+        font = QFont("DejaVu Sans", _LABEL_PT)
+        fm = QFontMetricsF(font)
+        th = fm.height()
+        tw = fm.horizontalAdvance(text)
+        if _block_is_vertical(x1, y1, x2, y2):
+            lx, ly = x1 - th - 2, y2
+            if lx < 0:
+                lx = x2 + 2
+            rot = -90.0
+            bl = min(tw + 4, (y2 - y1) + 4)
+            bg = QGraphicsRectItem(lx - 1, ly - bl + 1, th + 2, bl)
+        else:
+            lx, ly = x1, y1 - th - 2
+            if ly < 0:
+                ly = y2 + 2
+            rot = 0.0
+            bg = QGraphicsRectItem(lx - 1, ly - 1,
+                                   min(tw + 4, (x2 - x1) + 4), th + 2)
+        bg.setPen(QPen(Qt.PenStyle.NoPen))
+        bg.setBrush(QBrush(_COLOR_TEXT_BG))
+        label = QGraphicsSimpleTextItem(text)
+        label.setBrush(QBrush(_COLOR_TEXT))
+        label.setFont(font)
+        label.setPos(lx, ly)
+        label.setRotation(rot)
+        return [bg, label]
+
     def move_ocr_block(self, block_id: str, new_x1: float, new_y1: float):
         """Переместить блок (верхний левый угол в new_x1,new_y1)."""
         blk = self.model.find_text_block(block_id)
@@ -358,7 +639,11 @@ class OcrLayerMixin:
         return ids, boxes
 
     def apply_ocr_results(self, block_ids: list, results: list) -> int:
-        """Проставить распознанный текст в блоки по id. Returns кол-во непустых."""
+        """Проставить распознанный текст в блоки по id. Returns кол-во непустых.
+
+        Синхронно обновляет text привязки блока (если есть) — binding['text']
+        источник KKS и diameter_text в FXML (как в edit_ocr_block_text).
+        """
         cmd = self._ocr_push_snapshot("Распознать блоки")
         n = 0
         for bid, res in zip(block_ids, results):
@@ -367,6 +652,9 @@ class OcrLayerMixin:
                 continue
             txt = (res.get("text") or "").strip() if isinstance(res, dict) else ""
             blk["text"] = txt
+            binding = self.model.find_binding(bid)
+            if binding is not None:
+                binding["text"] = txt
             if isinstance(res, dict) and res.get("confidence") is not None:
                 blk["confidence"] = float(res.get("confidence") or 0.0)
             if txt:
@@ -379,9 +667,13 @@ class OcrLayerMixin:
                       origin: list | None = None) -> bool:
         """Привязать блок к узлу/ребру под точкой (x, y).
 
-        Привязка НЕ перемещает блок: при попадании на узел/ребро бокс
-        возвращается на исходное место (origin) — как `_restore_ocr_pos` в
-        «бусине». Если цели нет — блок остаётся на новом месте (перемещение).
+        Привязка ставит блок по центру выбранной стороны цели с отступом
+        (_BIND_GAP); side+gap пишутся в binding — дальше позиция производная
+        и следует за перемещением/resize цели. Сторона считается от ИСХОДНОГО
+        положения блока (origin — bbox в момент захвата), место броска не
+        влияет: привязка детерминирована. Если авто-позицию вычислить нельзя —
+        бокс возвращается на origin, как раньше. Если цели нет — блок
+        остаётся на новом месте (перемещение).
         Снимок для undo делает вызывающий (жест целиком) — здесь не снимаем.
         """
         blk = self.model.find_text_block(block_id)
@@ -391,12 +683,14 @@ class OcrLayerMixin:
 
         node_id = self.find_node_at(x, y)
         if node_id:
-            if origin is not None:
-                blk["bbox"] = list(origin)      # привязка ≠ перемещение
-            self.model.set_binding({
+            binding = {
                 "block_id": block_id, "node_id": node_id,
                 "kind": "node", "text": text,
-            })
+            }
+            if not self._attach_binding_position(binding, blk, origin) \
+                    and origin is not None:
+                blk["bbox"] = list(origin)      # fallback: цель без геометрии
+            self.model.set_binding(binding)
             self.refresh_ocr_layer()
             self._redraw_all()
             self.update_status(f"Блок привязан к узлу {node_id}")
@@ -404,13 +698,15 @@ class OcrLayerMixin:
 
         edge_key, _pt = self.find_nearest_edge(x, y, threshold=20.0)
         if edge_key:
-            if origin is not None:
-                blk["bbox"] = list(origin)
-            self.model.set_binding({
+            binding = {
                 "block_id": block_id,
                 "edge_key": f"{edge_key[0]}|{edge_key[1]}",
                 "kind": "edge", "text": text,
-            })
+            }
+            if not self._attach_binding_position(binding, blk, origin) \
+                    and origin is not None:
+                blk["bbox"] = list(origin)
+            self.model.set_binding(binding)
             self.refresh_ocr_layer()
             self._redraw_all()
             self.update_status("Блок привязан к ребру")
@@ -523,6 +819,12 @@ class OcrLayerMixin:
             if b is not None:
                 b["bbox"] = [float(v) for v in new_bbox]
                 self._redraw_single_ocr_block(_bid)
+                # Привязанный блок «приклеен» к стороне цели: производная
+                # позиция могла сдвинуть bbox — вернуть ручки на фактическое
+                # положение блока (размер сохранён, позиция у стенки).
+                ov = self._ocr_resize_overlay
+                if ov is not None and b["bbox"] != [float(v) for v in new_bbox]:
+                    ov.set_bbox(b["bbox"])
 
         self._ocr_resize_overlay = ResizableNodeOverlay(
             scene=self.scene,
@@ -585,7 +887,11 @@ class OcrLayerMixin:
         self._ocr_clear_highlight()
         node_id = self.find_node_at(x, y)
         if node_id:
-            item = self.bbox_items.get(node_id) or self.node_items.get(node_id)
+            # Подсвечиваем весь контур оборудования (рамка бокса ИЛИ контур
+            # полигона) — ровно то, что привяжется; фолбэк — центроид-маркер.
+            item = (self.bbox_items.get(node_id)
+                    or self.polygon_items.get(node_id)
+                    or self.node_items.get(node_id))
             if item is not None:
                 self._ocr_hl_restore.append((item, item.pen()))
                 item.setPen(QPen(_COLOR_DROP, 3))
@@ -648,9 +954,13 @@ class OcrBindHandler(ModeHandler):
     """Резидентный режим состояния «ОКР привязка».
 
     Жесты Ctrl+ЛКМ по текст-блоку:
-      • одиночный клик (без смещения) — переключить ручки изменения размера блока;
+      • одиночный клик (без смещения) — переключить ручки изменения размера
+        блока; при активном выделении клик по НЕвыделенному блоку добавляет
+        его в выделение (вместо ручек);
       • протяжка — двигать блок; отпускание над узлом/ребром — привязка,
         иначе просто перемещение.
+    Ctrl+ЛКМ клик по узлу с привязками (без блока под курсором) — повернуть
+    его привязки на следующую сторону по часовой.
     Если под курсором ручка активного resize-оверлея — приоритет у оверлея
     (тянем угол, а не двигаем/переключаем блок).
     """
@@ -666,6 +976,7 @@ class OcrBindHandler(ModeHandler):
 
     def on_exit(self, editor):
         editor._ocr_drag_id = None
+        editor._ocr_rotate_nid = None
         editor._ocr_clear_highlight()
 
     def on_press(self, editor, x, y, event) -> bool:
@@ -684,6 +995,14 @@ class OcrBindHandler(ModeHandler):
             # Клик по пустому месту — скрыть ручки (если были).
             if getattr(editor, "_ocr_resize_overlay", None) is not None:
                 editor._hide_ocr_block_resize()
+            # Блока нет: узел с привязками под курсором — кандидат на
+            # вращение привязок по часовой (клик/drag решается на release).
+            nid = editor.find_node_at(x, y)
+            if nid is not None and any(
+                    b.get("node_id") == nid for b in editor.model.bindings):
+                editor._ocr_rotate_nid = nid
+                editor._ocr_rotate_xy = (x, y)
+                return True
             return False
         blk = editor.model.find_text_block(bid)
         if not blk:
@@ -715,6 +1034,10 @@ class OcrBindHandler(ModeHandler):
                 ov.drag_to(x, y)
                 return True
             return False
+
+        # Кандидат на вращение привязок: ждём release (порог проверяется там).
+        if getattr(editor, "_ocr_rotate_nid", None) is not None:
+            return True
 
         if editor._ocr_drag_id is None:
             return False
@@ -759,6 +1082,16 @@ class OcrBindHandler(ModeHandler):
                 ov.end_drag()   # вызовет _ocr_resize_commit (шаг undo)
             return True
 
+        # Вращение привязок узла: Ctrl+ЛКМ КЛИК (без сдвига) по узлу с
+        # привязками, когда под курсором не было блока.
+        nid = getattr(editor, "_ocr_rotate_nid", None)
+        if nid is not None:
+            editor._ocr_rotate_nid = None
+            px, py = getattr(editor, "_ocr_rotate_xy", (x, y))
+            if ((x - px) ** 2 + (y - py) ** 2) ** 0.5 < self.OCR_CLICK_MOVE_THRESHOLD:
+                editor._rotate_node_bindings(nid)
+            return True
+
         # Блок с показанными ручками: тело не двигали. Клик — скрыть ручки; drag — no-op.
         if getattr(editor, "_ocr_resize_lock", False):
             editor._ocr_resize_lock = False
@@ -779,9 +1112,19 @@ class OcrBindHandler(ModeHandler):
         editor._ocr_moved = False
 
         if not moved:
-            # Клик без сдвига → переключить ручки изменения размера блока.
+            # Клик без сдвига.
             editor._ocr_drag_cmd = None
             editor._ocr_drag_origin = None
+            sel = getattr(editor, "_selected_ocr", None)
+            if sel and bid not in sel:
+                # Активное выделение: клик добавляет НЕвыделенный блок в
+                # выделение (вместо переключения ручек resize).
+                sel.add(bid)
+                editor.refresh_ocr_layer()
+                editor.update_status(
+                    f"Выделено блоков: {len(sel)} (Delete — удалить)")
+                return True
+            # Иначе — прежнее поведение: переключить ручки размера блока.
             editor._toggle_ocr_block_resize(bid)
             return True
 

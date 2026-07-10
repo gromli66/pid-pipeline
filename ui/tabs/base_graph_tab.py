@@ -93,8 +93,8 @@ class BaseGraphTab(AppearanceMixin, QWidget):
       - скачивание артефактов через _GraphArtifactDownloader
       - _setup_ui() → toolbar (из _setup_toolbar) + loading + status
       - _save_graph() → editor.save_graph + upload_validated_graph
-      - _on_confirm() → save? + emit confirmed
-      - has_unsaved_changes → undo_mgr.stack_depth > 0
+      - _on_confirm() → безусловный save + emit confirmed
+      - has_unsaved_changes → undo_mgr.revision != _saved_revision
 
     Потомки обязаны реализовать:
       _create_editor() → BaseGraphEditor
@@ -132,7 +132,8 @@ class BaseGraphTab(AppearanceMixin, QWidget):
         self.temp_dir = Path(self._temp_dir_obj.name)
 
         self._editor: Optional[BaseGraphEditor] = None
-        self._saved_stack_depth: int = 0  # stack_depth на момент последнего save
+        # undo_mgr.revision на момент последнего успешного save
+        self._saved_revision: int = 0
 
         self._setup_ui()
         self._download_artifacts()
@@ -364,7 +365,7 @@ class BaseGraphTab(AppearanceMixin, QWidget):
     def has_unsaved_changes(self) -> bool:
         """True если есть несохранённые изменения после последнего save."""
         if self._editor:
-            return self._editor.undo_mgr.stack_depth != self._saved_stack_depth
+            return self._editor.undo_mgr.revision != self._saved_revision
         return False
 
     def _save_graph(self) -> bool:
@@ -383,7 +384,7 @@ class BaseGraphTab(AppearanceMixin, QWidget):
             self.status_label.setText("Загрузка графа на сервер...")
             self.api_client.upload_validated_graph(self.uid, graph_path)
 
-            self._saved_stack_depth = self._editor.undo_mgr.stack_depth
+            self._saved_revision = self._editor.undo_mgr.revision
             self.status_label.setText("Граф сохранён")
             return True
 
@@ -398,20 +399,24 @@ class BaseGraphTab(AppearanceMixin, QWidget):
 
     @Slot()
     def _on_confirm(self):
-        """Подтвердить: сохранить если нужно + emit confirmed."""
+        """Подтвердить: безусловно сохранить + emit confirmed.
+
+        Save не гейтится дырти-флагом: он может ложно давать «нет изменений»,
+        а без свежего graph_validated сервер сгенерирует FXML из устаревшего
+        графа. Лишний POST дёшев — страхует от потери правок.
+        """
         if self.has_unsaved_changes():
             reply = QMessageBox.question(
                 self, "Сохранение",
-                "Граф не сохранён. Сохранить перед подтверждением?",
+                "Несохранённые изменения будут сохранены. Продолжить?",
                 QMessageBox.StandardButton.Yes
-                | QMessageBox.StandardButton.No
                 | QMessageBox.StandardButton.Cancel,
             )
-            if reply == QMessageBox.StandardButton.Cancel:
+            if reply != QMessageBox.StandardButton.Yes:
                 return
-            if reply == QMessageBox.StandardButton.Yes:
-                if not self._save_graph():
-                    return
+
+        if not self._save_graph():
+            return
 
         self.status_message.emit("Граф подтверждён")
         self.confirmed.emit()

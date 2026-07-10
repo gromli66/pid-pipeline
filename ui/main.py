@@ -7,6 +7,7 @@ P&ID Pipeline - Desktop UI Application.
 import sys
 import os
 import logging
+from pathlib import Path
 
 # Windows-консоль обычно cp1251: '→'/emoji в логах роняли StreamHandler
 # (UnicodeEncodeError) и строка терялась. UTF-8 + errors=replace — не падаем.
@@ -28,12 +29,44 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QImageReader
+from PySide6.QtGui import QImageReader, QFontDatabase
 
 from ui.windows.main_window import MainWindow
 
 # Увеличить лимит загрузки изображений (по умолчанию 256 МБ, нужно для P&ID ~15000x7000)
 QImageReader.setAllocationLimit(1024)  # 1 ГБ
+
+
+def _load_bundled_fonts(app):
+    """Подключить шрифты из ui/resources/fonts как fallback шрифта приложения.
+
+    На Astra нет системного эмодзи-шрифта — эмодзи в кнопках/статусах
+    (💾 ✅ 📁 🔄 …) рисуются «тофу»-квадратами. Бандлим Noto Color Emoji (OFL)
+    и добавляем зарегистрированные семейства в конец fallback-списка.
+    Путь от __file__ работает и в dev, и во frozen-сборке: спека кладёт
+    ui/resources в _MEIPASS с сохранением пути, а __file__ модуля ui.main
+    во frozen указывает туда же (плюс client_main делает chdir в _MEIPASS,
+    так что даже относительный __file__ разрешится верно).
+    Нет папки/шрифтов — тихий no-op (Windows и так рендерит через Segoe UI Emoji).
+    """
+    fonts_dir = Path(__file__).resolve().parent / "resources" / "fonts"
+    if not fonts_dir.is_dir():
+        return
+    families = []
+    for fp in sorted(fonts_dir.glob("*.ttf")) + sorted(fonts_dir.glob("*.otf")):
+        font_id = QFontDatabase.addApplicationFont(str(fp))
+        if font_id == -1:
+            logging.getLogger(__name__).warning("Не удалось загрузить шрифт: %s", fp.name)
+            continue
+        for fam in QFontDatabase.applicationFontFamilies(font_id):
+            if fam not in families:
+                families.append(fam)
+    if not families:
+        return
+    f = app.font()
+    f.setFamilies([f.family(), *families])
+    app.setFont(f)
+    logging.getLogger(__name__).info("Fallback-шрифты подключены: %s", ", ".join(families))
 
 
 def main():
@@ -69,6 +102,9 @@ def main():
 
     # Стиль
     app.setStyle("Fusion")
+
+    # Эмодзи-шрифт из бандла (на Astra эмодзи иначе рисуются квадратами)
+    _load_bundled_fonts(app)
 
     # Главное окно
     window = MainWindow()

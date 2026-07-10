@@ -19,9 +19,9 @@ from PySide6.QtWidgets import (
     QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsPathItem,
     QGraphicsLineItem, QGraphicsSimpleTextItem, QGraphicsPixmapItem, QDialog,
     QVBoxLayout, QFormLayout, QLineEdit, QDialogButtonBox, QLabel,
-    QToolTip,
+    QToolTip, QGraphicsItemGroup,
 )
-from PySide6.QtGui import QColor, QBrush, QPen, QPainterPath, QFont, QPixmap, QTransform
+from PySide6.QtGui import QColor, QBrush, QPen, QPainterPath, QFont, QPixmap, QTransform, QCursor
 from PySide6.QtCore import Qt
 
 from ui.editors.simple_graph_editor import SimpleGraphEditor
@@ -136,6 +136,16 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self._rb_start_x: float = 0
         self._rb_start_y: float = 0
         self._rb_active: bool = False
+
+        # ── Копипаст подсистемы (Ctrl+C/Ctrl+V в базовом состоянии) ──
+        # Буфер: {"nodes": [...], "edges": [...], "texts": [(block, binding), ...]}
+        self._node_clipboard: dict = {}
+        # Призрак вставки (Ctrl+V → следует за мышью → Ctrl+ЛКМ фиксирует):
+        # {"kind": "nodes"|"ocr", "group": QGraphicsItemGroup, "center": (cx, cy)}
+        self._paste_ghost: dict | None = None
+        # Цель отложенного Ctrl+ЛКМ-клика для расширения выделения
+        # (equipment по bbox / ребро — find_node_at их не видит): ("node", id) | ("edge", key)
+        self._ext_click_target: tuple | None = None
 
         # ── Waypoint / Endpoint ──
         self.waypoint_markers: dict[tuple[str, str], list] = {}
@@ -376,6 +386,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         if hasattr(self, "_ocr_block_items"):
             self._ocr_block_items.clear()
             self._ocr_hl_restore = []
+        # Призрак вставки не переживает перерисовку сцены (item'ы удалены).
+        if getattr(self, "_paste_ghost", None) is not None:
+            self._paste_ghost = None
         super()._reset_scene_state()
 
     def _redraw_all(self):
@@ -1086,15 +1099,15 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             self.selected_edges.clear()
 
         edge_only = self._edge_only_selection()
+        rect_bbox = [rx, ry, rx + rw, ry + rh]
 
         # В режиме «Размер и цвет» обводка выделяет только рёбра, не узлы.
         if not edge_only:
-            for node_id, node in self.nodes.items():
-                cx, cy = node['centroid'][1], node['centroid'][0]
-                if rx <= cx <= rx + rw and ry <= cy <= ry + rh:
+            for node_id in self.nodes:
+                # Частичное пересечение: bbox узла перекрывается с рамкой.
+                if self._bboxes_overlap(self._get_node_bbox(node_id), rect_bbox):
                     self.selected_nodes.add(node_id)
 
-        rect_bbox = [rx, ry, rx + rw, ry + rh]
         for edge in self.edges_data:
             sp, tp = edge.get('source_point'), edge.get('target_point')
             if not sp or not tp:
@@ -1113,11 +1126,14 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 if hit:
                     self.selected_edges.add(key)
             else:
-                sx, sy = sp[1], sp[0]
-                tx, ty = tp[1], tp[0]
-                if (rx <= sx <= rx + rw and ry <= sy <= ry + rh and
-                        rx <= tx <= rx + rw and ry <= ty <= ry + rh):
-                    self.selected_edges.add(key)
+                # Частичное пересечение: любой сегмент задевает рамку
+                # (как в ветке edge_only).
+                for (ax, ay), (bx, by) in self._get_edge_segments(edge):
+                    if ((rx <= ax <= rx + rw and ry <= ay <= ry + rh) or
+                            (rx <= bx <= rx + rw and ry <= by <= ry + rh) or
+                            segment_intersects_bbox(ax, ay, bx, by, rect_bbox)):
+                        self.selected_edges.add(key)
+                        break
 
         self._update_selection_visuals()
         self.update_status(f"Выделено: {len(self.selected_nodes)} узлов, {len(self.selected_edges)} рёбер")
@@ -1250,8 +1266,11 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         super().wheelEvent(event)
 
     def _ctrl_right_click_delete(self, x: float, y: float):
-        """Ctrl+ПКМ — удалить под курсором. Если элемент выделен → удалить всю пачку.
+        """Ctrl+ПКМ — удалить под курсором (без выделения).
 
+        При активном выделении Ctrl+ПКМ ничего не удаляет: клик по объекту
+        ИЗ выделения исключает его из выделения, по любому другому — ничего.
+        Удаление выделенной пачки — только клавишей Delete.
         В режимах изменения ребра Ctrl+ПКМ НЕ удаляет, а убирает ребро из обводки.
         """
         # Правка полигона: Ctrl+ПКМ по вершине удаляет вершину (минимум 3).
@@ -1284,17 +1303,24 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             return
 
         # Состояние «ОКР привязка»: Ctrl+ПКМ по блоку — отвязать (если привязан)
-        # или удалить блок.
+        # или удалить блок. При активном выделении — только исключение из
+        # выделения (удаление выделенных — клавишей Delete).
         if self.display_regime == "ocr" and hasattr(self, "_ocr_block_at"):
             bid = self._ocr_block_at(x, y)
+            if getattr(self, "_selected_ocr", None):
+                if bid is not None and bid in self._selected_ocr:
+                    self._selected_ocr.discard(bid)
+                    self.refresh_ocr_layer()
+                    self.update_status(
+                        f"Блок исключён из выделения (осталось {len(self._selected_ocr)})"
+                    )
+                # По любому другому объекту при активном выделении — ничего.
+                return
             if bid is not None:
                 # Снять ручки размера (блок может быть удалён этой операцией).
                 if getattr(self, "_ocr_resize_overlay", None) is not None:
                     self._hide_ocr_block_resize()
-                if getattr(self, "_selected_ocr", None) and bid in self._selected_ocr:
-                    self._delete_selected_ocr_blocks()
-                    self.update_status("Выделенные блоки удалены")
-                elif self.model.find_binding(bid) is not None:
+                if self.model.find_binding(bid) is not None:
                     self.unbind_ocr_block(bid)
                     self.update_status("Блок отвязан")
                 else:
@@ -1314,12 +1340,32 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 self.update_status("Нет обведённого ребра под курсором")
             return
 
+        # Активное выделение base-слоя: Ctrl+ПКМ только исключает объект из
+        # выделения (никаких удалений); удаление выделенного — клавишей Delete.
+        if self.selected_nodes or self.selected_edges:
+            node_id = self._node_for_copy_at(x, y)
+            if node_id and node_id in self.selected_nodes:
+                self.selected_nodes.discard(node_id)
+                self._update_selection_visuals()
+                self.update_status(
+                    f"Узел исключён из выделения (осталось {len(self.selected_nodes)} узлов, "
+                    f"{len(self.selected_edges)} рёбер)"
+                )
+                return
+            edge_key, _ = self.find_nearest_edge(x, y)
+            if edge_key and edge_key in self.selected_edges:
+                self.selected_edges.discard(edge_key)
+                self._update_selection_visuals()
+                self.update_status(
+                    f"Ребро исключено из выделения (осталось {len(self.selected_nodes)} узлов, "
+                    f"{len(self.selected_edges)} рёбер)"
+                )
+                return
+            # По невыделенному объекту / пустому месту при активном выделении — ничего.
+            return
+
         node_id = self.find_node_at(x, y)
         if node_id:
-            if node_id in self.selected_nodes:
-                # Удалить всю выделенную пачку
-                self.batch_delete()
-                return
             # Удалить только этот узел
             snap_cmd = AutoFixCommand(self.model, self._redraw_all)
             snap_cmd.description = f"Удалить узел {node_id}"
@@ -1333,10 +1379,6 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             return
         edge_key, _ = self.find_nearest_edge(x, y)
         if edge_key:
-            if edge_key in self.selected_edges:
-                # Удалить всю выделенную пачку
-                self.batch_delete()
-                return
             # Удалить только это ребро
             snap_cmd = AutoFixCommand(self.model, self._redraw_all)
             snap_cmd.description = f"Удалить ребро {edge_key[0]}—{edge_key[1]}"
@@ -1444,6 +1486,11 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                     self.drag_start_edge_points[key] = {
                         'source_point': (edge_data.get('source_point') or []).copy(),
                         'target_point': (edge_data.get('target_point') or []).copy(),
+                        # Бэкап waypoints обязателен: при drag рёбра живо
+                        # пересчитываются (_recalculate_edge мутирует waypoints
+                        # мимо undo) — без него Ctrl+Z возвращал узел, но
+                        # оставлял рёбрам новые изломы (диагональные зигзаги).
+                        'waypoints': [wp.copy() for wp in edge_data.get('waypoints', [])],
                     }
 
     def drag_node_to(self, x: float, y: float):
@@ -1506,6 +1553,10 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 r = self.EQUIPMENT_MARKER_RADIUS if node_type == 'equipment' else self.CONNECTOR_MARKER_RADIUS
                 self.node_items[nid].setRect(nx-r, ny-r, r*2, r*2)
 
+            # Скин следует за боксом при групповом drag (bbox уже обновлён выше)
+            if self.show_skins and nid in self._skin_items:
+                self._update_node_skin(nid)
+
         # Pass 2: обновить рёбра (precomputed в start_drag_node)
         for e in self._batch_internal_edges:
             # Internal edge: shift everything
@@ -1526,6 +1577,12 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             self._recalculate_edge_fast(e)
             edge_key = self.model.edge_key(e['source'], e['target'])
             self._update_edge_path(edge_key)
+
+        # Pass 3: привязанные текст-блоки следуют за группой (после рёбер —
+        # midpoint'ы edge-привязок уже актуальны; no-op вне состояния 'ocr')
+        if hasattr(self, "_refresh_ocr_layer_for_node"):
+            for nid in sel:
+                self._refresh_ocr_layer_for_node(nid)
 
     def _recalculate_edge_fast(self, edge_data: dict):
         """Быстрый пересчёт ребра — без routing, без distribute.
@@ -1651,6 +1708,15 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
 
         for e in affected:
             self._recalculate_edge(e, moving_node_id=node_id, keep_sides=True)
+
+        # Скин следует за боксом при drag (bbox в модели уже обновлён выше)
+        if self.show_skins and node_id in self._skin_items:
+            self._update_node_skin(node_id)
+
+        # Привязанные текст-блоки следуют за узлом/его рёбрами
+        # (гранулярно; внутри — no-op вне состояния 'ocr')
+        if hasattr(self, "_refresh_ocr_layer_for_node"):
+            self._refresh_ocr_layer_for_node(node_id)
 
     # =================================================================
     # Waypoints
@@ -2238,6 +2304,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         # подогнать скин под новый размер (живой резайз)
         if self.show_skins and node_id in self._skin_items:
             self._update_node_skin(node_id)
+        # привязанные текст-блоки следуют за resize цели (гранулярно)
+        if hasattr(self, "_refresh_ocr_layer_for_node"):
+            self._refresh_ocr_layer_for_node(node_id)
 
     def preview_resize(self, width=None, height=None, scale=None):
         """Живое превью: визуально меняет размеры набора без перестройки связей.
@@ -2583,6 +2652,30 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         """Подогнать скин узла под текущий bbox (для живого резайза)."""
         self._apply_skin_geometry(node_id)
 
+    def _draw_single_node(self, node_id: str):
+        """Отрисовка узла + скин для нового equipment-бокса (добавление/вставка)."""
+        super()._draw_single_node(node_id)
+        # защита от дубля: при полной перерисовке скины создаёт _redraw_skins
+        if not self.show_skins or node_id in self._skin_items:
+            return
+        node = self.nodes.get(node_id)
+        if not node or node.get('type') != 'equipment':
+            return
+        pm = self._skin_pixmap_for(node.get('class_name'))
+        if pm is not None:
+            self._add_node_skin(node_id, node, pm)
+
+    def remove_node_items(self, node_id: str):
+        """Удалить визуальные элементы узла вместе со скином (симметрично добавлению)."""
+        super().remove_node_items(node_id)
+        items = self._skin_items.pop(node_id, None)
+        if items:
+            for it in items:
+                try:
+                    self.scene.removeItem(it)
+                except Exception:
+                    pass
+
     def set_background_darkness(self, darkness: float):
         """Затемнение фона: применяется и к листу, и к фону скинов (общий ползунок)."""
         super().set_background_darkness(darkness)
@@ -2624,15 +2717,405 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             self._handle_escape()
             return
         elif event.key() == Qt.Key.Key_Delete:
+            # В состоянии ОКР выделенные блоки удаляются клавишей Delete
+            # (Ctrl+ПКМ пачку больше не удаляет — только исключает из выделения).
+            if self.display_regime == "ocr" and getattr(self, "_selected_ocr", None):
+                self._delete_selected_ocr_blocks()
+                self.update_status("Выделенные блоки удалены")
+                return
             self.batch_delete()
             return
         elif event.key() == Qt.Key.Key_A and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             self.select_all()
             return
+        elif event.key() == Qt.Key.Key_C and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            # Пока активен призрак вставки — буфер менять нельзя (фиксация
+            # вставляет текущий буфер; иначе призрак разойдётся с содержимым).
+            if self._paste_ghost is not None:
+                return
+            # Копипаст взаимоисключающий по состоянию: ocr → блоки, base → узлы.
+            if self.display_regime == "ocr":
+                self._ocr_copy_blocks()
+                return
+            if self.display_regime == "base" and self._node_drag_allowed():
+                self._copy_selected_nodes()
+                return
+        elif event.key() == Qt.Key.Key_V and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            # Ctrl+V теперь показывает призрак вставки (фиксация — Ctrl+ЛКМ,
+            # отмена — Esc); повторный Ctrl+V при активном призраке — игнор.
+            if self.display_regime == "ocr":
+                self._start_paste_ghost()
+                return
+            if self.display_regime == "base" and self._node_drag_allowed():
+                self._start_paste_ghost()
+                return
         elif event.key() == Qt.Key.Key_G:
             self.toggle_grid()
             return
         super().keyPressEvent(event)
+
+    # =================================================================
+    # Копипаст подсистемы: узлы + рёбра + тексты (Ctrl+C/Ctrl+V, base + idle)
+    # =================================================================
+
+    def _cursor_scene_pos(self):
+        """Позиция курсора мыши в координатах сцены.
+
+        Курсор вне вьюпорта → fallback в центр вьюпорта.
+        """
+        vp = self.viewport()
+        pt = vp.mapFromGlobal(QCursor.pos())
+        if not vp.rect().contains(pt):
+            pt = vp.rect().center()
+        return self.mapToScene(pt)
+
+    def _node_for_copy_at(self, x: float, y: float) -> str | None:
+        """Узел под курсором для копипаста/выделения (любой тип).
+
+        Сначала штатный find_node_at (радиус от центроида — equipment И
+        connector), затем попадание точки внутрь bbox оборудования (наименьший
+        бокс — как _ocr_block_at), чтобы работало наведение на любую точку
+        бокса, не только на центроид.
+        """
+        nid = self.find_node_at(x, y)
+        if nid:
+            return nid
+        best_id, best_area = None, None
+        for node_id, node in self.nodes.items():
+            if node.get('type') != 'equipment':
+                continue
+            bb = node.get('bbox')
+            if not bb or len(bb) != 4:
+                continue
+            if bb[0] <= x <= bb[2] and bb[1] <= y <= bb[3]:
+                area = abs((bb[2] - bb[0]) * (bb[3] - bb[1]))
+                if best_area is None or area < best_area:
+                    best_id, best_area = node_id, area
+        return best_id
+
+    def _copy_selected_nodes(self):
+        """Ctrl+C: скопировать подсистему — узлы, рёбра между ними, тексты.
+
+        Приоритет у узла под курсором (любого типа): узел вне выделения →
+        выделение переключается на него; узел в составе выделения или курсор
+        в пустоте → копируется текущее выделение. В буфер идут:
+          • nodes — deepcopy ВСЕХ выделенных узлов (equipment и connector);
+          • edges — рёбра из selected_edges, у которых ОБА конца копируются
+            (остальные пропускаются и считаются);
+          • texts — text_blocks, чья привязка указывает на копируемый
+            узел/ребро (deepcopy блока + привязки с side/gap/text/kind).
+        Скопированное остаётся выделенным (штатная подсветка).
+        """
+        pos = self._cursor_scene_pos()
+        cur = self._node_for_copy_at(pos.x(), pos.y())
+        if cur is not None and cur not in self.selected_nodes:
+            # выделение = содержимое буфера: переключить на узел под курсором
+            self.selected_nodes = {cur}
+            self.selected_edges.clear()
+            self._update_selection_visuals()
+        ids = [nid for nid in self.selected_nodes if nid in self.nodes]
+        if not ids:
+            self.update_status("Копировать: выделите узлы или наведите курсор на узел")
+            return
+        nodes_clip = [deepcopy(self.nodes[nid]) for nid in ids]
+        id_set = set(ids)
+
+        # Рёбра: только с обоими концами среди копируемых узлов
+        edges_clip = []
+        skipped_edges = 0
+        for key in self.selected_edges:
+            ed = self.model.find_edge_data(key)
+            if ed and ed.get('source') in id_set and ed.get('target') in id_set:
+                edges_clip.append(deepcopy(ed))
+            else:
+                skipped_edges += 1
+
+        # Тексты: привязки, указывающие на копируемые узлы/рёбра
+        copied_keys = {self.model.edge_key(e['source'], e['target'])
+                       for e in edges_clip}
+        texts_clip = []
+        for b in self.model.bindings:
+            if not (b.get("node_id") in id_set
+                    or self.model.binding_edge_key(b) in copied_keys):
+                continue
+            blk = self.model.find_text_block(b.get("block_id"))
+            if not blk or blk.get("merged_into") is not None:
+                continue
+            bbox = blk.get("bbox")
+            if not bbox or len(bbox) != 4:
+                continue
+            texts_clip.append((deepcopy(blk), deepcopy(b)))
+
+        self._node_clipboard = {
+            "nodes": nodes_clip, "edges": edges_clip, "texts": texts_clip,
+        }
+        msg = f"Скопировано: {len(nodes_clip)} узлов, {len(edges_clip)} рёбер"
+        if skipped_edges:
+            msg += f" (пропущено рёбер: {skipped_edges})"
+        msg += f", {len(texts_clip)} текстов (Ctrl+V — вставить)"
+        self.update_status(msg)
+
+    def _clip_nodes_bbox(self, nodes: list) -> tuple:
+        """Общий bbox набора узлов буфера: bbox оборудования или centroid ± r
+        коннектора. По нему считается центр набора для призрака/вставки."""
+        r = self.CONNECTOR_MARKER_RADIUS
+        xs1, ys1, xs2, ys2 = [], [], [], []
+        for n in nodes:
+            bb = n.get('bbox')
+            if n.get('type') == 'equipment' and bb and len(bb) == 4:
+                xs1.append(float(bb[0])); ys1.append(float(bb[1]))
+                xs2.append(float(bb[2])); ys2.append(float(bb[3]))
+            else:
+                c = n.get('centroid') or [0.0, 0.0]  # [y, x]
+                xs1.append(float(c[1]) - r); ys1.append(float(c[0]) - r)
+                xs2.append(float(c[1]) + r); ys2.append(float(c[0]) + r)
+        return min(xs1), min(ys1), max(xs2), max(ys2)
+
+    def _paste_node_clipboard(self, dx: float, dy: float):
+        """Зафиксировать вставку буфера подсистемы со сдвигом (dx, dy).
+
+        Вызывается фиксацией призрака (Ctrl+V → призрак → Ctrl+ЛКМ). Создаёт:
+          • узлы (equipment И connector) с новыми id той же механикой, что
+            фабрики graph_data (manual_node_counter / node_manual_{n}), все
+            поля сохраняются, геометрия сдвигается;
+          • рёбра между НОВЫМИ id (маппинг old→new, сдвиг
+            source_point/target_point/waypoints);
+          • тексты: create_text_block + set_binding на новую цель (side/gap
+            сохраняются).
+        Взаимное расположение сохраняется. Вся вставка — одна SnapshotCommand,
+        т.е. отменяется одним Ctrl+Z.
+        """
+        from ui.editors.undo_manager import SnapshotCommand
+        clip = self._node_clipboard
+        if not clip or not clip.get("nodes"):
+            self.update_status("Буфер узлов пуст — сначала Ctrl+C")
+            return
+
+        cmd = SnapshotCommand(self.model, self._redraw_all)
+        cmd.execute()
+        cmd.description = "Вставить узлы"
+
+        # Узлы: deepcopy всех полей, новый id, сдвиг centroid/bbox/segmentation
+        id_map: dict[str, str] = {}
+        for src in clip["nodes"]:
+            node = deepcopy(src)
+            self.model.manual_node_counter += 1
+            new_id = f"node_manual_{self.model.manual_node_counter}"
+            node["id"] = new_id
+            node["manual"] = True
+            node["yolo_idx"] = None
+            node["degree"] = 0  # пересчитается по вставленным рёбрам ниже
+            c = node.get("centroid") or [0.0, 0.0]
+            node["centroid"] = [float(c[0]) + dy, float(c[1]) + dx]  # [y, x]
+            bb = node.get("bbox")
+            if bb and len(bb) == 4:
+                node["bbox"] = [float(bb[0]) + dx, float(bb[1]) + dy,
+                                float(bb[2]) + dx, float(bb[3]) + dy]
+            seg = node.get("segmentation")
+            if seg and isinstance(seg, list):
+                # segmentation — плоский список [x, y, x, y, ...]
+                node["segmentation"] = [float(v) + (dx if i % 2 == 0 else dy)
+                                        for i, v in enumerate(seg)]
+            self.model.add_node(node)
+            id_map[src["id"]] = new_id
+
+        # Рёбра: между новыми id; точки в формате [y, x]
+        new_edge_keys: list[tuple] = []
+        for src_e in clip.get("edges", []):
+            ns, nt = id_map.get(src_e.get("source")), id_map.get(src_e.get("target"))
+            if not ns or not nt:
+                continue  # копируются только рёбра с обоими концами в буфере
+            e = deepcopy(src_e)
+            self.model.manual_edge_counter += 1
+            e["id"] = f"edge_manual_{self.model.manual_edge_counter}"
+            e["source"], e["target"] = ns, nt
+            e["manual"] = True
+            for pt in (e.get("source_point"), e.get("target_point")):
+                if pt and len(pt) == 2:
+                    pt[0] += dy
+                    pt[1] += dx
+            for wp in e.get("waypoints") or []:
+                wp[0] += dy
+                wp[1] += dx
+            self.model.add_edge(ns, nt, e)
+            new_edge_keys.append(self.model.edge_key(ns, nt))
+            for nid in (ns, nt):
+                self.model.nodes[nid]["degree"] = \
+                    self.model.nodes[nid].get("degree", 0) + 1
+
+        # Тексты: новый блок + привязка на НОВУЮ цель (side/gap сохраняются)
+        n_texts = 0
+        for blk_src, bind_src in clip.get("texts", []):
+            binding = {
+                "kind": bind_src.get("kind"),
+                "text": bind_src.get("text") or "",
+            }
+            if bind_src.get("node_id"):
+                binding["node_id"] = id_map.get(bind_src["node_id"])
+                if not binding["node_id"]:
+                    continue
+            elif bind_src.get("edge_key") and "|" in str(bind_src["edge_key"]):
+                a, b = str(bind_src["edge_key"]).split("|", 1)
+                na, nb = id_map.get(a), id_map.get(b)
+                if not na or not nb:
+                    continue
+                binding["edge_key"] = f"{min(na, nb)}|{max(na, nb)}"
+            else:
+                continue
+            bb = blk_src.get("bbox")
+            blk = self.model.create_text_block(
+                [bb[0] + dx, bb[1] + dy, bb[2] + dx, bb[3] + dy],
+                text=blk_src.get("text") or "",
+                confidence=blk_src.get("confidence") or 0.0,
+                source="manual")
+            self.model.add_text_block(blk)
+            binding["block_id"] = blk["id"]
+            if bind_src.get("side") in ("top", "right", "left", "bottom"):
+                binding["side"] = bind_src["side"]
+                if bind_src.get("gap") is not None:
+                    binding["gap"] = bind_src["gap"]
+            self.model.set_binding(binding)
+            n_texts += 1
+
+        cmd.finalize()
+        self.undo_mgr.push_executed(cmd)
+
+        # Полная перерисовка (узлы + рёбра + OCR-слой) + выделение вставленных
+        self._redraw_all()
+        self.selected_nodes = set(id_map.values())
+        self.selected_edges = set(new_edge_keys)
+        self._update_selection_visuals()
+        self.update_statistics()
+        self.update_status(
+            f"Вставлено: {len(id_map)} узлов, {len(new_edge_keys)} рёбер, "
+            f"{n_texts} текстов")
+
+    # =================================================================
+    # Призрак вставки (Ctrl+V → следует за мышью → Ctrl+ЛКМ фиксирует)
+    # =================================================================
+
+    def _start_paste_ghost(self):
+        """Ctrl+V: показать полупрозрачный призрак буфера, следующий за мышью.
+
+        Вставка больше не мгновенная: Ctrl+ЛКМ фиксирует набор в позиции
+        призрака, Esc отменяет. Повторный Ctrl+V при активном призраке — игнор.
+        Пока призрак активен, все прочие жесты мыши в этом view отключены.
+        """
+        if self._paste_ghost is not None:
+            return  # призрак уже активен
+        items: list = []   # контурные item'ы (получают общий пунктирный pen)
+        deco: list = []    # скины/подписи — со своим стилем, pen не трогаем
+        if self.display_regime == "ocr":
+            clip = getattr(self, "_ocr_clipboard", [])
+            if not clip:
+                self.update_status("Буфер блоков пуст — сначала Ctrl+C")
+                return
+            # Призрак OCR: рамки блоков + призрачная подпись с текстом
+            for bbox, text in clip:
+                items.append(QGraphicsRectItem(
+                    bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1]))
+                deco.extend(self._ghost_label_items(bbox, text))
+            gx1 = min(b[0][0] for b in clip)
+            gy1 = min(b[0][1] for b in clip)
+            gx2 = max(b[0][2] for b in clip)
+            gy2 = max(b[0][3] for b in clip)
+            kind = "ocr"
+        else:
+            clip = self._node_clipboard
+            if not clip or not clip.get("nodes"):
+                self.update_status("Буфер узлов пуст — сначала Ctrl+C")
+                return
+            # Рамки bbox оборудования / кружки коннекторов
+            for n in clip["nodes"]:
+                bb = n.get('bbox')
+                if n.get('type') == 'equipment' and bb and len(bb) == 4:
+                    items.append(QGraphicsRectItem(
+                        bb[0], bb[1], bb[2] - bb[0], bb[3] - bb[1]))
+                    w, h = bb[2] - bb[0], bb[3] - bb[1]
+                    pm = self._skin_pixmap_for(n.get('class_name')) \
+                        if self.show_skins else None
+                    if pm is not None:
+                        # скин-призрак: видно, какой блок едет (имя не дублируем);
+                        # ориентация по аспекту — копия ещё не в графе, рёбер нет
+                        disp = self._oriented_skin_pixmap(
+                            pm, 'HORIZONTAL' if w > h else 'VERTICAL')
+                        spi = QGraphicsPixmapItem(disp)
+                        self._fit_pixmap(spi, disp, bb[0], bb[1], w, h)
+                        deco.append(spi)
+                    elif n.get('class_name'):
+                        # без скина блок опознаётся по имени класса
+                        lbl = QGraphicsSimpleTextItem(str(n['class_name']))
+                        lbl.setFont(QFont(self.font().family(), 9))
+                        lbl.setBrush(QBrush(self.COLOR_SELECTION))
+                        lbl.setPos(bb[0], bb[1] - 16)
+                        deco.append(lbl)
+                else:
+                    c = n.get('centroid') or [0.0, 0.0]  # [y, x]
+                    r = self.CONNECTOR_MARKER_RADIUS
+                    items.append(QGraphicsEllipseItem(
+                        c[1] - r, c[0] - r, r * 2, r * 2))
+            # Полилинии рёбер: source_point → waypoints → target_point
+            for e in clip.get("edges", []):
+                items.append(QGraphicsPathItem(self._build_edge_path(
+                    e.get('source_point'), e.get('waypoints', []),
+                    e.get('target_point'))))
+            # Рамки текстов + призрачная подпись с текстом
+            for blk, _b in clip.get("texts", []):
+                bb = blk.get('bbox')
+                if bb and len(bb) == 4:
+                    items.append(QGraphicsRectItem(
+                        bb[0], bb[1], bb[2] - bb[0], bb[3] - bb[1]))
+                    deco.extend(self._ghost_label_items(bb, blk.get('text')))
+            gx1, gy1, gx2, gy2 = self._clip_nodes_bbox(clip["nodes"])
+            kind = "nodes"
+
+        # Общая группа: item'ы в исходных координатах, двигаем одним setPos
+        # (не пересоздаём на каждый move); пунктир, полупрозрачно, поверх всего.
+        pen = QPen(self.COLOR_SELECTION, 2, Qt.PenStyle.DashLine)
+        group = QGraphicsItemGroup()
+        for it in items:
+            it.setPen(pen)
+            group.addToGroup(it)
+        for it in deco:   # скин/подписи — свой стиль, общий pen не применяем
+            group.addToGroup(it)
+        group.setZValue(200)
+        group.setOpacity(0.5)
+        self.scene.addItem(group)
+        self._paste_ghost = {
+            "kind": kind, "group": group,
+            "center": ((gx1 + gx2) / 2.0, (gy1 + gy2) / 2.0),
+        }
+        pos = self._cursor_scene_pos()
+        self._move_paste_ghost(pos.x(), pos.y())
+        self.update_status("Ctrl+ЛКМ — вставить, Esc — отмена")
+
+    def _move_paste_ghost(self, x: float, y: float):
+        """Призрак следует за мышью: центр набора — под курсором."""
+        g = self._paste_ghost
+        if not g:
+            return
+        ccx, ccy = g["center"]
+        g["group"].setPos(x - ccx, y - ccy)
+
+    def _commit_paste_ghost(self):
+        """Ctrl+ЛКМ: зафиксировать вставку в позиции призрака."""
+        g = self._paste_ghost
+        if not g:
+            return
+        offset = g["group"].pos()  # сдвиг призрака относительно оригинала
+        kind = g["kind"]
+        self._cancel_paste_ghost()
+        if kind == "ocr":
+            self._ocr_paste_blocks(offset.x(), offset.y())
+        else:
+            self._paste_node_clipboard(offset.x(), offset.y())
+
+    def _cancel_paste_ghost(self):
+        """Убрать призрак вставки со сцены (Esc / перед фиксацией)."""
+        g = self._paste_ghost
+        self._paste_ghost = None
+        if g and g["group"].scene() is not None:
+            self.scene.removeItem(g["group"])
 
     def _node_drag_allowed(self) -> bool:
         """Перетаскивание узлов — только когда не активен инструмент (базовое/idle).
@@ -2652,6 +3135,12 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         2-я ступень: если инструмент не активен и снимать нечего —
                      вернуться в базовое состояние.
         """
+        # Призрак вставки (Ctrl+V) — отменить первым приоритетом.
+        if self._paste_ghost is not None:
+            self._cancel_paste_ghost()
+            self.update_status("Вставка отменена")
+            return
+
         # Ручки изменения размера OCR-блока — снять первыми (не выходя из ОКР).
         if getattr(self, "_ocr_resize_overlay", None) is not None:
             self._hide_ocr_block_resize()
@@ -2698,10 +3187,28 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
     # Ctrl+ЛКМ: клик → KKS/handler, drag → перетаскивание
     # =================================================================
 
-    def _on_ctrl_lmb_click(self, x: float, y: float, node_id: str):
+    def _on_ctrl_lmb_click(self, x: float, y: float, node_id: str | None):
         """Ctrl+ЛКМ клик (без drag) на узле."""
         # Правка полигона: одиночный Ctrl+ЛКМ по вершине (без drag) — ничего.
         if self._poly_edit_node:
+            return
+        # Расширение выделения: отложенный клик по объекту, которого
+        # find_node_at не видит (equipment по bbox / ребро) — цель взведена
+        # в mousePressEvent только при активном выделении в base + idle.
+        if self._ext_click_target is not None:
+            kind, obj = self._ext_click_target
+            self._ext_click_target = None
+            if kind == "node":
+                self.toggle_select_node(obj)
+            else:
+                self.toggle_select_edge(obj)
+            return
+        # Расширение выделения по центроиду: клик по НЕвыделенному узлу при
+        # активном выделении добавляет его (base-состояние, инструмент idle).
+        if (self.display_regime == "base" and self._node_drag_allowed()
+                and (self.selected_nodes or self.selected_edges)
+                and node_id is not None and node_id not in self.selected_nodes):
+            self.toggle_select_node(node_id)
             return
         # Режим «Размер объектов»: Ctrl+ЛКМ добавляет экземпляр в набор.
         if self._current_mode == "resize_objects":
@@ -2720,6 +3227,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         Перетаскивание доступно во всех режимах, кроме «Размер объектов»
         (там Ctrl+ЛКМ только набирает экземпляры, узлы двигать нельзя).
         """
+        # Жест ушёл в drag → отложенный клик расширения выделения отменяется
+        # (для целей без node_id — bbox/ребро — drag не начинается, как раньше).
+        self._ext_click_target = None
         # Правка полигона: Ctrl+ЛКМ по вершине → тянем вершину, а не узел.
         if (self._poly_edit_node and self._poly_overlay
                 and self._poly_overlay.phase == "edit"):
@@ -2772,6 +3282,17 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
     def mousePressEvent(self, event):
         """В режиме правки полигона перехватываем Ctrl+ЛКМ по вершине/ребру ДО
         базовой логики (иначе клик ушёл бы в перетаскивание узла)."""
+        # Призрак вставки: все прочие жесты мыши отключены;
+        # Ctrl+ЛКМ фиксирует вставку в позиции призрака.
+        if self._paste_ghost is not None:
+            if event.button() == Qt.MouseButton.LeftButton and (
+                    self.ctrl_pressed
+                    or event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+                self._commit_paste_ghost()
+            else:
+                self.update_status("Ctrl+ЛКМ — вставить, Esc — отмена")
+            event.accept()
+            return
         if (self._poly_edit_node and self._poly_overlay
                 and self.ctrl_pressed
                 and event.button() == Qt.MouseButton.LeftButton
@@ -2797,7 +3318,42 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             self._exit_polygon_editing_mode(commit=True)
             event.accept()
             return
+        # Расширение выделения (base + idle): при активном выделении Ctrl+ЛКМ
+        # клик должен добавлять и объекты, которых find_node_at не видит
+        # (equipment по любой точке bbox, ребро) — заводим отложенный
+        # клик/drag с той же механикой порога, что у базового класса.
+        if (self.ctrl_pressed and event.button() == Qt.MouseButton.LeftButton
+                and not self._poly_edit_node
+                and self.display_regime == "base" and self._node_drag_allowed()
+                and (self.selected_nodes or self.selected_edges)):
+            pos = self.mapToScene(event.pos())
+            x, y = pos.x(), pos.y()
+            if self.find_node_at(x, y) is None:
+                target = None
+                nid = self._node_for_copy_at(x, y)
+                if nid is not None and nid not in self.selected_nodes:
+                    target = ("node", nid)
+                elif nid is None:
+                    edge_key, _ = self.find_nearest_edge(x, y)
+                    if edge_key is not None and edge_key not in self.selected_edges:
+                        target = ("edge", edge_key)
+                if target is not None:
+                    self._ext_click_target = target
+                    self._ctrl_lmb_pending = True
+                    self._ctrl_lmb_start_x = x
+                    self._ctrl_lmb_start_y = y
+                    self._ctrl_lmb_node = None  # drag за такую точку не начинается
+                    self._ctrl_lmb_dragging = False
+                    event.accept()
+                    return
         super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        """Пока активен призрак вставки — жесты мыши не доходят до редактора."""
+        if self._paste_ghost is not None:
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def _enter_polygon_editing_mode(self, node_id: str):
         """Войти в правку точек полигона узла (Ctrl+2ЛКМ по полигону в базовом).
@@ -2904,6 +3460,12 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         """Override: KKS hover tooltip при наведении на equipment."""
         pos = self.mapToScene(event.pos())
         x, y = pos.x(), pos.y()
+
+        # Призрак вставки следует за мышью; остальные жесты отключены.
+        if self._paste_ghost is not None:
+            self._move_paste_ghost(x, y)
+            event.accept()
+            return
 
         # KKS hover tooltip — ищем equipment по bbox (а не только по centroid).
         # KKS берём из graph.bindings (единый источник), не из node.kks_full.

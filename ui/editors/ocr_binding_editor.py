@@ -20,11 +20,11 @@ from PySide6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsRectItem,
     QGraphicsEllipseItem, QGraphicsLineItem,
     QGraphicsSimpleTextItem, QGraphicsPixmapItem,
-    QGraphicsPathItem, QInputDialog,
+    QGraphicsPathItem, QGraphicsItemGroup, QInputDialog,
 )
 from PySide6.QtGui import (
     QImage, QPixmap, QPainter, QColor, QBrush, QPen,
-    QFont, QPainterPath, QFontMetricsF, QPolygonF,
+    QFont, QPainterPath, QFontMetricsF, QPolygonF, QCursor,
 )
 from PySide6.QtCore import Qt, QRectF, QPointF, Signal
 
@@ -64,6 +64,19 @@ COLOR_EDGE_BOUND = QColor("#e67e22")
 COLOR_BINDING_LINE = QColor(30, 120, 255, 160)
 COLOR_TEXT_LABEL = QColor(255, 255, 255, 230)
 COLOR_TEXT_BG = QColor(0, 0, 0, 140)
+
+# Отступ привязанного блока от границы цели (авто-позиция при привязке), px.
+# Синхронизировано с _BIND_GAP в ui/editors/ocr_layer_mixin.py.
+OCR_BIND_GAP = 6.0
+# Порог «вертикальный» блок: h > w * 1.3 (квадрат — горизонтальный).
+# Продублировано из modules/graph_to_fxml.py:_TEXT_VERTICAL_RATIO —
+# менять синхронно, иначе редактор разойдётся с итоговым FXML.
+_TEXT_VERTICAL_RATIO = 1.3
+
+
+def _block_is_vertical(x1: float, y1: float, x2: float, y2: float) -> bool:
+    """Вертикальный текст-блок (текст пишется снизу вверх) — по аспекту bbox."""
+    return (y2 - y1) > (x2 - x1) * _TEXT_VERTICAL_RATIO
 
 # Diameter binding colors
 COLOR_DIAMETER_BORDER = QColor(155, 89, 182, 240)       # #9B59B6
@@ -186,6 +199,12 @@ class OcrBindingEditor(QGraphicsView):
     CLICK_THRESHOLD = 25
     EDGE_HIT_THRESHOLD = 25
     TEXT_FONT_SIZE = 9
+    # Порог различия клик/drag для Ctrl+ЛКМ по блоку (px) —
+    # синхронно с OcrBindHandler.OCR_CLICK_MOVE_THRESHOLD.
+    OCR_CLICK_MOVE_THRESHOLD = 4.0
+    # Порядок вращения стороны привязки по часовой стрелке (Ctrl+ЛКМ по узлу).
+    _BIND_SIDE_CW = {"right": "bottom", "bottom": "left", "left": "top",
+                     "top": "right"}
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -246,6 +265,11 @@ class OcrBindingEditor(QGraphicsView):
         self._add_bbox_start = None      # П3: рисование бокса перетаскиванием
         self._add_bbox_preview = None
         self._selected_ocr: set = set()  # П3: выделенные боксы (Shift-рамка)
+        self._ocr_clipboard: list = []   # буфер копипаста: [(bbox, text), ...]
+        # Призрак вставки (Ctrl+V → следует за мышью → Ctrl+ЛКМ фиксирует):
+        # {"group": QGraphicsItemGroup, "center": (cx, cy)}
+        self._paste_ghost: dict | None = None
+        self._ctrl_press_xy: tuple | None = None  # позиция press для клик/drag
         self._rb_start = None            # старт rubber-band
         self._rubber_band = None         # item рамки выделения
         self._node_contours: dict = {}   # ann_idx -> полигон контура узла
@@ -320,6 +344,7 @@ class OcrBindingEditor(QGraphicsView):
         self._img_width, self._img_height = img.width(), img.height()
 
         self.scene.clear()
+        self._paste_ghost = None  # призрак вставки не переживает scene.clear()
         self._ocr_items.clear()
         self._ocr_text_items.clear()
         self._ocr_text_bg_items.clear()
@@ -1066,19 +1091,40 @@ class OcrBindingEditor(QGraphicsView):
             self._ocr_items[idx] = rect
             if text:
                 th = fm.height()
-                lx, ly = x1, y1 - th - 2
-                if ly < 0:
-                    ly = y2 + 2
                 tw = fm.horizontalAdvance(text)
-                bg = self.scene.addRect(lx - 1, ly - 1, min(tw + 4, x2 - x1 + 4), th + 2,
+                lx, ly, rot, bg_rect = self._label_geometry(
+                    x1, y1, x2, y2, tw, th)
+                bg = self.scene.addRect(*bg_rect,
                                         QPen(Qt.PenStyle.NoPen), QBrush(COLOR_TEXT_BG))
                 bg.setZValue(11)
                 self._ocr_text_bg_items[idx] = bg
                 label = self.scene.addSimpleText(text, font)
                 label.setBrush(QBrush(COLOR_TEXT_LABEL))
                 label.setPos(lx, ly)
+                label.setRotation(rot)
                 label.setZValue(12)
                 self._ocr_text_items[idx] = label
+
+    @staticmethod
+    def _label_geometry(x1, y1, x2, y2, tw, th):
+        """Геометрия подписи блока: (lx, ly, rotation, bg_rect).
+
+        Горизонтальный блок — подпись над боксом (fallback вниз, если не
+        влезает сверху). Вертикальный (h > w*1.3) — подпись у нижнего-левого
+        угла с поворотом -90° (имитация Rotate angle="-90" сценбилдера):
+        текст идёт снизу вверх вдоль левой стенки (fallback вдоль правой).
+        Точка поворота — pos подписи (transform origin (0,0)).
+        """
+        if _block_is_vertical(x1, y1, x2, y2):
+            lx, ly = x1 - th - 2, y2
+            if lx < 0:
+                lx = x2 + 2
+            bl = min(tw + 4, (y2 - y1) + 4)
+            return lx, ly, -90.0, (lx - 1, ly - bl + 1, th + 2, bl)
+        lx, ly = x1, y1 - th - 2
+        if ly < 0:
+            ly = y2 + 2
+        return lx, ly, 0.0, (lx - 1, ly - 1, min(tw + 4, (x2 - x1) + 4), th + 2)
 
     def _draw_graph_nodes(self):
         if not hasattr(self, "_connector_items"):
@@ -1734,32 +1780,34 @@ class OcrBindingEditor(QGraphicsView):
             block = self._ocr_blocks[idx] if idx < len(self._ocr_blocks) else {}
             text = block.get("text", "").strip()
 
-        # Подпись сверху
+        # Подпись: горизонтальный блок — сверху; вертикальный — снизу вверх
+        # вдоль левой стенки (поворот -90°, см. _label_geometry)
         font = QFont("DejaVu Sans", self._label_pt)
         fm = QFontMetricsF(font)
         th = fm.height()
-        lx, ly = x1, y1 - th - 2
-        if ly < 0:
-            ly = y2 + 2
 
         if text:
+            tw = fm.horizontalAdvance(text)
+            lx, ly, rot, bg_rect = self._label_geometry(x1, y1, x2, y2, tw, th)
             if idx in self._ocr_text_items:
-                self._ocr_text_items[idx].setText(text)
-                self._ocr_text_items[idx].setPos(lx, ly)
-                self._ocr_text_items[idx].setVisible(True)
+                item = self._ocr_text_items[idx]
+                item.setText(text)
+                item.setPos(lx, ly)
+                item.setRotation(rot)   # сброс/установка поворота при переиспользовании
+                item.setVisible(True)
             else:
                 label = self.scene.addSimpleText(text, font)
                 label.setBrush(QBrush(COLOR_TEXT_LABEL))
                 label.setPos(lx, ly)
+                label.setRotation(rot)
                 label.setZValue(12)
                 self._ocr_text_items[idx] = label
 
-            tw = fm.horizontalAdvance(text)
             if idx in self._ocr_text_bg_items:
-                self._ocr_text_bg_items[idx].setRect(lx - 1, ly - 1, min(tw + 4, x2 - x1 + 4), th + 2)
+                self._ocr_text_bg_items[idx].setRect(*bg_rect)
                 self._ocr_text_bg_items[idx].setVisible(True)
             else:
-                bg = self.scene.addRect(lx - 1, ly - 1, min(tw + 4, x2 - x1 + 4), th + 2,
+                bg = self.scene.addRect(*bg_rect,
                                         QPen(Qt.PenStyle.NoPen), QBrush(COLOR_TEXT_BG))
                 bg.setZValue(11)
                 self._ocr_text_bg_items[idx] = bg
@@ -1781,6 +1829,12 @@ class OcrBindingEditor(QGraphicsView):
             c = COLOR_NODE_BOUND if is_b else COLOR_NODE_EQUIPMENT
             e.setBrush(QBrush(c))
             e.setPen(QPen(c.darker(130), 1.5))
+            # вернуть перо контура оборудования (рамка/полигон), если подсвечивали
+            rect = getattr(self, "_equipment_bbox_items", {}).get(self._highlighted_node)
+            pen = getattr(self, "_highlighted_bbox_pen", None)
+            if rect is not None and pen is not None:
+                rect.setPen(pen)
+            self._highlighted_bbox_pen = None
         self._highlighted_node = None
 
         if self._highlighted_edge_idx is not None and self._highlighted_edge_idx in self._edge_items:
@@ -1807,6 +1861,12 @@ class OcrBindingEditor(QGraphicsView):
             self._highlighted_node = nid
             self._node_items[nid].setBrush(QBrush(COLOR_DROP_HIGHLIGHT))
             self._node_items[nid].setPen(QPen(COLOR_DROP_HIGHLIGHT.darker(130), 2.5))
+            # подсветить весь контур оборудования (рамка бокса / полигон) —
+            # ровно то, к чему привяжется; перо запоминаем для восстановления
+            rect = getattr(self, "_equipment_bbox_items", {}).get(nid)
+            if rect is not None:
+                self._highlighted_bbox_pen = rect.pen()
+                rect.setPen(QPen(COLOR_DROP_HIGHLIGHT, 3))
 
     def _highlight_edge(self, idx):
         self._clear_highlights()
@@ -1825,12 +1885,128 @@ class OcrBindingEditor(QGraphicsView):
     # Operations
     # =================================================================
 
+    def _node_target_bbox(self, node):
+        """bbox узла для авто-позиции блока: реальный или бокс вокруг центроида."""
+        b = node.get("bbox")
+        if b and len(b) == 4:
+            return [float(v) for v in b]
+        cx, cy = self._node_center(node)
+        if cx is None:
+            return None
+        r = self.NODE_RADIUS
+        return [cx - r, cy - r, cx + r, cy + r]
+
+    @staticmethod
+    def _bind_side_of(block_bbox, target_bbox) -> str:
+        """Сторона цели по «выходам» центра блока за грани bbox цели.
+
+        Одна ось → та сторона; обе (угловая зона) → большее смещение;
+        внутри → ближайшая изнутри; равенство (в т.ч. вырожденная цель) →
+        right. Правило синхронно с ocr_layer_mixin._nearest_bind_side.
+        """
+        px = (block_bbox[0] + block_bbox[2]) / 2.0
+        py = (block_bbox[1] + block_bbox[3]) / 2.0
+        tx1, ty1, tx2, ty2 = target_bbox
+        dx = (px - tx2) if px > tx2 else (px - tx1) if px < tx1 else 0.0
+        dy = (py - ty2) if py > ty2 else (py - ty1) if py < ty1 else 0.0
+        if dx or dy:
+            if abs(dx) >= abs(dy):
+                return "right" if dx > 0 else "left"
+            return "bottom" if dy > 0 else "top"
+        side, best = "right", tx2 - px
+        for s, d in (("left", px - tx1), ("top", py - ty1),
+                     ("bottom", ty2 - py)):
+            if d < best:
+                side, best = s, d
+        return side
+
+    def _auto_bind_bbox(self, ocr_idx, target_bbox, side=None):
+        """Авто-позиция блока по центру выбранной стороны цели с отступом
+        OCR_BIND_GAP.
+
+        Объекты графа в «бусине» статичны — позиция считается один раз в
+        момент привязки (следование не нужно). Сторона — от ИСХОДНОГО
+        положения блока (во время drag bbox блока не мутирует — двигаются
+        только визуалы), место броска не влияет: привязка детерминирована.
+        Параметр side форсирует сторону (вращение привязок), иначе она
+        считается правилом «выходов» (_bind_side_of). Размер блока
+        сохраняется; bbox блока и визуалы обновляются. Возвращает новый bbox
+        или None (цель без геометрии — блок остаётся на месте).
+        """
+        if target_bbox is None:
+            return None
+        block = self._ocr_blocks[ocr_idx]
+        bb = block.get("bbox")
+        if not bb or len(bb) != 4:
+            return None
+        w = max(1.0, bb[2] - bb[0])
+        h = max(1.0, bb[3] - bb[1])
+        tx1, ty1, tx2, ty2 = target_bbox
+        tcx, tcy = (tx1 + tx2) / 2.0, (ty1 + ty2) / 2.0
+        if side is None:
+            side = self._bind_side_of(bb, target_bbox)
+        if side == "top":
+            nx1, ny1 = tcx - w / 2.0, ty1 - OCR_BIND_GAP - h
+        elif side == "bottom":
+            nx1, ny1 = tcx - w / 2.0, ty2 + OCR_BIND_GAP
+        elif side == "left":
+            nx1, ny1 = tx1 - OCR_BIND_GAP - w, tcy - h / 2.0
+        else:  # right
+            nx1, ny1 = tx2 + OCR_BIND_GAP, tcy - h / 2.0
+        nb = [nx1, ny1, nx1 + w, ny1 + h]
+        block["bbox"] = nb
+        self._move_ocr_visuals(ocr_idx, *nb)
+        return nb
+
+    def _rotate_node_bindings(self, node_id) -> bool:
+        """Повернуть ВСЕ привязки узла на следующую сторону по часовой.
+
+        right → bottom → left → top → right. Текущая сторона каждого блока —
+        правилом «выходов» от центра его bbox к bbox узла (_bind_side_of);
+        блок переставляется по центру следующей стороны с отступом
+        OCR_BIND_GAP. Один _push_undo на весь узел. Returns True, если было
+        что вращать.
+        """
+        binds = [b for b in self._bindings if b.get("node_id") == node_id]
+        if not binds:
+            return False
+        node = self._find_node(node_id)
+        tb = self._node_target_bbox(node) if node else None
+        if tb is None:
+            return False
+        self._push_undo()
+        n = 0
+        for b in binds:
+            idx = b.get("ocr_block_idx")
+            if idx is None or idx >= len(self._ocr_blocks):
+                continue
+            block = self._ocr_blocks[idx]
+            bb = block.get("bbox")
+            if not bb or len(bb) != 4:
+                continue
+            cur = self._bind_side_of(bb, tb)
+            nb = self._auto_bind_bbox(idx, tb, side=self._BIND_SIDE_CW[cur])
+            if nb is not None:
+                b["bbox"] = nb
+                n += 1
+        self._after_change()
+        self.status_message.emit(f"Привязки узла повернуты по часовой ({n})")
+        return True
+
     def _bind_to_node(self, ocr_idx, node_id):
-        # П3: простая привязка текст->узел (без KKS-нормализации/потока)
+        # П3: простая привязка текст->узел (без KKS-нормализации/потока).
+        # Блок автоматически встаёт по центру стороны bbox/центроида узла
+        # (сторона — от исходного положения блока).
         self._push_undo()
         block = self._ocr_blocks[ocr_idx]
         text = _clean_text(block.get("text", ""))
         n = self._find_node(node_id)
+        if self._auto_bind_bbox(
+                ocr_idx, self._node_target_bbox(n) if n else None) is None:
+            # цель без геометрии — вернуть визуалы на bbox блока (как раньше)
+            bb = block.get("bbox")
+            if bb and len(bb) == 4:
+                self._move_ocr_visuals(ocr_idx, *bb)
         self._bindings = [b for b in self._bindings if b.get("ocr_block_idx") != ocr_idx]
         self._bindings.append({
             "node_id": node_id, "text": text,
@@ -1841,11 +2017,19 @@ class OcrBindingEditor(QGraphicsView):
         self.status_message.emit(f"Привязано → узел {cls}")
 
     def _bind_to_edge(self, ocr_idx, edge_idx):
-        # П3: простая привязка текст->ребро (как у узла, без диаметра/потока)
+        # П3: простая привязка текст->ребро (как у узла, без диаметра/потока).
+        # Блок автоматически встаёт у midpoint'а ребра (сторона — от
+        # исходного положения блока).
         self._push_undo()
         block = self._ocr_blocks[ocr_idx]
         text = _clean_text(block.get("text", ""))
         ek = self._edge_key_str(edge_idx)
+        mx, my = self._get_edge_midpoint_by_key(ek) if ek else (None, None)
+        target_bbox = [mx, my, mx, my] if mx is not None else None
+        if self._auto_bind_bbox(ocr_idx, target_bbox) is None:
+            bb = block.get("bbox")
+            if bb and len(bb) == 4:
+                self._move_ocr_visuals(ocr_idx, *bb)
         self._bindings = [b for b in self._bindings if b.get("ocr_block_idx") != ocr_idx]
         self._bindings.append({
             "edge_key": ek, "text": text,
@@ -2302,6 +2486,161 @@ class OcrBindingEditor(QGraphicsView):
         self.blocks_changed.emit()
         self.status_message.emit(f"Добавлен пустой блок #{idx} — нажмите «Распознать»")
 
+    def _cursor_scene_pos(self) -> QPointF:
+        """Позиция курсора мыши в координатах сцены.
+
+        Курсор вне вьюпорта → fallback в центр вьюпорта.
+        """
+        vp = self.viewport()
+        pt = vp.mapFromGlobal(QCursor.pos())
+        if not vp.rect().contains(pt):
+            pt = vp.rect().center()
+        return self.mapToScene(pt)
+
+    def _copy_ocr_blocks(self):
+        """Ctrl+C: приоритет у блока под курсором.
+
+        Блок под курсором вне выделения → выделение переключается на него;
+        блок в составе выделения или курсор в пустоте → копируется текущее
+        выделение. Скопированное остаётся выделенным (зелёная рамка) —
+        видно, что именно в буфере; Esc для смены копируемого не нужен.
+        """
+        pos = self._cursor_scene_pos()
+        cur = self._find_ocr_at(pos.x(), pos.y())
+        if cur is not None and cur not in self._selected_ocr:
+            self._selected_ocr = {cur}
+            self._redraw_all_colors()
+        idxs = sorted(self._selected_ocr)
+        clip = []
+        for idx in idxs:
+            if not isinstance(idx, int) or idx >= len(self._ocr_blocks):
+                continue
+            block = self._ocr_blocks[idx]
+            if block.get("merged_into") is not None:
+                continue
+            bbox = block.get("bbox")
+            if not bbox or len(bbox) != 4:
+                continue
+            clip.append(([float(v) for v in bbox], block.get("text", "") or ""))
+        if not clip:
+            self.status_message.emit("Копировать: выделите блоки или наведите курсор на блок")
+            return
+        self._ocr_clipboard = clip
+        self.status_message.emit(f"Скопировано блоков: {len(clip)} (Ctrl+V — вставить)")
+
+    def _start_paste_ghost(self):
+        """Ctrl+V: показать полупрозрачный призрак буфера, следующий за мышью.
+
+        Вставка больше не мгновенная: Ctrl+ЛКМ фиксирует набор в позиции
+        призрака, Esc отменяет. Повторный Ctrl+V при активном призраке — игнор.
+        Пока призрак активен, все прочие жесты мыши в этом view отключены.
+        """
+        if self._paste_ghost is not None:
+            return  # призрак уже активен
+        clip = self._ocr_clipboard
+        if not clip:
+            self.status_message.emit("Буфер блоков пуст — сначала Ctrl+C")
+            return
+        # Рамки блоков в исходных координатах, двигаем одной группой
+        # (не пересоздаём на каждый move); пунктир, полупрозрачно, поверх всего.
+        # У непустых блоков — призрачная подпись с текстом (геометрия как у
+        # реальных: верх-лево / низ-лево с -90°, см. _label_geometry).
+        pen = QPen(self._c_textbox, 2, Qt.PenStyle.DashLine)
+        font = QFont("DejaVu Sans", self._label_pt)
+        fm = QFontMetricsF(font)
+        group = QGraphicsItemGroup()
+        for bbox, text in clip:
+            it = QGraphicsRectItem(
+                bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1])
+            it.setPen(pen)
+            group.addToGroup(it)
+            t = (text or "").strip()
+            if t:
+                th = fm.height()
+                tw = fm.horizontalAdvance(t)
+                lx, ly, rot, bg_rect = self._label_geometry(
+                    bbox[0], bbox[1], bbox[2], bbox[3], tw, th)
+                bg = QGraphicsRectItem(*bg_rect)
+                bg.setPen(QPen(Qt.PenStyle.NoPen))
+                bg.setBrush(QBrush(COLOR_TEXT_BG))
+                group.addToGroup(bg)
+                label = QGraphicsSimpleTextItem(t)
+                label.setFont(font)
+                label.setBrush(QBrush(COLOR_TEXT_LABEL))
+                label.setPos(lx, ly)
+                label.setRotation(rot)
+                group.addToGroup(label)
+        group.setZValue(100)
+        group.setOpacity(0.5)
+        self.scene.addItem(group)
+        gx1 = min(b[0][0] for b in clip)
+        gy1 = min(b[0][1] for b in clip)
+        gx2 = max(b[0][2] for b in clip)
+        gy2 = max(b[0][3] for b in clip)
+        self._paste_ghost = {
+            "group": group,
+            "center": ((gx1 + gx2) / 2.0, (gy1 + gy2) / 2.0),
+        }
+        pos = self._cursor_scene_pos()
+        self._move_paste_ghost(pos.x(), pos.y())
+        self.status_message.emit("Ctrl+ЛКМ — вставить, Esc — отмена")
+
+    def _move_paste_ghost(self, x: float, y: float):
+        """Призрак следует за мышью: центр набора — под курсором."""
+        g = self._paste_ghost
+        if not g:
+            return
+        ccx, ccy = g["center"]
+        g["group"].setPos(x - ccx, y - ccy)
+
+    def _commit_paste_ghost(self):
+        """Ctrl+ЛКМ: зафиксировать вставку в позиции призрака."""
+        g = self._paste_ghost
+        if not g:
+            return
+        offset = g["group"].pos()  # сдвиг призрака относительно оригинала
+        self._cancel_paste_ghost()
+        self._paste_ocr_blocks(offset.x(), offset.y())
+
+    def _cancel_paste_ghost(self):
+        """Убрать призрак вставки со сцены (Esc / перед фиксацией)."""
+        g = self._paste_ghost
+        self._paste_ghost = None
+        if g and g["group"].scene() is not None:
+            self.scene.removeItem(g["group"])
+
+    def _paste_ocr_blocks(self, dx: float, dy: float):
+        """Зафиксировать вставку буфера блоков со сдвигом (dx, dy).
+
+        Вызывается фиксацией призрака (Ctrl+V → призрак → Ctrl+ЛКМ).
+        Копии создаются без привязок. Один снимок undo ДО всех мутаций —
+        вся вставка отменяется одним Ctrl+Z.
+        """
+        clip = self._ocr_clipboard
+        if not clip:
+            self.status_message.emit("Буфер блоков пуст — сначала Ctrl+C")
+            return
+        self._push_undo()  # снапшот ДО правки (семантика как в _add_ocr_block_bbox)
+        new_idxs = []
+        for bbox, text in clip:
+            idx = len(self._ocr_blocks)
+            self._ocr_blocks.append({
+                "bbox": [bbox[0] + dx, bbox[1] + dy, bbox[2] + dx, bbox[3] + dy],
+                "text": text,
+                "confidence": 0.0, "source": "manual",
+            })
+            self._draw_single_ocr_block(idx)
+            if self._block_filter is not None:
+                self._block_filter.add(idx)
+            # Классифицировать копию с текстом (цвет в режиме валидации)
+            if text and getattr(self, "_ocr_classifier", None):
+                self._reclassify_block(idx)
+            new_idxs.append(idx)
+        self._selected_ocr = set(new_idxs)
+        self._after_change()
+        self.blocks_changed.emit()  # таб выставит _saved = False (как при добавлении блока)
+        self.status_message.emit(f"Вставлено блоков: {len(new_idxs)}")
+
     def _add_ocr_block(self, x: float, y: float):
         """Добавить новый OCR-бокс в позиции (x, y)."""
         self._push_undo()
@@ -2369,19 +2708,31 @@ class OcrBindingEditor(QGraphicsView):
             font = QFont("DejaVu Sans", self._label_pt)
             fm = QFontMetricsF(font)
             th = fm.height()
-            lx, ly = x1, y1 - th - 2
-            if ly < 0:
-                ly = y2 + 2
             tw = fm.horizontalAdvance(text)
-            bg = self.scene.addRect(lx - 1, ly - 1, min(tw + 4, x2 - x1 + 4), th + 2,
+            lx, ly, rot, bg_rect = self._label_geometry(x1, y1, x2, y2, tw, th)
+            bg = self.scene.addRect(*bg_rect,
                                     QPen(Qt.PenStyle.NoPen), QBrush(COLOR_TEXT_BG))
             bg.setZValue(11)
             self._ocr_text_bg_items[idx] = bg
             label = self.scene.addSimpleText(text, font)
             label.setBrush(QBrush(COLOR_TEXT_LABEL))
             label.setPos(lx, ly)
+            label.setRotation(rot)
             label.setZValue(12)
             self._ocr_text_items[idx] = label
+
+    def _delete_selected_ocr_blocks(self):
+        """Удалить все выделенные блоки — клавиша Delete.
+
+        (Раньше пачку удалял Ctrl+ПКМ по выделенному; теперь Ctrl+ПКМ только
+        исключает блок из выделения.)
+        """
+        if not self._selected_ocr:
+            self.status_message.emit("Нет выделенных блоков")
+            return
+        for i in sorted(self._selected_ocr):
+            self._delete_ocr_block(i)
+        self._selected_ocr.clear()
 
     def _delete_ocr_block(self, idx: int):
         """Удалить OCR-бокс и все его привязки."""
@@ -2451,7 +2802,26 @@ class OcrBindingEditor(QGraphicsView):
                 self.setCursor(Qt.CursorShape.CrossCursor)
         elif event.key() == Qt.Key.Key_Z and self.ctrl_pressed:
             self._undo()
+        elif event.key() == Qt.Key.Key_C and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            # Пока активен призрак вставки — буфер менять нельзя (фиксация
+            # вставляет текущий буфер; иначе призрак разойдётся с содержимым).
+            if self._paste_ghost is not None:
+                return
+            # Копипаст блоков: проверяем модификатор события (не флаг ctrl_pressed)
+            self._copy_ocr_blocks()
+        elif event.key() == Qt.Key.Key_V and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            # Ctrl+V показывает призрак вставки (фиксация — Ctrl+ЛКМ,
+            # отмена — Esc); повторный Ctrl+V при активном призраке — игнор.
+            self._start_paste_ghost()
+        elif event.key() == Qt.Key.Key_Delete:
+            # Удаление выделенных блоков — только клавишей Delete.
+            self._delete_selected_ocr_blocks()
         elif event.key() == Qt.Key.Key_Escape:
+            # Призрак вставки — отменить первым приоритетом.
+            if self._paste_ghost is not None:
+                self._cancel_paste_ghost()
+                self.status_message.emit("Вставка отменена")
+                return
             self._abort_drag()
             self._add_mode = False
             self._del_mode = False
@@ -2508,6 +2878,17 @@ class OcrBindingEditor(QGraphicsView):
         super().mouseDoubleClickEvent(event)
 
     def mousePressEvent(self, event):
+        # Призрак вставки: все прочие жесты мыши отключены;
+        # Ctrl+ЛКМ фиксирует вставку в позиции призрака.
+        if self._paste_ghost is not None:
+            if event.button() == Qt.MouseButton.LeftButton and (
+                    self.ctrl_pressed
+                    or event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+                self._commit_paste_ghost()
+            else:
+                self.status_message.emit("Ctrl+ЛКМ — вставить, Esc — отмена")
+            event.accept()
+            return
         if event.button() != Qt.MouseButton.LeftButton:
             # Ctrl+RMB unbind handled in mouseReleaseEvent
             if self.ctrl_pressed and event.button() == Qt.MouseButton.RightButton:
@@ -2589,20 +2970,33 @@ class OcrBindingEditor(QGraphicsView):
                 return
 
             if idx is not None:
-                # Начать drag OCR-бокса
+                # Начать drag OCR-бокса (клик/drag различаем на release по порогу)
                 block = self._ocr_blocks[idx]
                 bbox = block.get("bbox", [0, 0, 0, 0])
                 self._drag_idx = idx
                 self._drag_origin_bbox = bbox.copy()
                 bcx, bcy = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
                 self._drag_offset = (x - bcx, y - bcy)
+                self._ctrl_press_xy = (x, y)
                 text = block.get("text", "")[:25]
                 self.status_message.emit(f"Тяните «{text}» на цель...")
+            else:
+                # Блока нет: Ctrl+ЛКМ по центроиду узла с привязками —
+                # повернуть его привязки на следующую сторону по часовой.
+                nid = self._find_node_at(x, y)
+                if nid is not None:
+                    self._rotate_node_bindings(nid)
             event.accept()
             return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        # Призрак вставки следует за мышью; остальные жесты отключены.
+        if self._paste_ghost is not None:
+            pos = self.mapToScene(event.pos())
+            self._move_paste_ghost(pos.x(), pos.y())
+            event.accept()
+            return
         # П3: Shift rubber-band — тянем рамку выделения
         if self._rubber_band is not None and self._rb_start is not None:
             pos = self.mapToScene(event.pos())
@@ -2706,6 +3100,10 @@ class OcrBindingEditor(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        # Пока активен призрак вставки — жесты мыши не доходят до редактора.
+        if self._paste_ghost is not None:
+            event.accept()
+            return
         # П3: Shift rubber-band — завершить выделение (боксы внутри рамки → зелёные)
         if self._rubber_band is not None and self._rb_start is not None:
             pos = self.mapToScene(event.pos())
@@ -2724,7 +3122,7 @@ class OcrBindingEditor(QGraphicsView):
                 if bb[0] <= rx2 and bb[2] >= rx1 and bb[1] <= ry2 and bb[3] >= ry1:
                     self._selected_ocr.add(i)
             self._redraw_all_colors()
-            self.status_message.emit(f"Выделено: {len(self._selected_ocr)} (Ctrl+ПКМ — удалить)")
+            self.status_message.emit(f"Выделено: {len(self._selected_ocr)} (Delete — удалить)")
             event.accept()
             return
         # П3: Add mode — завершить рисование → ПУСТОЙ блок (текст по кнопке «Распознать»)
@@ -2769,12 +3167,28 @@ class OcrBindingEditor(QGraphicsView):
                 self._drag_line = None
 
             pos = self.mapToScene(event.pos())
+            # Клик без сдвига (порог OCR_CLICK_MOVE_THRESHOLD): при активном
+            # выделении добавляет НЕвыделенный блок в выделение;
+            # drag/привязка — только с реальным движением.
+            px, py = self._ctrl_press_xy or (pos.x(), pos.y())
+            self._ctrl_press_xy = None
+            moved = math.hypot(pos.x() - px, pos.y() - py) \
+                >= self.OCR_CLICK_MOVE_THRESHOLD
+            if not moved and self._selected_ocr and idx not in self._selected_ocr:
+                self._restore_ocr_pos(idx)  # вернуть микросдвиг визуалов
+                self._selected_ocr.add(idx)
+                self._redraw_all_colors()
+                self.status_message.emit(
+                    f"Выделено блоков: {len(self._selected_ocr)} (Delete — удалить)")
+                event.accept()
+                return
             if tt == "node":
-                # привязка — это НЕ перемещение: вернуть бокс на место
-                self._restore_ocr_pos(idx)
+                # привязка ставит блок по центру выбранной стороны цели —
+                # сторона от исходного положения блока, место броска не влияет
+                self._drag_origin_bbox = []
                 self._bind_to_node(idx, tid)
             elif tt == "edge":
-                self._restore_ocr_pos(idx)
+                self._drag_origin_bbox = []
                 self._bind_to_edge(idx, tid)
             else:
                 # перемещение на пустое место — зафиксировать позицию (с undo)
@@ -2786,17 +3200,22 @@ class OcrBindingEditor(QGraphicsView):
             event.accept()
             return
 
-        # П3: Ctrl+ПКМ — выделение есть → удалить все выделенные;
-        #     иначе бокс под курсором: привязан → отвязать, не привязан → удалить
+        # П3: Ctrl+ПКМ — при активном выделении только исключает блок из
+        #     выделения (удаление выделенных — клавишей Delete);
+        #     без выделения: привязан → отвязать, не привязан → удалить
         if self.ctrl_pressed and event.button() == Qt.MouseButton.RightButton:
-            if self._selected_ocr:
-                for i in sorted(self._selected_ocr):
-                    self._delete_ocr_block(i)
-                self._selected_ocr.clear()
-                event.accept()
-                return
             pos = self.mapToScene(event.pos())
             x, y = pos.x(), pos.y()
+            if self._selected_ocr:
+                idx = self._find_ocr_at(x, y)
+                if idx is not None and idx in self._selected_ocr:
+                    self._selected_ocr.discard(idx)
+                    self._redraw_all_colors()
+                    self.status_message.emit(
+                        f"Блок исключён из выделения (осталось {len(self._selected_ocr)})")
+                # По любому другому объекту при активном выделении — ничего.
+                event.accept()
+                return
             idx = self._find_ocr_at(x, y)
             if idx is None:
                 sec_idx = self._find_secondary_at(x, y)

@@ -7,7 +7,7 @@ FrameTab — вкладка очистки рамки/штампа (этап 0 p
 последующие этапы. Исходный PDF (если был) сохраняется как original/source.pdf.
 
 Toolbar (первый QHBoxLayout — в него DiagramWorkspace вставляет «← Назад»):
-  Полигон | Бокс | Undo | 💾 Сохранить и продолжить
+  Полигон | Бокс | Обрезать | Undo | 💾 Сохранить и продолжить
 
 Сигналы:
   confirmed()           — этап завершён (save+complete); вкладку закрыть
@@ -85,6 +85,19 @@ class FrameTab(QWidget):
         self.btn_box.clicked.connect(lambda: self._set_tool("box"))
         toolbar.addWidget(self.btn_box)
 
+        self.btn_crop = QPushButton("✂ Обрезать (оставить)")
+        self.btn_crop.setToolTip(
+            "Прямоугольник по области листа, которую ОСТАВИТЬ — всё вокруг "
+            "обрезается (лист уменьшится, DPI сохранится).\n"
+            "Рисовать зажатой ЛКМ. Ctrl+Z возвращает исходный размер."
+        )
+        self.btn_crop.setCheckable(True)
+        self.btn_crop.setStyleSheet(
+            "QPushButton:checked { background-color: #4CAF50; color: white; }"
+        )
+        self.btn_crop.clicked.connect(lambda: self._set_tool("crop"))
+        toolbar.addWidget(self.btn_crop)
+
         self.btn_undo = make_undo_button(
             self._on_undo,
             tooltip="Отменить последнюю операцию (Ctrl+Z). История — до 30 шагов.")
@@ -123,6 +136,7 @@ class FrameTab(QWidget):
     def _set_tool(self, tool: str):
         self.btn_polygon.setChecked(tool == "polygon")
         self.btn_box.setChecked(tool == "box")
+        self.btn_crop.setChecked(tool == "crop")
         self.editor.set_tool(tool)
 
     def _on_undo(self):

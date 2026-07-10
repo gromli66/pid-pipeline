@@ -340,7 +340,7 @@ class _StagePanel(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         row_h = max(22, min(40, self.height() // 16))
-        font = QFont("Segoe UI", max(9, int(row_h * 0.40)))
+        font = QFont(self.font().family(), max(9, int(row_h * 0.40)))
         for btn in self._buttons:
             btn.setFixedHeight(row_h)
             btn.setFont(font)
