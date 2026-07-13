@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QImageReader, QFontDatabase
+from PySide6.QtGui import QImageReader, QFontDatabase, QFontInfo
 
 from ui.windows.main_window import MainWindow
 
@@ -64,9 +64,16 @@ def _load_bundled_fonts(app):
     if not families:
         return
     f = app.font()
-    f.setFamilies([f.family(), *families])
+    # Берём КОНКРЕТНОЕ разрешённое семейство, а не дженерик-алиас (на Linux/Astra
+    # f.family() == 'Sans Serif'): при дженерик-примари Qt отдаёт общие кодпоинты
+    # (цифры 0-9, ⚠, ⚙) эмодзи-шрифту → цифры «плыли». QFontInfo резолвит в
+    # реальный шрифт (Linux→DejaVu Sans, Windows→Segoe UI), эмодзи остаются fallback.
+    concrete = QFontInfo(f).family()
+    f.setFamilies([concrete, *families])
     app.setFont(f)
-    logging.getLogger(__name__).info("Fallback-шрифты подключены: %s", ", ".join(families))
+    logging.getLogger(__name__).info(
+        "Fallback-шрифты подключены (примари %s): %s", concrete, ", ".join(families)
+    )
 
 
 def main():
