@@ -270,7 +270,8 @@ def fix_skins(root, geo, apply_contact=False):
             perp = (sum(xs)/len(xs)) if xs else cx
             nh = ph; nw = ph * aspect_hw; nly = ly; nlx = perp - nw/2.0
             if apply_contact:
-                nlx += v_frac * nw
+                # VERTICAL_REVERSE зеркалит талию: знак поперечной поправки инвертируется.
+                nlx += (-v_frac if orient == "VERTICAL_REVERSE" else v_frac) * nw
         a["prefWidth"] = f"{nw:.2f}"
         a["prefHeight"] = f"{nh:.2f}"
         a["layoutX"] = f"{max(0.0, nlx):.2f}"
@@ -375,8 +376,11 @@ def _standardize_tree(tree, root, geo=None, mode="letterbox", margin=0.0,
                    if lx - 2 <= px <= lx + pw + 2 and ly - 2 <= py <= ly + ph + 2]
             if not ins:
                 continue
-            if a.get("orientation", "HORIZONTAL").startswith("VERTICAL"):
+            orient = a.get("orientation", "HORIZONTAL")
+            if orient.startswith("VERTICAL"):
                 wu = g["waist"][0]
+                if orient.endswith("REVERSE"):
+                    wu = 1.0 - wu   # разворот на 180° зеркалит талию по горизонтали
                 xs = sorted(p[0] for p in ins); pipe_x = xs[len(xs) // 2]
                 a["layoutX"] = f"{max(0.0, lx + (pipe_x - (lx + wu * pw))):.2f}"
             else:

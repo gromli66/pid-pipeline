@@ -186,6 +186,18 @@ DIRECTION_ORIENT_CLASSES = {
     'nasos', 'rashodomernaya_shaiba',
 }
 
+# Классы арматуры/регуляторов/клапанов, которые в вертикальном положении рисуем
+# развёрнутыми на 180° (VERTICAL_REVERSE вместо VERTICAL). Библиотечный дефолт
+# вертикали для них — «вниз», а на схемах нужен разворот. Ось (geometry.orientation)
+# и swap/layout не меняются: REVERSE лишь зеркалит графику, из-за чего талия
+# уезжает на 1-waist (учитывается в fxml_standardize) и знак contact-поправки
+# инвертируется (apply_contact_offset). predohran (RELIEF_VLV) намеренно НЕ входит.
+REVERSE_VERTICAL_CLASSES = {
+    'armatura_ruchn', 'klapan_obratn', 'armatura_membr_electro',
+    'regulator_ruchn', 'regulator_electro', 'armatura_electro',
+    'klapan_obratn_seroprivod', 'regulator_seroprivod', 'armatura_seroprivod',
+}
+
 # Класс «направление» — рисуется треугольником по направлению потока,
 # а не библиотечным скином.
 NAPRAVLENIE_CLASS_NAME = 'napravlenie'
@@ -226,9 +238,13 @@ def apply_contact_offset(skin_type, orientation, layout_x, layout_y, height):
     if not offs:
         return layout_x, layout_y
     h_frac, v_frac = offs
-    if orientation == 'HORIZONTAL':
+    if orientation.startswith('HORIZONTAL'):
+        # Reverse по горизонтали зеркалит вдоль оси трубы, поперечное (h_frac) смещение талии не меняется.
         layout_y -= h_frac * height
-    else:
+    elif orientation == 'VERTICAL_REVERSE':
+        # Разворот на 180°: талия уходит на противоположную сторону от центра.
+        layout_x -= v_frac * height
+    else:  # VERTICAL
         layout_x += v_frac * height
     return layout_x, layout_y
 
@@ -960,6 +976,13 @@ def generate_fxml_control(node, geometry: SkinGeometry, node_id: str,
                 layout_y=geometry.layout_y,
             )
 
+    # --- Разворот вертикальной арматуры/регуляторов/клапанов на 180° ---
+    # Ось и swap/layout ниже НЕ трогаем — REVERSE лишь зеркалит графику.
+    # nasos/rashodomernaya_shaiba сюда не попадают (их разворот уже задан
+    # выше по направлению потока и не является VERTICAL).
+    if node.get('class_name') in REVERSE_VERTICAL_CLASSES and emit_orientation == 'VERTICAL':
+        emit_orientation = 'VERTICAL_REVERSE'
+
     width = geometry.width
     height = geometry.height
     layout_x = geometry.layout_x
@@ -979,8 +1002,9 @@ def generate_fxml_control(node, geometry: SkinGeometry, node_id: str,
         width, height = height, width
 
     # --- Поправка оси контакта (привод смещает талию от центра бокса) ---
+    # Передаём emit_orientation (а не ось), чтобы VERTICAL_REVERSE инвертировал знак.
     layout_x, layout_y = apply_contact_offset(
-        skin_type, geometry.orientation, layout_x, layout_y, height)
+        skin_type, emit_orientation, layout_x, layout_y, height)
 
     # --- Датчик в 3 раза меньше оригинала (сжатие вокруг центра) ---
     if control_class == 'DetectorControl':
