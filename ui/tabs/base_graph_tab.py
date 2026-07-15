@@ -290,7 +290,9 @@ class BaseGraphTab(AppearanceMixin, QWidget):
                     graph_for_editor = canvas_graph
                     editor._canvas_mode = True   # сцена в холсте 1920x1080
             except Exception as exc:
-                logger.warning("pre-transform пропущен, гружу граф как есть: %s", exc)
+                # Не фатально: грузим граф в исходных координатах (legacy-режим).
+                # Полный трейсбек — для дебага (WYSIWYG pre-transform).
+                logger.exception("pre-transform не выполнен, гружу граф как есть: %s", exc)
 
             editor.load_data(
                 image_path=str(artifacts["original_image"]),

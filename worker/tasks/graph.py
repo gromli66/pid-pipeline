@@ -615,8 +615,23 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None, bridge_gap
         # ===== 5. Generate FXML =====
         # '1920x1080' — экранный лист: генерируем в пикселях, затем стандартизируем.
         STD_1920 = "1920x1080"
+        # WYSIWYG: граф уже в координатах холста 1920x1080 (правился в редакторе) —
+        # identity-экспорт: без масштаба и без fxml_standardize (иначе двойной масштаб
+        # и повторная посадка горловин, ломающая паритет с редактором).
+        _img_size = (graph_data.get("graph", {}) or {}).get("image_size")
+        is_canvas = (
+            _img_size is not None
+            and [int(_img_size[0]), int(_img_size[1])] == [1080, 1920]
+        )
         with obs.step("compute", logger):
-            gen_page_size = None if page_size == STD_1920 else page_size
+            if is_canvas:
+                gen_page_size = None
+                logger.info(
+                    "WYSIWYG: граф в холсте 1920x1080 -> identity-экспорт "
+                    "(scale/standardize пропущены)"
+                )
+            else:
+                gen_page_size = None if page_size == STD_1920 else page_size
             page_info = f" (page: {page_size})" if page_size else " (original pixels)"
             logger.info("Generating FXML%s...", page_info)
             gen_kwargs = {"page_size": gen_page_size}
@@ -628,7 +643,7 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None, bridge_gap
         # датчиков и невидимые разрывы мостов (tools/fxml_standardize.py). Остальные
         # размеры (оригинал / A4-A0) остаются как есть. Ошибка стандартизации не
         # фатальна — пишем сырой FXML.
-        if page_size == STD_1920:
+        if page_size == STD_1920 and not is_canvas:
             try:
                 from pathlib import Path as _Path
                 from tools.fxml_standardize import standardize_xml, load_geo

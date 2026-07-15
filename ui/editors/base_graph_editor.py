@@ -8,6 +8,7 @@ Base Graph Editor — базовый класс редактора графа P&
 Вся расширяемость — через виртуальные методы и хуки.
 """
 
+import logging
 import math
 from typing import Optional, Callable
 
@@ -26,6 +27,8 @@ from ui.editors.graph_data import GraphDataModel
 from ui.editors.undo_manager import UndoManager
 from ui.editors.mode_handlers.base_handler import ModeHandler
 from ui.editors.graph_geometry import bbox_exit_side, bbox_side_midpoint
+
+logger = logging.getLogger(__name__)
 
 
 class BaseGraphEditor(QGraphicsView):
@@ -228,11 +231,18 @@ class BaseGraphEditor(QGraphicsView):
             self._bg_offx = (self.canvas_w - self.img_width * self._bg_scale) / 2.0
             self._bg_offy = (self.canvas_h - self.img_height * self._bg_scale) / 2.0
             scene_w, scene_h = self.canvas_w, self.canvas_h
+            logger.info(
+                "setup_scene: WYSIWYG-холст %.0fx%.0f, img=%dx%d, s=%.4f, off=(%.1f,%.1f)",
+                self.canvas_w, self.canvas_h, self.img_width, self.img_height,
+                self._bg_scale, self._bg_offx, self._bg_offy,
+            )
         else:
             # Legacy: сцена = пиксели изображения, фон 1:1 (граф в исходных координатах).
             self._bg_scale = 1.0
             self._bg_offx = self._bg_offy = 0.0
             scene_w, scene_h = self.img_width, self.img_height
+            logger.info("setup_scene: legacy-режим, сцена=%dx%d (граф в исходных px)",
+                        self.img_width, self.img_height)
 
         # Z=0: Original image (darkened)
         if self.original_image and not self.original_image.isNull():

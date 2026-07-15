@@ -150,6 +150,12 @@ def transform_to_canvas(graph, image_hw):
             if pts:
                 e[k] = [[Y(p[0]), X(p[1])] for p in pts]     # [[y, x], ...]
 
+    # OCR текст-блоки (идут в FXML <Text>) — bbox [x1, y1, x2, y2]
+    for tb in graph.get("text_blocks") or []:
+        bb = tb.get("bbox")
+        if bb:
+            tb["bbox"] = [X(bb[0]), Y(bb[1]), X(bb[2]), Y(bb[3])]
+
     graph.setdefault("graph", {})["image_size"] = [int(TARGET_H), int(TARGET_W)]
     return {"s": s, "offx": offx, "offy": offy,
             "orig_image_size": [ih, iw], "canvas": [int(TARGET_W), int(TARGET_H)]}
