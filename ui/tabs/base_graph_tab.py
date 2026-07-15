@@ -8,7 +8,9 @@ Template method: скачивание артефактов, сохранение
 Вся расширяемость — через _create_editor() и _setup_toolbar().
 """
 
+import json
 import logging
+import struct
 import tempfile
 from abc import abstractmethod
 from pathlib import Path
@@ -28,6 +30,32 @@ from ui.widgets.toolbar_buttons import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _png_size(path: Path):
+    """(height, width) PNG из заголовка, без Qt. None если не PNG."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(24)
+        if head[:8] == b"\x89PNG\r\n\x1a\n":
+            w, h = struct.unpack(">II", head[16:24])
+            return (h, w)
+    except OSError:
+        pass
+    return None
+
+
+def _pretransform_to_canvas(graph_path: Path, image_path: Path, out_path: Path) -> bool:
+    """WYSIWYG: перевести граф в холст 1920x1080 (фикс-размеры + declust).
+
+    Идемпотентно (уже-1920 граф не трогается). Пишет out_path. True при успехе.
+    """
+    from modules.graph.core.pretransform import pretransform
+    graph = json.loads(graph_path.read_text(encoding="utf-8"))
+    g, transform, stats = pretransform(graph, image_hw=_png_size(image_path))
+    out_path.write_text(json.dumps(g, ensure_ascii=False), encoding="utf-8")
+    logger.info("pre-transform → холст 1920x1080: %s", stats)
+    return True
 
 
 class _GraphArtifactDownloader(QObject):
@@ -249,9 +277,23 @@ class BaseGraphTab(AppearanceMixin, QWidget):
             editor.status_callback = lambda msg: self.status_label.setText(msg)
             editor.stats_callback = self._update_stats
             editor.mode_callback = self._on_mode_changed
+            # WYSIWYG: pre-transform графа в холст 1920x1080 перед загрузкой.
+            # При неудаче — грузим как есть (граф в исходных координатах).
+            graph_for_editor = artifacts["graph_json"]
+            try:
+                canvas_graph = self.temp_dir / "graph_1920.json"
+                if _pretransform_to_canvas(
+                    Path(artifacts["graph_json"]),
+                    Path(artifacts["original_image"]),
+                    canvas_graph,
+                ):
+                    graph_for_editor = canvas_graph
+            except Exception as exc:
+                logger.warning("pre-transform пропущен, гружу граф как есть: %s", exc)
+
             editor.load_data(
                 image_path=str(artifacts["original_image"]),
-                graph_path=str(artifacts["graph_json"]),
+                graph_path=str(graph_for_editor),
                 coco_path=str(artifacts.get("coco_validated", "")),
             )
             # Вставить редактор перед status_label (последний виджет)

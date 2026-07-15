@@ -374,6 +374,15 @@ def _build_adjacency(graph):
 def pretransform(graph, image_hw=None):
     """Полный pre-transform. Возвращает (graph_1920, transform, stats). Не мутирует вход."""
     g = deepcopy(graph)
+    # Идемпотентность: граф уже в координатах холста (напр. пере-открытие сохранённого) — не трогаем.
+    size = g.get("graph", {}).get("image_size")
+    if size and [int(size[0]), int(size[1])] == [int(TARGET_H), int(TARGET_W)]:
+        transform = {"s": 1.0, "offx": 0.0, "offy": 0.0,
+                     "orig_image_size": list(size),
+                     "canvas": [int(TARGET_W), int(TARGET_H)], "identity": True}
+        stats = {"symbols": 0, "overlaps_before": 0, "overlaps_after": 0,
+                 "moved": 0, "max_disp": 0.0, "mean_disp": 0.0, "skipped": True}
+        return g, transform, stats
     if image_hw is None:
         size = g.get("graph", {}).get("image_size")
         if not size:

@@ -73,6 +73,13 @@ class BaseGraphEditor(QGraphicsView):
         self.original_image: QImage | None = None
         self.img_width: int = 0
         self.img_height: int = 0
+        # WYSIWYG: система координат сцены = холст 1920x1080 (граф уже в этих
+        # координатах после pretransform). Фон вписывается scale-трансформом.
+        self.canvas_w: float = 1920.0
+        self.canvas_h: float = 1080.0
+        self._bg_scale: float = 1.0
+        self._bg_offx: float = 0.0
+        self._bg_offy: float = 0.0
 
         # ── Graphics items ──
         self.node_items: dict[str, QGraphicsEllipseItem] = {}
@@ -203,11 +210,25 @@ class BaseGraphEditor(QGraphicsView):
     # =================================================================
 
     def setup_scene(self):
-        """Настройка сцены со всеми слоями."""
+        """Настройка сцены со всеми слоями.
+
+        WYSIWYG: сцена = холст 1920x1080 (граф уже в этих координатах). Фон —
+        полноразмерный оригинал, ВПИСАННЫЙ в холст scale-трансформом (не даунсэмпл:
+        зум остаётся резким). Множитель s и офсеты — те же, что в
+        modules.graph.core.pretransform (letterbox по размеру картинки).
+        """
         self.scene.clear()
         self._reset_scene_state()
 
-        # Z=0: Original image (darkened)
+        if self.img_width and self.img_height:
+            s = min(self.canvas_w / self.img_width, self.canvas_h / self.img_height)
+        else:
+            s = 1.0
+        self._bg_scale = s
+        self._bg_offx = (self.canvas_w - self.img_width * s) / 2.0
+        self._bg_offy = (self.canvas_h - self.img_height * s) / 2.0
+
+        # Z=0: Original image (darkened), вписан в холст scale-трансформом
         if self.original_image and not self.original_image.isNull():
             darkened = self.original_image.copy().convertToFormat(QImage.Format.Format_ARGB32)
             painter = QPainter(darkened)
@@ -215,6 +236,8 @@ class BaseGraphEditor(QGraphicsView):
             painter.end()
 
             self._bg_item = QGraphicsPixmapItem(QPixmap.fromImage(darkened))
+            self._bg_item.setScale(s)                     # полноразмер → вписан в 1920x1080
+            self._bg_item.setPos(self._bg_offx, self._bg_offy)
             self._bg_item.setZValue(0)
             self.scene.addItem(self._bg_item)
 
@@ -224,7 +247,7 @@ class BaseGraphEditor(QGraphicsView):
         # Z=2-3: Nodes
         self._draw_all_nodes()
 
-        self.setSceneRect(QRectF(0, 0, self.img_width, self.img_height))
+        self.setSceneRect(QRectF(0, 0, self.canvas_w, self.canvas_h))
         self.fitInView(self.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
     def set_left_gutter(self, px: int):
