@@ -749,7 +749,12 @@ def auto_fix_graph(
                     e['source_point'] = [src_pt[1], src_pt[0]]
                     e['target_point'] = [tgt_pt[1], tgt_pt[0]]
 
-            e['waypoints'] = []
+            # Долг O6: маршрут (waypoints/path) обнуляем ТОЛЬКО когда связь получилась
+            # ортогональной. Иначе (диагональ) сохраняем исходный маршрут — не рвём
+            # routing, не режем лист диагональю через полсхемы.
+            sp, tp = e['source_point'], e['target_point']
+            if abs(sp[0] - tp[0]) < 1.0 or abs(sp[1] - tp[1]) < 1.0:
+                e['waypoints'] = []
 
     # ─── Final statistics ──────────────────────────────────────
     total_shift = 0.0
