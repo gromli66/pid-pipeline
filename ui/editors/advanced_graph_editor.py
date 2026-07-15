@@ -2028,7 +2028,10 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         if gs <= 0:
             return
         pen = QPen(QColor(255, 255, 255, 38), 0.5)
-        cw, ch = int(self.canvas_w), int(self.canvas_h)   # сетка по холсту, не по картинке
+        if self._canvas_mode:
+            cw, ch = int(self.canvas_w), int(self.canvas_h)   # сетка по холсту
+        else:
+            cw, ch = int(self.img_width), int(self.img_height)
         for gx in range(0, cw + 1, gs):
             line = self.scene.addLine(gx, 0, gx, ch, pen)
             line.setZValue(0.5)
