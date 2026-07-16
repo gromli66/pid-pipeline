@@ -623,10 +623,15 @@ class AdvancedGraphTab(SimpleGraphTab):
         """После загрузки — обновить perp stats + config dir для KKS."""
         self._update_perp_stats()
         self._sync_editor_config_dir()
-        # Инициализировать кисть изменения ребра (цвет/размер)
+        # Инициализировать кисть изменения ребра (цвет/размер).
+        # Размер синхронизируем ОТ редактора: стартовый размер = базовая толщина
+        # трубы в его системе координат (в холсте 2 == LINE_STROKE_WIDTH, в
+        # legacy 4), а не наоборот — иначе спинбокс навязывал бы legacy-значение.
         if self._editor and hasattr(self._editor, "set_edge_brush_color"):
             self._editor.set_edge_brush_color(QColor(self._current_edge_color))
-            self._editor.edge_brush_size = self.spin_edge_size.value()
+            self._size_sync = True
+            self.spin_edge_size.setValue(int(round(self._editor.edge_brush_size)))
+            self._size_sync = False
             self._editor.edge_size_callback = self._on_editor_size_changed
         # Подключить состояния (по умолчанию — «Базовое»)
         if self._editor and hasattr(self._editor, "set_display_regime"):

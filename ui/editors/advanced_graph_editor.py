@@ -244,6 +244,15 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             self._compute_grid_size()
         return result
 
+    def _apply_visuals(self, canvas: bool):
+        """+ стартовый размер кисти = базовая толщина трубы в этой системе координат.
+
+        В __init__ edge_brush_size взят из legacy-константы (система координат
+        тогда ещё неизвестна) — здесь, в setup_scene, она уже определена.
+        """
+        super()._apply_visuals(canvas)
+        self.edge_brush_size = self.EDGE_WIDTH
+
     def _get_edge_color(self, edge_data: dict, key: tuple = None) -> QColor:
         """Цвет ребра — зависит от активного режима.
 
