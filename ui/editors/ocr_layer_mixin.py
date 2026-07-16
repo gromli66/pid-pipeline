@@ -63,6 +63,19 @@ class OcrLayerMixin:
     идёт через ModeHandler'ы (AddOcrBlockHandler, OcrBindHandler).
     """
 
+    def _ocr_vis_scale(self) -> float:
+        """Множитель размеров ВНУТРИ текст-блока (рамка, шрифт, линия привязки).
+
+        Символы в холсте имеют фиксированный размер, а текст-блоки — нет: они
+        ужаты вместе с растром (bbox × s), поэтому типичный блок ~50x20 px в
+        оригинале становится ~15x6 px. Константы ниже подобраны под сцену=растр,
+        и без этого множителя рамка со шрифтом перекрывают сам блок.
+        Вне холста — 1.0 (прежний вид).
+        """
+        if not getattr(self, "_canvas_mode", False):
+            return 1.0
+        return getattr(self, "_bg_scale", 1.0) or 1.0
+
     # -----------------------------------------------------------------
     # Инициализация / состояние
     # -----------------------------------------------------------------
@@ -136,7 +149,7 @@ class OcrLayerMixin:
             if tgt is not None:
                 cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
                 line = QGraphicsLineItem(cx, cy, tgt[0], tgt[1])
-                pen = QPen(_COLOR_BOUND, 1.5)
+                pen = QPen(_COLOR_BOUND, 1.5 * self._ocr_vis_scale())
                 pen.setStyle(Qt.PenStyle.DashLine)
                 line.setPen(pen)
                 line.setZValue(_LINE_Z)
@@ -151,7 +164,7 @@ class OcrLayerMixin:
             border = _COLOR_BOUND           # привязан
         else:
             border = _COLOR_UNBOUND         # не привязан
-        rect.setPen(QPen(border, _BORDER_W))
+        rect.setPen(QPen(border, _BORDER_W * self._ocr_vis_scale()))
         rect.setBrush(QBrush(Qt.BrushStyle.NoBrush))
         rect.setZValue(_BLOCK_Z)
         rect.setVisible(visible)
@@ -164,7 +177,8 @@ class OcrLayerMixin:
         label = None
         bg = None
         if text:
-            font = QFont("DejaVu Sans", _LABEL_PT)
+            font = QFont("DejaVu Sans")
+            font.setPointSizeF(max(0.5, _LABEL_PT * self._ocr_vis_scale()))
             fm = QFontMetricsF(font)
             th = fm.height()
             tw = fm.horizontalAdvance(text)
@@ -270,7 +284,7 @@ class OcrLayerMixin:
                 c = _COLOR_BOUND if nid in bnodes else _NODE_CENTROID
             try:
                 marker.setBrush(QBrush(c))
-                marker.setPen(QPen(c.darker(130), 1.5))
+                marker.setPen(QPen(c.darker(130), self.OUTLINE_WIDTH))
             except Exception:
                 pass
         # bbox оборудования — только рамка
@@ -278,13 +292,13 @@ class OcrLayerMixin:
             c = _COLOR_BOUND if nid in bnodes else _NODE_EQUIP_GREY
             try:
                 rect_item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
-                rect_item.setPen(QPen(c, 2.0))
+                rect_item.setPen(QPen(c, self.OUTLINE_WIDTH))
             except Exception:
                 pass
         for nid, poly_item in poly.items():
             c = _COLOR_BOUND if nid in bnodes else _NODE_EQUIP_GREY
             try:
-                poly_item.setPen(QPen(c, 2.0))
+                poly_item.setPen(QPen(c, self.OUTLINE_WIDTH))
             except Exception:
                 pass
         # рёбра — золото если привязано
@@ -292,7 +306,7 @@ class OcrLayerMixin:
             ek = f"{key[0]}|{key[1]}"
             if ek in bedges:
                 try:
-                    item.setPen(QPen(_COLOR_BOUND, 5))
+                    item.setPen(QPen(_COLOR_BOUND, self.EDGE_WIDTH * 1.25))
                 except Exception:
                     pass
 
@@ -512,7 +526,8 @@ class OcrLayerMixin:
         """Создать пустой текст-блок из нарисованной рамки."""
         bx1, bx2 = min(x1, x2), max(x1, x2)
         by1, by2 = min(y1, y2), max(y1, y2)
-        if (bx2 - bx1) < _MIN_BLOCK_SIZE or (by2 - by1) < _MIN_BLOCK_SIZE:
+        _min = _MIN_BLOCK_SIZE * self._ocr_vis_scale()
+        if (bx2 - bx1) < _min or (by2 - by1) < _min:
             self.update_status("Слишком маленькая рамка — блок не создан")
             return
         cmd = self._ocr_push_snapshot("Добавить блок")
@@ -587,7 +602,8 @@ class OcrLayerMixin:
         if not text or not bbox or len(bbox) != 4:
             return []
         x1, y1, x2, y2 = [float(v) for v in bbox]
-        font = QFont("DejaVu Sans", _LABEL_PT)
+        font = QFont("DejaVu Sans")
+        font.setPointSizeF(max(0.5, _LABEL_PT * self._ocr_vis_scale()))
         fm = QFontMetricsF(font)
         th = fm.height()
         tw = fm.horizontalAdvance(text)
@@ -845,7 +861,7 @@ class OcrLayerMixin:
         self._ocr_resize_overlay = ResizableNodeOverlay(
             scene=self.scene,
             bbox=[float(v) for v in bbox],
-            min_size=int(_MIN_BLOCK_SIZE),
+            min_size=max(1, int(_MIN_BLOCK_SIZE * self._ocr_vis_scale())),
             on_resize=_on_resize,
             on_commit=lambda: self._ocr_resize_commit(),
         )
@@ -910,13 +926,13 @@ class OcrLayerMixin:
                     or self.node_items.get(node_id))
             if item is not None:
                 self._ocr_hl_restore.append((item, item.pen()))
-                item.setPen(QPen(_COLOR_DROP, 3))
+                item.setPen(QPen(_COLOR_DROP, 3 * self._ocr_vis_scale()))
             return
         edge_key, _pt = self.find_nearest_edge(x, y, threshold=20.0)
         if edge_key and edge_key in self.edge_items:
             item = self.edge_items[edge_key]
             self._ocr_hl_restore.append((item, item.pen()))
-            item.setPen(QPen(_COLOR_DROP, 5))
+            item.setPen(QPen(_COLOR_DROP, 5 * self._ocr_vis_scale()))
 
 
 # =====================================================================
@@ -941,7 +957,7 @@ class AddOcrBlockHandler(ModeHandler):
     def on_press(self, editor, x, y, event) -> bool:
         editor._ocr_add_start = (x, y)
         rect = QGraphicsRectItem(x, y, 1, 1)
-        rect.setPen(QPen(_COLOR_UNBOUND, 2, Qt.PenStyle.DashLine))
+        rect.setPen(QPen(_COLOR_UNBOUND, 2 * self._ocr_vis_scale(), Qt.PenStyle.DashLine))
         rect.setZValue(_BLOCK_Z + 5)
         editor.scene.addItem(rect)
         editor._ocr_add_preview = rect
