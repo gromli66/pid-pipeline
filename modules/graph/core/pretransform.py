@@ -350,6 +350,35 @@ def _apply_move(graph, node, dx, dy):
                 pts[idx] = [pts[idx][0] + dy, pts[idx][1] + dx]
 
 
+def _skin_content_rect(node):
+    """След реальной графики скина внутри bbox: (x1, y1, x2, y2) или None.
+
+    Скин сохраняет свой aspect_hw при resize, поэтому в боксе другого аспекта он
+    letterbox-ится и не заполняет его: клапан 42x38 при aspect_hw=0.5 рисуется
+    как 42x21 с полями по 8.5px сверху/снизу. Труба, посаженная на границу БОКСА,
+    до графики не доходит.
+
+    Та же формула, что _content_rect в tools/fxml_standardize.py (он этим и
+    занимался, пока identity-экспорт его не отключил).
+    """
+    ar = _SKIN_ASPECT.get(_CLASS_SKIN.get(node.get("class_name"), ""))
+    bb = node.get("bbox")
+    if not ar or not bb:
+        return None
+    x1, y1, x2, y2 = bb
+    pw, ph = x2 - x1, y2 - y1
+    if pw <= 0 or ph <= 0:
+        return None
+    # aspect_hw = h/w в H-рамке; для вертикали ось переворачивается
+    r = (1.0 / ar) if node.get("_axis") == "V" else ar
+    if pw * r <= ph:
+        sw, sh = pw, pw * r
+    else:
+        sh, sw = ph, ph / r
+    return (x1 + (pw - sw) / 2.0, y1 + (ph - sh) / 2.0,
+            x1 + (pw + sw) / 2.0, y1 + (ph + sh) / 2.0)
+
+
 def _has_skin(node):
     """Есть ли у узла скин — тем же правилом, что в FXML (skin > segmentation).
 
@@ -425,7 +454,9 @@ def reproject_edge_endpoints(graph):
                 bb = n.get("bbox")
                 if not bb or n.get("class_name") not in FIXED_SIZES:
                     continue          # размер не менялся — концы и так на месте
-                x1, y1, x2, y2 = bb
+                # Сажаем на ГРАФИКУ скина, а не на бокс: скин letterbox-ится
+                # внутри бокса, и до его границы труба бы не дошла.
+                x1, y1, x2, y2 = _skin_content_rect(n) or bb
                 cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
                 py, px = p[0], p[1]
                 dx, dy = px - cx, py - cy

@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import (
     QColor, QBrush, QPen, QPainterPath, QFont, QPixmap, QTransform, QCursor,
-    QPolygonF,
+    QPolygonF, QImage,
 )
 from PySide6.QtCore import Qt, QPointF
 
@@ -2625,6 +2625,33 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 return p
         return Path(__file__).resolve().parents[1] / "resources" / "skins"
 
+    @staticmethod
+    def _crop_alpha(pm: QPixmap) -> QPixmap:
+        """Обрезать прозрачные поля PNG (у скинов они ~8px по краям).
+
+        _fit_pixmap вписывает в bbox весь файл вместе с полями, поэтому графика
+        садится уже бокса и труба до неё не доходит. После обрезки аспект файла
+        сходится с aspect_hw из skin_geometry.json (по нему считается content_rect,
+        куда pretransform сажает концы труб).
+        """
+        img = pm.toImage().convertToFormat(QImage.Format.Format_ARGB32)
+        w, h = img.width(), img.height()
+        if w <= 0 or h <= 0:
+            return pm
+        try:
+            import numpy as np
+            arr = np.frombuffer(img.constBits(), np.uint8, count=h * img.bytesPerLine())
+            alpha = arr.reshape(h, img.bytesPerLine())[:, :w * 4].reshape(h, w, 4)[:, :, 3]
+            rows = np.flatnonzero(alpha.any(axis=1))
+            cols = np.flatnonzero(alpha.any(axis=0))
+        except Exception:
+            logger.exception("crop_alpha: не удалось прочитать альфу, беру PNG как есть")
+            return pm
+        if not len(rows) or not len(cols):
+            return pm
+        return pm.copy(int(cols[0]), int(rows[0]),
+                       int(cols[-1] - cols[0] + 1), int(rows[-1] - rows[0] + 1))
+
     def _skin_pixmap_for(self, class_name: str | None):
         """QPixmap скина для класса (по имени файла) или None. Кэшируется."""
         if class_name in self._skin_pixmaps:
@@ -2635,7 +2662,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             if f.is_file():
                 img = QPixmap(str(f))
                 if not img.isNull():
-                    pm = img
+                    pm = self._crop_alpha(img)
         self._skin_pixmaps[class_name] = pm
         return pm
 
