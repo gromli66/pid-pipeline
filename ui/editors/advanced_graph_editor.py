@@ -616,7 +616,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             wx, wy = wp[1], wp[0]
             r = 4
             marker = QGraphicsEllipseItem(wx - r, wy - r, r * 2, r * 2)
-            marker.setPen(QPen(self.COLOR_SELECTION, 2 * self._vis_scale))
+            marker.setPen(QPen(self.COLOR_SELECTION, 2))
             marker.setBrush(QBrush(self.COLOR_SELECTION))
             marker.setZValue(9)
             self.scene.addItem(marker)
@@ -786,9 +786,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 self.edge_highlight = QGraphicsPathItem(path)
                 perp_info = self.edge_perp_scores.get(edge_key, {})
                 if perp_info.get('is_good', True):
-                    self.edge_highlight.setPen(QPen(self.COLOR_EDGE, 4 * self._vis_scale))
+                    self.edge_highlight.setPen(QPen(self.COLOR_EDGE, 4))
                 else:
-                    self.edge_highlight.setPen(QPen(self.COLOR_EDGE_HIGHLIGHT, 4 * self._vis_scale))
+                    self.edge_highlight.setPen(QPen(self.COLOR_EDGE_HIGHLIGHT, 4))
                 self.edge_highlight.setZValue(10)
                 self.scene.addItem(self.edge_highlight)
 
@@ -810,7 +810,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 radius = 15
                 self.connector_preview = QGraphicsEllipseItem(
                     cx - radius, cy - radius, radius * 2, radius * 2)
-                self.connector_preview.setPen(QPen(self.COLOR_EDGE_HIGHLIGHT, 3 * self._vis_scale))
+                self.connector_preview.setPen(QPen(self.COLOR_EDGE_HIGHLIGHT, 3))
                 self.connector_preview.setBrush(QBrush(Qt.GlobalColor.transparent))
                 self.connector_preview.setZValue(15)
                 self.scene.addItem(self.connector_preview)
@@ -989,7 +989,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             cx, cy = node['centroid'][1], node['centroid'][0]
             r = self.CLICK_THRESHOLD - 2
             ring = QGraphicsEllipseItem(cx - r, cy - r, r * 2, r * 2)
-            ring.setPen(QPen(self.COLOR_SELECTION, 2 * self._vis_scale))
+            ring.setPen(QPen(self.COLOR_SELECTION, 2))
             ring.setBrush(QBrush(Qt.BrushStyle.NoBrush))
             ring.setZValue(7)
             self.scene.addItem(ring)
@@ -1749,7 +1749,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 wx, wy = wp[1], wp[0]
                 size = 6
                 rect = QGraphicsRectItem(wx - size / 2, wy - size / 2, size, size)
-                rect.setPen(QPen(QColor(40, 40, 40), 1.5 * self._vis_scale))
+                rect.setPen(QPen(QColor(40, 40, 40), 1.5))
                 rect.setBrush(QBrush(QColor(255, 255, 255, 220)))
                 rect.setZValue(5)
                 self.scene.addItem(rect)
@@ -1777,7 +1777,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             wx, wy = wp[1], wp[0]
             size = 6
             rect = QGraphicsRectItem(wx - size / 2, wy - size / 2, size, size)
-            rect.setPen(QPen(QColor(40, 40, 40), 1.5 * self._vis_scale))
+            rect.setPen(QPen(QColor(40, 40, 40), 1.5))
             rect.setBrush(QBrush(QColor(255, 255, 255, 220)))
             rect.setZValue(5)
             self.scene.addItem(rect)
@@ -1915,7 +1915,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 if point:
                     px, py = point[1], point[0]
                     rect = QGraphicsRectItem(px - EP_SIZE / 2, py - EP_SIZE / 2, EP_SIZE, EP_SIZE)
-                    rect.setPen(QPen(QColor(0, 188, 212), 2 * self._vis_scale))
+                    rect.setPen(QPen(QColor(0, 188, 212), 2))
                     rect.setBrush(QBrush(QColor(0, 188, 212, 120)))
                     rect.setZValue(8)
                     self.scene.addItem(rect)
@@ -2042,7 +2042,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         gs = self.grid_size
         if gs <= 0:
             return
-        pen = QPen(QColor(255, 255, 255, 38), 0.5 * self._vis_scale)
+        pen = QPen(QColor(255, 255, 255, 38), 0.5)
         if self._canvas_mode:
             cw, ch = int(self.canvas_w), int(self.canvas_h)   # сетка по холсту
         else:
@@ -2356,7 +2356,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
 
     def _redraw_resize_frames(self):
         self._clear_resize_frames()
-        pen = QPen(QColor(255, 215, 0), 2.5 * self._vis_scale)
+        pen = QPen(QColor(255, 215, 0), 2.5)
         for nid in self._resize_sel:
             node = self.nodes.get(nid)
             if not node:

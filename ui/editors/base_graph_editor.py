@@ -56,9 +56,8 @@ class BaseGraphEditor(QGraphicsView):
     COLOR_KKS_LABEL_BG = QColor(0, 0, 0, 160)      # label background
 
     # ── Размеры (в единицах СЦЕНЫ; подобраны под сцену=пиксели оригинала) ──
-    # В canvas-режиме сцена = 1920 вместо ~5000 px, поэтому все эти размеры
-    # пересчитываются на _vis_scale (см. _rescale_visuals), иначе визуал
-    # выглядит в ~1/s раз крупнее.
+    # В canvas-режиме сцена = холст 1920x1080, и размеры берутся из _VIS_CANVAS
+    # (см. _apply_visuals) — не пересчётом отсюда, а явными значениями холста.
     EQUIPMENT_MARKER_RADIUS = 6
     CONNECTOR_MARKER_RADIUS = 8
     CLICK_THRESHOLD = 20
@@ -68,12 +67,31 @@ class BaseGraphEditor(QGraphicsView):
     HIGHLIGHT_WIDTH = 4        # подсветка ребра
     PREVIEW_WIDTH = 2          # превью коннектора
 
-    # Размеры, пересчитываемые под масштаб сцены
+    # Размеры, зависящие от системы координат сцены
     _VIS_KEYS = (
         "EQUIPMENT_MARKER_RADIUS", "CONNECTOR_MARKER_RADIUS", "CLICK_THRESHOLD",
         "SELECTION_RING_WIDTH", "EDGE_WIDTH", "OUTLINE_WIDTH",
         "HIGHLIGHT_WIDTH", "PREVIEW_WIDTH",
     )
+
+    # WYSIWYG: холст 1920x1080 — не уменьшенный оригинал, а ФИНАЛЬНАЯ система
+    # координат: что оператор видит, то и уйдёт в FXML. Поэтому размеры здесь
+    # заданы прямо в пикселях холста, а не пересчитаны из legacy-констант
+    # (те подобраны под сцену=растр, где символ ~130px, а в холсте он 42x38).
+    #
+    # EDGE_WIDTH = LINE_STROKE_WIDTH из modules/graph_to_fxml.py: труба в
+    # редакторе обязана быть той же толщины, что в SceneBuilder, иначе редактор
+    # врёт (и расходится с render_width, который в холст идёт как есть).
+    _VIS_CANVAS = {
+        "EDGE_WIDTH": 2.0,               # == graph_to_fxml.LINE_STROKE_WIDTH
+        "OUTLINE_WIDTH": 1.0,
+        "EQUIPMENT_MARKER_RADIUS": 3.0,
+        "CONNECTOR_MARKER_RADIUS": 4.0,
+        "CLICK_THRESHOLD": 8.0,
+        "SELECTION_RING_WIDTH": 1.5,
+        "HIGHLIGHT_WIDTH": 2.0,
+        "PREVIEW_WIDTH": 1.0,
+    }
 
     def __init__(self):
         super().__init__()
@@ -97,9 +115,8 @@ class BaseGraphEditor(QGraphicsView):
         self._bg_scale: float = 1.0
         self._bg_offx: float = 0.0
         self._bg_offy: float = 0.0
-        self._vis_scale: float = 1.0
-        # Базовые (несмасштабированные) размеры визуала — с учётом переопределений
-        # в потомках. Пересчёт идёт всегда от них, поэтому идемпотентен.
+        # Legacy-размеры визуала — с учётом переопределений в потомках.
+        # См. _apply_visuals: в холсте вместо них берётся _VIS_CANVAS.
         self._vis_base = {k: getattr(self, k) for k in self._VIS_KEYS}
 
         # ── Graphics items ──
@@ -230,15 +247,16 @@ class BaseGraphEditor(QGraphicsView):
     # Scene rendering
     # =================================================================
 
-    def _rescale_visuals(self, vis_scale: float):
-        """Пересчитать размеры визуала под масштаб сцены.
+    def _apply_visuals(self, canvas: bool):
+        """Размеры визуала под систему координат сцены.
 
-        Всегда считаем от _vis_base, поэтому повторные вызовы не накапливают
-        масштаб. vis_scale=1.0 возвращает исходные (legacy) размеры.
+        legacy → базовые константы (сцена = пиксели растра).
+        canvas → _VIS_CANVAS: холст 1920x1080 это финальные пиксели FXML,
+                 размеры в нём задаются, а не масштабируются.
+        Значения берутся от _vis_base/_VIS_CANVAS, поэтому вызов идемпотентен.
         """
-        self._vis_scale = vis_scale
         for key, base in self._vis_base.items():
-            setattr(self, key, base * vis_scale)
+            setattr(self, key, self._VIS_CANVAS[key] if canvas else base)
 
     def setup_scene(self):
         """Настройка сцены со всеми слоями.
@@ -271,9 +289,7 @@ class BaseGraphEditor(QGraphicsView):
             logger.info("setup_scene: legacy-режим, сцена=%dx%d (граф в исходных px)",
                         self.img_width, self.img_height)
 
-        # Визуал (маркеры/перья/рёбра) подобран под сцену=оригинал. В холсте сцена
-        # меньше в 1/s раз → без пересчёта всё выглядит огромным.
-        self._rescale_visuals(self._bg_scale if self._canvas_mode else 1.0)
+        self._apply_visuals(canvas=self._canvas_mode)
 
         # Z=0: Original image (darkened)
         if self.original_image and not self.original_image.isNull():
@@ -1041,10 +1057,10 @@ class BaseGraphEditor(QGraphicsView):
             else:  # delete_edge
                 color = self.COLOR_PREVIEW_DELETE if edge_exists else self.COLOR_PREVIEW_NO
 
-            pen = QPen(color, 3 * self._vis_scale)
+            pen = QPen(color, 3)
         else:
             x2, y2 = mouse_x, mouse_y
-            pen = QPen(self.COLOR_SELECTION, 2 * self._vis_scale, Qt.PenStyle.DashLine)
+            pen = QPen(self.COLOR_SELECTION, 2, Qt.PenStyle.DashLine)
 
         if self.preview_line:
             self.scene.removeItem(self.preview_line)
