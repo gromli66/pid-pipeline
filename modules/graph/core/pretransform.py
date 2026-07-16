@@ -350,13 +350,61 @@ def _apply_move(graph, node, dx, dy):
                 pts[idx] = [pts[idx][0] + dy, pts[idx][1] + dx]
 
 
+def _has_skin(node):
+    """Есть ли у узла скин — тем же правилом, что в FXML (skin > segmentation).
+
+    Мягкий импорт: pretransform не должен падать без модуля экспорта.
+    """
+    try:
+        from modules.graph_to_fxml import get_skin_info
+        return get_skin_info(node) is not None
+    except Exception:
+        return node.get("class_name") in FIXED_SIZES
+
+
+def _project_to_polygon(seg, cx, cy, px, py):
+    """Точка на границе полигона по лучу центр→(px, py). None если не пересёк.
+
+    Луч, а не отрезок: точка подключения может быть и внутри контура, и снаружи.
+    seg = [x1, y1, x2, y2, ...] (координаты холста).
+    """
+    dx, dy = px - cx, py - cy
+    norm = math.hypot(dx, dy)
+    if norm < 1e-9:
+        return None
+    dx, dy = dx / norm, dy / norm
+
+    pts = [(seg[i], seg[i + 1]) for i in range(0, len(seg) - 1, 2)]
+    best = None
+    for i in range(len(pts)):
+        ax, ay = pts[i]
+        bx, by = pts[(i + 1) % len(pts)]
+        ex, ey = bx - ax, by - ay
+        # cx + t*d = a + u*e,  t >= 0,  0 <= u <= 1
+        den = dx * ey - dy * ex
+        if abs(den) < 1e-12:
+            continue
+        t = ((ax - cx) * ey - (ay - cy) * ex) / den
+        u = ((ax - cx) * dy - (ay - cy) * dx) / den
+        if t >= 0 and 0.0 <= u <= 1.0 and (best is None or t > best):
+            best = t   # дальнее пересечение = внешняя граница контура
+    if best is None:
+        return None
+    return (cx + dx * best, cy + dy * best)
+
+
 def reproject_edge_endpoints(graph):
-    """Пересадить концы рёбер на границу НОВОГО (фиксированного) бокса.
+    """Пересадить концы рёбер на границу формы узла (той, что уйдёт в FXML).
 
     После замены размера по таблице точки подключения остались на границе
     ДЕТЕКЦИОННОГО бокса → ребро не доходит до символа или перелетает его.
-    Сохраняем ось трубы (поперечную координату), меняем только координату
-    вдоль направления выхода; ось клампим в пределы бокса.
+
+    Форма берётся та же, что эмитит FXML:
+      • есть скин            → фикс-бокс (контур в FXML игнорируется);
+      • нет скина, есть контур → полигон;
+      • иначе                → узел не наш, пропускаем.
+    Для бокса сохраняем ось трубы (поперечную координату), меняем только
+    координату вдоль направления выхода; ось клампим в пределы бокса.
     """
     byid = {n["id"]: n for n in graph.get("nodes", [])}
     fixed = 0
@@ -364,22 +412,43 @@ def reproject_edge_endpoints(graph):
         src, tgt = _edge_ends(e)
         for end_id, pkey in ((src, "source_point"), (tgt, "target_point")):
             n = byid.get(end_id)
-            if not n or n.get("class_name") not in FIXED_SIZES:
-                continue
-            bb = n.get("bbox")
             p = e.get(pkey)
-            if not bb or not p:
+            if not n or not p:
                 continue
-            x1, y1, x2, y2 = bb
-            cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-            py, px = p[0], p[1]
-            dx, dy = px - cx, py - cy
-            if abs(dx) >= abs(dy):            # выход влево/вправо
-                nx = x2 if dx > 0 else x1
-                ny = min(max(py, y1), y2)     # ось трубы, но в пределах бокса
-            else:                             # выход вверх/вниз
-                ny = y2 if dy > 0 else y1
-                nx = min(max(px, x1), x2)
+
+            seg = n.get("segmentation")
+            has_poly = bool(seg) and len(seg) >= 6
+            skinned = n.get("class_name") in FIXED_SIZES or _has_skin(n)
+
+            new = None
+            if skinned:
+                bb = n.get("bbox")
+                if not bb or n.get("class_name") not in FIXED_SIZES:
+                    continue          # размер не менялся — концы и так на месте
+                x1, y1, x2, y2 = bb
+                cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+                py, px = p[0], p[1]
+                dx, dy = px - cx, py - cy
+                if abs(dx) >= abs(dy):            # выход влево/вправо
+                    nx = x2 if dx > 0 else x1
+                    ny = min(max(py, y1), y2)     # ось трубы, но в пределах бокса
+                else:                             # выход вверх/вниз
+                    ny = y2 if dy > 0 else y1
+                    nx = min(max(px, x1), x2)
+                new = (nx, ny)
+            elif has_poly:
+                # Форма в FXML = контур: сажаем конец на его границу, иначе труба
+                # уходит внутрь фигуры (bbox тут вообще не при чём).
+                c = n.get("centroid")
+                if not c:
+                    continue
+                new = _project_to_polygon(seg, c[1], c[0], p[1], p[0])
+                if new is None:
+                    continue
+            else:
+                continue
+
+            nx, ny = new
             e[pkey] = [ny, nx]
             # терминальная точка маршрута — туда же
             for wk in ("path", "waypoints"):

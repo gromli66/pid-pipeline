@@ -283,6 +283,20 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         # base — нейтральное отображение без подсветок.
         return self.COLOR_EDGE
 
+    def _draws_polygon(self, node: dict) -> bool:
+        """Скины включены → у скинового узла контур не рисуем.
+
+        В FXML skin_info имеет приоритет над segmentation: узел со скином
+        эмитится контролом в своём bbox, а контур игнорируется. Показывать его
+        при включённых скинах значит рисовать форму, которой в SceneBuilder не
+        будет (и рёбра, честно посаженные на границу bbox, выглядят «внутри»).
+        Скины выключены → контур виден как есть: это рабочий слой, не предпросмотр.
+        """
+        if not self.show_skins:
+            return True
+        from modules.graph_to_fxml import get_skin_info
+        return get_skin_info(node) is None
+
     def _get_equipment_brush(self, node: dict) -> QBrush:
         """Заливка equipment — нейтральная во всех состояниях.
 

@@ -533,6 +533,23 @@ class BaseGraphEditor(QGraphicsView):
     # Node rendering
     # =================================================================
 
+    def _draws_polygon(self, node: dict) -> bool:
+        """Виртуальный. Рисовать ли контур (segmentation) как форму узла.
+
+        Base: да, если контур есть.
+        Advanced: при включённых скинах у скиновых узлов форма = фикс-бокс + скин
+        (в FXML контур игнорируется — skin_info в приоритете).
+        """
+        return True
+
+    def _node_has_polygon(self, node: dict) -> bool:
+        """Форма узла = контур? (учитывает _draws_polygon, поэтому bbox-ветка
+        включается там, где контур не рисуется)."""
+        seg = node.get('segmentation')
+        if not (seg and isinstance(seg, list) and len(seg) >= 6):
+            return False
+        return self._draws_polygon(node)
+
     def _draw_all_nodes(self):
         """Отрисовка всех узлов."""
         connected_nodes = set()
@@ -545,10 +562,8 @@ class BaseGraphEditor(QGraphicsView):
         for node_id, node in self.nodes.items():
             if node.get('type') != 'equipment':
                 continue
-            seg = node.get('segmentation')
             bbox = node.get('bbox')
-            has_polygon = seg and isinstance(seg, list) and len(seg) >= 6
-            if has_polygon and bbox:
+            if self._node_has_polygon(node) and bbox:
                 drawn_bboxes.add(tuple(bbox))
 
         for node_id, node in self.nodes.items():
@@ -566,7 +581,7 @@ class BaseGraphEditor(QGraphicsView):
             if node_type == 'equipment':
                 segmentation = node.get('segmentation')
                 bbox = node.get('bbox')
-                has_polygon = segmentation and isinstance(segmentation, list) and len(segmentation) >= 6
+                has_polygon = self._node_has_polygon(node)
 
                 if has_polygon:
                     path = QPainterPath()
@@ -629,7 +644,7 @@ class BaseGraphEditor(QGraphicsView):
         if node_type == 'equipment':
             segmentation = node.get('segmentation')
             bbox = node.get('bbox')
-            has_polygon = segmentation and isinstance(segmentation, list) and len(segmentation) >= 6
+            has_polygon = self._node_has_polygon(node)
 
             if has_polygon:
                 path = QPainterPath()
