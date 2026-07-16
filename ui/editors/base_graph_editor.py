@@ -55,12 +55,25 @@ class BaseGraphEditor(QGraphicsView):
     COLOR_NO_DIAMETER = QColor(255, 60, 40, 180)    # bright red for edges without diameter
     COLOR_KKS_LABEL_BG = QColor(0, 0, 0, 160)      # label background
 
-    # ── Размеры ──
+    # ── Размеры (в единицах СЦЕНЫ; подобраны под сцену=пиксели оригинала) ──
+    # В canvas-режиме сцена = 1920 вместо ~5000 px, поэтому все эти размеры
+    # пересчитываются на _vis_scale (см. _rescale_visuals), иначе визуал
+    # выглядит в ~1/s раз крупнее.
     EQUIPMENT_MARKER_RADIUS = 6
     CONNECTOR_MARKER_RADIUS = 8
     CLICK_THRESHOLD = 20
     SELECTION_RING_WIDTH = 3
     EDGE_WIDTH = 4
+    OUTLINE_WIDTH = 2          # контуры bbox/полигонов/маркеров
+    HIGHLIGHT_WIDTH = 4        # подсветка ребра
+    PREVIEW_WIDTH = 2          # превью коннектора
+
+    # Размеры, пересчитываемые под масштаб сцены
+    _VIS_KEYS = (
+        "EQUIPMENT_MARKER_RADIUS", "CONNECTOR_MARKER_RADIUS", "CLICK_THRESHOLD",
+        "SELECTION_RING_WIDTH", "EDGE_WIDTH", "OUTLINE_WIDTH",
+        "HIGHLIGHT_WIDTH", "PREVIEW_WIDTH",
+    )
 
     def __init__(self):
         super().__init__()
@@ -84,6 +97,10 @@ class BaseGraphEditor(QGraphicsView):
         self._bg_scale: float = 1.0
         self._bg_offx: float = 0.0
         self._bg_offy: float = 0.0
+        self._vis_scale: float = 1.0
+        # Базовые (несмасштабированные) размеры визуала — с учётом переопределений
+        # в потомках. Пересчёт идёт всегда от них, поэтому идемпотентен.
+        self._vis_base = {k: getattr(self, k) for k in self._VIS_KEYS}
 
         # ── Graphics items ──
         self.node_items: dict[str, QGraphicsEllipseItem] = {}
@@ -213,6 +230,16 @@ class BaseGraphEditor(QGraphicsView):
     # Scene rendering
     # =================================================================
 
+    def _rescale_visuals(self, vis_scale: float):
+        """Пересчитать размеры визуала под масштаб сцены.
+
+        Всегда считаем от _vis_base, поэтому повторные вызовы не накапливают
+        масштаб. vis_scale=1.0 возвращает исходные (legacy) размеры.
+        """
+        self._vis_scale = vis_scale
+        for key, base in self._vis_base.items():
+            setattr(self, key, base * vis_scale)
+
     def setup_scene(self):
         """Настройка сцены со всеми слоями.
 
@@ -243,6 +270,10 @@ class BaseGraphEditor(QGraphicsView):
             scene_w, scene_h = self.img_width, self.img_height
             logger.info("setup_scene: legacy-режим, сцена=%dx%d (граф в исходных px)",
                         self.img_width, self.img_height)
+
+        # Визуал (маркеры/перья/рёбра) подобран под сцену=оригинал. В холсте сцена
+        # меньше в 1/s раз → без пересчёта всё выглядит огромным.
+        self._rescale_visuals(self._bg_scale if self._canvas_mode else 1.0)
 
         # Z=0: Original image (darkened)
         if self.original_image and not self.original_image.isNull():
@@ -529,7 +560,7 @@ class BaseGraphEditor(QGraphicsView):
                     path.closeSubpath()
 
                     poly_item = QGraphicsPathItem(path)
-                    poly_item.setPen(QPen(color, 2))
+                    poly_item.setPen(QPen(color, self.OUTLINE_WIDTH))
                     poly_item.setBrush(self._get_equipment_brush(node))
                     poly_item.setZValue(2)
                     self.scene.addItem(poly_item)
@@ -540,7 +571,7 @@ class BaseGraphEditor(QGraphicsView):
                         if bbox_key not in drawn_bboxes:
                             x1, y1, x2, y2 = bbox
                             rect = QGraphicsRectItem(x1, y1, x2 - x1, y2 - y1)
-                            rect.setPen(QPen(color, 2))
+                            rect.setPen(QPen(color, self.OUTLINE_WIDTH))
                             rect.setBrush(self._get_equipment_brush(node))
                             rect.setZValue(2)
                             self.scene.addItem(rect)
@@ -551,7 +582,7 @@ class BaseGraphEditor(QGraphicsView):
                 r = self.CONNECTOR_MARKER_RADIUS
 
             marker = QGraphicsEllipseItem(cx - r, cy - r, r * 2, r * 2)
-            marker.setPen(QPen(color, 2))
+            marker.setPen(QPen(color, self.OUTLINE_WIDTH))
             marker.setBrush(QBrush(color.lighter(150)))
             marker.setZValue(3)
             self.scene.addItem(marker)
@@ -592,7 +623,7 @@ class BaseGraphEditor(QGraphicsView):
                 path.closeSubpath()
 
                 poly_item = QGraphicsPathItem(path)
-                poly_item.setPen(QPen(color, 2))
+                poly_item.setPen(QPen(color, self.OUTLINE_WIDTH))
                 poly_item.setBrush(self._get_equipment_brush(node))
                 poly_item.setZValue(2)
                 self.scene.addItem(poly_item)
@@ -600,7 +631,7 @@ class BaseGraphEditor(QGraphicsView):
             elif bbox and len(bbox) == 4:
                 x1, y1, x2, y2 = bbox
                 rect = QGraphicsRectItem(x1, y1, x2 - x1, y2 - y1)
-                rect.setPen(QPen(color, 2))
+                rect.setPen(QPen(color, self.OUTLINE_WIDTH))
                 rect.setBrush(self._get_equipment_brush(node))
                 rect.setZValue(2)
                 self.scene.addItem(rect)
@@ -608,7 +639,7 @@ class BaseGraphEditor(QGraphicsView):
 
         r = self.EQUIPMENT_MARKER_RADIUS if node_type == 'equipment' else self.CONNECTOR_MARKER_RADIUS
         marker = QGraphicsEllipseItem(cx - r, cy - r, r * 2, r * 2)
-        marker.setPen(QPen(color, 2))
+        marker.setPen(QPen(color, self.OUTLINE_WIDTH))
         marker.setBrush(QBrush(color.lighter(150)))
         marker.setZValue(3)
         self.scene.addItem(marker)
@@ -651,13 +682,13 @@ class BaseGraphEditor(QGraphicsView):
             color = self.COLOR_CONNECTOR
 
         marker = self.node_items[node_id]
-        marker.setPen(QPen(color, 2))
+        marker.setPen(QPen(color, self.OUTLINE_WIDTH))
         marker.setBrush(QBrush(color.lighter(150)))
 
         if node_id in self.polygon_items:
-            self.polygon_items[node_id].setPen(QPen(color, 2))
+            self.polygon_items[node_id].setPen(QPen(color, self.OUTLINE_WIDTH))
         elif node_id in self.bbox_items:
-            self.bbox_items[node_id].setPen(QPen(color, 2))
+            self.bbox_items[node_id].setPen(QPen(color, self.OUTLINE_WIDTH))
 
     # =================================================================
     # Hit testing
@@ -1010,10 +1041,10 @@ class BaseGraphEditor(QGraphicsView):
             else:  # delete_edge
                 color = self.COLOR_PREVIEW_DELETE if edge_exists else self.COLOR_PREVIEW_NO
 
-            pen = QPen(color, 3)
+            pen = QPen(color, 3 * self._vis_scale)
         else:
             x2, y2 = mouse_x, mouse_y
-            pen = QPen(self.COLOR_SELECTION, 2, Qt.PenStyle.DashLine)
+            pen = QPen(self.COLOR_SELECTION, 2 * self._vis_scale, Qt.PenStyle.DashLine)
 
         if self.preview_line:
             self.scene.removeItem(self.preview_line)
@@ -1044,14 +1075,14 @@ class BaseGraphEditor(QGraphicsView):
                     edge_data.get('target_point')
                 )
                 self.edge_highlight = QGraphicsPathItem(path)
-                self.edge_highlight.setPen(QPen(self.COLOR_EDGE_HIGHLIGHT, 4))
+                self.edge_highlight.setPen(QPen(self.COLOR_EDGE_HIGHLIGHT, self.HIGHLIGHT_WIDTH))
                 self.edge_highlight.setZValue(4)
                 self.scene.addItem(self.edge_highlight)
 
             px, py = proj_point
             r = 6
             self.connector_preview = QGraphicsEllipseItem(px - r, py - r, r * 2, r * 2)
-            self.connector_preview.setPen(QPen(self.COLOR_CONNECTOR_PREVIEW, 2))
+            self.connector_preview.setPen(QPen(self.COLOR_CONNECTOR_PREVIEW, self.PREVIEW_WIDTH))
             self.connector_preview.setBrush(QBrush(self.COLOR_CONNECTOR_PREVIEW))
             self.connector_preview.setZValue(5)
             self.scene.addItem(self.connector_preview)
