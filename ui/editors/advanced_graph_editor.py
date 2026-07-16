@@ -250,12 +250,17 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         style → индивидуальный цвет (render_color) или белый по умолчанию;
         perp  → оранжевый для неперпендикулярных, иначе белый;
         ocr   → красный для рёбер без диаметра, иначе белый.
-        Индивидуальный цвет показывается ТОЛЬКО в режиме style
-        (в FXML экспортируется всегда).
+
+        Индивидуальный цвет показывается в режиме style (там его правят) и при
+        включённых скинах: скин — предпросмотр FXML, а цвет линии это тот же скин,
+        но для ребра. В FXML экспортируется всегда.
         """
+        rc = edge_data.get('render_color')
+        if rc and (self.display_regime == "style" or self.show_skins):
+            return QColor(rc)
+
         if self.display_regime == "style":
-            rc = edge_data.get('render_color')
-            return QColor(rc) if rc else self.COLOR_EDGE
+            return self.COLOR_EDGE
 
         if self.display_regime == "perp":
             waypoints = edge_data.get('waypoints', [])
@@ -333,21 +338,22 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
 
         Приоритет — индивидуальная толщина ребра (режим «Размер ребра»).
         Флаг edge_data['dashed'] делает ребро пунктирным во всех режимах.
+
+        Как и цвет, индивидуальная толщина видна в режиме style и при включённых
+        скинах (предпросмотр FXML, куда она уходит всегда).
         """
         color = self._get_edge_color(edge_data, key)
 
-        # Индивидуальная толщина — только в режиме «Размер и цвет».
-        if self.display_regime == "style":
-            render_width = edge_data.get('render_width')
-            pen = QPen(color, float(render_width)) if render_width else QPen(color, self.EDGE_WIDTH)
-            if edge_data.get('dashed'):
-                pen.setStyle(Qt.PenStyle.DashLine)
-            return pen
+        render_width = edge_data.get('render_width')
+        if render_width and (self.display_regime == "style" or self.show_skins):
+            pen_width = float(render_width)
+        elif (self.display_regime == "perp" and key
+                and key in self.edge_perp_scores
+                and not self.edge_perp_scores[key].get('is_good', True)):
+            pen_width = self.EDGE_WIDTH + 1
+        else:
+            pen_width = self.EDGE_WIDTH
 
-        pen_width = self.EDGE_WIDTH
-        if self.display_regime == "perp" and key and key in self.edge_perp_scores:
-            if not self.edge_perp_scores[key].get('is_good', True):
-                pen_width = self.EDGE_WIDTH + 1
         pen = QPen(color, pen_width)
         if edge_data.get('dashed'):
             pen.setStyle(Qt.PenStyle.DashLine)
@@ -2557,9 +2563,12 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         return pm
 
     def set_show_skins(self, on: bool):
-        """Включить/выключить отрисовку скинов внутри боксов."""
+        """Включить/выключить предпросмотр FXML: скины символов + цвет и толщина рёбер."""
         self.show_skins = bool(on)
-        self._redraw_skins()
+        # Не только скины: при включённых скинах рёбра показывают свои
+        # render_color/render_width, поэтому нужна полная перерисовка
+        # (_redraw_all сам зовёт _redraw_skins).
+        self._redraw_all()
         self.update_status("Скины " + ("показаны" if self.show_skins else "скрыты"))
 
     def _clear_skin_items(self):
@@ -2645,34 +2654,44 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self._skin_items[node_id] = [item]
         self._apply_skin_geometry(node_id)
 
+    def _napravlenie_direction(self, node_id: str, node: dict) -> str:
+        """Направление стрелки: из графа, иначе по рёбрам (как в экспорте)."""
+        direction = node.get("flow_direction") or node.get("direction")
+        if direction in ("up", "down", "left", "right"):
+            return direction
+        # Ручной узел не проходит annotate_direction_nodes — выводим по рёбрам
+        # тем же правилом, что и экспорт.
+        from modules.graph_to_fxml import _infer_napravlenie_direction
+        return _infer_napravlenie_direction(node, node_id, self.edges_data, self.nodes)
+
     def _napravlenie_polygon(self, node_id: str, node: dict):
         """QPolygonF стрелки napravlenie или None. Геометрия — из FXML-модуля,
         чтобы редактор и SceneBuilder рисовали один и тот же треугольник."""
-        from modules.graph_to_fxml import (
-            napravlenie_triangle_points, _infer_napravlenie_direction,
-        )
-        direction = node.get("flow_direction") or node.get("direction")
-        if direction not in ("up", "down", "left", "right"):
-            # Ручной узел не проходит annotate_direction_nodes — выводим по рёбрам
-            # тем же правилом, что и экспорт.
-            direction = _infer_napravlenie_direction(
-                node, node_id, self.edges_data, self.nodes)
-        pts = napravlenie_triangle_points(node.get("bbox"), direction)
+        from modules.graph_to_fxml import napravlenie_triangle_points
+        pts = napravlenie_triangle_points(
+            node.get("bbox"), self._napravlenie_direction(node_id, node))
         if not pts:
             return None
         return QPolygonF([QPointF(x, y) for x, y in pts])
+
+    def _napravlenie_fill(self, node_id: str, node: dict) -> QColor:
+        """Заливка стрелки = цвет своей (входящей) трубы; иначе дефолт класса."""
+        from modules.graph_to_fxml import (
+            CLASS_COLORS, NAPRAVLENIE_COLOR, NAPRAVLENIE_CLASS_NAME,
+            napravlenie_incoming_color,
+        )
+        rc = napravlenie_incoming_color(
+            node, node_id, self.edges_data, self.nodes,
+            self._napravlenie_direction(node_id, node))
+        return QColor(rc or CLASS_COLORS.get(NAPRAVLENIE_CLASS_NAME, NAPRAVLENIE_COLOR))
 
     def _add_direction_arrow(self, node_id: str, node: dict):
         """Стрелка napravlenie: в FXML это Polygon-треугольник, а не скин."""
         poly = self._napravlenie_polygon(node_id, node)
         if poly is None:
             return
-        from modules.graph_to_fxml import (
-            CLASS_COLORS, NAPRAVLENIE_COLOR, NAPRAVLENIE_CLASS_NAME,
-        )
         item = QGraphicsPolygonItem(poly)
-        item.setBrush(QBrush(QColor(
-            CLASS_COLORS.get(NAPRAVLENIE_CLASS_NAME, NAPRAVLENIE_COLOR))))
+        item.setBrush(QBrush(self._napravlenie_fill(node_id, node)))
         item.setPen(QPen(QColor(_NAPRAVLENIE_STROKE), self.OUTLINE_WIDTH))
         item.setZValue(2.5)   # как у скинов: над рамкой, под центроидом
         self.scene.addItem(item)

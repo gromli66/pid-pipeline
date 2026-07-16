@@ -1205,11 +1205,57 @@ def napravlenie_triangle_points(bbox, direction) -> Optional[list]:
     return [(x1, y2), (x2, y2), (cx, y1)]   # up
 
 
-def generate_fxml_triangle(node, node_id: str, graph_scale: float = 1.0, kks: str = None) -> Optional[str]:
+def napravlenie_incoming_color(node, node_id, edges, nodes, direction) -> Optional[str]:
+    """Цвет трубы, упирающейся в ОСНОВАНИЕ стрелки (входящей), или None.
+
+    Стрелка красится в цвет своей трубы. «Входящая» = ребро, чья точка
+    подключения ближе всего к центру входной грани (грань напротив вершины).
+    Если у неё цвет не задан — берём любое инцидентное ребро с цветом.
+
+    Без Qt — общий источник правды для FXML-экспорта и редактора.
+    Точки подключения в формате [y, x].
+    """
+    b = parse_bbox(node.get('bbox'))
+    if not b or direction not in ('up', 'down', 'left', 'right'):
+        return None
+
+    x1, y1, x2, y2 = b['x1'], b['y1'], b['x2'], b['y2']
+    cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+    # Вершина смотрит ПО направлению → основание на противоположной грани.
+    face = {
+        'right': (x1, cy),
+        'left': (x2, cy),
+        'down': (cx, y1),
+        'up': (cx, y2),
+    }[direction]
+
+    incident = [e for e in (edges or [])
+                if e.get('source') == node_id or e.get('target') == node_id]
+
+    best, best_d = None, None
+    for e in incident:
+        p = e.get('source_point') if e.get('source') == node_id else e.get('target_point')
+        if not p:
+            continue
+        d = (p[1] - face[0]) ** 2 + (p[0] - face[1]) ** 2
+        if best_d is None or d < best_d:
+            best_d, best = d, e
+
+    if best is not None and best.get('render_color'):
+        return best['render_color']
+    for e in incident:                       # входящая без цвета → любая цветная
+        if e.get('render_color'):
+            return e['render_color']
+    return None
+
+
+def generate_fxml_triangle(node, node_id: str, graph_scale: float = 1.0, kks: str = None,
+                           edges=None, nodes=None) -> Optional[str]:
     """
     Генерирует FXML Polygon-треугольник для узла `napravlenie`.
 
-    Геометрия — napravlenie_triangle_points (тот же источник, что у редактора).
+    Геометрия — napravlenie_triangle_points, цвет — napravlenie_incoming_color
+    (те же источники, что у редактора).
     Возвращает строку FXML или None, если нет bbox/направления.
     """
     direction = node.get('flow_direction') or node.get('direction')
@@ -1226,7 +1272,10 @@ def generate_fxml_triangle(node, node_id: str, graph_scale: float = 1.0, kks: st
         rel.append(py - layout_y)
     points_str = ",".join(f"{v:.1f}" for v in rel)
 
-    color = CLASS_COLORS.get(NAPRAVLENIE_CLASS_NAME, NAPRAVLENIE_COLOR)
+    # Заливка — цвет своей трубы; обводка остаётся контрастной (#333333),
+    # иначе стрелка сливается с линией.
+    color = (napravlenie_incoming_color(node, node_id, edges, nodes, direction)
+             or CLASS_COLORS.get(NAPRAVLENIE_CLASS_NAME, NAPRAVLENIE_COLOR))
     elem_stroke = max(0.3, 1.0 * graph_scale) if graph_scale < 1.0 else 1.0
 
     attrs = [
@@ -1802,7 +1851,9 @@ def generate_fxml(graph_data: dict, stroke_width: float = LINE_STROKE_WIDTH,
         if node.get('class_name') == NAPRAVLENIE_CLASS_NAME or node.get('direction_node'):
             if not (node.get('flow_direction') or node.get('direction')):
                 node['direction'] = _infer_napravlenie_direction(node, node_id, edges, nodes)
-            tri = generate_fxml_triangle(node, node_id, graph_scale, kks=kks_by_node.get(node_id))
+            tri = generate_fxml_triangle(node, node_id, graph_scale,
+                                         kks=kks_by_node.get(node_id),
+                                         edges=edges, nodes=nodes)
             if tri:
                 polygon_elements.append(tri)
                 stats['polygons'] += 1
