@@ -8,6 +8,7 @@ Template method: скачивание артефактов, сохранение
 Вся расширяемость — через _create_editor() и _setup_toolbar().
 """
 
+import hashlib
 import json
 import logging
 import struct
@@ -45,6 +46,11 @@ def _png_size(path: Path):
     return None
 
 
+def _graph_sha(path: Path) -> str:
+    """Короткий хеш содержимого — метка источника, из которого собран холст."""
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()[:16]
+
+
 def _pretransform_to_canvas(graph_path: Path, image_path: Path, out_path: Path) -> bool:
     """WYSIWYG: перевести граф в холст 1920x1080 (фикс-размеры + declust).
 
@@ -53,9 +59,29 @@ def _pretransform_to_canvas(graph_path: Path, image_path: Path, out_path: Path) 
     from modules.graph.core.pretransform import pretransform
     graph = json.loads(graph_path.read_text(encoding="utf-8"))
     g, transform, stats = pretransform(graph, image_hw=_png_size(image_path))
+    # Метка источника: по ней при следующем открытии видно, что graph_validated
+    # изменился (оператор возвращался на Контуры/OCR) и холст надо пересобрать.
+    g.setdefault("graph", {}).setdefault("canvas_transform", {})["source_sha"] = \
+        _graph_sha(graph_path)
     out_path.write_text(json.dumps(g, ensure_ascii=False), encoding="utf-8")
     logger.info("pre-transform → холст 1920x1080: %s", stats)
     return True
+
+
+def _canvas_is_stale(canvas_path: Path, source_path: Path) -> bool:
+    """Холст устарел, если graph_validated изменился после его сборки.
+
+    Смёржить их нельзя — pretransform необратим, поэтому устаревший холст
+    пересобирается с нуля (правки оператора в нём теряются).
+    """
+    try:
+        g = json.loads(Path(canvas_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return True
+    sha = ((g.get("graph") or {}).get("canvas_transform") or {}).get("source_sha")
+    if not sha:
+        return True   # холст без метки (собран до её появления) — доверять нечему
+    return sha != _graph_sha(source_path)
 
 
 class _GraphArtifactDownloader(QObject):
@@ -65,11 +91,13 @@ class _GraphArtifactDownloader(QObject):
     error = Signal(str)
     progress = Signal(str)
 
-    def __init__(self, api_client: APIClient, uid: str, temp_dir: Path):
+    def __init__(self, api_client: APIClient, uid: str, temp_dir: Path,
+                 want_canvas: bool = False):
         super().__init__()
         self.api_client = api_client
         self.uid = uid
         self.temp_dir = temp_dir
+        self.want_canvas = want_canvas
 
     def run(self):
         artifacts = {}
@@ -79,6 +107,9 @@ class _GraphArtifactDownloader(QObject):
         optional = [
             ("coco_validated", "coco_validated.json"),
         ]
+        # WYSIWYG-вкладка: свой артефакт-холст, если он уже сохранялся
+        if self.want_canvas:
+            optional = optional + [("graph_canvas", "graph_canvas.json")]
 
         try:
             for art_type, filename in required:
@@ -259,7 +290,7 @@ class BaseGraphTab(AppearanceMixin, QWidget):
     def _download_artifacts(self):
         self._download_thread = QThread()
         self._downloader = _GraphArtifactDownloader(
-            self.api_client, self.uid, self.temp_dir
+            self.api_client, self.uid, self.temp_dir, want_canvas=self.USE_CANVAS
         )
         self._downloader.moveToThread(self._download_thread)
         self._download_thread.started.connect(self._downloader.run)
@@ -285,18 +316,36 @@ class BaseGraphTab(AppearanceMixin, QWidget):
             # При неудаче — грузим как есть (граф в исходных координатах).
             graph_for_editor = artifacts["graph_json"]
             if self.USE_CANVAS:
-                # WYSIWYG-вкладка (Ручная правка): граф → холст 1920x1080.
+                # WYSIWYG-вкладка (Ручная правка): работаем в холсте 1920x1080.
                 # Вкладки в оригинале (Проверка схемы и др.) сюда не заходят —
                 # иначе они бы сконвертили граф и автосейв залил бы 1920.
                 try:
-                    canvas_graph = self.temp_dir / "graph_1920.json"
-                    if _pretransform_to_canvas(
-                        Path(artifacts["graph_json"]),
-                        Path(artifacts["original_image"]),
-                        canvas_graph,
-                    ):
-                        graph_for_editor = canvas_graph
-                        editor._canvas_mode = True   # сцена в холсте 1920x1080
+                    saved = artifacts.get("graph_canvas")
+                    if saved and not _canvas_is_stale(saved, artifacts["graph_json"]):
+                        # Холст актуален — грузим правки оператора как есть
+                        graph_for_editor = saved
+                        editor._canvas_mode = True
+                        logger.info("Загружен сохранённый холст graph_canvas")
+                    else:
+                        if saved:
+                            # Схема правилась на предыдущих вкладках. Смёржить нельзя
+                            # (pretransform необратим) — пересобираем холст с нуля.
+                            logger.info("graph_canvas устарел → пересборка из graph_validated")
+                            QMessageBox.information(
+                                self, "Схема изменилась",
+                                "Схема правилась после «Ручной правки» "
+                                "(контуры/OCR/проверка схемы).\n\n"
+                                "Холст будет пересобран заново — прежние правки "
+                                "в нём не сохранятся.",
+                            )
+                        canvas_graph = self.temp_dir / "graph_1920.json"
+                        if _pretransform_to_canvas(
+                            Path(artifacts["graph_json"]),
+                            Path(artifacts["original_image"]),
+                            canvas_graph,
+                        ):
+                            graph_for_editor = canvas_graph
+                            editor._canvas_mode = True   # сцена в холсте 1920x1080
                 except Exception as exc:
                     # Не фатально: грузим граф в исходных координатах (legacy).
                     logger.exception("pre-transform не выполнен, гружу как есть: %s", exc)
@@ -428,13 +477,20 @@ class BaseGraphTab(AppearanceMixin, QWidget):
         try:
             QApplication.setOverrideCursor(Qt.WaitCursor)
 
-            graph_path = self.temp_dir / "graph_validated.json"
+            # Холст пишется в свой артефакт: graph_validated принадлежит вкладкам
+            # в оригинальных координатах и затирать его 1920-графом нельзя.
+            to_canvas = getattr(self._editor, "_canvas_mode", False)
+            name = "graph_canvas.json" if to_canvas else "graph_validated.json"
+            graph_path = self.temp_dir / name
             if not self._editor.save_graph(str(graph_path)):
                 self.status_label.setText("Не удалось сохранить локально")
                 return False
 
             self.status_label.setText("Загрузка графа на сервер...")
-            self.api_client.upload_validated_graph(self.uid, graph_path)
+            if to_canvas:
+                self.api_client.upload_canvas_graph(self.uid, graph_path)
+            else:
+                self.api_client.upload_validated_graph(self.uid, graph_path)
 
             self._saved_revision = self._editor.undo_mgr.revision
             self.status_label.setText("Граф сохранён")

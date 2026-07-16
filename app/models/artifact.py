@@ -52,6 +52,9 @@ class ArtifactType(str, enum.Enum):
     # Graph
     GRAPH_JSON = "graph_json"
     GRAPH_VALIDATED = "graph_validated"
+    # WYSIWYG: производная от GRAPH_VALIDATED в холсте 1920x1080.
+    # Правится только в «Ручной правке», назад в GRAPH_VALIDATED не пишется.
+    GRAPH_CANVAS = "graph_canvas"
 
     # Contours (SAM2)
     CONTOURS_AUTO = "contours_auto"

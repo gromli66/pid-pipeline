@@ -420,12 +420,22 @@ def _build_adjacency(graph):
 def pretransform(graph, image_hw=None):
     """Полный pre-transform. Возвращает (graph_1920, transform, stats). Не мутирует вход."""
     g = deepcopy(graph)
-    # Идемпотентность: граф уже в координатах холста (напр. пере-открытие сохранённого) — не трогаем.
+    # Идемпотентность: граф уже в координатах холста (напр. пере-открытие
+    # сохранённого graph_canvas) — не трогаем.
     size = g.get("graph", {}).get("image_size")
     if size and [int(size[0]), int(size[1])] == [int(TARGET_H), int(TARGET_W)]:
-        transform = {"s": 1.0, "offx": 0.0, "offy": 0.0,
-                     "orig_image_size": list(size),
-                     "canvas": [int(TARGET_W), int(TARGET_H)], "identity": True}
+        # Транcформ берём СОХРАНЁННЫЙ: он связывает холст с оригинальным растром,
+        # без него не развернуть координаты обратно (OCR-распознавание режет
+        # оригинал). identity здесь вернуть нельзя — связь с оригиналом потеряется.
+        saved = (g.get("graph") or {}).get("canvas_transform")
+        if saved:
+            transform = dict(saved)
+        else:
+            # Граф холста, сохранённый до появления canvas_transform: развернуть
+            # обратно нечем. Честно отдаём identity — вызывающий увидит orig==canvas.
+            transform = {"s": 1.0, "offx": 0.0, "offy": 0.0,
+                         "orig_image_size": list(size),
+                         "canvas": [int(TARGET_W), int(TARGET_H)], "identity": True}
         stats = {"symbols": 0, "overlaps_before": 0, "overlaps_after": 0,
                  "moved": 0, "max_disp": 0.0, "mean_disp": 0.0, "skipped": True}
         return g, transform, stats
@@ -436,6 +446,9 @@ def pretransform(graph, image_hw=None):
         image_hw = (size[0], size[1])
 
     transform = transform_to_canvas(g, image_hw)
+    # Транcформ — часть графа: рантайму нужен обратный путь холст → оригинал,
+    # а image_size==[1080,1920] как единственный маркер холста ненадёжен.
+    g.setdefault("graph", {})["canvas_transform"] = transform
     adj = _build_adjacency(g)
     apply_fixed_sizes(g, adj)
     adj = _build_adjacency(g)  # точки подключения не двигались, но пересоберём для чистоты

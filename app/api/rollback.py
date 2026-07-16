@@ -97,6 +97,12 @@ _STAGE_ARTIFACTS = {
     ],
     DiagramStatus.COMPLETED: [
         ArtifactType.FXML,
+        # «Ручная правка» своей стадии в _STAGE_ORDER не имеет (её done_status —
+        # GENERATING_FXML), а живёт между OCR_BOUND и COMPLETED. Держим её артефакт
+        # здесь: откат на любую более раннюю стадию сносит холст, и он пересобирается
+        # из свежего graph_validated. Обратно холст не конвертируется — pretransform
+        # необратим (фикс-размеры затирают детекционные, declust двигает символы).
+        ArtifactType.GRAPH_CANVAS,
     ],
 }
 

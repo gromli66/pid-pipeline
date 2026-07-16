@@ -577,6 +577,26 @@ class APIClient:
                 timeout=120.0,
             )
 
+    def upload_canvas_graph(self, uid: str, file_path: Path) -> Dict[str, Any]:
+        """
+        Загрузить граф «Ручной правки» (холст 1920x1080) как graph_canvas.
+
+        Отдельный артефакт — graph_validated остаётся в оригинальных координатах.
+
+        Args:
+            uid: UUID диаграммы
+            file_path: путь к JSON файлу графа в холсте
+        """
+        file_path = Path(file_path)
+        with open(file_path, "rb") as f:
+            files = {"file": (file_path.name, f, "application/json")}
+            return self._request(
+                "POST",
+                f"/api/validation/{uid}/graph/canvas/save",
+                files=files,
+                timeout=120.0,
+            )
+
     def complete_graph_validation(self, uid: str) -> Dict[str, Any]:
         """
         Завершить валидацию графа.

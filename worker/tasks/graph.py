@@ -470,10 +470,17 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None, bridge_gap
         # --- Input: graph JSON ---
         # Приоритет: graph_validated.json > graph.json
         with obs.step("load_inputs", logger):
+            graph_canvas_path = diagram_dir / "graph" / "graph_canvas.json"
             graph_validated_path = diagram_dir / "graph" / "graph_validated.json"
             graph_json_path = diagram_dir / "graph" / "graph.json"
 
-            if graph_validated_path.exists():
+            # WYSIWYG: холст — результат «Ручной правки», последней стадии перед
+            # экспортом, поэтому он в приоритете. При откате назад rollback его
+            # удаляет, так что само его наличие значит «правка актуальна».
+            if graph_canvas_path.exists():
+                input_graph_path = graph_canvas_path
+                logger.info("Using canvas graph (WYSIWYG): %s", input_graph_path)
+            elif graph_validated_path.exists():
                 input_graph_path = graph_validated_path
                 logger.info("Using validated graph: %s", input_graph_path)
             elif graph_json_path.exists():
@@ -618,8 +625,11 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None, bridge_gap
         # WYSIWYG: граф уже в координатах холста 1920x1080 (правился в редакторе) —
         # identity-экспорт: без масштаба и без fxml_standardize (иначе двойной масштаб
         # и повторная посадка горловин, ломающая паритет с редактором).
-        _img_size = (graph_data.get("graph", {}) or {}).get("image_size")
-        is_canvas = (
+        _graph_meta = graph_data.get("graph", {}) or {}
+        _img_size = _graph_meta.get("image_size")
+        # Признак холста — canvas_transform, который кладёт pretransform. Размер
+        # оставлен как фолбэк для графов, сохранённых до его появления.
+        is_canvas = bool(_graph_meta.get("canvas_transform")) or (
             _img_size is not None
             and [int(_img_size[0]), int(_img_size[1])] == [1080, 1920]
         )

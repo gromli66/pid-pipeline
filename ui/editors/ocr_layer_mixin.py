@@ -624,7 +624,19 @@ class OcrLayerMixin:
         blk["bbox"] = [new_x1, new_y1, new_x1 + w, new_y1 + h]
 
     def get_pending_ocr_boxes(self):
-        """(ids, boxes) для пустых (не распознанных) активных блоков."""
+        """(ids, boxes) для пустых (не распознанных) активных блоков.
+
+        Боксы — в координатах ОРИГИНАЛЬНОГО растра: сервер режет по ним оригинал
+        (worker/tasks/ocr.py), а сцена в WYSIWYG-режиме живёт в холсте 1920x1080.
+        Разворачиваем тем же преобразованием, которым вписан фон: orig=(canvas−off)/s.
+        В legacy-режиме s=1, off=0 → конверсия тождественна.
+
+        Текст возвращается по id, геометрии в ответе нет (см. apply_ocr_results),
+        поэтому обратная конверсия не нужна.
+        """
+        s = getattr(self, "_bg_scale", 1.0) or 1.0
+        offx = getattr(self, "_bg_offx", 0.0)
+        offy = getattr(self, "_bg_offy", 0.0)
         ids, boxes = [], []
         for blk in self.model.text_blocks:
             if blk.get("merged_into") is not None:
@@ -634,8 +646,12 @@ class OcrLayerMixin:
             bbox = blk.get("bbox")
             if not bbox or len(bbox) != 4:
                 continue
+            x1, y1, x2, y2 = bbox
             ids.append(blk.get("id"))
-            boxes.append([int(v) for v in bbox])
+            boxes.append([
+                int(round((x1 - offx) / s)), int(round((y1 - offy) / s)),
+                int(round((x2 - offx) / s)), int(round((y2 - offy) / s)),
+            ])
         return ids, boxes
 
     def apply_ocr_results(self, block_ids: list, results: list) -> int:

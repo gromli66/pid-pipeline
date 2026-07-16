@@ -883,6 +883,74 @@ async def save_validated_graph(
     }
 
 
+@router.post("/{uid}/graph/canvas/save")
+async def save_canvas_graph(
+    uid: UUID,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Сохранить граф «Ручной правки» (холст 1920x1080) как GRAPH_CANVAS.
+
+    Отдельный артефакт: GRAPH_VALIDATED остаётся в ОРИГИНАЛЬНЫХ координатах и
+    принадлежит вкладкам 7-10, которые его читают и пишут. Холст — производная
+    от него, назад не конвертируется (pretransform необратим). Устаревание холста
+    ловит клиент по source_sha в canvas_transform; чистку при откате — rollback.
+    """
+    result = await db.execute(select(Diagram).where(Diagram.uid == uid))
+    diagram = result.scalar_one_or_none()
+
+    if not diagram:
+        raise HTTPException(status_code=404, detail="Diagram not found")
+
+    # «Ручная правка» доступна с OCR_COMPLETED и переоткрывается после экспорта
+    if diagram.status not in (
+        DiagramStatus.OCR_COMPLETED,
+        DiagramStatus.OCR_BOUND,
+        DiagramStatus.GENERATING_FXML,
+        DiagramStatus.COMPLETED,
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot save canvas graph: status is '{diagram.status.value}', "
+            f"expected 'ocr_completed' or later",
+        )
+
+    storage = StorageService()
+    content = await file.read()
+    file_path, file_size = await storage.save_file(
+        uid, "graph", "graph_canvas.json", content
+    )
+
+    old_result = await db.execute(
+        select(Artifact).where(
+            Artifact.diagram_uid == uid,
+            Artifact.artifact_type == ArtifactType.GRAPH_CANVAS,
+        )
+    )
+    old_artifact = old_result.scalar_one_or_none()
+    if old_artifact:
+        await db.delete(old_artifact)
+        await db.flush()
+
+    artifact = Artifact(
+        diagram_uid=uid,
+        artifact_type=ArtifactType.GRAPH_CANVAS,
+        file_path=file_path,
+        file_size=file_size,
+        mime_type="application/json",
+    )
+    db.add(artifact)
+
+    await db.commit()
+
+    return {
+        "status": "saved",
+        "file_size": file_size,
+        "uid": str(uid),
+    }
+
+
 @router.post("/{uid}/graph/complete")
 async def complete_graph_validation(
     uid: UUID,

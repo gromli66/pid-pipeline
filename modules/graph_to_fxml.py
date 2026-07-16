@@ -927,6 +927,27 @@ def generate_fxml_control(node, geometry: SkinGeometry, node_id: str,
     skin_type = skin_info[1]
     equipment_type = skin_info[2] if len(skin_info) > 2 else None
 
+    # --- WYSIWYG: узел прошёл pretransform (фикс-размер в холсте 1920x1080) ---
+    # Размер берём строго из bbox, а не из calculate_skin_geometry, которая
+    # растягивает скин между точками подключения — иначе редактор и SceneBuilder
+    # показывают разное. Ось задал pretransform в node['_axis']; ветки ниже
+    # (FORCE_HORIZONTAL, DIRECTION, REVERSE, VERTICAL-swap) отрабатывают поверх
+    # неё как обычно — swap на VERTICAL как раз вернёт канонический размер в
+    # H-рамке, которую ждёт OrientationService.
+    is_canvas = node.get('_axis') in ('H', 'V')
+    if is_canvas:
+        canvas_bbox = parse_bbox(node.get('bbox'))
+        if canvas_bbox:
+            geometry = SkinGeometry(
+                orientation='VERTICAL' if node['_axis'] == 'V' else 'HORIZONTAL',
+                width=canvas_bbox['width'],
+                height=canvas_bbox['height'],
+                layout_x=canvas_bbox['x1'],
+                layout_y=canvas_bbox['y1'],
+            )
+        else:
+            is_canvas = False   # нет bbox — эмитим по-старому
+
     # Датчик всегда горизонтально, независимо от направления трубы.
     # Геометрия — по исходному bbox (без растяжки между точками подключения).
     if control_class in FORCE_HORIZONTAL_CONTROLS and geometry.orientation == 'VERTICAL':
@@ -1003,11 +1024,17 @@ def generate_fxml_control(node, geometry: SkinGeometry, node_id: str,
 
     # --- Поправка оси контакта (привод смещает талию от центра бокса) ---
     # Передаём emit_orientation (а не ось), чтобы VERTICAL_REVERSE инвертировал знак.
-    layout_x, layout_y = apply_contact_offset(
-        skin_type, emit_orientation, layout_x, layout_y, height)
+    # В холсте пропускаем: редактор рисует скин вписанным в bbox без поправки, а
+    # концы труб уже посажены на границу фикс-бокса (reproject_edge_endpoints).
+    # Сдвиг здесь разъехался бы с картинкой, которую видел оператор.
+    if not is_canvas:
+        layout_x, layout_y = apply_contact_offset(
+            skin_type, emit_orientation, layout_x, layout_y, height)
 
     # --- Датчик в 3 раза меньше оригинала (сжатие вокруг центра) ---
-    if control_class == 'DetectorControl':
+    # В холсте не делим: FIXED_SIZES['datchik'] уже финальный (30x30), а /3 дал бы
+    # 10px при минимуме скина ~20px.
+    if control_class == 'DetectorControl' and not is_canvas:
         new_w = width / 3.0
         new_h = height / 3.0
         layout_x += (width - new_w) / 2.0
