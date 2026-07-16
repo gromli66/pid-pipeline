@@ -283,6 +283,28 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         # base — нейтральное отображение без подсветок.
         return self.COLOR_EDGE
 
+    @staticmethod
+    def _node_has_skin(node: dict) -> bool:
+        """Есть ли у узла скин — тем же правилом, что в FXML (смотрит и class_id)."""
+        from modules.graph_to_fxml import get_skin_info
+        return get_skin_info(node) is not None
+
+    def _node_geometry(self, node: dict) -> dict:
+        """Геометрия узла для РАСЧЁТА рёбер — форма, которая уйдёт в FXML.
+
+        get_node_geometry отдаёт приоритет полигону, но у скинового узла в FXML
+        полигон игнорируется: узел эмитится контролом в своём bbox. Считать по
+        контуру нельзя — точки подключения уедут с символа (autofix/перетаскивание
+        сажали их на границу контура 62x68, тогда как скин живёт в боксе 42x38).
+
+        От show_skins НЕ зависит: режим отображения не должен менять данные.
+        """
+        if self._canvas_mode and node and self._node_has_skin(node):
+            bb = node.get('bbox')
+            if bb and len(bb) == 4:
+                return {'type': 'bbox', 'data': bb}
+        return get_node_geometry(node)
+
     def _draws_polygon(self, node: dict) -> bool:
         """Скины включены → у скинового узла контур не рисуем.
 
@@ -294,8 +316,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         """
         if not self.show_skins:
             return True
-        from modules.graph_to_fxml import get_skin_info
-        return get_skin_info(node) is None
+        return not self._node_has_skin(node)
 
     def _contour_endpoint(self, node_id: str, point, toward):
         """Конец ребра на границе НАРИСОВАННОГО контура (только отрисовка).
@@ -431,8 +452,8 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             sp = edge.get('source_point')
             tp = edge.get('target_point')
             if sp and tp:
-                source_geom = get_node_geometry(self.nodes[edge['source']])
-                target_geom = get_node_geometry(self.nodes[edge['target']])
+                source_geom = self._node_geometry(self.nodes[edge['source']])
+                target_geom = self._node_geometry(self.nodes[edge['target']])
                 perp_info = compute_edge_perpendicularity(
                     (sp[1], sp[0]), (tp[1], tp[0]), source_geom, target_geom)
                 self.edge_perp_scores[key] = perp_info
@@ -786,8 +807,8 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self.undo_mgr.execute(cmd)
 
         # Пересчитываем перпендикулярность
-        source_geom = get_node_geometry(self.nodes[original_source_id])
-        target_geom = get_node_geometry(self.nodes[original_target_id])
+        source_geom = self._node_geometry(self.nodes[original_source_id])
+        target_geom = self._node_geometry(self.nodes[original_target_id])
         perp_info = compute_edge_perpendicularity(
             (src_x, src_y), (tgt_x, tgt_y), source_geom, target_geom)
         self.edge_perp_scores[key] = perp_info
@@ -971,8 +992,8 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self._update_edge_path(edge_key)
 
         if not edge_data['waypoints']:
-            source_geom = get_node_geometry(self.nodes[src_id])
-            target_geom = get_node_geometry(self.nodes[tgt_id])
+            source_geom = self._node_geometry(self.nodes[src_id])
+            target_geom = self._node_geometry(self.nodes[tgt_id])
             perp_info = compute_edge_perpendicularity(
                 (sx, sy), (tx, ty), source_geom, target_geom)
             self.edge_perp_scores[edge_key] = perp_info
@@ -2026,7 +2047,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         границы узла, не ограничиваясь центрами сторон.
         """
         node = self.nodes.get(node_id)
-        geom = get_node_geometry(node) if node else None
+        geom = self._node_geometry(node) if node else None
         if geom and geom['type'] == 'polygon':
             return project_point_to_polygon_border(geom['data'], x, y)
         bbox = self._get_node_bbox(node_id)
