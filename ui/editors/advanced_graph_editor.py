@@ -297,6 +297,39 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         from modules.graph_to_fxml import get_skin_info
         return get_skin_info(node) is None
 
+    def _contour_endpoint(self, node_id: str, point, toward):
+        """Конец ребра на границе НАРИСОВАННОГО контура (только отрисовка).
+
+        В модели конец сидит на границе фикс-бокса — это то, что уйдёт в FXML,
+        и менять его нельзя. Но пока на экране нарисован контур (скины
+        выключены), труба обязана доходить до него, а не теряться внутри фигуры.
+        Луч ведём от центроида к следующей точке пути — ребро остаётся
+        коллинеарным самому себе.
+        """
+        node = self.nodes.get(node_id)
+        if not node or not point or not toward:
+            return point
+        if not self._node_has_polygon(node):
+            return point           # контур не рисуется → конец на боксе, как в FXML
+        c = node.get('centroid')
+        if not c:
+            return point
+        from modules.graph.core.pretransform import project_ray_to_polygon
+        r = project_ray_to_polygon(node.get('segmentation'), c[1], c[0],
+                                   toward[1], toward[0])
+        return [r[1], r[0]] if r else point
+
+    def _visual_edge_ends(self, edge_key: tuple, edge_data: dict):
+        """Концы ребра для отрисовки: к границе той формы, что сейчас на экране."""
+        sp = edge_data.get('source_point')
+        tp = edge_data.get('target_point')
+        if not self._canvas_mode:
+            return sp, tp
+        src, tgt = edge_data.get('source'), edge_data.get('target')
+        wps = edge_data.get('waypoints') or []
+        return (self._contour_endpoint(src, sp, wps[0] if wps else tp),
+                self._contour_endpoint(tgt, tp, wps[-1] if wps else sp))
+
     def _get_equipment_brush(self, node: dict) -> QBrush:
         """Заливка equipment — нейтральная во всех состояниях.
 

@@ -427,14 +427,19 @@ class BaseGraphEditor(QGraphicsView):
         color = self._get_edge_color(edge_data, key)
         return QPen(color, self.EDGE_WIDTH)
 
+    def _visual_edge_ends(self, edge_key: tuple, edge_data: dict):
+        """Виртуальный. Концы ребра ДЛЯ ОТРИСОВКИ (модель не меняется).
+
+        Base: как в данных. Advanced: подтягивает конец к границе контура, когда
+        контур нарисован.
+        """
+        return edge_data.get('source_point'), edge_data.get('target_point')
+
     def create_edge_item(self, edge_key: tuple, edge_data: dict,
                          color: QColor = None) -> QGraphicsPathItem:
         """Создать визуальный элемент ребра + подпись диаметра. Public — для Commands."""
-        path = self._build_edge_path(
-            edge_data.get('source_point'),
-            edge_data.get('waypoints', []),
-            edge_data.get('target_point')
-        )
+        _sp, _tp = self._visual_edge_ends(edge_key, edge_data)
+        path = self._build_edge_path(_sp, edge_data.get('waypoints', []), _tp)
 
         if color is not None:
             pen = QPen(color, self.EDGE_WIDTH)
@@ -503,11 +508,8 @@ class BaseGraphEditor(QGraphicsView):
         if not edge_data or edge_key not in self.edge_items:
             return
 
-        path = self._build_edge_path(
-            edge_data.get('source_point'),
-            edge_data.get('waypoints', []),
-            edge_data.get('target_point')
-        )
+        _sp, _tp = self._visual_edge_ends(edge_key, edge_data)
+        path = self._build_edge_path(_sp, edge_data.get('waypoints', []), _tp)
         self.edge_items[edge_key].setPath(path)
 
         pen = self._get_edge_pen(edge_data, edge_key)

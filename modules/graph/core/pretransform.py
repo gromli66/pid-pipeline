@@ -362,7 +362,7 @@ def _has_skin(node):
         return node.get("class_name") in FIXED_SIZES
 
 
-def _project_to_polygon(seg, cx, cy, px, py):
+def project_ray_to_polygon(seg, cx, cy, px, py):
     """Точка на границе полигона по лучу центр→(px, py). None если не пересёк.
 
     Луч, а не отрезок: точка подключения может быть и внутри контура, и снаружи.
@@ -442,7 +442,7 @@ def reproject_edge_endpoints(graph):
                 c = n.get("centroid")
                 if not c:
                     continue
-                new = _project_to_polygon(seg, c[1], c[0], p[1], p[0])
+                new = project_ray_to_polygon(seg, c[1], c[0], p[1], p[0])
                 if new is None:
                     continue
             else:
