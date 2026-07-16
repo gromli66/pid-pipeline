@@ -19,10 +19,13 @@ from PySide6.QtWidgets import (
     QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsPathItem,
     QGraphicsLineItem, QGraphicsSimpleTextItem, QGraphicsPixmapItem, QDialog,
     QVBoxLayout, QFormLayout, QLineEdit, QDialogButtonBox, QLabel,
-    QToolTip, QGraphicsItemGroup,
+    QToolTip, QGraphicsItemGroup, QGraphicsPolygonItem,
 )
-from PySide6.QtGui import QColor, QBrush, QPen, QPainterPath, QFont, QPixmap, QTransform, QCursor
-from PySide6.QtCore import Qt
+from PySide6.QtGui import (
+    QColor, QBrush, QPen, QPainterPath, QFont, QPixmap, QTransform, QCursor,
+    QPolygonF,
+)
+from PySide6.QtCore import Qt, QPointF
 
 from ui.editors.simple_graph_editor import SimpleGraphEditor
 from ui.editors.mode_handlers.advanced_handlers import (
@@ -50,6 +53,12 @@ from ui.editors.ocr_layer_mixin import (
     OcrLayerMixin, AddOcrBlockHandler, OcrBindHandler,
 )
 from ui.editors.mode_handlers.base_handler import ModeHandler
+
+
+# Стрелка потока: в FXML это Polygon-треугольник, а не скин (generate_fxml_triangle),
+# поэтому PNG для класса нет — рисуем вектором. Обводка — как в FXML.
+_NAPRAVLENIE_CLASS = "napravlenie"
+_NAPRAVLENIE_STROKE = "#333333"
 
 
 class EditEdgeDashHandler(ModeHandler):
@@ -217,7 +226,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         # ── Отображение FXML-скинов внутри боксов ──
         self.show_skins: bool = False
         self._skin_pixmaps: dict[str, QPixmap] = {}   # class_name → QPixmap | None (кэш)
-        self._skin_items: dict[str, list] = {}        # node_id → [bg_rect, pixmap_item]
+        self._skin_items: dict[str, list] = {}        # node_id → [pixmap_item]
 
     # =================================================================
     # Overrides — Base/Simple hooks
@@ -2572,11 +2581,6 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         item.setScale(s)
         item.setPos(x1 + (w - pw * s) / 2.0, y1 + (h - ph * s) / 2.0)
 
-    def _skin_bg_color(self) -> QColor:
-        """Цвет фона-«тайла» скина: белый, затемнённый общим фактором листа."""
-        g = max(0, min(255, int(round(255 * (1.0 - self._bg_darkness)))))
-        return QColor(g, g, g)
-
     def _node_orientation(self, node_id):
         """Ориентация узла для скина/размера — по рёбрам (Часть 1).
 
@@ -2596,12 +2600,12 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         return base_pm
 
     def _apply_skin_geometry(self, node_id: str):
-        """Обновить фон-тайл (цвет затемнения) + ориентацию/вписывание скина."""
+        """Обновить ориентацию/вписывание скина под текущий bbox."""
         items = self._skin_items.get(node_id)
         node = self.nodes.get(node_id)
         if not items or not node:
             return
-        bg, item = items
+        item = items[0]
         bb = node.get("bbox")
         if not bb or len(bb) != 4:
             return
@@ -2609,8 +2613,13 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         w, h = x2 - x1, y2 - y1
         if w <= 0 or h <= 0:
             return
-        bg.setRect(x1, y1, w, h)
-        bg.setBrush(QBrush(self._skin_bg_color()))
+        # Стрелка napravlenie — полигон, а не пиксмап: пересобираем по новому bbox
+        # (направление могло смениться вместе с рёбрами).
+        if isinstance(item, QGraphicsPolygonItem):
+            poly = self._napravlenie_polygon(node_id, node)
+            if poly is not None:
+                item.setPolygon(poly)
+            return
         base = self._skin_pixmap_for(node.get("class_name"))
         if base is None:
             return
@@ -2626,18 +2635,48 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         x1, y1, x2, y2 = bb
         if (x2 - x1) <= 0 or (y2 - y1) <= 0:
             return
-        # непрозрачный фон-«тайл» (затемняется общим ползунком вместе с листом)
-        bg = QGraphicsRectItem(0, 0, 1, 1)
-        bg.setPen(QPen(Qt.PenStyle.NoPen))
-        bg.setZValue(4.0)
-        self.scene.addItem(bg)
-        # сам скин (прозрачный фон у PNG → виден затемнённый тайл)
+        # Скин без подложки: прозрачный фон PNG пропускает лист, рёбра и рамку
+        # бокса. Z ниже маркера центроида (3), но выше рамки (2) — иначе символ
+        # закрывает собой центроид.
         item = QGraphicsPixmapItem()
         item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
-        item.setZValue(4.1)
+        item.setZValue(2.5)
         self.scene.addItem(item)
-        self._skin_items[node_id] = [bg, item]
+        self._skin_items[node_id] = [item]
         self._apply_skin_geometry(node_id)
+
+    def _napravlenie_polygon(self, node_id: str, node: dict):
+        """QPolygonF стрелки napravlenie или None. Геометрия — из FXML-модуля,
+        чтобы редактор и SceneBuilder рисовали один и тот же треугольник."""
+        from modules.graph_to_fxml import (
+            napravlenie_triangle_points, _infer_napravlenie_direction,
+        )
+        direction = node.get("flow_direction") or node.get("direction")
+        if direction not in ("up", "down", "left", "right"):
+            # Ручной узел не проходит annotate_direction_nodes — выводим по рёбрам
+            # тем же правилом, что и экспорт.
+            direction = _infer_napravlenie_direction(
+                node, node_id, self.edges_data, self.nodes)
+        pts = napravlenie_triangle_points(node.get("bbox"), direction)
+        if not pts:
+            return None
+        return QPolygonF([QPointF(x, y) for x, y in pts])
+
+    def _add_direction_arrow(self, node_id: str, node: dict):
+        """Стрелка napravlenie: в FXML это Polygon-треугольник, а не скин."""
+        poly = self._napravlenie_polygon(node_id, node)
+        if poly is None:
+            return
+        from modules.graph_to_fxml import (
+            CLASS_COLORS, NAPRAVLENIE_COLOR, NAPRAVLENIE_CLASS_NAME,
+        )
+        item = QGraphicsPolygonItem(poly)
+        item.setBrush(QBrush(QColor(
+            CLASS_COLORS.get(NAPRAVLENIE_CLASS_NAME, NAPRAVLENIE_COLOR))))
+        item.setPen(QPen(QColor(_NAPRAVLENIE_STROKE), self.OUTLINE_WIDTH))
+        item.setZValue(2.5)   # как у скинов: над рамкой, под центроидом
+        self.scene.addItem(item)
+        self._skin_items[node_id] = [item]
 
     def _redraw_skins(self):
         """Перерисовать все скины по текущему состоянию (вызывается в _redraw_all)."""
@@ -2646,6 +2685,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             return
         for nid, node in self.nodes.items():
             if node.get("type") != "equipment":
+                continue
+            if node.get("class_name") == _NAPRAVLENIE_CLASS or node.get("direction_node"):
+                self._add_direction_arrow(nid, node)
                 continue
             pm = self._skin_pixmap_for(node.get("class_name"))
             if pm is None:
@@ -2679,14 +2721,6 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                     self.scene.removeItem(it)
                 except Exception:
                     pass
-
-    def set_background_darkness(self, darkness: float):
-        """Затемнение фона: применяется и к листу, и к фону скинов (общий ползунок)."""
-        super().set_background_darkness(darkness)
-        if self.show_skins and self._skin_items:
-            col = QBrush(self._skin_bg_color())
-            for items in self._skin_items.values():
-                items[0].setBrush(col)
 
     # =================================================================
     # Static helpers for obstacle avoidance

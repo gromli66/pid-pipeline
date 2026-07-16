@@ -1170,29 +1170,25 @@ def generate_fxml_polygon(node, node_id: str, graph_scale: float = 1.0, kks: str
     return f'        {comment}\n        <Polygon {" ".join(attrs)} />'
 
 
-def generate_fxml_triangle(node, node_id: str, graph_scale: float = 1.0, kks: str = None) -> Optional[str]:
-    """
-    Генерирует FXML Polygon-треугольник для узла `napravlenie`.
+def napravlenie_triangle_points(bbox, direction) -> Optional[list]:
+    """Абсолютные вершины треугольника-стрелки `napravlenie`: [(x, y) x3] или None.
 
-    Треугольник = стрелка потока: ВЕРШИНА смотрит в сторону направления
-    (flow_direction / direction), ОСНОВАНИЕ лежит на противоположной
+    ВЕРШИНА смотрит в сторону направления, ОСНОВАНИЕ лежит на противоположной
     («входной») грани bbox. Так входящее ребро упирается в основание, а
     исходящее выходит из вершины (а не из пустоты), если граф так построен.
 
-    Соответствие грани входа берётся тем же правилом, что и в
-    direction_nodes._IN_FACE:
+    Соответствие грани входа — то же правило, что в direction_nodes._IN_FACE:
         right → основание слева,  вершина справа
         left  → основание справа, вершина слева
         down  → основание сверху, вершина снизу
         up    → основание снизу,  вершина сверху
 
-    Возвращает строку FXML или None, если нет bbox/направления.
+    Без Qt и без побочных эффектов — общий источник правды для FXML-экспорта и
+    для отрисовки стрелки в редакторе (WYSIWYG: обе картинки обязаны совпадать).
     """
-    direction = node.get('flow_direction') or node.get('direction')
     if direction not in ('up', 'down', 'left', 'right'):
         return None
-
-    b = parse_bbox(node.get('bbox'))
+    b = parse_bbox(bbox)
     if not b:
         return None
 
@@ -1200,15 +1196,26 @@ def generate_fxml_triangle(node, node_id: str, graph_scale: float = 1.0, kks: st
     cx = (x1 + x2) / 2.0
     cy = (y1 + y2) / 2.0
 
-    # Абсолютные вершины треугольника (две точки основания + вершина).
     if direction == 'right':
-        pts = [(x1, y1), (x1, y2), (x2, cy)]
-    elif direction == 'left':
-        pts = [(x2, y1), (x2, y2), (x1, cy)]
-    elif direction == 'down':
-        pts = [(x1, y1), (x2, y1), (cx, y2)]
-    else:  # up
-        pts = [(x1, y2), (x2, y2), (cx, y1)]
+        return [(x1, y1), (x1, y2), (x2, cy)]
+    if direction == 'left':
+        return [(x2, y1), (x2, y2), (x1, cy)]
+    if direction == 'down':
+        return [(x1, y1), (x2, y1), (cx, y2)]
+    return [(x1, y2), (x2, y2), (cx, y1)]   # up
+
+
+def generate_fxml_triangle(node, node_id: str, graph_scale: float = 1.0, kks: str = None) -> Optional[str]:
+    """
+    Генерирует FXML Polygon-треугольник для узла `napravlenie`.
+
+    Геометрия — napravlenie_triangle_points (тот же источник, что у редактора).
+    Возвращает строку FXML или None, если нет bbox/направления.
+    """
+    direction = node.get('flow_direction') or node.get('direction')
+    pts = napravlenie_triangle_points(node.get('bbox'), direction)
+    if not pts:
+        return None
 
     # Polygon points в JavaFX задаём ОТНОСИТЕЛЬНО layoutX/layoutY.
     layout_x = min(p[0] for p in pts)
