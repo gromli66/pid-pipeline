@@ -54,6 +54,9 @@ class AdvancedGraphTab(SimpleGraphTab):
     Редактор: AdvancedGraphEditor.
     """
 
+    # Ручная правка — единственная вкладка в холсте 1920x1080 (WYSIWYG).
+    USE_CANVAS = True
+
     def __init__(
         self,
         diagram_uid: str,

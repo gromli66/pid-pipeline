@@ -129,6 +129,10 @@ class BaseGraphTab(AppearanceMixin, QWidget):
       _setup_toolbar(toolbar: QHBoxLayout)
     """
 
+    # WYSIWYG: True → граф переводится в холст 1920x1080 (фикс-размеры).
+    # False → вкладка работает в ОРИГИНАЛЬНЫХ координатах (Проверка схемы и др.).
+    USE_CANVAS = False
+
     confirmed = Signal()           # Пользователь подтвердил
     status_message = Signal(str)   # Сообщение для статусбара workspace
 
@@ -280,19 +284,22 @@ class BaseGraphTab(AppearanceMixin, QWidget):
             # WYSIWYG: pre-transform графа в холст 1920x1080 перед загрузкой.
             # При неудаче — грузим как есть (граф в исходных координатах).
             graph_for_editor = artifacts["graph_json"]
-            try:
-                canvas_graph = self.temp_dir / "graph_1920.json"
-                if _pretransform_to_canvas(
-                    Path(artifacts["graph_json"]),
-                    Path(artifacts["original_image"]),
-                    canvas_graph,
-                ):
-                    graph_for_editor = canvas_graph
-                    editor._canvas_mode = True   # сцена в холсте 1920x1080
-            except Exception as exc:
-                # Не фатально: грузим граф в исходных координатах (legacy-режим).
-                # Полный трейсбек — для дебага (WYSIWYG pre-transform).
-                logger.exception("pre-transform не выполнен, гружу граф как есть: %s", exc)
+            if self.USE_CANVAS:
+                # WYSIWYG-вкладка (Ручная правка): граф → холст 1920x1080.
+                # Вкладки в оригинале (Проверка схемы и др.) сюда не заходят —
+                # иначе они бы сконвертили граф и автосейв залил бы 1920.
+                try:
+                    canvas_graph = self.temp_dir / "graph_1920.json"
+                    if _pretransform_to_canvas(
+                        Path(artifacts["graph_json"]),
+                        Path(artifacts["original_image"]),
+                        canvas_graph,
+                    ):
+                        graph_for_editor = canvas_graph
+                        editor._canvas_mode = True   # сцена в холсте 1920x1080
+                except Exception as exc:
+                    # Не фатально: грузим граф в исходных координатах (legacy).
+                    logger.exception("pre-transform не выполнен, гружу как есть: %s", exc)
 
             editor.load_data(
                 image_path=str(artifacts["original_image"]),

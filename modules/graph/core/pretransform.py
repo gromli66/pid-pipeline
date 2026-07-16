@@ -350,6 +350,46 @@ def _apply_move(graph, node, dx, dy):
                 pts[idx] = [pts[idx][0] + dy, pts[idx][1] + dx]
 
 
+def reproject_edge_endpoints(graph):
+    """Пересадить концы рёбер на границу НОВОГО (фиксированного) бокса.
+
+    После замены размера по таблице точки подключения остались на границе
+    ДЕТЕКЦИОННОГО бокса → ребро не доходит до символа или перелетает его.
+    Сохраняем ось трубы (поперечную координату), меняем только координату
+    вдоль направления выхода; ось клампим в пределы бокса.
+    """
+    byid = {n["id"]: n for n in graph.get("nodes", [])}
+    fixed = 0
+    for e in _edges(graph):
+        src, tgt = _edge_ends(e)
+        for end_id, pkey in ((src, "source_point"), (tgt, "target_point")):
+            n = byid.get(end_id)
+            if not n or n.get("class_name") not in FIXED_SIZES:
+                continue
+            bb = n.get("bbox")
+            p = e.get(pkey)
+            if not bb or not p:
+                continue
+            x1, y1, x2, y2 = bb
+            cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+            py, px = p[0], p[1]
+            dx, dy = px - cx, py - cy
+            if abs(dx) >= abs(dy):            # выход влево/вправо
+                nx = x2 if dx > 0 else x1
+                ny = min(max(py, y1), y2)     # ось трубы, но в пределах бокса
+            else:                             # выход вверх/вниз
+                ny = y2 if dy > 0 else y1
+                nx = min(max(px, x1), x2)
+            e[pkey] = [ny, nx]
+            # терминальная точка маршрута — туда же
+            for wk in ("path", "waypoints"):
+                pts = e.get(wk)
+                if pts:
+                    pts[0 if pkey == "source_point" else -1] = [ny, nx]
+            fixed += 1
+    return fixed
+
+
 def _count_overlaps(boxes):
     r = 0
     for i in range(len(boxes)):
@@ -400,6 +440,9 @@ def pretransform(graph, image_hw=None):
     apply_fixed_sizes(g, adj)
     adj = _build_adjacency(g)  # точки подключения не двигались, но пересоберём для чистоты
     stats = declust(g, adj)
+    # Концы рёбер всё ещё сидят на границе ДЕТЕКЦИОННОГО бокса — пересадить
+    # на границу итогового (фикс-размер + сдвиг declust).
+    stats["endpoints_reprojected"] = reproject_edge_endpoints(g)
     return g, transform, stats
 
 
