@@ -863,7 +863,8 @@ class BaseGraphEditor(QGraphicsView):
         """Connection point on node boundary toward target.
 
         For polygon nodes: prefer orthogonal (H/V ray), fallback nearest boundary.
-        For bbox-only / connector nodes: midpoint of nearest bbox face.
+        For bbox-only / connector nodes: projection of the target onto the chosen
+        face when the target is within the face's span, midpoint otherwise.
         """
         node = self.nodes[node_id]
         seg = node.get('segmentation')
@@ -877,6 +878,18 @@ class BaseGraphEditor(QGraphicsView):
         bbox = self._get_node_bbox(node_id)
         cx, cy = node['centroid'][1], node['centroid'][0]
         side = bbox_exit_side(bbox, cx, cy, target_x, target_y)
+        # Ортогональная посадка: если партнёр стоит в створе выбранной стороны,
+        # конец садится на его проекцию — труба идёт строго по оси. Середина
+        # стороны давала ВЕЕР: все рёбра, входящие с одной стороны, получали
+        # одну и ту же точку независимо от того, где партнёр (крупный блок с
+        # несколькими подводками — все линии сходились в одну точку и шли косо).
+        # Вне створа ортогональной трубы не существует — там прежняя середина.
+        x1, y1, x2, y2 = bbox
+        if side in ('left', 'right'):
+            if y1 <= target_y <= y2:
+                return (x1 if side == 'left' else x2, target_y)
+        elif x1 <= target_x <= x2:
+            return (target_x, y1 if side == 'top' else y2)
         return bbox_side_midpoint(bbox, side)
 
     def _closest_point_on_polygon(self, polygon: list, cx: float, cy: float,
