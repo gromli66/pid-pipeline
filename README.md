@@ -116,3 +116,4 @@ UPLOADED → DETECTING → DETECTED → VALIDATING_BBOX → VALIDATED_BBOX
 | [GLOSSARY.md](docs/GLOSSARY.md) | Термины: P&ID, KKS, FXML, SAM2, SAHI и др. |
 | [DOCUMENTATION_RULES.md](docs/DOCUMENTATION_RULES.md) | Мета-правила документации |
 | [ADR/](docs/ADR/) | 6 Architecture Decision Records (SAM2, LoRA r=8, 6ch input, smart snap и др.) |
+| [AUTO_LAYOUT.md](docs/AUTO_LAYOUT.md) | Раскладка графа на холсте: где живёт R&D, что нужно для запуска, чего нет в git |
