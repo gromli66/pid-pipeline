@@ -48,28 +48,38 @@ DECLUST_CAP = 60.0       # потолок смещения символа (ве�
 # Таблица фиксированных размеров: class_name -> (W, H) в px холста (HORIZONTAL).
 # Для вертикали W/H меняются местами. Значение 0 по оси -> вывести из aspect
 # скина (skin_geometry). Классы вне таблицы размер не меняют.
-# TODO(Фаза 0): вынести в configs. datchik(0,30)/output(0,18) — проверить,
-#   не опечатка ли (см. диалог); у датчика есть своя фикс-логика в standardize.
+# Значения от САПР-стороны, 2026-07-17; НЕ финальные — могут сдвинуться на
+# 3-7 px в любую сторону. Ничего не подгонять под конкретные числа: все
+# производные величины считать от bbox в рантайме.
+#
+# Габарит = сама графика, а не рамка вокруг неё. Размер по второй оси = ведущая
+# ось * aspect_hw скина, поэтому скину нечего letterbox-ить: bbox ==
+# _skin_content_rect, и раздвигание не резервирует несуществующий воздух
+# (у арматуры бокс 42x38 при графике 42x21).
+# Значения ниже — точные (42*0.5, 42*0.9, 42*0.75, 42/1.5); при смене библиотеки
+# скинов пересчитать: python -X utf8 _scratch/fixed_sizes_probe.py (он же рисует
+# FXML-каталог 1:1 для сверки глазами).
+# TODO(Фаза 0): вынести в configs.
 # ---------------------------------------------------------------------------
 FIXED_SIZES = {
-    'armatura_ruchn': (42, 38),
-    'klapan_obratn': (42, 38),
-    'regulator_ruchn': (42, 38),
-    'armatura_electro': (42, 38),
-    'regulator_electro': (42, 38),
-    'klapan_obratn_seroprivod': (42, 38),
-    'armatura_seroprivod': (42, 38),
-    'regulator_seroprivod': (42, 38),
-    'armatura_membr_electro': (42, 38),
-    'predohran': (42, 38),
+    'armatura_ruchn': (42, 21),           # aspect_hw 0.5
+    'klapan_obratn': (42, 21),            # aspect_hw 0.5
+    'regulator_ruchn': (42, 37.8),        # aspect_hw 0.9
+    'armatura_electro': (42, 37.8),       # aspect_hw 0.9
+    'regulator_electro': (42, 37.8),      # aspect_hw 0.9
+    'klapan_obratn_seroprivod': (42, 37.8),   # aspect_hw 0.9
+    'armatura_seroprivod': (28, 42),      # aspect_hw 1.5 — узкий-высокий
+    'regulator_seroprivod': (42, 31.5),   # aspect_hw 0.75
+    'armatura_membr_electro': (42, 37.8),     # aspect_hw 0.9
+    'predohran': (42, 31.5),              # aspect_hw 0.75
     'nasos': (45, 45),
     'ventilaytor': (45, 45),
     'vodostruiniy_nasos': (45, 45),
     'teploobmen': (90, 90),
     'filtr_meh': (60, 60),
     'electronagrevat': (90, 90),
-    'datchik': (0, 30),
-    'output': (0, 18),
+    'datchik': (30, 30),
+    'output': (72, 18),                   # aspect_hw 0.25
     'strelka': (20, 20),
 }
 
