@@ -177,7 +177,9 @@ storage/diagrams/{uid}/
 │   ├── junction_mask.png      # Маска перекрёстков (CenterNet)
 │   ├── bridge_mask.png        # Маска мостов (CenterNet)
 │   ├── junction_mask_validated.png # После валидации оператором
-│   └── bridge_mask_validated.png   # После валидации оператором
+│   ├── bridge_mask_validated.png   # После валидации оператором
+│   ├── points.json            # Центры квадратов от модели
+│   └── points_validated.json  # Центры после правки оператором
 ├── graph/
 │   ├── graph.json             # Граф (автоматический)
 │   ├── graph_validated.json   # Граф (после валидации)
@@ -220,6 +222,8 @@ storage/diagrams/{uid}/
 | `BRIDGE_MASK` | `junction/` | `bridge_mask.png` | PNG (binary mask) | Junction detection |
 | `JUNCTION_MASK_VALIDATED` | `junction/` | `junction_mask_validated.png` | PNG (binary mask) | Junction validation |
 | `BRIDGE_MASK_VALIDATED` | `junction/` | `bridge_mask_validated.png` | PNG (binary mask) | Junction validation |
+| `JUNCTION_POINTS` | `junction/` | `points.json` | JSON | Junction detection |
+| `JUNCTION_POINTS_VALIDATED` | `junction/` | `points_validated.json` | JSON | Junction validation |
 | `GRAPH_JSON` | `graph/` | `graph.json` | JSON | Graph build |
 | `GRAPH_VALIDATED` | `graph/` | `graph_validated.json` | JSON | Graph validation |
 | `CONTOURS_AUTO` | `contours/` | `contours_auto.json` | JSON | SAM2 extraction |

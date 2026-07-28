@@ -226,7 +226,7 @@ erDiagram
 
 ### ArtifactType
 
-Определён в `app/models/artifact.py`. 27 значений. Полное описание — см. [ARCHITECTURE.md §6](ARCHITECTURE.md#6-артефакты-pipeline).
+Определён в `app/models/artifact.py`. 32 значения. Полное описание — см. [ARCHITECTURE.md §6](ARCHITECTURE.md#6-артефакты-pipeline).
 
 ### StageType
 
@@ -315,6 +315,16 @@ convention = {
 | `a1b2c3d4e5f7` | Добавление `pipe_mask_refined` в `artifacttype` |
 | `0003_add_ocr_stagetype` | Добавление `ocr` в `stagetype` |
 | `0004_add_contour_pipeline` | Добавление contour статусов, артефактов и stage type |
+| `0005_add_frame_removal` | Этап удаления рамки |
+| `0006_add_direction_stagetype` | Добавление `direction` в `stagetype` |
+| `0007_add_error_code_failed_step` | `error_code` и `failed_step` у диаграммы |
+| `0008_add_current_step` | `current_step` у диаграммы |
+| `0009_add_graph_canvas` | Добавление `graph_canvas` в `artifacttype` |
+| `0010_add_junction_points` | Добавление `junction_points`, `junction_points_validated` в `artifacttype` |
+
+**Порядок деплоя для `0010`:** миграция накатывается **раньше** кода воркера —
+иначе insert нового значения enum уронит этап junction для всех диаграмм.
+Значение enum в PostgreSQL неудаляемо, `downgrade` — no-op.
 
 ### Особенность PostgreSQL: ALTER TYPE ADD VALUE
 

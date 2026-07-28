@@ -387,10 +387,53 @@ FXML — XML-формат JavaFX, используемый в САПР. Соде
 | `junction/bridge_mask.png` | PNG (grayscale, binary) | Маска мостов (CenterNet) |
 | `junction/junction_mask_validated.png` | PNG (grayscale, binary) | Перекрёстки после валидации |
 | `junction/bridge_mask_validated.png` | PNG (grayscale, binary) | Мосты после валидации |
+| `junction/points.json` | JSON | Центры перекрёстков/мостов от модели (см. ниже) |
+| `junction/points_validated.json` | JSON | Центры после правки оператором (см. ниже) |
 | `ocr/ocr_cleaned.png` | PNG (RGB) | Очищенное изображение для OCR (удалены pipe/node маски) |
 | `detection/detection_overlay.png` | PNG (RGB) | Визуализация bbox поверх оригинала (debug) |
 | `segmentation/segmentation_overlay.png` | PNG (RGB) | Визуализация масок поверх оригинала (debug) |
 | `graph/graph_overlay.png` | PNG (RGB) | Визуализация графа поверх оригинала (debug) |
+
+---
+
+## Центры перекрёстков и мостов (`junction/points*.json`)
+
+Два файла одного назначения — координаты центров квадратов, которыми
+растеризуются перекрёстки и мосты.
+
+**`points.json` — вариант воркера** (`worker/tasks/junction.py`,
+`ArtifactType.JUNCTION_POINTS`). Точки — плоские пары `[x, y]`:
+
+```json
+{
+  "junctions": [[1520, 880], [1533, 880]],
+  "bridges": [[402, 1190]],
+  "junction_threshold": 0.5,
+  "bridge_threshold": 0.5,
+  "n_tiles": 42,
+  "time_sec": 18.7
+}
+```
+
+Ключей `width` / `height` здесь **нет** (в отличие от CLI-варианта из
+`modules/junction_segmentation/prepare_dataset.py`, где аннотации датасета их
+содержат) — полагаться можно только на `junctions` / `bridges`.
+
+**`points_validated.json` — вариант UI** (вкладка «Проверка узлов»,
+`ArtifactType.JUNCTION_POINTS_VALIDATED`). Точки — объекты, у каждой хранится
+последний применённый к ней размер квадрата:
+
+```json
+{
+  "junctions": [{"x": 1520, "y": 880, "size": 9}],
+  "bridges": [{"x": 402, "y": 1190, "size": 15}]
+}
+```
+
+`size` обязателен: без него при следующем открытии вкладки экстрактор центров
+работал бы с дефолтным окном 15 px и не нашёл бы ни одного окна в квадратах,
+ужатых до меньшего размера — слипшаяся пара снова свернулась бы в один центр.
+Редактор понимает оба формата (`SquareMaskEditor.load_points`).
 
 ---
 

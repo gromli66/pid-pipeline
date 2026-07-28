@@ -215,7 +215,12 @@ curl -X POST "http://localhost:8000/api/detection/{uid}/detect?model_id=yolov8m_
 | POST | `/{uid}/masks/complete` | Завершить → `validated_masks`, auto-dispatch skeleton #2 |
 | POST | `/{uid}/nodes/update` | Обновить COCO + перегенерировать node_mask |
 
-**mask_type:** `pipe_mask_validated`, `junction_mask_validated`, `bridge_mask_validated`.
+**mask_type:** `pipe_mask_validated`, `junction_mask_validated`, `bridge_mask_validated`, `junction_points_validated`.
+
+`junction_points_validated` — не маска, а JSON с центрами квадратов
+(`junction/points_validated.json`, формат — см. [DATA_FORMATS.md](DATA_FORMATS.md));
+едет тем же эндпоинтом, но с `Content-Type: application/json` (для остальных
+типов ожидается `image/png`).
 
 ### Junction validation
 

@@ -739,7 +739,7 @@ ocr_corrections:
 | Оригинальное изображение | `{diagram_dir}/original/image.png` | Да |
 | Маска труб | `{diagram_dir}/segmentation/pipe_mask_refined.png` (fallback: `_validated.png`, `pipe_mask.png`) | Нет |
 | Маска узлов | `{diagram_dir}/segmentation/node_mask.png` | Нет |
-| Junction/bridge points | `{diagram_dir}/junction/points.json` | Нет |
+| Junction/bridge points | `{diagram_dir}/junction/points.json` (`ArtifactType.JUNCTION_POINTS`) | Нет |
 
 ### 12.6 Выходной артефакт
 
