@@ -48,6 +48,12 @@ class ArtifactType(str, enum.Enum):
     BRIDGE_MASK = "bridge_mask"
     JUNCTION_MASK_VALIDATED = "junction_mask_validated"
     BRIDGE_MASK_VALIDATED = "bridge_mask_validated"
+    # Центры перекрёстков/мостов. JUNCTION_POINTS — модельный points.json
+    # воркера; JUNCTION_POINTS_VALIDATED — правленые оператором центры.
+    # Без них операция «изменить размер» ломает свой фундамент: экстрактор с
+    # дефолтным окном 15 не найдёт ни одного окна в ужатых квадратах.
+    JUNCTION_POINTS = "junction_points"
+    JUNCTION_POINTS_VALIDATED = "junction_points_validated"
 
     # Graph
     GRAPH_JSON = "graph_json"

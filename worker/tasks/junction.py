@@ -258,8 +258,11 @@ def task_detect_junctions(
 
         # ===== 8. Артефакты в БД =====
         with obs.step("persist_artifacts", logger):
-            # Remove old artifacts if re-running
-            for art_type in (ArtifactType.JUNCTION_MASK, ArtifactType.BRIDGE_MASK):
+            # Remove old artifacts if re-running.
+            # JUNCTION_POINTS обязателен в этом кортеже: повторный прогон иначе
+            # создаст дубль, а download делает scalar_one_or_none → 500.
+            for art_type in (ArtifactType.JUNCTION_MASK, ArtifactType.BRIDGE_MASK,
+                             ArtifactType.JUNCTION_POINTS):
                 old = (
                     db.query(Artifact)
                     .filter(
@@ -272,16 +275,22 @@ def task_detect_junctions(
                     db.delete(old)
                     db.flush()
 
-            for art_type, art_path in [
-                (ArtifactType.JUNCTION_MASK, junction_dir / "junction_mask.png"),
-                (ArtifactType.BRIDGE_MASK, junction_dir / "bridge_mask.png"),
+            for art_type, art_path, mime in [
+                (ArtifactType.JUNCTION_MASK, junction_dir / "junction_mask.png",
+                 "image/png"),
+                (ArtifactType.BRIDGE_MASK, junction_dir / "bridge_mask.png",
+                 "image/png"),
+                # Центры квадратов: вкладка «Проверка узлов» меняет размер
+                # перекрёстков ПО ЦЕНТРАМ, ей нужен модельный points.json.
+                (ArtifactType.JUNCTION_POINTS, junction_dir / "points.json",
+                 "application/json"),
             ]:
                 artifact = Artifact(
                     diagram_uid=diagram_uid,
                     artifact_type=art_type,
                     file_path=str(art_path.relative_to(storage_path)),
                     file_size=art_path.stat().st_size,
-                    mime_type="image/png",
+                    mime_type=mime,
                 )
                 db.add(artifact)
 

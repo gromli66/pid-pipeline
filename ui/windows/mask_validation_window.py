@@ -407,6 +407,11 @@ class MaskValidationWindow(QMainWindow):
             self._save_pipe_mask()
 
     def _save_junction_masks(self):
+        """Второй потребитель SquareMaskEditor (первый — ui/tabs/junction_tab).
+
+        Центры квадратов (points_validated) здесь не сохраняются: окно —
+        legacy-путь, у него нет вкладочного цикла загрузки points.
+        """
         if not self._junction_editor:
             return
 

@@ -11,7 +11,7 @@ from typing import Optional
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QMessageBox, QSlider, QApplication,
+    QPushButton, QLabel, QMessageBox, QSlider, QApplication, QSpinBox,
 )
 from PySide6.QtCore import Signal, Slot, Qt, QThread, QObject
 
@@ -77,6 +77,19 @@ class _JunctionArtifactDownloader(QObject):
             return ("coco_validated", dest)
         return None
 
+    def _dl_points(self):
+        """Центры квадратов: правленые оператором → модельные.
+
+        Опционально с фолбэком: на старом сервере типов ещё нет, и вкладка от
+        этого падать не должна (центры доопределятся из масок экстрактором).
+        """
+        dest = self.temp_dir / "points.json"
+        if self._dl("junction_points_validated", dest):
+            return ("points", dest)
+        if self._dl("junction_points", dest):
+            return ("points", dest)
+        return None
+
     def run(self):
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -84,13 +97,14 @@ class _JunctionArtifactDownloader(QObject):
             self.progress.emit("Загрузка артефактов...")
             artifacts = {}
 
-            with ThreadPoolExecutor(max_workers=5) as pool:
+            with ThreadPoolExecutor(max_workers=6) as pool:
                 futures = [
                     pool.submit(self._dl_original),
                     pool.submit(self._dl_junction_mask),
                     pool.submit(self._dl_bridge_mask),
                     pool.submit(self._dl_skeleton),
                     pool.submit(self._dl_coco),
+                    pool.submit(self._dl_points),
                 ]
                 for future in as_completed(futures):
                     result = future.result()
@@ -194,6 +208,33 @@ class JunctionTab(AppearanceMixin, QWidget):
         self.square_label = QLabel("15px")
         toolbar.addWidget(self.square_label)
 
+        sep = QLabel(" | ")
+        sep.setStyleSheet("color: #666;")
+        toolbar.addWidget(sep)
+
+        # Реальный размер СУЩЕСТВУЮЩИХ перекрёстков/мостов — не кисть.
+        # Потолок кисти (15) здесь не наследуется: «расширение» может требовать
+        # больше. Связка с растеризацией конвейера — configs/projects/*/
+        # thermohydraulics.yaml → junction.square_size (сейчас 15).
+        toolbar.addWidget(QLabel(" Размер объектов:"))
+        self.spin_obj_size = QSpinBox()
+        self.spin_obj_size.setRange(3, 100)
+        self.spin_obj_size.setValue(15)
+        self.spin_obj_size.setSuffix(" px")
+        self.spin_obj_size.setToolTip(
+            "Реальный размер существующих перекрёстков/мостов.\n"
+            "Сжатие/расширение относительно центра квадрата."
+        )
+        toolbar.addWidget(self.spin_obj_size)
+
+        self.btn_apply_size = QPushButton("Применить размер")
+        self.btn_apply_size.setToolTip(
+            "Есть выделение (Shift+протяжка) — меняются выделенные пятна.\n"
+            "Выделения нет — все пятна текущего класса (с подтверждением)."
+        )
+        self.btn_apply_size.clicked.connect(self._apply_object_size)
+        toolbar.addWidget(self.btn_apply_size)
+
         toolbar.addStretch()
 
         self.btn_save = make_save_button(
@@ -278,6 +319,9 @@ class JunctionTab(AppearanceMixin, QWidget):
 
             self._editor = SquareMaskEditor()
             self._editor.status_callback = lambda msg: self.status_label.setText(msg)
+            # Ctrl+S в редакторе раньше звал save_masks() без путей — PNG падали
+            # в CWD процесса и на сервер не уходили. Теперь шорткат идёт сюда.
+            self._editor.save_requested_callback = self._save_masks
             self._editor.load_images(
                 original_path=str(artifacts["original_image"]),
                 mask1_path=str(artifacts["junction_mask"]),
@@ -285,6 +329,7 @@ class JunctionTab(AppearanceMixin, QWidget):
                 skeleton_path=str(artifacts.get("skeleton", "")),
                 coco_path=str(artifacts.get("coco_validated", "")),
             )
+            self._load_points(artifacts.get("points"))
             # Вставляем перед status_label (последний виджет)
             self._editor_layout.insertWidget(
                 self._editor_layout.count() - 1, self._editor
@@ -322,6 +367,50 @@ class JunctionTab(AppearanceMixin, QWidget):
         if self._editor:
             self._editor.undo()
 
+    def _load_points(self, path) -> None:
+        """Центры квадратов: файл → редактор; без файла — доопределить из масок."""
+        import json
+
+        if self._editor is None:
+            return
+        if path:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    self._editor.load_points(json.load(f))
+            except (OSError, ValueError) as exc:
+                logger.warning("points.json не прочитан (%s) — центры из масок", exc)
+        self._editor.ensure_points()
+        # Спинбокс показывает последний применённый размер (из points-файла).
+        sizes = getattr(self._editor, "_applied_size", {})
+        if sizes:
+            self.spin_obj_size.setValue(int(max(sizes.values())))
+
+    @Slot()
+    def _apply_object_size(self):
+        """Изменить реальный размер существующих перекрёстков/мостов."""
+        if not self._editor:
+            return
+        size = int(self.spin_obj_size.value())
+        has_selection = any(b["confirmed"] for b in self._editor._blobs)
+        if not has_selection:
+            label = "перекрёстков" if self._editor.current_class == 1 else "мостов"
+            answer = QMessageBox.question(
+                self, "Изменить размер",
+                f"Выделения нет — размер {size}px будет применён ко ВСЕМ "
+                f"{label} на схеме.\n\nПродолжить?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            changed = self._editor.apply_square_size(size)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if changed:
+            self._saved = False
+
     # === Save & Confirm ===
 
     def has_unsaved_changes(self) -> bool:
@@ -351,6 +440,8 @@ class JunctionTab(AppearanceMixin, QWidget):
                 self.uid, "bridge_mask_validated", bridge_path
             )
 
+            self._upload_points()
+
             self._saved = True
             self._undo_baseline = len(self._editor.undo_stack)
             self.status_label.setText("Маски перекрёстков и мостов сохранены")
@@ -364,6 +455,28 @@ class JunctionTab(AppearanceMixin, QWidget):
             return False
         finally:
             QApplication.restoreOverrideCursor()
+
+    def _upload_points(self):
+        """Отправить центры квадратов рядом с масками.
+
+        Без этого правленые центры умирают вместе с вкладкой: при переоткрытии
+        доопределение пошло бы из устаревшего points.json, а экстрактор с
+        дефолтным окном 15 не находит окна в квадратах, ужатых до <15 — фича
+        ломала бы собственный фундамент.
+        Старый сервер типа не знает — не роняем сохранение масок из-за этого.
+        """
+        import json
+
+        try:
+            path = self.temp_dir / "points_validated.json"
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self._editor.export_points(), f, ensure_ascii=False)
+            self.status_label.setText("Загрузка центров...")
+            self.api_client.upload_validated_mask(
+                self.uid, "junction_points_validated", path
+            )
+        except Exception as exc:
+            logger.warning("Центры не сохранены на сервер: %s", exc)
 
     @Slot()
     def _on_confirm(self):

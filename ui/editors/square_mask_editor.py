@@ -25,8 +25,17 @@ from PySide6.QtGui import (
 )
 from PySide6.QtCore import Qt, QRectF
 
-SQUARE_SIZE = 15  # значение по умолчанию (fallback)
+# Значение по умолчанию. Держится в связке с растеризацией конвейера
+# (configs/projects/*/thermohydraulics.yaml → junction.square_size, дефолты 15
+# в трёх местах): «фикс 15» здесь верен, пока конфиг 15.
+SQUARE_SIZE = 15
 MAX_UNDO_STEPS = 50
+
+# Цвет пикселя маски в BGRA (порядок как у _qimage_to_numpy).
+_CLASS_BGRA = {
+    1: (255, 255, 255, 255),   # junction — белый
+    2: (0, 0, 255, 255),       # bridge — красный
+}
 
 
 def _qimage_to_numpy(qimg: QImage) -> np.ndarray:
@@ -219,6 +228,19 @@ class SquareMaskEditor(QGraphicsView):
 
         # Blob tracking: list of (bbox, class, confirmed, rect_item)
         self._blobs: list[dict] = []  # {x1,y1,x2,y2, cls, confirmed, rect_item}
+
+        # Центры квадратов — источник истины операции «изменить размер».
+        # {1: [(x, y), ...], 2: [...]}; приходят из points_validated.json,
+        # иначе из модельного points.json, иначе доопределяются экстрактором.
+        self._points: dict[int, list[tuple[int, int]]] = {1: [], 2: []}
+        # Последний применённый размер квадрата — с ним, а не с дефолтной 15,
+        # экстрактор разбивает слипшиеся компоненты (см. point_extraction).
+        self._applied_size: dict[int, int] = {1: SQUARE_SIZE, 2: SQUARE_SIZE}
+
+        # Ctrl+S: сохранение — дело вкладки (ей известны пути и сервер).
+        # Без колбэка шорткат ничего не делает (раньше save_masks() без путей
+        # ронял PNG в CWD процесса, на сервер они не уходили).
+        self.save_requested_callback = None
 
         # Placeholder
         self._show_placeholder()
@@ -417,7 +439,8 @@ class SquareMaskEditor(QGraphicsView):
         self.skeleton_item.setPixmap(QPixmap.fromImage(self.skeleton_image))
 
     def set_square_size(self, size: int):
-        """Установить размер квадратов."""
+        """Размер квадрата-КИСТИ (ставится по Ctrl+ЛКМ). Существующие пятна
+        не трогает — для них есть apply_square_size."""
         self.square_size = max(3, size)
 
     def add_square(self, x: int, y: int):
@@ -547,6 +570,20 @@ class SquareMaskEditor(QGraphicsView):
             self._blobs.append(blob_data)
             self._draw_blob_highlight(blob_data)
             self._update_status("Undo: пятно восстановлено")
+        elif action[0] == "resize_squares":
+            _, old_mask1, old_mask2, rect_geoms, points, sizes = action
+            self.mask1_image = old_mask1
+            self.mask2_image = old_mask2
+            self._update_mask1_display()
+            self._update_mask2_display()
+            # Геометрия свежепоставленных квадратов живёт отдельно от масок —
+            # снимка масок для отмены недостаточно.
+            for rect, geom in rect_geoms:
+                rect.setRect(geom)
+            self._points = {c: list(v) for c, v in points.items()}
+            self._applied_size = dict(sizes)
+            self._redetect_blobs()
+            self._update_status("Undo: размер квадратов восстановлен")
         elif action[0] == "delete_all_blobs":
             _, old_mask1, old_mask2, blobs_data = action
             self.mask1_image = old_mask1
@@ -636,7 +673,10 @@ class SquareMaskEditor(QGraphicsView):
             event.key() == Qt.Key.Key_S
             and event.modifiers() & Qt.KeyboardModifier.ControlModifier
         ):
-            self.save_masks()
+            if self.save_requested_callback:
+                self.save_requested_callback()
+            else:
+                self._update_status("Сохранение доступно кнопкой на панели")
         else:
             super().keyPressEvent(event)
 
@@ -767,6 +807,36 @@ class SquareMaskEditor(QGraphicsView):
         self._detect_blobs()
 
     @staticmethod
+    def _labeled_components(binary: np.ndarray):
+        """(labels, {bbox: label}) — та же разметка, что у _find_connected_components.
+
+        Порядок предпочтения библиотек обязан совпадать с ним: у scipy.label
+        связность по умолчанию 4, у cv2 здесь 8 — разойдясь, мы получили бы
+        bbox'ы, для которых нет метки.
+        """
+        try:
+            from scipy.ndimage import label, find_objects
+            labeled, _n = label(binary)
+            index = {}
+            for i, slc in enumerate(find_objects(labeled), start=1):
+                if slc is None:
+                    continue
+                index[(slc[1].start, slc[0].start, slc[1].stop, slc[0].stop)] = i
+            return labeled, index
+        except ImportError:
+            pass
+        import cv2
+        n, labeled, stats, _c = cv2.connectedComponentsWithStats(binary, connectivity=8)
+        index = {}
+        for i in range(1, n):
+            x1 = int(stats[i, cv2.CC_STAT_LEFT])
+            y1 = int(stats[i, cv2.CC_STAT_TOP])
+            index[(x1, y1,
+                   x1 + int(stats[i, cv2.CC_STAT_WIDTH]),
+                   y1 + int(stats[i, cv2.CC_STAT_HEIGHT]))] = i
+        return labeled, index
+
+    @staticmethod
     def _find_connected_components(binary: np.ndarray) -> list[tuple]:
         """Найти bbox связных компонентов. Возвращает [(x1,y1,x2,y2), ...]."""
         try:
@@ -857,6 +927,212 @@ class SquareMaskEditor(QGraphicsView):
         self._redetect_blobs()
 
         self._update_status(f"Удалено {len(confirmed)} пятен")
+
+    # ==================== РАЗМЕР КВАДРАТОВ ====================
+
+    def load_points(self, data: dict):
+        """Загрузить центры из points-файла ({junctions:[...], bridges:[...]}).
+
+        Точки — [x, y] или {x, y}; необязательное поле size запоминается как
+        последний применённый размер класса.
+        """
+        for cls, key in ((1, "junctions"), (2, "bridges")):
+            pts = []
+            for p in (data.get(key) or []):
+                if isinstance(p, dict):
+                    x, y, size = p.get("x"), p.get("y"), p.get("size")
+                else:
+                    if not p or len(p) < 2:
+                        continue
+                    x, y, size = p[0], p[1], None
+                if x is None or y is None:
+                    continue
+                pts.append((int(x), int(y)))
+                if size:
+                    self._applied_size[cls] = max(3, int(size))
+            self._points[cls] = pts
+
+    def export_points(self) -> dict:
+        """Центры для сохранения: {"junctions": [{x,y,size}], "bridges": [...]}.
+
+        size хранится, потому что оператор может применить разный размер к
+        разным наборам, а при следующем открытии экстрактору нужен именно
+        последний применённый (с дефолтной 15 он не разберёт ужатые квадраты).
+        """
+        out = {}
+        for cls, key in ((1, "junctions"), (2, "bridges")):
+            size = self._applied_size[cls]
+            out[key] = [{"x": int(x), "y": int(y), "size": int(size)}
+                        for x, y in self._points[cls]]
+        return out
+
+    def _blob_component(self, blob: dict, labels, index):
+        """(маска компоненты в bbox пятна, x1, y1) или None."""
+        key = (blob["x1"], blob["y1"], blob["x2"], blob["y2"])
+        lbl = index.get(key)
+        if lbl is None:
+            return None
+        sub = labels[blob["y1"]:blob["y2"], blob["x1"]:blob["x2"]]
+        return (sub == lbl).astype(np.uint8) * 255, blob["x1"], blob["y1"]
+
+    def _centers_of_component(self, comp: np.ndarray, x0: int, y0: int,
+                              cls: int, bbox: tuple) -> list[tuple[int, int]]:
+        """Центры квадратов внутри компоненты.
+
+        Правило выбора: точка модели выигрывает ТОЛЬКО для merged-компонент.
+        Для одиночного квадрата центроид пятна надёжнее устаревшей точки —
+        оператор мог передвинуть квадрат.
+        """
+        try:
+            from modules.junction_segmentation.point_extraction import (
+                extract_points_from_mask,
+            )
+        except ImportError:
+            # cv2 недоступен — фолбэк на центр bbox (одна точка на компоненту)
+            return [((bbox[0] + bbox[2]) // 2, (bbox[1] + bbox[3]) // 2)]
+
+        pts, summary = extract_points_from_mask(
+            comp, merged_square_size=self._applied_size[cls]
+        )
+        if summary.get("merged"):
+            x1, y1, x2, y2 = bbox
+            saved = [(x, y) for x, y in self._points[cls]
+                     if x1 <= x < x2 and y1 <= y < y2]
+            if saved:
+                return saved
+        return [(x + x0, y + y0) for x, y in pts]
+
+    @staticmethod
+    def _paint_square(arr: np.ndarray, cx: int, cy: int, size: int, cls: int):
+        """Нарисовать квадрат size×size с центром (cx, cy) в BGRA-массиве."""
+        h, w = arr.shape[:2]
+        half = size // 2
+        y1, y2 = max(0, cy - half), min(h, cy - half + size)
+        x1, x2 = max(0, cx - half), min(w, cx - half + size)
+        if y2 <= y1 or x2 <= x1:
+            return
+        arr[y1:y2, x1:x2] = _CLASS_BGRA[cls]
+
+    def apply_square_size(self, size: int, only_selected: bool | None = None) -> int:
+        """Пересобрать квадраты под новый размер. Returns число изменённых пятен.
+
+        Правило операции: есть выделение — меняем выделенные; нет выделения —
+        все пятна ТЕКУЩЕГО класса (подтверждение спрашивает вкладка).
+
+        Механика (важно, оба шага обязательны):
+          1. стереть по СВЯЗНОЙ КОМПОНЕНТЕ, не по bbox — у L-образных клякс
+             bbox'ы соседних компонент перекрываются, и стирание по bbox
+             уничтожило бы чужие пиксели, которые никто не перерисует;
+          2. нарисовать заново квадраты size×size ПО ЦЕНТРАМ — только это
+             разъединяет слипшиеся при сжатии и сохраняет квадратность.
+
+        Свежепоставленные квадраты (QGraphicsRectItem) Shift-выделение не видит
+        никогда, поэтому ветка «все пятна класса» меняет и их.
+        """
+        if self.mask1_image is None:
+            return 0
+        size = max(3, int(size))
+        confirmed = [b for b in self._blobs if b["confirmed"]]
+        if only_selected is None:
+            only_selected = bool(confirmed)
+
+        if only_selected:
+            targets = confirmed
+            classes = sorted({b["cls"] for b in targets})
+            rects = []
+        else:
+            classes = [self.current_class]
+            targets = [b for b in self._blobs if b["cls"] == self.current_class]
+            rects = (self.squares_white if self.current_class == 1
+                     else self.squares_red)
+        if not targets and not rects:
+            self._update_status("Нечего изменять")
+            return 0
+
+        # Undo: обе маски + геометрия свежепоставленных квадратов + центры.
+        # Снимка масок недостаточно — rect-итемы живут отдельно от масок.
+        self.undo_stack.append((
+            "resize_squares",
+            self.mask1_image.copy(), self.mask2_image.copy(),
+            [(r, QRectF(r.rect())) for r in rects],
+            {c: list(self._points[c]) for c in (1, 2)},
+            dict(self._applied_size),
+        ))
+
+        changed = 0
+        for cls in classes:
+            mask = self.mask1_image if cls == 1 else self.mask2_image
+            arr = _qimage_to_numpy(mask)
+            binary = (arr[:, :, 3] > 128).astype(np.uint8)
+            labels, index = self._labeled_components(binary)
+
+            centers: list[tuple[int, int]] = []
+            for blob in [b for b in targets if b["cls"] == cls]:
+                comp = self._blob_component(blob, labels, index)
+                if comp is None:
+                    continue
+                comp_mask, x0, y0 = comp
+                bbox = (blob["x1"], blob["y1"], blob["x2"], blob["y2"])
+                centers.extend(self._centers_of_component(comp_mask, x0, y0, cls, bbox))
+                # стереть ТОЛЬКО пиксели этой компоненты
+                region = arr[blob["y1"]:blob["y2"], blob["x1"]:blob["x2"]]
+                region[comp_mask > 0] = 0
+                changed += 1
+
+            for cx, cy in centers:
+                self._paint_square(arr, int(cx), int(cy), size, cls)
+
+            new_mask = _numpy_to_qimage(arr)
+            if cls == 1:
+                self.mask1_image = new_mask
+                self._update_mask1_display()
+            else:
+                self.mask2_image = new_mask
+                self._update_mask2_display()
+            self._applied_size[cls] = size
+
+        # Свежепоставленные квадраты — тем же размером вокруг их центров
+        for rect in rects:
+            r = rect.rect()
+            cx, cy = r.center().x(), r.center().y()
+            rect.setRect(cx - size / 2.0, cy - size / 2.0, size, size)
+            changed += 1
+
+        self.square_size = size
+        self._redetect_blobs()
+        self._resync_points()
+        self._update_status(f"Размер {size}px применён к {changed} объектам")
+        return changed
+
+    def _resync_points(self):
+        """Пере-сопоставить центры с пятнами после _redetect_blobs.
+
+        Идемпотентность операции держится только на НЕЗАВИСИМОМ списке
+        центров: _redetect_blobs строит _blobs с нуля (и сбрасывает
+        confirmed — выделение после операции пропадает, повторное применение
+        требует новой обводки).
+        """
+        for cls in (1, 2):
+            mask = self.mask1_image if cls == 1 else self.mask2_image
+            if mask is None:
+                continue
+            arr = _qimage_to_numpy(mask)
+            binary = (arr[:, :, 3] > 128).astype(np.uint8)
+            labels, index = self._labeled_components(binary)
+            pts: list[tuple[int, int]] = []
+            for blob in [b for b in self._blobs if b["cls"] == cls]:
+                comp = self._blob_component(blob, labels, index)
+                if comp is None:
+                    continue
+                comp_mask, x0, y0 = comp
+                bbox = (blob["x1"], blob["y1"], blob["x2"], blob["y2"])
+                pts.extend(self._centers_of_component(comp_mask, x0, y0, cls, bbox))
+            self._points[cls] = pts
+
+    def ensure_points(self):
+        """Доопределить центры из масок там, где их не дали файлы."""
+        if not self._points[1] and not self._points[2]:
+            self._resync_points()
 
     def _delete_blob(self, blob: dict):
         """Удалить подтверждённое пятно с маски (flood-fill в bbox)."""

@@ -30,13 +30,20 @@ VALID_MASK_TYPES = {
     "junction_mask_validated": ArtifactType.JUNCTION_MASK_VALIDATED,
     "bridge_mask_validated": ArtifactType.BRIDGE_MASK_VALIDATED,
     "pipe_mask_validated": ArtifactType.PIPE_MASK_VALIDATED,
+    # Не маска, а JSON с центрами квадратов — едет тем же эндпоинтом
+    # (см. JSON_MASK_TYPES ниже: у него другой content-type и mime).
+    "junction_points_validated": ArtifactType.JUNCTION_POINTS_VALIDATED,
 }
+
+# Типы, которые приезжают JSON'ом, а не PNG.
+JSON_MASK_TYPES = {"junction_points_validated"}
 
 # Маппинг mask_type → (stage_folder, filename)
 MASK_STORAGE_MAP = {
     "junction_mask_validated": ("junction", "junction_mask_validated.png"),
     "bridge_mask_validated": ("junction", "bridge_mask_validated.png"),
     "pipe_mask_validated": ("segmentation", "pipe_mask_validated.png"),
+    "junction_points_validated": ("junction", "points_validated.json"),
 }
 
 
@@ -80,7 +87,11 @@ async def upload_validated_mask(
     uid: UUID,
     mask_type: str = Form(
         ...,
-        description="Тип маски: junction_mask_validated, bridge_mask_validated, pipe_mask_validated",
+        description=(
+            "Тип маски: junction_mask_validated, bridge_mask_validated, "
+            "pipe_mask_validated; либо junction_points_validated (JSON с "
+            "центрами квадратов)"
+        ),
     ),
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_async_db),
@@ -119,10 +130,13 @@ async def upload_validated_mask(
         )
 
     # Проверка типа файла
-    if file.content_type not in {"image/png", "application/octet-stream"}:
+    is_json = mask_type in JSON_MASK_TYPES
+    allowed = ({"application/json", "text/json", "application/octet-stream"}
+               if is_json else {"image/png", "application/octet-stream"})
+    if file.content_type not in allowed:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid file type '{file.content_type}'. Expected: image/png",
+            detail=f"Invalid file type '{file.content_type}'. Expected: {sorted(allowed)}",
         )
 
     # Автоматически переводим в VALIDATING_MASKS при первой загрузке
@@ -157,7 +171,7 @@ async def upload_validated_mask(
         artifact_type=art_type,
         file_path=file_path,
         file_size=file_size,
-        mime_type="image/png",
+        mime_type="application/json" if is_json else "image/png",
     )
     db.add(artifact)
 

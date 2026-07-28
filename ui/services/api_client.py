@@ -473,16 +473,19 @@ class APIClient:
         self, uid: str, mask_type: str, file_path: Path
     ) -> Dict[str, Any]:
         """
-        Загрузить валидированную маску.
+        Загрузить валидированную маску (или JSON-артефакт того же эндпоинта).
 
         Args:
             uid: UUID диаграммы
-            mask_type: junction_mask_validated | bridge_mask_validated | pipe_mask_validated
-            file_path: путь к PNG файлу
+            mask_type: junction_mask_validated | bridge_mask_validated |
+                pipe_mask_validated | junction_points_validated
+            file_path: путь к PNG (или .json для junction_points_validated)
         """
         file_path = Path(file_path)
+        mime = ("application/json" if file_path.suffix.lower() == ".json"
+                else "image/png")
         with open(file_path, "rb") as f:
-            files = {"file": (file_path.name, f, "image/png")}
+            files = {"file": (file_path.name, f, mime)}
             data = {"mask_type": mask_type}
             return self._request(
                 "POST",

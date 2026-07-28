@@ -1970,10 +1970,44 @@ class DiagramWorkspace(QWidget):
         if fetched:
             self._start_segmentation()
 
+    def _has_saved_canvas(self) -> bool:
+        """Есть ли у диаграммы сохранённый холст «Ручной правки».
+
+        Проверяем по артефакту graph_canvas: GET download → 404 значит нет.
+        """
+        import tempfile
+        from pathlib import Path
+
+        try:
+            with tempfile.TemporaryDirectory(prefix="pid_canvas_probe_") as td:
+                self.api_client.download_artifact(
+                    self._uid, "graph_canvas", Path(td) / "canvas.json")
+            return True
+        except Exception:
+            return False
+
     @Slot()
     def _on_junction_confirmed(self):
         """Junction маски подтверждены → complete_junction_validation → graph build."""
         logger.info("Junction confirmed via signal")
+
+        # Пересборка графа делает новый graph_validated → холст устареет по
+        # source_sha и будет пересобран с нуля (base_graph_tab._canvas_is_stale),
+        # т.е. ручная раскладка WYSIWYG пропадёт. Поведение конвейера НЕ меняем —
+        # только предупреждаем оператора (решение заказчика 2026-07-28).
+        if self._has_saved_canvas():
+            answer = QMessageBox.question(
+                self, "Пересборка графа",
+                "Пересборка графа уничтожит ручную раскладку в «Ручной правке»: "
+                "холст будет собран заново из нового graph_validated.\n\n"
+                "Продолжить?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                self.status_message.emit("Подтверждение перекрёстков отменено", 5000)
+                return
+
         self._junction_confirmed = True
 
         self._close_tab_and_restore_header()
