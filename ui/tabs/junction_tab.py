@@ -232,6 +232,10 @@ class JunctionTab(AppearanceMixin, QWidget):
             "Есть выделение (Shift+протяжка) — меняются выделенные пятна.\n"
             "Выделения нет — все пятна текущего класса (с подтверждением)."
         )
+        # Кнопка не должна забирать фокус клавиатуры: Ctrl+Z обрабатывает
+        # keyPressEvent самого редактора, и с фокусом на кнопке отмена
+        # операции размера не срабатывала бы.
+        self.btn_apply_size.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.btn_apply_size.clicked.connect(self._apply_object_size)
         toolbar.addWidget(self.btn_apply_size)
 
@@ -408,6 +412,9 @@ class JunctionTab(AppearanceMixin, QWidget):
             changed = self._editor.apply_square_size(size)
         finally:
             QApplication.restoreOverrideCursor()
+        # Вернуть фокус редактору: иначе он остаётся на спинбоксе (там Ctrl+Z
+        # отменяет ввод текста), и отмена операции не работает.
+        self._editor.setFocus(Qt.FocusReason.OtherFocusReason)
         if changed:
             self._saved = False
 
