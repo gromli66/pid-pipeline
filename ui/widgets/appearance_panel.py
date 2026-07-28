@@ -12,7 +12,7 @@
 
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QPushButton,
-    QColorDialog,
+    QColorDialog, QCheckBox,
 )
 from PySide6.QtGui import QColor
 from PySide6.QtCore import Qt, QPropertyAnimation, QRect, QEasingCurve
@@ -92,6 +92,15 @@ class AppearancePanel(QFrame):
         box.addWidget(slider)
         self._content.addLayout(box)
         return slider
+
+    def add_checkbox(self, label: str, checked: bool, on_change) -> QCheckBox:
+        """Добавить флажок. on_change(v: bool) вызывается при переключении."""
+        cb = QCheckBox(label)
+        cb.setChecked(bool(checked))
+        cb.setStyleSheet("QCheckBox { color: #ddd; font-size: 12px; }")
+        cb.toggled.connect(on_change)
+        self._content.addWidget(cb)
+        return cb
 
     def add_color(self, label: str, initial: QColor, on_change) -> QPushButton:
         """Добавить строку выбора цвета (swatch + QColorDialog)."""
@@ -302,6 +311,22 @@ class AppearanceMixin:
         """Применить сохранённый множитель размера, если пользователь его задавал."""
         if UISettings.instance().has_appearance(self.uid, key):
             apply_fn(self._saved_pct(key, 100.0) / 100.0)
+
+    def _add_flag_setting(self, panel: AppearancePanel, label: str, key: str,
+                          default: bool, apply_fn):
+        """Флажок с сохранением по диаграмме."""
+        s = UISettings.instance()
+        cur = bool(s.get_appearance(self.uid, key, default))
+
+        def on_change(v: bool):
+            s.set_appearance(self.uid, key, bool(v))
+            apply_fn(bool(v))
+
+        panel.add_checkbox(label, cur, on_change)
+
+    def _apply_saved_flag(self, key: str, default: bool, apply_fn):
+        if UISettings.instance().has_appearance(self.uid, key):
+            apply_fn(bool(UISettings.instance().get_appearance(self.uid, key, default)))
 
     def _saved_color(self, key: str, default_color: QColor) -> QColor:
         raw = UISettings.instance().get_appearance(self.uid, key, default_color.name())

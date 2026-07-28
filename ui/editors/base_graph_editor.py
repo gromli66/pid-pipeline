@@ -26,7 +26,9 @@ from PySide6.QtCore import Qt, QRectF
 from ui.editors.graph_data import GraphDataModel
 from ui.editors.undo_manager import UndoManager
 from ui.editors.mode_handlers.base_handler import ModeHandler
-from ui.editors.graph_geometry import bbox_exit_side, bbox_side_midpoint
+from ui.editors.graph_geometry import (
+    bbox_exit_side, bbox_side_midpoint, boundary_projection, boundary_mark_points,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,12 +76,15 @@ class BaseGraphEditor(QGraphicsView):
     OUTLINE_WIDTH = 2          # контуры bbox/полигонов/маркеров
     HIGHLIGHT_WIDTH = 4        # подсветка ребра
     PREVIEW_WIDTH = 2          # превью коннектора
+    # Длина подсвеченного участка границы вокруг точки входа трубы (П8).
+    # legacy: символ ~130 px растра; canvas: фикс-боксы порядка 42x38.
+    SIDE_MARK_LEN = 24
 
     # Размеры, зависящие от системы координат сцены
     _VIS_KEYS = (
         "EQUIPMENT_MARKER_RADIUS", "CONNECTOR_MARKER_RADIUS", "CONNECTOR_DRAW_RADIUS",
         "CLICK_THRESHOLD", "SELECTION_RING_WIDTH", "EDGE_WIDTH", "OUTLINE_WIDTH",
-        "HIGHLIGHT_WIDTH", "PREVIEW_WIDTH",
+        "HIGHLIGHT_WIDTH", "PREVIEW_WIDTH", "SIDE_MARK_LEN",
     )
 
     # Ключи, которым разрешён субъективный множитель из шестерёнки (П4).
@@ -107,6 +112,7 @@ class BaseGraphEditor(QGraphicsView):
         "SELECTION_RING_WIDTH": 1.5,
         "HIGHLIGHT_WIDTH": 2.0,
         "PREVIEW_WIDTH": 1.0,
+        "SIDE_MARK_LEN": 8.0,
     }
 
     def __init__(self):
@@ -149,6 +155,17 @@ class BaseGraphEditor(QGraphicsView):
         self.edge_label_items: dict[tuple[str, str], QGraphicsSimpleTextItem] = {}
         self.bbox_items: dict[str, QGraphicsRectItem] = {}
         self.polygon_items: dict[str, QGraphicsPathItem] = {}
+        # П8: подсвеченные участки границы узла (по одному на точку входа трубы)
+        self.side_items: dict[str, list[QGraphicsPathItem]] = {}
+        self.show_side_marks: bool = True
+        self.side_mark_color: QColor | None = None   # None → цвет узла
+        # Во время массовой отрисовки рёбер участки не пересчитываем: их
+        # рисует _draw_all_nodes одним проходом.
+        self._side_marks_bulk: bool = False
+        # Индекс узел → рёбра на время массовой отрисовки. Без него подсветка
+        # всего листа была бы O(узлы × рёбра) — на 1000 узлах это удваивало
+        # время сборки сцены (tools/bench/bench_scene.py).
+        self._side_edge_index: dict[str, list] | None = None
 
         # ── Mode system ──
         self._mode_handlers: dict[str, ModeHandler] = {}
@@ -402,6 +419,7 @@ class BaseGraphEditor(QGraphicsView):
         self.edge_label_items.clear()
         self.bbox_items.clear()
         self.polygon_items.clear()
+        self.side_items.clear()
         self.selection_ring = None
         self.hover_ring = None
         self.preview_line = None
@@ -418,12 +436,16 @@ class BaseGraphEditor(QGraphicsView):
     def _draw_all_edges(self):
         """Базовая отрисовка рёбер с хуками для Advanced."""
         self._before_draw_all_edges()
-        for edge in self.edges_data:
-            src, tgt = edge.get('source'), edge.get('target')
-            if src in self.nodes and tgt in self.nodes:
-                key = self.model.edge_key(src, tgt)
-                self._before_edge_draw(key, edge)
-                self.create_edge_item(key, edge)
+        self._side_marks_bulk = True
+        try:
+            for edge in self.edges_data:
+                src, tgt = edge.get('source'), edge.get('target')
+                if src in self.nodes and tgt in self.nodes:
+                    key = self.model.edge_key(src, tgt)
+                    self._before_edge_draw(key, edge)
+                    self.create_edge_item(key, edge)
+        finally:
+            self._side_marks_bulk = False
 
     def _before_draw_all_edges(self):
         """Хук перед циклом отрисовки. Base: no-op. Advanced: clear perp_scores."""
@@ -515,6 +537,7 @@ class BaseGraphEditor(QGraphicsView):
         if diam_text:
             self._create_edge_label(edge_key, edge_data, diam_text)
 
+        self._refresh_side_marks_for_edge(edge_key)
         return item
 
     def _create_edge_label(self, edge_key: tuple, edge_data: dict, text: str):
@@ -559,6 +582,7 @@ class BaseGraphEditor(QGraphicsView):
         if key in self.edge_label_items:
             self.scene.removeItem(self.edge_label_items[key])
             del self.edge_label_items[key]
+        self._refresh_side_marks_for_edge(key)
 
     def _update_edge_path(self, edge_key: tuple):
         """Обновить path и pen существующего edge item + подпись."""
@@ -589,6 +613,150 @@ class BaseGraphEditor(QGraphicsView):
                 br = label.boundingRect()
                 label.setPos(mid_x - br.width() / 2, mid_y - br.height() / 2)
 
+        self._refresh_side_marks_for_edge(edge_key)
+
+    # =================================================================
+    # Подсветка стороны блока, где есть подключение (П8)
+    # =================================================================
+
+    def set_side_marks_visible(self, visible: bool):
+        """Показывать/скрывать подсветку сторон (переключатель в шестерёнке)."""
+        self.show_side_marks = bool(visible)
+        self._refresh_all_side_marks()
+
+    def set_side_mark_color(self, color: QColor | None):
+        """Цвет подсветки. None — брать цвет узла (поведение по умолчанию)."""
+        self.side_mark_color = QColor(color) if color is not None else None
+        self._refresh_all_side_marks()
+
+    def _refresh_all_side_marks(self):
+        self._build_side_edge_index()
+        try:
+            for node_id in list(self.nodes):
+                self._draw_side_marks(node_id)
+        finally:
+            self._side_edge_index = None
+
+    def _build_side_edge_index(self):
+        """Индекс узел → инцидентные рёбра (на время массового прохода)."""
+        index: dict[str, list] = {}
+        for edge in self.edges_data:
+            for nid in (edge.get('source'), edge.get('target')):
+                if nid is not None:
+                    index.setdefault(nid, []).append(edge)
+        self._side_edge_index = index
+
+    def _refresh_side_marks_for_edge(self, edge_key: tuple):
+        """Пересчитать участки у обоих концов ребра.
+
+        Точечных путей пересчёта рёбер много (undo/redo команд, батч-drag, тяга
+        конца, autofix, вставка буфера, живой resize), но все они проходят через
+        create_edge_item / _update_edge_path / remove_edge_item — хук здесь, а не
+        в каждом из них.
+        """
+        if self._side_marks_bulk or not edge_key:
+            return
+        for node_id in edge_key:
+            if node_id in self.nodes:
+                self._draw_side_marks(node_id)
+
+    def _node_outline_points(self, node_id: str):
+        """(замкнутая полилиния, обрезать_по_грани) НАРИСОВАННОЙ формы узла.
+
+        Берётся то, что реально на экране: у скинового узла в холсте контур не
+        рисуется (_draws_polygon), там форма = bbox. Иначе штрих лёг бы на
+        невидимый контур.
+        Returns (None, False) — у узла нет нарисованной формы (коннектор).
+        """
+        node = self.nodes.get(node_id)
+        if not node or node.get('type') != 'equipment':
+            return None, False
+        if self._node_has_polygon(node):
+            seg = node.get('segmentation')
+            return [(seg[i], seg[i + 1]) for i in range(0, len(seg) - 1, 2)], False
+        bb = node.get('bbox')
+        if bb and len(bb) == 4:
+            x1, y1, x2, y2 = bb
+            # Бокс — обрезаем по грани: у мелкого бокса штрих иначе завернёт за угол.
+            return [(x1, y1), (x2, y1), (x2, y2), (x1, y2)], True
+        return None, False
+
+    def _node_entry_points(self, node_id: str) -> list:
+        """Точки входа труб в узел (x, y) — по НАРИСОВАННЫМ концам рёбер.
+
+        В холсте конец для отрисовки не равен точке в данных (_visual_edge_ends
+        подтягивает его к границе контура) — берём именно его, иначе штрих
+        встанет мимо видимой трубы. Фолбэк на get_connection_point — для старых
+        графов без source_point/target_point.
+        """
+        points = []
+        if self._side_edge_index is not None:
+            incident = self._side_edge_index.get(node_id, ())
+        else:
+            incident = [e for e in self.edges_data
+                        if node_id in (e.get('source'), e.get('target'))]
+        for edge in incident:
+            src, tgt = edge.get('source'), edge.get('target')
+            key = self.model.edge_key(src, tgt)
+            sp, tp = self._visual_edge_ends(key, edge)
+            pt = sp if node_id == src else tp
+            if pt and len(pt) == 2:
+                points.append((float(pt[1]), float(pt[0])))   # [y, x] → (x, y)
+                continue
+            partner = self.nodes.get(tgt if node_id == src else src)
+            if partner and partner.get('centroid'):
+                points.append(self.get_connection_point(
+                    node_id, partner['centroid'][1], partner['centroid'][0]))
+        return points
+
+    def _remove_side_marks(self, node_id: str):
+        for item in self.side_items.pop(node_id, []):
+            if item.scene() is not None:
+                self.scene.removeItem(item)
+
+    def _draw_side_marks(self, node_id: str):
+        """Перерисовать участки границы узла вокруг точек входа труб."""
+        self._remove_side_marks(node_id)
+        if not self.show_side_marks:
+            return
+        outline, clip = self._node_outline_points(node_id)
+        if not outline:
+            return
+        entries = self._node_entry_points(node_id)
+        if not entries:
+            return
+
+        # Цвет узла: раз точки входа есть, узел заведомо не изолирован, значит
+        # COLOR_ISOLATED тут недостижим. Проверять связность перебором рёбер
+        # нельзя — это O(узлы × рёбра) на весь лист.
+        color = self.side_mark_color or self.COLOR_EQUIPMENT
+        pen = QPen(color, self.OUTLINE_WIDTH * 2.5)
+        pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+        items = []
+        seen = set()
+        for px, py in entries:
+            _i, _t, cx, cy = boundary_projection(outline, px, py)
+            key = (round(cx, 3), round(cy, 3))
+            if key in seen:
+                continue          # два ребра в одну точку — один участок
+            seen.add(key)
+            pts = boundary_mark_points(outline, px, py, self.SIDE_MARK_LEN, clip)
+            if len(pts) < 2:
+                continue
+            path = QPainterPath()
+            path.moveTo(pts[0][0], pts[0][1])
+            for x, y in pts[1:]:
+                path.lineTo(x, y)
+            item = QGraphicsPathItem(path)
+            item.setPen(pen)
+            item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+            # Между рамкой узла (2) и маркером-центроидом (3).
+            item.setZValue(2.5)
+            self.scene.addItem(item)
+            items.append(item)
+        if items:
+            self.side_items[node_id] = items
+
     # =================================================================
     # Node rendering
     # =================================================================
@@ -612,6 +780,13 @@ class BaseGraphEditor(QGraphicsView):
 
     def _draw_all_nodes(self):
         """Отрисовка всех узлов."""
+        self._build_side_edge_index()   # см. _node_entry_points: иначе O(N×E)
+        try:
+            self._draw_all_nodes_inner()
+        finally:
+            self._side_edge_index = None
+
+    def _draw_all_nodes_inner(self):
         connected_nodes = set()
         for a, b in self.edges:
             connected_nodes.add(a)
@@ -679,6 +854,8 @@ class BaseGraphEditor(QGraphicsView):
             self.scene.addItem(marker)
             self.node_items[node_id] = marker
 
+            self._draw_side_marks(node_id)
+
     def _draw_single_node(self, node_id: str):
         """Отрисовать один узел (маркер + bbox/polygon для equipment)."""
         node = self.nodes.get(node_id)
@@ -736,8 +913,11 @@ class BaseGraphEditor(QGraphicsView):
         self.scene.addItem(marker)
         self.node_items[node_id] = marker
 
+        self._draw_side_marks(node_id)
+
     def remove_node_items(self, node_id: str):
         """Удалить все визуальные элементы узла. Public — для Commands."""
+        self._remove_side_marks(node_id)
         if node_id in self.node_items:
             self.scene.removeItem(self.node_items[node_id])
             del self.node_items[node_id]

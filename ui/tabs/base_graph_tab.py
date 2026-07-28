@@ -389,6 +389,16 @@ class BaseGraphTab(AppearanceMixin, QWidget):
             panel, "Толщина рамки боксов", "size_outline",
             lambda f: self._set_editor_size("OUTLINE_WIDTH", f),
         )
+        # П8: подсветка стороны блока, где есть подключение. По умолчанию — вкл.
+        self._add_flag_setting(
+            panel, "Подсветка сторон с подключением", "side_marks", True,
+            lambda v: self._editor and self._editor.set_side_marks_visible(v),
+        )
+        self._add_color_setting(
+            panel, "Цвет подсветки сторон", "side_mark_color",
+            QColor(self._editor.COLOR_EQUIPMENT if self._editor else "#3498db"),
+            lambda c: self._editor and self._editor.set_side_mark_color(c),
+        )
 
     def _set_editor_size(self, key: str, factor: float):
         ed = self._editor
@@ -408,6 +418,10 @@ class BaseGraphTab(AppearanceMixin, QWidget):
                 "size_connector", lambda f: ed.set_size_factor("CONNECTOR_DRAW_RADIUS", f))
             self._apply_saved_size(
                 "size_outline", lambda f: ed.set_size_factor("OUTLINE_WIDTH", f))
+        if hasattr(ed, "set_side_marks_visible"):
+            self._apply_saved_flag("side_marks", True, ed.set_side_marks_visible)
+            self._apply_saved_color("side_mark_color", QColor(ed.COLOR_EQUIPMENT),
+                                    ed.set_side_mark_color)
 
     def apply_default_appearance(self):
         super().apply_default_appearance()
@@ -420,6 +434,9 @@ class BaseGraphTab(AppearanceMixin, QWidget):
         # Общий сброс обязан вернуть и размерные регуляторы (иначе T6 красный).
         if hasattr(ed, "reset_size_factors"):
             ed.reset_size_factors()
+        if hasattr(ed, "set_side_marks_visible"):
+            ed.set_side_mark_color(None)      # None → цвет узла
+            ed.set_side_marks_visible(True)
 
     @Slot(str)
     def _on_download_error(self, error_msg: str):

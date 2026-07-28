@@ -1149,3 +1149,103 @@ def node_orientation_by_edges(node_id, nodes, edges_data):
     if not (has_h or has_v):
         return None
     return 'HORIZONTAL' if has_h else 'VERTICAL'
+
+
+# =====================================================================
+# Подсветка участка границы вокруг точки входа трубы (П8)
+# =====================================================================
+
+def boundary_projection(outline: List[Tuple[float, float]],
+                        px: float, py: float) -> Tuple[int, float, float, float]:
+    """Проекция точки на ЗАМКНУТУЮ полилинию.
+
+    Args:
+        outline: вершины замкнутого контура [(x, y), ...] (последняя соединена
+                 с первой; дублировать первую не нужно).
+    Returns:
+        (индекс сегмента, параметр t на нём 0..1, x, y). Для пустого/
+        вырожденного контура — (0, 0.0, px, py).
+    """
+    n = len(outline)
+    if n < 2:
+        return 0, 0.0, px, py
+    best = (0, 0.0, px, py, float('inf'))
+    for i in range(n):
+        ax, ay = outline[i]
+        bx, by = outline[(i + 1) % n]
+        abx, aby = bx - ax, by - ay
+        ab2 = abx * abx + aby * aby
+        t = 0.0 if ab2 == 0.0 else max(0.0, min(1.0, ((px - ax) * abx + (py - ay) * aby) / ab2))
+        cx, cy = ax + t * abx, ay + t * aby
+        d2 = (px - cx) ** 2 + (py - cy) ** 2
+        if d2 < best[4]:
+            best = (i, t, cx, cy, d2)
+    return best[0], best[1], best[2], best[3]
+
+
+def boundary_mark_points(outline: List[Tuple[float, float]],
+                         px: float, py: float, length: float,
+                         clip_to_face: bool = False) -> List[Tuple[float, float]]:
+    """Участок границы длиной `length`, центрированный на проекции (px, py).
+
+    Единый алгоритм для боксов и полигонов: точка проецируется на замкнутую
+    полилинию, дальше от проекции отматывается по length/2 в обе стороны ВДОЛЬ
+    границы.
+
+    clip_to_face=True — не заворачивать за вершину (участок остаётся на той
+    грани, куда попала проекция). Нужен боксам: у мелкого бокса половина длины
+    больше грани, и без обрезки штрих завернул бы за угол.
+
+    Returns:
+        Полилиния участка [(x, y), ...] (>= 2 точек) или [] — контур вырожден.
+    """
+    n = len(outline)
+    if n < 2 or length <= 0:
+        return []
+
+    idx, t, cx, cy = boundary_projection(outline, px, py)
+    half = length / 2.0
+
+    def _seg(i):
+        ax, ay = outline[i]
+        bx, by = outline[(i + 1) % n]
+        return ax, ay, bx, by, math.hypot(bx - ax, by - ay)
+
+    perimeter = sum(_seg(i)[4] for i in range(n))
+    if perimeter <= 1e-9:
+        return []
+    # Штрих не может быть длиннее самой границы.
+    half = min(half, perimeter / 2.0)
+
+    def _walk(forward: bool) -> List[Tuple[float, float]]:
+        """Отмотать half от проекции; вернуть точки ОТ проекции наружу."""
+        pts: List[Tuple[float, float]] = []
+        remain = half
+        i, u = idx, t
+        for _ in range(n + 1):
+            ax, ay, bx, by, ln = _seg(i)
+            if ln <= 1e-9:
+                avail = 0.0
+            else:
+                avail = (1.0 - u) * ln if forward else u * ln
+            if remain <= avail or clip_to_face:
+                step = min(remain, avail)
+                du = 0.0 if ln <= 1e-9 else step / ln
+                uu = u + du if forward else u - du
+                pts.append((ax + (bx - ax) * uu, ay + (by - ay) * uu))
+                return pts
+            # грань закончилась — идём через вершину дальше
+            remain -= avail
+            if forward:
+                pts.append((bx, by))
+                i = (i + 1) % n
+                u = 0.0
+            else:
+                pts.append((ax, ay))
+                i = (i - 1) % n
+                u = 1.0
+        return pts
+
+    back = _walk(False)
+    fwd = _walk(True)
+    return list(reversed(back)) + [(cx, cy)] + fwd

@@ -2400,6 +2400,8 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             r = (self.EQUIPMENT_MARKER_RADIUS if node.get('type') == 'equipment'
                  else self.CONNECTOR_DRAW_RADIUS)
             self.node_items[node_id].setRect(cx - r, cy - r, r * 2, r * 2)
+        # форма узла изменилась — переставить подсветку сторон (П8)
+        self._draw_side_marks(node_id)
         # подогнать скин под новый размер (живой резайз)
         if self.show_skins and node_id in self._skin_items:
             self._update_node_skin(node_id)
