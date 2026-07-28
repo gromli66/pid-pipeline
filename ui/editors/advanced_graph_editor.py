@@ -1642,7 +1642,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                         self.polygon_items[nid].setPath(path)
 
             if nid in self.node_items:
-                r = self.EQUIPMENT_MARKER_RADIUS if node_type == 'equipment' else self.CONNECTOR_MARKER_RADIUS
+                r = self.EQUIPMENT_MARKER_RADIUS if node_type == 'equipment' else self.CONNECTOR_DRAW_RADIUS
                 self.node_items[nid].setRect(nx-r, ny-r, r*2, r*2)
 
             # Скин следует за боксом при групповом drag (bbox уже обновлён выше)
@@ -1780,7 +1780,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                     self.polygon_items[node_id].setPath(path)
 
         if node_id in self.node_items:
-            r = self.EQUIPMENT_MARKER_RADIUS if node_type == 'equipment' else self.CONNECTOR_MARKER_RADIUS
+            r = self.EQUIPMENT_MARKER_RADIUS if node_type == 'equipment' else self.CONNECTOR_DRAW_RADIUS
             self.node_items[node_id].setRect(x - r, y - r, r * 2, r * 2)
 
         # Пересчитать рёбра — двухпроходный
@@ -2395,7 +2395,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         if node_id in self.node_items:
             cx, cy = node['centroid'][1], node['centroid'][0]
             r = (self.EQUIPMENT_MARKER_RADIUS if node.get('type') == 'equipment'
-                 else self.CONNECTOR_MARKER_RADIUS)
+                 else self.CONNECTOR_DRAW_RADIUS)
             self.node_items[node_id].setRect(cx - r, cy - r, r * 2, r * 2)
         # подогнать скин под новый размер (живой резайз)
         if self.show_skins and node_id in self._skin_items:
@@ -3019,6 +3019,8 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
     def _clip_nodes_bbox(self, nodes: list) -> tuple:
         """Общий bbox набора узлов буфера: bbox оборудования или centroid ± r
         коннектора. По нему считается центр набора для призрака/вставки."""
+        # Радиус здесь ГЕОМЕТРИЧЕСКИЙ (не DRAW): от него зависят координаты
+        # вставки — ползунок «размер коннекторов» двигать их не должен.
         r = self.CONNECTOR_MARKER_RADIUS
         xs1, ys1, xs2, ys2 = [], [], [], []
         for n in nodes:
@@ -3212,7 +3214,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                         deco.append(lbl)
                 else:
                     c = n.get('centroid') or [0.0, 0.0]  # [y, x]
-                    r = self.CONNECTOR_MARKER_RADIUS
+                    r = self.CONNECTOR_DRAW_RADIUS
                     items.append(QGraphicsEllipseItem(
                         c[1] - r, c[0] - r, r * 2, r * 2))
             # Полилинии рёбер: source_point → waypoints → target_point

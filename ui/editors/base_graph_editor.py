@@ -59,7 +59,15 @@ class BaseGraphEditor(QGraphicsView):
     # В canvas-режиме сцена = холст 1920x1080, и размеры берутся из _VIS_CANVAS
     # (см. _apply_visuals) — не пересчётом отсюда, а явными значениями холста.
     EQUIPMENT_MARKER_RADIUS = 6
+    # ВНИМАНИЕ: два радиуса коннектора разведены намеренно.
+    # CONNECTOR_MARKER_RADIUS — ГЕОМЕТРИЧЕСКИЙ: виртуальный bbox коннектора
+    #   (_get_node_bbox), от него зависят посадка рёбер (source/target_point →
+    #   FXML), сторона ребра и геометрия ОКР-привязки. Регуляторами не крутится.
+    # CONNECTOR_DRAW_RADIUS — НАРИСОВАННЫЙ: только кружок маркера. Его и меняет
+    #   ползунок «размер коннекторов» (шестерёнка), в данные не уходит.
+    # Дефолты равны — поведение по умолчанию не меняется.
     CONNECTOR_MARKER_RADIUS = 8
+    CONNECTOR_DRAW_RADIUS = 8
     CLICK_THRESHOLD = 20
     SELECTION_RING_WIDTH = 3
     EDGE_WIDTH = 4
@@ -69,8 +77,8 @@ class BaseGraphEditor(QGraphicsView):
 
     # Размеры, зависящие от системы координат сцены
     _VIS_KEYS = (
-        "EQUIPMENT_MARKER_RADIUS", "CONNECTOR_MARKER_RADIUS", "CLICK_THRESHOLD",
-        "SELECTION_RING_WIDTH", "EDGE_WIDTH", "OUTLINE_WIDTH",
+        "EQUIPMENT_MARKER_RADIUS", "CONNECTOR_MARKER_RADIUS", "CONNECTOR_DRAW_RADIUS",
+        "CLICK_THRESHOLD", "SELECTION_RING_WIDTH", "EDGE_WIDTH", "OUTLINE_WIDTH",
         "HIGHLIGHT_WIDTH", "PREVIEW_WIDTH",
     )
 
@@ -87,6 +95,7 @@ class BaseGraphEditor(QGraphicsView):
         "OUTLINE_WIDTH": 1.0,
         "EQUIPMENT_MARKER_RADIUS": 3.0,
         "CONNECTOR_MARKER_RADIUS": 4.0,
+        "CONNECTOR_DRAW_RADIUS": 4.0,
         "CLICK_THRESHOLD": 8.0,
         "SELECTION_RING_WIDTH": 1.5,
         "HIGHLIGHT_WIDTH": 2.0,
@@ -612,7 +621,7 @@ class BaseGraphEditor(QGraphicsView):
 
                 r = self.EQUIPMENT_MARKER_RADIUS
             else:
-                r = self.CONNECTOR_MARKER_RADIUS
+                r = self.CONNECTOR_DRAW_RADIUS
 
             marker = QGraphicsEllipseItem(cx - r, cy - r, r * 2, r * 2)
             marker.setPen(QPen(color, self.OUTLINE_WIDTH))
@@ -670,7 +679,7 @@ class BaseGraphEditor(QGraphicsView):
                 self.scene.addItem(rect)
                 self.bbox_items[node_id] = rect
 
-        r = self.EQUIPMENT_MARKER_RADIUS if node_type == 'equipment' else self.CONNECTOR_MARKER_RADIUS
+        r = self.EQUIPMENT_MARKER_RADIUS if node_type == 'equipment' else self.CONNECTOR_DRAW_RADIUS
         marker = QGraphicsEllipseItem(cx - r, cy - r, r * 2, r * 2)
         marker.setPen(QPen(color, self.OUTLINE_WIDTH))
         marker.setBrush(QBrush(color.lighter(150)))
