@@ -280,6 +280,29 @@ class AppearanceMixin:
 
         panel.add_slider(label, lo, hi, cur, on_change)
 
+    def _add_size_setting(self, panel: AppearancePanel, label: str, key: str,
+                          apply_fn, lo: int = 25, hi: int = 400):
+        """Ползунок субъективного размера: % от базового (100 = как было).
+
+        apply_fn получает МНОЖИТЕЛЬ (v/100), а не абсолютный размер: редактор
+        применяет его от собственной базы, поэтому значение переживает
+        переключение системы координат (растр/холст) и не накапливается.
+        Только визуал — в граф и FXML ничего не уходит.
+        """
+        s = UISettings.instance()
+        cur = int(round(self._saved_pct(key, 100.0)))
+
+        def on_change(v: int):
+            s.set_appearance(self.uid, key, float(v))
+            apply_fn(v / 100.0)
+
+        panel.add_slider(label, lo, hi, cur, on_change)
+
+    def _apply_saved_size(self, key: str, apply_fn):
+        """Применить сохранённый множитель размера, если пользователь его задавал."""
+        if UISettings.instance().has_appearance(self.uid, key):
+            apply_fn(self._saved_pct(key, 100.0) / 100.0)
+
     def _saved_color(self, key: str, default_color: QColor) -> QColor:
         raw = UISettings.instance().get_appearance(self.uid, key, default_color.name())
         c = QColor(raw)

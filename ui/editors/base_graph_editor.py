@@ -82,6 +82,13 @@ class BaseGraphEditor(QGraphicsView):
         "HIGHLIGHT_WIDTH", "PREVIEW_WIDTH",
     )
 
+    # Ключи, которым разрешён субъективный множитель из шестерёнки (П4).
+    # Строго нарисованные величины. Сюда НЕ входят:
+    #   CONNECTOR_MARKER_RADIUS — геометрия (см. П0),
+    #   CLICK_THRESHOLD — hit-test,
+    #   EDGE_WIDTH — обязана совпадать с graph_to_fxml.LINE_STROKE_WIDTH.
+    SIZE_FACTOR_KEYS = ("CONNECTOR_DRAW_RADIUS", "OUTLINE_WIDTH")
+
     # WYSIWYG: холст 1920x1080 — не уменьшенный оригинал, а ФИНАЛЬНАЯ система
     # координат: что оператор видит, то и уйдёт в FXML. Поэтому размеры здесь
     # заданы прямо в пикселях холста, а не пересчитаны из legacy-констант
@@ -127,6 +134,14 @@ class BaseGraphEditor(QGraphicsView):
         # Legacy-размеры визуала — с учётом переопределений в потомках.
         # См. _apply_visuals: в холсте вместо них берётся _VIS_CANVAS.
         self._vis_base = {k: getattr(self, k) for k in self._VIS_KEYS}
+        # Субъективные множители размеров (ползунки шестерёнки, П4): ключ → фактор.
+        # Применяются ВНУТРИ _apply_visuals от базы, поэтому идемпотентны и
+        # переживают переключение legacy/canvas (иначе значение, записанное
+        # прямо в атрибут, откатывалось бы при каждом setup_scene).
+        self._size_factors: dict[str, float] = {}
+        # База размерных ключей ВНЕ _VIS_KEYS (у них свой масштаб — например
+        # рамка текст-блока живёт с множителем _ocr_vis_scale).
+        self._size_base_extra: dict[str, float] = {}
 
         # ── Graphics items ──
         self.node_items: dict[str, QGraphicsEllipseItem] = {}
@@ -263,9 +278,43 @@ class BaseGraphEditor(QGraphicsView):
         canvas → _VIS_CANVAS: холст 1920x1080 это финальные пиксели FXML,
                  размеры в нём задаются, а не масштабируются.
         Значения берутся от _vis_base/_VIS_CANVAS, поэтому вызов идемпотентен.
+        Поверх базы накладываются множители ползунков (_size_factors) — только
+        для SIZE_FACTOR_KEYS, т.е. на нарисованные величины.
         """
         for key, base in self._vis_base.items():
-            setattr(self, key, self._VIS_CANVAS[key] if canvas else base)
+            val = self._VIS_CANVAS[key] if canvas else base
+            setattr(self, key, val * self._size_factors.get(key, 1.0))
+        for key, base in self._size_base_extra.items():
+            setattr(self, key, base * self._size_factors.get(key, 1.0))
+
+    def set_size_factor(self, key: str, factor: float):
+        """Субъективный множитель нарисованного размера (ползунок шестерёнки).
+
+        Только визуал: в граф и FXML ничего не уходит (см. П0/П4а — геометрия
+        сидит на отдельных константах). Множитель применяется от базы, поэтому
+        повторные вызовы не накапливаются.
+        """
+        if key not in self.SIZE_FACTOR_KEYS:
+            logger.warning("set_size_factor: ключ %s не размерный, игнорирую", key)
+            return
+        self._size_factors[key] = max(0.05, float(factor))
+        self._apply_visuals(canvas=self._canvas_mode)
+        self._redraw_after_size_change()
+
+    def reset_size_factors(self):
+        """Вернуть все множители размеров к 1.0 (общий сброс оформления)."""
+        if not self._size_factors:
+            return
+        self._size_factors.clear()
+        self._apply_visuals(canvas=self._canvas_mode)
+        self._redraw_after_size_change()
+
+    def _redraw_after_size_change(self):
+        """Перерисовка после смены множителя. До загрузки данных — no-op
+        (иначе _redraw_all снесёт заглушку пустой сцены)."""
+        if not self.nodes:
+            return
+        self._redraw_all()
 
     def setup_scene(self):
         """Настройка сцены со всеми слоями.

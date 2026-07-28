@@ -558,6 +558,11 @@ class OcrBindingTab(AppearanceMixin, QWidget):
         self._add_pct_setting(panel, "Размер подписи", "label_size",
                               float(getattr(ed, "_label_pt", 9)),
                               ed.set_label_font_size, lo=6, hi=24)
+        # Субъективные размеры (только визуал; геометрия привязки — П4а).
+        self._add_size_setting(panel, "Размер узлов", "size_node",
+                               ed.set_node_size_factor)
+        self._add_size_setting(panel, "Толщина рамки текст-боксов", "size_ocr_border",
+                               ed.set_text_border_factor)
 
     def apply_saved_appearance(self):
         super().apply_saved_appearance()
@@ -568,6 +573,8 @@ class OcrBindingTab(AppearanceMixin, QWidget):
         self._apply_saved_color("box_border", QColor(235, 235, 235), ed.set_box_border_color)
         self._apply_saved_color("edge_color", QColor(0, 255, 220), ed.set_edge_color)
         self._apply_saved_pct("label_size", 9.0, ed.set_label_font_size)
+        self._apply_saved_size("size_node", ed.set_node_size_factor)
+        self._apply_saved_size("size_ocr_border", ed.set_text_border_factor)
 
     def apply_default_appearance(self):
         super().apply_default_appearance()
@@ -578,6 +585,8 @@ class OcrBindingTab(AppearanceMixin, QWidget):
         ed.set_box_border_color(QColor(235, 235, 235))
         ed.set_edge_color(QColor(0, 255, 220))
         ed.set_label_font_size(9)
+        ed.set_node_size_factor(1.0)
+        ed.set_text_border_factor(1.0)
 
     def _classify_blocks_into_groups(self):
         """Разбить classifications на 3 группы по типу для подвкладок.

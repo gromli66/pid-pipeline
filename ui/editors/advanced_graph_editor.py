@@ -94,6 +94,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
     активные в состоянии display_regime == 'ocr'.
     """
 
+    # + рамка слоя ОКР (текст-блоки и рамки ОКР-объектов) — своя ручка.
+    SIZE_FACTOR_KEYS = SimpleGraphEditor.SIZE_FACTOR_KEYS + ("OCR_BORDER_W",)
+
     def __init__(self):
         super().__init__()
         self._init_ocr_layer()

@@ -659,6 +659,11 @@ class AdvancedGraphTab(SimpleGraphTab):
             panel, "Неперпенд. ребро", "edge_bad_color", QColor("#e67e22"),
             lambda c: self._editor and self._editor.set_edge_bad_color(c),
         )
+        # Слой ОКР (текст-блоки и рамки ОКР-объектов) — одна ручка.
+        self._add_size_setting(
+            panel, "Толщина рамки текст-боксов", "size_ocr_border",
+            lambda f: self._set_editor_size("OCR_BORDER_W", f),
+        )
 
     def apply_saved_appearance(self):
         super().apply_saved_appearance()
@@ -671,6 +676,9 @@ class AdvancedGraphTab(SimpleGraphTab):
                                     ed.set_edge_no_diameter_color)
             self._apply_saved_color("edge_bad_color", QColor("#e67e22"),
                                     ed.set_edge_bad_color)
+        if hasattr(ed, "set_size_factor"):
+            self._apply_saved_size(
+                "size_ocr_border", lambda f: ed.set_size_factor("OCR_BORDER_W", f))
 
     def apply_default_appearance(self):
         super().apply_default_appearance()

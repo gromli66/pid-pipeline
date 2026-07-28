@@ -285,6 +285,15 @@ class OcrBindingEditor(QGraphicsView):
         self._c_equip = COLOR_EQUIP_GREY
         self._c_textbox = COLOR_UNBOUND_BLUE
         self._label_pt = self.TEXT_FONT_SIZE
+        # Субъективные размеры (ползунки шестерёнки) — ТОЛЬКО визуал.
+        # База хранится отдельно, чтобы множитель применялся от неё и не
+        # накапливался при повторных вызовах.
+        self._draw_base = {
+            "NODE_DRAW_RADIUS": float(self.NODE_DRAW_RADIUS),
+            "OCR_BORDER_WIDTH": float(self.OCR_BORDER_WIDTH),
+        }
+        self._ocr_bound_border_w = BOUND_BORDER_WIDTH
+        self._ocr_select_border_w = SELECT_BORDER_WIDTH
         self._bg_darkness = 0.47
         self._bg_item = None
         self._orig_qimage = None
@@ -1043,6 +1052,35 @@ class OcrBindingEditor(QGraphicsView):
     def set_label_font_size(self, pt):
         self._label_pt = max(6, int(pt)); self.refresh_ocr_layer()
 
+    def set_node_size_factor(self, factor: float):
+        """Ползунок «размер узлов» — только нарисованные кружки.
+
+        Геометрия привязки сидит на NODE_RADIUS и здесь не трогается (П4а),
+        иначе ползунок менял бы сторону и bbox привязки, уходящие в FXML.
+        """
+        self.NODE_DRAW_RADIUS = max(1.0, self._draw_base["NODE_DRAW_RADIUS"]
+                                    * float(factor))
+        self._redraw_graph_nodes()
+
+    def set_text_border_factor(self, factor: float):
+        """Ползунок «толщина рамки текст-боксов» — все рамки блоков сразу."""
+        f = max(0.05, float(factor))
+        self.OCR_BORDER_WIDTH = self._draw_base["OCR_BORDER_WIDTH"] * f
+        self._ocr_bound_border_w = BOUND_BORDER_WIDTH * f
+        self._ocr_select_border_w = SELECT_BORDER_WIDTH * f
+        self._redraw_all_colors()
+
+    def _redraw_graph_nodes(self):
+        """Пересоздать кружки узлов (размер задаётся при создании эллипса)."""
+        for items in (self._node_items, getattr(self, "_connector_items", {})):
+            for it in list(items.values()):
+                try:
+                    self.scene.removeItem(it)
+                except (RuntimeError, ValueError):
+                    pass
+            items.clear()
+        self._draw_graph_nodes()
+
     def set_background_darkness(self, frac):
         self._bg_darkness = max(0.0, min(0.95, float(frac)))
         self._apply_bg_darkness()
@@ -1075,10 +1113,10 @@ class OcrBindingEditor(QGraphicsView):
     def _ocr_pen(self, idx):
         """Рамка текст-бокса: зелёный (выделен) / золото (привязан) / голубой (нет)."""
         if idx in self._selected_ocr:
-            return QPen(COLOR_SELECT_GREEN, SELECT_BORDER_WIDTH)
+            return QPen(COLOR_SELECT_GREEN, self._ocr_select_border_w)
         if idx in self._bound_ocr_indices:
-            return QPen(COLOR_BOUND_GOLD, BOUND_BORDER_WIDTH)
-        return QPen(self._c_textbox, BOUND_BORDER_WIDTH)
+            return QPen(COLOR_BOUND_GOLD, self._ocr_bound_border_w)
+        return QPen(self._c_textbox, self._ocr_bound_border_w)
 
     def _draw_ocr_blocks(self):
         font = QFont("DejaVu Sans", self._label_pt)

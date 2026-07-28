@@ -380,6 +380,20 @@ class BaseGraphTab(AppearanceMixin, QWidget):
             panel, "Цвет рёбер", "edge_color", QColor(255, 255, 255),
             lambda c: self._editor and self._editor.set_edge_color(c),
         )
+        # Субъективные размеры (только визуал). Наследуются «Контурами».
+        self._add_size_setting(
+            panel, "Размер коннекторов", "size_connector",
+            lambda f: self._set_editor_size("CONNECTOR_DRAW_RADIUS", f),
+        )
+        self._add_size_setting(
+            panel, "Толщина рамки боксов", "size_outline",
+            lambda f: self._set_editor_size("OUTLINE_WIDTH", f),
+        )
+
+    def _set_editor_size(self, key: str, factor: float):
+        ed = self._editor
+        if ed is not None and hasattr(ed, "set_size_factor"):
+            ed.set_size_factor(key, factor)
 
     def apply_saved_appearance(self):
         super().apply_saved_appearance()
@@ -389,6 +403,11 @@ class BaseGraphTab(AppearanceMixin, QWidget):
         from PySide6.QtGui import QColor
         if hasattr(ed, "set_edge_color"):
             self._apply_saved_color("edge_color", QColor(255, 255, 255), ed.set_edge_color)
+        if hasattr(ed, "set_size_factor"):
+            self._apply_saved_size(
+                "size_connector", lambda f: ed.set_size_factor("CONNECTOR_DRAW_RADIUS", f))
+            self._apply_saved_size(
+                "size_outline", lambda f: ed.set_size_factor("OUTLINE_WIDTH", f))
 
     def apply_default_appearance(self):
         super().apply_default_appearance()
@@ -398,6 +417,9 @@ class BaseGraphTab(AppearanceMixin, QWidget):
         from PySide6.QtGui import QColor
         if hasattr(ed, "set_edge_color"):
             ed.set_edge_color(QColor(255, 255, 255, 150))
+        # Общий сброс обязан вернуть и размерные регуляторы (иначе T6 красный).
+        if hasattr(ed, "reset_size_factors"):
+            ed.reset_size_factors()
 
     @Slot(str)
     def _on_download_error(self, error_msg: str):

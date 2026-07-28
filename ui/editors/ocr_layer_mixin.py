@@ -42,7 +42,6 @@ _LABEL_PT = 9
 _MIN_BLOCK_SIZE = 5.0
 _BLOCK_Z = 50.0
 _LINE_Z = 48.0
-_BORDER_W = 2.0
 # Отступ привязанного блока от границы цели (авто-позиция side+gap), px.
 _BIND_GAP = 6.0
 # Порог «вертикальный» блок: h > w * 1.3 (квадрат — горизонтальный).
@@ -63,6 +62,13 @@ class OcrLayerMixin:
     идёт через ModeHandler'ы (AddOcrBlockHandler, OcrBindHandler).
     """
 
+    # Толщина рамки всего, что относится к слою ОКР: текст-блоки и рамки
+    # ОКР-объектов. Поле экземпляра (не модульная константа) — его крутит
+    # ползунок «толщина рамки текст-боксов» через _size_factors. Применяется
+    # ВСЕГДА с _ocr_vis_scale(): в холсте блок ~15x6 px, без множителя рамка
+    # задавила бы сам блок.
+    OCR_BORDER_W = 2.0
+
     def _ocr_vis_scale(self) -> float:
         """Множитель размеров ВНУТРИ текст-блока (рамка, шрифт, линия привязки).
 
@@ -80,6 +86,8 @@ class OcrLayerMixin:
     # Инициализация / состояние
     # -----------------------------------------------------------------
     def _init_ocr_layer(self):
+        # База для ползунка «толщина рамки текст-боксов» (см. _apply_visuals).
+        self._size_base_extra["OCR_BORDER_W"] = self.OCR_BORDER_W
         # block_id -> {"rect":..., "text":..., "line":...}
         self._ocr_block_items: dict[str, dict] = {}
         self._ocr_drag_id: str | None = None
@@ -164,7 +172,7 @@ class OcrLayerMixin:
             border = _COLOR_BOUND           # привязан
         else:
             border = _COLOR_UNBOUND         # не привязан
-        rect.setPen(QPen(border, _BORDER_W * self._ocr_vis_scale()))
+        rect.setPen(QPen(border, self.OCR_BORDER_W * self._ocr_vis_scale()))
         rect.setBrush(QBrush(Qt.BrushStyle.NoBrush))
         rect.setZValue(_BLOCK_Z)
         rect.setVisible(visible)
@@ -275,6 +283,10 @@ class OcrLayerMixin:
         bnodes = {b.get("node_id") for b in self.model.bindings if b.get("node_id")}
         bedges = {str(b.get("edge_key")) for b in self.model.bindings if b.get("edge_key")}
         poly = getattr(self, "polygon_items", {})
+        # Рамки ОКР-объектов — на ручке слоя ОКР, а не на общей OUTLINE_WIDTH:
+        # решение заказчика 2026-07-28 (всё, что относится к слою ОКР, крутится
+        # одним регулятором «толщина рамки текст-боксов»).
+        ocr_w = self.OCR_BORDER_W * self._ocr_vis_scale()
         # центроид-маркеры
         for nid, marker in self.node_items.items():
             is_equip = (nid in self.bbox_items) or (nid in poly)
@@ -292,13 +304,13 @@ class OcrLayerMixin:
             c = _COLOR_BOUND if nid in bnodes else _NODE_EQUIP_GREY
             try:
                 rect_item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
-                rect_item.setPen(QPen(c, self.OUTLINE_WIDTH))
+                rect_item.setPen(QPen(c, ocr_w))
             except Exception:
                 pass
         for nid, poly_item in poly.items():
             c = _COLOR_BOUND if nid in bnodes else _NODE_EQUIP_GREY
             try:
-                poly_item.setPen(QPen(c, self.OUTLINE_WIDTH))
+                poly_item.setPen(QPen(c, ocr_w))
             except Exception:
                 pass
         # рёбра — золото если привязано
@@ -957,7 +969,8 @@ class AddOcrBlockHandler(ModeHandler):
     def on_press(self, editor, x, y, event) -> bool:
         editor._ocr_add_start = (x, y)
         rect = QGraphicsRectItem(x, y, 1, 1)
-        rect.setPen(QPen(_COLOR_UNBOUND, 2 * self._ocr_vis_scale(), Qt.PenStyle.DashLine))
+        # _ocr_vis_scale — метод редактора, а не хендлера (self здесь — хендлер).
+        rect.setPen(QPen(_COLOR_UNBOUND, 2 * editor._ocr_vis_scale(), Qt.PenStyle.DashLine))
         rect.setZValue(_BLOCK_Z + 5)
         editor.scene.addItem(rect)
         editor._ocr_add_preview = rect
