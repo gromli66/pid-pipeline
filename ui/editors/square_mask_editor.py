@@ -1098,7 +1098,8 @@ class SquareMaskEditor(QGraphicsView):
             rect.setRect(cx - size / 2.0, cy - size / 2.0, size, size)
             changed += 1
 
-        self.square_size = size
+        # self.square_size (размер КИСТИ) намеренно не трогаем: слайдер кисти
+        # остаётся отдельным регулятором, у него свой потолок 15.
         self._redetect_blobs()
         self._resync_points()
         self._update_status(f"Размер {size}px применён к {changed} объектам")
