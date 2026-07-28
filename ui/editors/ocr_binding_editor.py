@@ -193,7 +193,14 @@ class OcrBindingEditor(QGraphicsView):
     mode_changed = Signal(str)  # "idle", "add", "del", "move"
     validation_exit_requested = Signal()  # Esc в режиме валидации
 
+    # Два радиуса узла разведены намеренно (зеркало П0 в base_graph_editor).
+    # NODE_RADIUS — ГЕОМЕТРИЧЕСКИЙ: цель привязки у узла без bbox
+    #   (_node_target_bbox) → _bind_side_of/_auto_bind_bbox пишут block["bbox"],
+    #   а он уходит в артефакт ocr_binding и дальше в <Text> FXML.
+    # NODE_DRAW_RADIUS — НАРИСОВАННЫЙ: только кружок центроида/коннектора,
+    #   его крутит ползунок «размер узлов». Дефолты равны.
     NODE_RADIUS = 7
+    NODE_DRAW_RADIUS = 7
     OCR_BORDER_WIDTH = 2
     BINDING_LINE_WIDTH = 2
     CLICK_THRESHOLD = 25
@@ -1129,7 +1136,7 @@ class OcrBindingEditor(QGraphicsView):
     def _draw_graph_nodes(self):
         if not hasattr(self, "_connector_items"):
             self._connector_items = {}
-        r = self.NODE_RADIUS
+        r = self.NODE_DRAW_RADIUS
         for node in self._graph_nodes:
             node_id = node.get("id", "")
             cx, cy = self._node_center(node)
