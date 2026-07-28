@@ -8,7 +8,6 @@ Template method: скачивание артефактов, сохранение
 Вся расширяемость — через _create_editor() и _setup_toolbar().
 """
 
-import hashlib
 import json
 import logging
 import struct
@@ -46,42 +45,50 @@ def _png_size(path: Path):
     return None
 
 
-def _graph_sha(path: Path) -> str:
-    """Короткий хеш содержимого — метка источника, из которого собран холст."""
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()[:16]
-
-
 def _pretransform_to_canvas(graph_path: Path, image_path: Path, out_path: Path) -> bool:
     """WYSIWYG: перевести граф в холст 1920x1080 (фикс-размеры + declust).
 
     Идемпотентно (уже-1920 граф не трогается). Пишет out_path. True при успехе.
+
+    Это ФОЛБЭК-путь без раскладки, поэтому метка ставится с
+    `layout_applied=False`: холст, собранный здесь, не должен приниматься за
+    продукт раскладки (§3.6 плана).
     """
     from modules.graph.core.pretransform import pretransform
+    from modules.graph.core import canvas_state
+
     graph = json.loads(graph_path.read_text(encoding="utf-8"))
     g, transform, stats = pretransform(graph, image_hw=_png_size(image_path))
-    # Метка источника: по ней при следующем открытии видно, что graph_validated
-    # изменился (оператор возвращался на Контуры/OCR) и холст надо пересобрать.
-    g.setdefault("graph", {}).setdefault("canvas_transform", {})["source_sha"] = \
-        _graph_sha(graph_path)
+    # Метка источника: по ней при следующем открытии видно, что geometry
+    # graph_validated изменилась (оператор возвращался на Контуры/Проверку) и
+    # холст надо пересобрать. Считается по ПРОЕКЦИИ, а не по файлу: OCR и
+    # привязка переписывают файл, не трогая геометрию.
+    canvas_state.stamp(g, graph, layout_applied=False)
     out_path.write_text(json.dumps(g, ensure_ascii=False), encoding="utf-8")
     logger.info("pre-transform → холст 1920x1080: %s", stats)
     return True
 
 
 def _canvas_is_stale(canvas_path: Path, source_path: Path) -> bool:
-    """Холст устарел, если graph_validated изменился после его сборки.
+    """Холст устарел, если геометрия graph_validated изменилась после сборки.
 
     Смёржить их нельзя — pretransform необратим, поэтому устаревший холст
     пересобирается с нуля (правки оператора в нём теряются).
+
+    Считает общий модуль `modules.graph.core.canvas_state` — тот же, что зовёт
+    воркер. Две реализации канона = расходящиеся sha = ложное «устарело».
     """
+    from modules.graph.core import canvas_state
+
     try:
-        g = json.loads(Path(canvas_path).read_text(encoding="utf-8"))
+        canvas = json.loads(Path(canvas_path).read_text(encoding="utf-8"))
+        source = json.loads(Path(source_path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return True
-    sha = ((g.get("graph") or {}).get("canvas_transform") or {}).get("source_sha")
-    if not sha:
-        return True   # холст без метки (собран до её появления) — доверять нечему
-    return sha != _graph_sha(source_path)
+    stale, reason = canvas_state.is_stale(canvas, source)
+    if stale:
+        logger.info("холст устарел: %s", reason)
+    return stale
 
 
 class _GraphArtifactDownloader(QObject):

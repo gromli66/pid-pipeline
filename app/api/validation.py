@@ -22,6 +22,7 @@ from app.db import get_async_db
 from app.models import Diagram, DiagramStatus, Artifact, ArtifactType
 from app.services.dispatch import async_safe_dispatch
 from app.services.storage import StorageService
+from modules.graph.core import canvas_state
 
 router = APIRouter()
 
@@ -932,6 +933,20 @@ async def save_canvas_graph(
 
     storage = StorageService()
     content = await file.read()
+
+    # Отметка «холст правился руками». Этим путём пишет ТОЛЬКО клиент (автосейв
+    # шлёт запрос лишь при несохранённых правках), воркер холст пишет напрямую
+    # и флага не ставит. На флаге стоят запрет молчаливо перезаписать правки
+    # результатом раскладки и сверка перед записью (§3.3/§3.6 плана
+    # docs/planning/AUTO_LAYOUT_INTEGRATION.md).
+    try:
+        canvas = json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise HTTPException(status_code=400,
+                            detail=f"Invalid canvas JSON: {exc}") from exc
+    canvas_state.mark_operator_saved(canvas)
+    content = json.dumps(canvas, ensure_ascii=False).encode("utf-8")
+
     file_path, file_size = await storage.save_file(
         uid, "graph", "graph_canvas.json", content
     )
