@@ -47,12 +47,20 @@ logger = logging.getLogger(__name__)
 # ═════════════════════════════════════════════════════════════════════════
 # Реализация переехала в point_extraction.py: этот модуль на верхнем уровне
 # тянет tqdm, которого нет в requirements/ui.txt, а редактору масок те же
-# функции нужны. Относительный импорт — пакет доступен и как
-# `junction_segmentation` (воркер), и как `modules.junction_segmentation` (UI).
-from .point_extraction import (  # noqa: E402,F401  (re-export)
-    _extract_centers_greedy,
-    extract_points_from_mask,
-)
+# функции нужны.
+# Относительный импорт покрывает оба пакетных имени — `junction_segmentation`
+# (воркер) и `modules.junction_segmentation` (UI); фолбэк на плоский — запуск
+# файлом (`python prepare_dataset.py`), у него нет родительского пакета.
+try:
+    from .point_extraction import (  # noqa: F401  (re-export)
+        _extract_centers_greedy,
+        extract_points_from_mask,
+    )
+except ImportError:
+    from point_extraction import (  # noqa: F401  (re-export)
+        _extract_centers_greedy,
+        extract_points_from_mask,
+    )
 
 
 def skeletonize_pipe_mask(pipe_mask: np.ndarray, binarize_threshold: int = 127) -> np.ndarray:
