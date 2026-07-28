@@ -177,6 +177,10 @@ class FrameRemoverView(QGraphicsView):
     """QGraphicsView для удаления рамок: полигон (внешнее) + бокс (внутреннее) + обрезка."""
 
     SCENE_PAD = 0.3  # 30% padding вокруг изображения
+    # Зона захвата стороны превью обрезки, экранных px (объектов-ручек нет —
+    # hit-test по самому прямоугольнику).
+    CROP_HANDLE_PX = 6
+    MIN_CROP = 5     # меньше — вырожденная рамка, обрезка отменяется
 
     def __init__(self):
         super().__init__()
@@ -209,6 +213,13 @@ class FrameRemoverView(QGraphicsView):
         self._crop_drawing = False
         self._crop_start = None  # (x, y)
         self._crop_preview: QGraphicsRectItem | None = None
+        # Припаркованное превью: протяжка закончилась, обрезка ЕЩЁ НЕ применена.
+        # Отдельное поле, а не `_crop_preview is not None`: превью-item живёт и
+        # во время протяжки, а _crop_drawing к этому моменту уже сброшен.
+        self._crop_rect: tuple | None = None      # (l, t, r, b)
+        self._crop_drag_zone: str | None = None   # какая ручка тянется
+        self._crop_drag_from = None               # (x, y) на момент захвата
+        self._crop_drag_rect: tuple | None = None # rect на момент захвата
 
         # View setup
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -306,7 +317,9 @@ class FrameRemoverView(QGraphicsView):
     # ── Tool switching ────────────────────────────────────
 
     def set_tool(self, tool: str):
-        # Отменить текущее рисование при смене инструмента
+        # Отменить текущее рисование при смене инструмента. Припаркованное
+        # превью обрезки при этом тоже исчезает — смена инструмента считается
+        # отказом от обрезки.
         self._cleanup_polygon()
         self._cleanup_box()
         self._cleanup_crop()
@@ -466,16 +479,125 @@ class FrameRemoverView(QGraphicsView):
         ))
 
     def _finish_crop(self, scene_pos):
+        """Конец протяжки — превью ПАРКУЕТСЯ, обрезка не применяется.
+
+        Раньше отпускание кнопки сразу резало лист. Теперь рамку можно
+        поправить (тяга за любую точку стороны / за углы / перенос целиком) и
+        применить по Enter, отменить по Esc.
+        """
         if not self._crop_drawing or not self._crop_start:
             return
         x1, y1 = self._crop_start
         x2 = max(0, min(int(scene_pos.x()), self.img_w))
         y2 = max(0, min(int(scene_pos.y()), self.img_h))
+        self._crop_drawing = False
+        self._crop_start = None
 
-        # Убрать preview
+        l, t = min(x1, x2), min(y1, y2)
+        r, b = max(x1, x2), max(y1, y2)
+        # Проверяем вырожденность здесь, а не в _apply_crop: иначе Enter молча
+        # ничего не делал бы (пользователь не понял бы, что рамка мала).
+        if (r - l) < self.MIN_CROP or (b - t) < self.MIN_CROP:
+            self._cleanup_crop()
+            self._status("Слишком маленькая область обрезки, отменено.")
+            return
+
+        self._crop_rect = (l, t, r, b)
+        self._sync_crop_preview()
+        self._status(
+            f"Область {r-l}×{b-t}px. Тяните за стороны/углы или внутри — "
+            "перенести. Enter — обрезать, Esc — отмена."
+        )
+
+    # ── Правка припаркованного превью ─────────────────────
+
+    def _sync_crop_preview(self):
+        if self._crop_preview is None or self._crop_rect is None:
+            return
+        l, t, r, b = self._crop_rect
+        self._crop_preview.setRect(QRectF(l, t, r - l, b - t))
+
+    def _crop_tolerance(self) -> float:
+        """Ширина зоны захвата стороны в координатах сцены (≈CROP_HANDLE_PX
+        экранных пикселей при любом зуме)."""
+        scale = abs(self.transform().m11()) or 1.0
+        return self.CROP_HANDLE_PX / scale
+
+    def _crop_zone_at(self, x: float, y: float) -> str | None:
+        """Зона под точкой: 'l','r','t','b','tl','tr','bl','br','move' или None.
+
+        Ручек-объектов нет — hit-test по самому прямоугольнику (углы попадают
+        сразу в обе стороны, внутри — перенос рамки).
+        """
+        if self._crop_rect is None:
+            return None
+        l, t, r, b = self._crop_rect
+        tol = self._crop_tolerance()
+        if not (l - tol <= x <= r + tol and t - tol <= y <= b + tol):
+            return None
+        h = 'l' if abs(x - l) <= tol else ('r' if abs(x - r) <= tol else '')
+        v = 't' if abs(y - t) <= tol else ('b' if abs(y - b) <= tol else '')
+        zone = v + h                       # 'tl', 'tr', 'bl', 'br'
+        if zone:
+            return zone
+        return 'move' if (l <= x <= r and t <= y <= b) else None
+
+    _CROP_CURSORS = {
+        'l': Qt.CursorShape.SizeHorCursor, 'r': Qt.CursorShape.SizeHorCursor,
+        't': Qt.CursorShape.SizeVerCursor, 'b': Qt.CursorShape.SizeVerCursor,
+        'tl': Qt.CursorShape.SizeFDiagCursor, 'br': Qt.CursorShape.SizeFDiagCursor,
+        'tr': Qt.CursorShape.SizeBDiagCursor, 'bl': Qt.CursorShape.SizeBDiagCursor,
+        'move': Qt.CursorShape.SizeAllCursor,
+    }
+
+    def _update_crop_cursor(self, x: float, y: float):
+        zone = self._crop_zone_at(x, y)
+        self.setCursor(self._CROP_CURSORS.get(zone, Qt.CursorShape.CrossCursor))
+
+    def _start_crop_drag(self, zone: str, x: float, y: float):
+        self._crop_drag_zone = zone
+        self._crop_drag_from = (x, y)
+        self._crop_drag_rect = self._crop_rect
+
+    def _update_crop_drag(self, x: float, y: float):
+        """Пересчитать рамку под текущее положение курсора."""
+        if not self._crop_drag_zone or self._crop_drag_rect is None:
+            return
+        l, t, r, b = self._crop_drag_rect
+        dx = int(x - self._crop_drag_from[0])
+        dy = int(y - self._crop_drag_from[1])
+        zone = self._crop_drag_zone
+
+        if zone == 'move':
+            dx = max(-l, min(dx, self.img_w - r))
+            dy = max(-t, min(dy, self.img_h - b))
+            l, r, t, b = l + dx, r + dx, t + dy, b + dy
+        else:
+            if 'l' in zone:
+                l = max(0, min(l + dx, r - self.MIN_CROP))
+            if 'r' in zone:
+                r = min(self.img_w, max(r + dx, l + self.MIN_CROP))
+            if 't' in zone:
+                t = max(0, min(t + dy, b - self.MIN_CROP))
+            if 'b' in zone:
+                b = min(self.img_h, max(b + dy, t + self.MIN_CROP))
+
+        self._crop_rect = (l, t, r, b)
+        self._sync_crop_preview()
+        self._status(f"Область {r-l}×{b-t}px. Enter — обрезать, Esc — отмена.")
+
+    def _end_crop_drag(self):
+        self._crop_drag_zone = None
+        self._crop_drag_from = None
+        self._crop_drag_rect = None
+
+    def _commit_crop_preview(self):
+        """Enter — применить припаркованное превью."""
+        if self._crop_rect is None:
+            return
+        l, t, r, b = self._crop_rect
         self._cleanup_crop()
-
-        self._apply_crop(x1, y1, x2, y2)
+        self._apply_crop(l, t, r, b)
 
     def _apply_crop(self, x1: int, y1: int, x2: int, y2: int):
         """Обрезать self.image по прямоугольнику: внутреннее остаётся.
@@ -514,6 +636,8 @@ class FrameRemoverView(QGraphicsView):
             self._crop_preview = None
         self._crop_drawing = False
         self._crop_start = None
+        self._crop_rect = None
+        self._end_crop_drag()
 
     # ── Undo ──────────────────────────────────────────────
 
@@ -602,6 +726,16 @@ class FrameRemoverView(QGraphicsView):
         # ── Crop mode ──
         if self.tool == "crop":
             if event.button() == Qt.MouseButton.LeftButton:
+                # Припарковано превью и попали в него — правим рамку,
+                # а не начинаем новую протяжку.
+                zone = self._crop_zone_at(pos.x(), pos.y())
+                if zone:
+                    self._start_crop_drag(zone, pos.x(), pos.y())
+                    return
+                # Клик мимо превью — обычная новая протяжка (старое превью
+                # заменяется). Панорамирование не подавляем сверх прежнего:
+                # средняя/правая кнопка по-прежнему уходят в super().
+                self._cleanup_crop()
                 self._start_crop(pos)
                 return
 
@@ -629,9 +763,16 @@ class FrameRemoverView(QGraphicsView):
             return
 
         # Crop preview
-        if self.tool == "crop" and self._crop_drawing:
-            self._update_crop_preview(pos)
-            return
+        if self.tool == "crop":
+            if self._crop_drawing:
+                self._update_crop_preview(pos)
+                return
+            if self._crop_drag_zone:
+                self._update_crop_drag(pos.x(), pos.y())
+                return
+            if self._crop_rect is not None:
+                self._update_crop_cursor(pos.x(), pos.y())
+                return
 
         super().mouseMoveEvent(event)
 
@@ -645,6 +786,10 @@ class FrameRemoverView(QGraphicsView):
             if event.button() == Qt.MouseButton.LeftButton:
                 pos = self.mapToScene(event.position().toPoint())
                 self._finish_crop(pos)
+            return
+        if self.tool == "crop" and self._crop_drag_zone:
+            if event.button() == Qt.MouseButton.LeftButton:
+                self._end_crop_drag()
             return
         super().mouseReleaseEvent(event)
 
@@ -678,13 +823,31 @@ class FrameRemoverView(QGraphicsView):
                 self._status("Бокс отменён.")
                 return
 
-        # Crop hotkeys (только пока crop реально рисуется — не красть Esc у других)
-        if self.tool == "crop" and self._crop_drawing:
+        # Crop hotkeys (только пока crop реально живёт — не красть Esc у других)
+        if self.tool == "crop" and (self._crop_drawing or self._crop_rect is not None):
             if event.key() == Qt.Key.Key_Escape:
                 self._cleanup_crop()
                 self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
                 self.setCursor(Qt.CursorShape.ArrowCursor)
                 self._status("Обрезка отменена.")
+                return
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                # Return у crop раньше не был занят вовсе (только у polygon).
+                self._commit_crop_preview()
+                return
+            if (
+                event.key() == Qt.Key.Key_Z
+                and event.modifiers() & Qt.KeyboardModifier.ControlModifier
+            ):
+                # Ctrl+Z при живом превью: undo пересобрал бы сцену
+                # (_reset_scene_keep_undo → _cleanup_crop) и убил превью-item
+                # посреди жеста. Отменяем сначала само превью — применено ещё
+                # ничего не было, отменять в изображении нечего. Следующий
+                # Ctrl+Z уже отменит правку изображения.
+                self._cleanup_crop()
+                self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+                self.setCursor(Qt.CursorShape.ArrowCursor)
+                self._status("Обрезка отменена (Ctrl+Z ещё раз — отменить правку).")
                 return
 
         # Global undo (вне рисования)
