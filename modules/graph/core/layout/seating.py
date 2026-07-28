@@ -1,0 +1,223 @@
+# -*- coding: utf-8 -*-
+"""seating.py — контрактная посадка концов рёбер (одна на всю систему).
+
+Источник: стенд `_scratch/layout_align/harness/shared_geom.py` (строки 30-226).
+Перенесено без изменения логики — см. docs/planning/AUTO_LAYOUT_INTEGRATION.md, Э2.
+
+Правила из contract-разведки (FXML + WYSIWYG-редактор):
+  * connector-конец: sp/tp ДОЛЖНЫ равняться centroid коннектора
+    (FXML игнорирует source_point для connector-концов и берёт центроид).
+  * узел из FIXED_SIZES (скин): конец на границе _skin_content_rect
+    (letterbox-след графики внутри bbox), поперечная координата в пределах рамки.
+  * узел с сегментацией без скина: конец на контуре (луч центроид -> точка).
+  * прочие (скин вне FIXED_SIZES, rectangle-fallback): конец на границе bbox.
+  * waypoints — только промежуточные точки [y, x], ключ обязан существовать.
+
+Вызывать reseat_all_endpoints(graph) ПОСЛЕ расстановки узлов. Прямизна: если
+ребро без waypoints и концы почти на одной оси — конец сажается на общую ось.
+"""
+from __future__ import annotations
+
+from ..pretransform import (
+    FIXED_SIZES,
+    _skin_content_rect,
+    project_ray_to_polygon,
+)
+from ._graph import edge_ends, edges, is_connector, node_cxy, nodes_by_id
+
+STRAIGHT_TOL = 3.0   # px: концы почти на оси -> строгая прямая
+
+
+def _anchor_rect(node):
+    """Прямоугольник посадки: след скина для FIXED_SIZES, иначе bbox."""
+    bb = node.get("bbox")
+    if not bb or len(bb) != 4:
+        return None
+    if node.get("class_name") in FIXED_SIZES:
+        return _skin_content_rect(node) or tuple(bb)
+    return tuple(bb)
+
+
+def node_anchor(node, toward_x, toward_y, lock=None):
+    """Точка подключения на форме узла, обращённая к (toward_x, toward_y).
+
+    lock: None | ('H', y) | ('V', x) — посадить на общую ось, если возможно.
+    Возвращает (x, y).
+    """
+    if is_connector(node):
+        return node_cxy(node)
+
+    seg = node.get("segmentation")
+    has_poly = bool(seg) and isinstance(seg, list) and len(seg) >= 6
+    rect = _anchor_rect(node)
+
+    if rect is None:
+        if has_poly:
+            cx, cy = node_cxy(node)
+            pt = project_ray_to_polygon(seg, cx, cy, toward_x, toward_y)
+            return pt if pt else (cx, cy)
+        return node_cxy(node)
+
+    # полигонный узел без скина: FXML эмитит контур
+    if has_poly and node.get("class_name") not in FIXED_SIZES \
+            and not node.get("_axis"):
+        cx, cy = node_cxy(node)
+        pt = project_ray_to_polygon(seg, cx, cy, toward_x, toward_y)
+        if pt:
+            return pt
+
+    x1, y1, x2, y2 = rect
+    cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+
+    if lock and lock[0] == "H" and y1 - 0.5 <= lock[1] <= y2 + 0.5:
+        y = min(max(lock[1], y1), y2)
+        return (x2 if toward_x >= cx else x1, y)
+    if lock and lock[0] == "V" and x1 - 0.5 <= lock[1] <= x2 + 0.5:
+        x = min(max(lock[1], x1), x2)
+        return (x, y2 if toward_y >= cy else y1)
+
+    dx, dy = toward_x - cx, toward_y - cy
+    if abs(dx) >= abs(dy):
+        return (x2 if dx > 0 else x1, min(max(toward_y, y1), y2))
+    return (min(max(toward_x, x1), x2), y2 if dy > 0 else y1)
+
+
+def poly_station_port(node, side, frac):
+    """Порт станции равномерки Э10 на контуре полигонного узла без скина
+    (ПОПРАВКА контракта, решение заказчика 2026-07-21): пересечение
+    ПЕРПЕНДИКУЛЯРНОГО стороне луча на доле frac с контуром."""
+    seg = node.get("segmentation")
+    bb = node.get("bbox")
+    if not seg or not isinstance(seg, list) or len(seg) < 6 or not bb:
+        return None
+    far = 10000.0
+    if side in ("L", "R"):
+        y = bb[1] + frac * (bb[3] - bb[1])
+        o, t = ((bb[0] - far, y), (bb[2] + far, y)) if side == "R" \
+            else ((bb[2] + far, y), (bb[0] - far, y))
+    else:
+        x = bb[0] + frac * (bb[2] - bb[0])
+        o, t = ((x, bb[1] - far), (x, bb[3] + far)) if side == "B" \
+            else ((x, bb[3] + far), (x, bb[1] - far))
+    pt = project_ray_to_polygon(seg, o[0], o[1], t[0], t[1])
+    return (float(pt[0]), float(pt[1])) if pt else None
+
+
+def _poly_even_seat(node, e, key, ref, tol=1.5):
+    """Станция Э10 из атрибутов ребра (_poly_side_*/_poly_frac_*), если
+    подход ref уже перпендикулярен станции; иначе None (старый осевой луч)."""
+    if node is None or e is None:
+        return None
+    side = e.get("_poly_side_" + key)
+    frac = e.get("_poly_frac_" + key)
+    if side is None or frac is None:
+        return None
+    bb = node.get("bbox")
+    if not bb:
+        return None
+    if side in ("L", "R"):
+        st = bb[1] + frac * (bb[3] - bb[1])
+        if abs(ref[1] - st) > tol:
+            return None
+    else:
+        st = bb[0] + frac * (bb[2] - bb[0])
+        if abs(ref[0] - st) > tol:
+            return None
+    return poly_station_port(node, side, frac)
+
+
+def _axis_range(node):
+    """Диапазон, в котором может лежать общая ось через узел: (y1,y2,x1,x2)."""
+    if is_connector(node):
+        cx, cy = node_cxy(node)
+        return (cy, cy, cx, cx)
+    rect = _anchor_rect(node)
+    if rect is None:
+        cx, cy = node_cxy(node)
+        return (cy, cy, cx, cx)
+    x1, y1, x2, y2 = rect
+    return (y1, y2, x1, x2)
+
+
+def reseat_edge(byid, e, straight_tol=STRAIGHT_TOL):
+    src = byid.get(e.get("source") or e.get("from"))
+    tgt = byid.get(e.get("target") or e.get("to"))
+    if not src or not tgt:
+        return
+    wps = e.get("waypoints") or []
+    scx, scy = node_cxy(src)
+    tcx, tcy = node_cxy(tgt)
+
+    # опорные точки направления
+    s_ref = (wps[0][1], wps[0][0]) if wps else (tcx, tcy)
+    t_ref = (wps[-1][1], wps[-1][0]) if wps else (scx, scy)
+
+    s_lock = t_lock = None
+    if not wps:
+        sy1, sy2, sx1, sx2 = _axis_range(src)
+        ty1, ty2, tx1, tx2 = _axis_range(tgt)
+        # H-прямая: диапазоны Y пересекаются (с допуском)
+        ylo, yhi = max(sy1, ty1), min(sy2, ty2)
+        xlo, xhi = max(sx1, tx1), min(sx2, tx2)
+        if ylo - yhi <= straight_tol and abs(scy - tcy) <= \
+                (sy2 - sy1) / 2 + (ty2 - ty1) / 2 + straight_tol:
+            y = _pick_axis_coord(src, tgt, ylo, yhi, axis="H")
+            if y is not None:
+                s_lock = t_lock = ("H", y)
+        if s_lock is None and xlo - xhi <= straight_tol and abs(scx - tcx) <= \
+                (sx2 - sx1) / 2 + (tx2 - tx1) / 2 + straight_tol:
+            x = _pick_axis_coord(src, tgt, xlo, xhi, axis="V")
+            if x is not None:
+                s_lock = t_lock = ("V", x)
+    else:
+        # конец сажаем на ось первого/последнего сегмента, если он H/V
+        sp = e.get("source_point")
+        tp = e.get("target_point")
+        if sp is not None:
+            s_lock = _seg_lock((sp[1], sp[0]), s_ref)
+        if tp is not None:
+            t_lock = _seg_lock((tp[1], tp[0]), t_ref)
+
+    sp2 = _poly_even_seat(src, e, "s", s_ref)
+    tp2 = _poly_even_seat(tgt, e, "t", t_ref)
+    sx, sy = sp2 if sp2 else node_anchor(src, s_ref[0], s_ref[1], s_lock)
+    tx, ty = tp2 if tp2 else node_anchor(tgt, t_ref[0], t_ref[1], t_lock)
+    e["source_point"] = [sy, sx]
+    e["target_point"] = [ty, tx]
+    if "waypoints" not in e or e["waypoints"] is None:
+        e["waypoints"] = []
+
+
+def _pick_axis_coord(src, tgt, lo, hi, axis):
+    """Координата общей оси. Центроид коннектора — жёсткая точка."""
+    s_conn, t_conn = is_connector(src), is_connector(tgt)
+    scx, scy = node_cxy(src)
+    tcx, tcy = node_cxy(tgt)
+    s_val = scy if axis == "H" else scx
+    t_val = tcy if axis == "H" else tcx
+    if s_conn and t_conn:
+        return s_val if abs(s_val - t_val) <= 0.75 else None
+    if s_conn:
+        return s_val if lo - 0.75 <= s_val <= hi + 0.75 else None
+    if t_conn:
+        return t_val if lo - 0.75 <= t_val <= hi + 0.75 else None
+    if lo > hi:
+        return None
+    mid = (s_val + t_val) / 2.0
+    return min(max(mid, lo), hi)
+
+
+def _seg_lock(endpoint_xy, ref_xy, tol=1.0):
+    ex, ey = endpoint_xy
+    rx, ry = ref_xy
+    if abs(ey - ry) <= tol:
+        return ("H", ry)
+    if abs(ex - rx) <= tol:
+        return ("V", rx)
+    return None
+
+
+def reseat_all_endpoints(graph, straight_tol=STRAIGHT_TOL):
+    byid = nodes_by_id(graph)
+    for e in edges(graph):
+        reseat_edge(byid, e, straight_tol)

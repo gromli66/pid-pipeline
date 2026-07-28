@@ -31,6 +31,12 @@ scikit-image>=0.22.0
 numpy>=1.26.0,<2.0.0
 scipy>=1.11.0
 
+# Auto-layout (modules/graph/core/layout) — версия закреплена точно:
+# в shapely 2.x менялся API STRtree, а строгий арбитр наложений в гейте
+# раскладки зависит от его поведения. До этого shapely приезжал только
+# транзитивно (worker.lock.txt), то есть версия была неуправляемой.
+shapely==2.1.2
+
 # Visualization (для отладки)
 matplotlib>=3.8.0
 
