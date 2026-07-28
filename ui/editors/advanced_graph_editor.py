@@ -2681,12 +2681,17 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self.update_status("Скины " + ("показаны" if self.show_skins else "скрыты"))
 
     def _clear_skin_items(self):
+        # _reset_scene_state НЕ чистит _skin_items, а _redraw_all снимает со
+        # сцены всё с z>0 — к моменту следующего _redraw_skins ссылки здесь уже
+        # отвязаны от сцены. Без проверки Qt печатает предупреждение на КАЖДЫЙ
+        # скин («item's scene (0x0) is different from this scene»), забивая лог.
         for items in self._skin_items.values():
             for it in items:
                 try:
-                    self.scene.removeItem(it)
-                except Exception:
-                    pass
+                    if it.scene() is not None:
+                        self.scene.removeItem(it)
+                except RuntimeError:
+                    pass          # C++-объект уже удалён (scene.clear())
         self._skin_items.clear()
 
     def _fit_pixmap(self, item: QGraphicsPixmapItem, pm: QPixmap,
