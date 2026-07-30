@@ -6,7 +6,7 @@
 восьми графам корпуса. Рефакторинг доказывается равенством, а не осмотром.
 
 Вход графа берётся из `storage/diagrams/<uid>/graph/graph_validated.json` и
-переводится в холст модулем `layout.input.to_canvas`. Для `5137af27` сырого
+переводится в холст модулем `canvas_input.to_canvas`. Для `5137af27` сырого
 входа не существует (потерян до Э0) — его канвас-вход лежит в архиве Э0
 (`inputs_recovered/5137af27/layout_input_canvas.json`) и подставляется
 ключом `--canvas-input-dir`, где файл называется `5137af27.json`.
@@ -29,7 +29,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from modules.graph.core.layout import LayoutParams, layout      # noqa: E402
-from modules.graph.core.layout.input import to_canvas           # noqa: E402
+from modules.graph.core.canvas_input import to_canvas           # noqa: E402
 
 # uid8 -> полное имя каталога в storage/diagrams; None = сырой вход потерян
 CORPUS = {

@@ -34,6 +34,7 @@ class StageType(str, enum.Enum):
     GRAPH_VALIDATION = "graph_validation"
     CONTOUR_EXTRACTION = "contour_extraction"
     OCR = "ocr"
+    LAYOUT = "layout"
     FXML_GENERATION = "fxml_generation"
 
 

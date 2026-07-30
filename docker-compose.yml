@@ -88,6 +88,12 @@ services:
     volumes:
       - ./app:/app/app
       - ./worker:/app/worker
+      # modules нужен API с версии авто-раскладки: устаревание холста считает
+      # ОДИН общий модуль (modules/graph/core/canvas_state.py) — тот же, что
+      # зовут клиент и воркер. Две реализации канона дали бы расходящиеся sha
+      # и молча выброшенную раскладку (§3.6 плана AUTO_LAYOUT_INTEGRATION.md).
+      # Импорт лёгкий: ни cv2, ни numpy, ни torch не тянет.
+      - ./modules:/app/modules
       - ./configs:/app/configs
       - ./storage:/storage
       - ./alembic:/app/alembic

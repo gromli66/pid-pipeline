@@ -30,11 +30,11 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from modules.graph.core.layout import LayoutParams, layout          # noqa: E402
-from modules.graph.core.layout import _gate, spread                 # noqa: E402
-from modules.graph.core.layout._graph import (edge_ends,            # noqa: E402
-                                              edge_polyline, edges,
-                                              is_connector, nodes_by_id)
-from modules.graph.core.layout.input import to_canvas               # noqa: E402
+from modules.graph.core.layout import _gate, _shapes, spread        # noqa: E402
+from modules.graph.core.graph_access import (edge_ends,            # noqa: E402
+                                             edge_polyline, edges,
+                                             is_connector, nodes_by_id)
+from modules.graph.core.canvas_input import to_canvas               # noqa: E402
 
 CORPUS = {
     "51b339ab": "51b339ab-3e4c-429c-ac5f-49c44cb9c755",
@@ -46,9 +46,30 @@ CORPUS = {
     "d74eb9f1": "d74eb9f1-668d-4596-891f-d4e5a16d04d0",
     "5137af27": None,          # сырой вход потерян, см. Э0
 }
-# §7 SOLUTION.md — эталонная таблица корпуса
-EXPECT = {"51b339ab": (311, 10), "a6d28736": (128, 6), "8d517a35": (81, 2),
-          "89ca7583": (26, 1), "13d1ef5f": (20, 1), "6e7144d5": (14, 0),
+# Эталонная таблица корпуса. ПЕРЕОБЪЯВЛЕНА 2026-07-30 (решение заказчика):
+# алгоритм намеренно изменён тремя правками, и прежние числа §7 SOLUTION.md
+# сравнивать больше не с чем.
+#   1. посадка конца ребра на контур ВДОЛЬ оси прямизны, а не лучом из
+#      центроида (`seating._poly_hit`);
+#   2. наложения считаются по НАРИСОВАННОЙ ФОРМЕ узла, а не по габариту
+#      (`layout/_shapes.py`, `axial.conflicts`, `_overlaps.collect_items`);
+#   3. пары, наложенные в ДЕТЕКТИРОВАННОЙ геометрии (до `apply_fixed_sizes`),
+#      законны и не разводятся — решение заказчика 2026-07-29 «если на графе
+#      после построения и проверки есть наложения, им можно там находиться»,
+#      причём легальны размеры ИЗ ДЕТЕКЦИИ, а не после словаря.
+# Итог перезамера: 601 -> 19 стало 590 -> 14, нелегальных наложений 0 на всех
+# семи, косых рёбер по корпусу 62 (у трёх крупных контурных блоков 12 из 37
+# против 36 из 37 на прежнем алгоритме), стороны/прямизна/связность/
+# перестановки — нули. Прежняя таблица §7 (311/10, 128/6, 81/2, 26/1, 20/1,
+# 14/0, 8/0, 0/0) сохранена в истории git, коммит с этой правкой.
+# 5137af27 не считается — сырой вход потерян (Э0), число оставлено прежним.
+#   4. створ крупного контурного блока (`band_block=True`, ярус 1) —
+#      включён 2026-07-30: косых рёбер по корпусу 60 -> 53, на c2f79462
+#      2 -> 1; ценой двух дефектов (8d517a35 103->0 стало 104->0 — там
+#      бесплатно, 13d1ef5f 22->2 стало 23->3, c2f79462 13->3 стало 13->4).
+#      На пяти графах без крупного блока — бит-в-бит как без него.
+EXPECT = {"51b339ab": (297, 7), "a6d28736": (128, 4), "8d517a35": (104, 0),
+          "89ca7583": (26, 1), "13d1ef5f": (23, 3), "6e7144d5": (14, 0),
           "5137af27": (8, 0), "d74eb9f1": (0, 0)}
 
 # §3.5: порог якоря подписи. Числа в SOLUTION.md нет — стенд текстом не
@@ -193,9 +214,14 @@ def check(uid8, canvas_dir=None, with_text=True):
     dt = time.perf_counter() - t0
     orig, v16 = stages["orig"], stages["placed"]
 
+    # Наложения, пришедшие из ПОСТРОЕНИЯ И ПРОВЕРКИ, законны (решение
+    # заказчика 2026-07-29) — судья их не считает. Таблица строится по
+    # детектированным габаритам, которые кладёт `to_canvas`.
+    legal = _shapes.legal_pairs(orig, orig.get("graph", {}).get(
+        "detected_bbox"), LayoutParams().border_tol)
     vb, ab = nodes_by_id(v16), nodes_by_id(aft)
-    g16 = _gate.verify(v16, orig, v16)
-    gaf = _gate.verify(aft, orig, v16)
+    g16 = _gate.verify(v16, orig, v16, legal)
+    gaf = _gate.verify(aft, orig, v16, legal)
 
     r = {
         "uid": uid8,

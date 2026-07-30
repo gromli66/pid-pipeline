@@ -9,21 +9,28 @@
     (FXML игнорирует source_point для connector-концов и берёт центроид).
   * узел из FIXED_SIZES (скин): конец на границе _skin_content_rect
     (letterbox-след графики внутри bbox), поперечная координата в пределах рамки.
-  * узел с сегментацией без скина: конец на контуре (луч центроид -> точка).
+  * узел с сегментацией без скина: конец на контуре. Луч идёт ВДОЛЬ оси
+    прямизны, если она задана и пересекает контур, иначе — из центроида
+    (см. `_poly_hit`).
   * прочие (скин вне FIXED_SIZES, rectangle-fallback): конец на границе bbox.
   * waypoints — только промежуточные точки [y, x], ключ обязан существовать.
 
 Вызывать reseat_all_endpoints(graph) ПОСЛЕ расстановки узлов. Прямизна: если
 ребро без waypoints и концы почти на одной оси — конец сажается на общую ось.
+
+Лежит рядом с pretransform, а не в пакете layout: посадка одна на всю систему
+(§3.4 плана), а импорт подмодуля layout тянул бы shapely, которого в
+requirements/ui.txt нет.
 """
 from __future__ import annotations
 
-from ..pretransform import (
+from .pretransform import (
     FIXED_SIZES,
     _skin_content_rect,
     project_ray_to_polygon,
 )
-from ._graph import edge_ends, edges, is_connector, node_cxy, nodes_by_id
+from .graph_access import (edge_ends, edges, is_connector, node_cxy,
+                           nodes_by_id)
 
 STRAIGHT_TOL = 3.0   # px: концы почти на оси -> строгая прямая
 
@@ -36,6 +43,31 @@ def _anchor_rect(node):
     if node.get("class_name") in FIXED_SIZES:
         return _skin_content_rect(node) or tuple(bb)
     return tuple(bb)
+
+
+def _poly_hit(node, seg, toward_x, toward_y, lock):
+    """Точка на контуре: луч ВДОЛЬ оси прямизны, иначе из центроида.
+
+    Прежде луч всегда шёл из центроида в соседа, и ветка возвращалась РАНЬШЕ,
+    чем проверялся `lock` (он работает только в прямоугольной ветке ниже).
+    Для крупного контура это значит, что труба рисуется диагональю по
+    построению: конец садится на прямую центроид->сосед, а центроид
+    невыпуклого контура лежит далеко от места врезки. Замер c2f79462
+    (деаэратор node_28, bbox 616x373, 13 рёбер): все 13 труб неортогональны
+    на холсте отрисовки ДО всякой раскладки; с лучом вдоль оси — ноль.
+    """
+    cx, cy = node_cxy(node)
+    if lock:
+        xs, ys = seg[0::2], seg[1::2]
+        if lock[0] == "H" and min(ys) <= lock[1] <= max(ys):
+            pt = project_ray_to_polygon(seg, cx, lock[1], toward_x, lock[1])
+            if pt:
+                return pt
+        elif lock[0] == "V" and min(xs) <= lock[1] <= max(xs):
+            pt = project_ray_to_polygon(seg, lock[1], cy, lock[1], toward_y)
+            if pt:
+                return pt
+    return project_ray_to_polygon(seg, cx, cy, toward_x, toward_y)
 
 
 def node_anchor(node, toward_x, toward_y, lock=None):
@@ -53,16 +85,14 @@ def node_anchor(node, toward_x, toward_y, lock=None):
 
     if rect is None:
         if has_poly:
-            cx, cy = node_cxy(node)
-            pt = project_ray_to_polygon(seg, cx, cy, toward_x, toward_y)
-            return pt if pt else (cx, cy)
+            pt = _poly_hit(node, seg, toward_x, toward_y, lock)
+            return pt if pt else node_cxy(node)
         return node_cxy(node)
 
     # полигонный узел без скина: FXML эмитит контур
     if has_poly and node.get("class_name") not in FIXED_SIZES \
             and not node.get("_axis"):
-        cx, cy = node_cxy(node)
-        pt = project_ray_to_polygon(seg, cx, cy, toward_x, toward_y)
+        pt = _poly_hit(node, seg, toward_x, toward_y, lock)
         if pt:
             return pt
 

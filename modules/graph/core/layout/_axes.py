@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import statistics
 
-from ._graph import edge_ends, edges, node_cxy
+from ..graph_access import edge_ends, edges, node_cxy
 
 TOL = 2.0          # допуск кластеризации, px (обоснование — режим --calib)
 MODE = "chain"     # single-linkage: разрыв > tol открывает новую ось

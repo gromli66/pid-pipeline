@@ -12,8 +12,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import logging
+
 from app.db.session import get_async_db
 from app.models import Diagram, DiagramStatus, Artifact, ArtifactType
+from app.services.layout_dispatch import dispatch_layout
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -214,6 +219,25 @@ async def rollback_diagram(
         )
         deleted_count = result.rowcount
 
+    # Файл холста сносится ВМЕСТЕ с записью в БД. Раньше удалялась только
+    # строка Artifact, а `graph_canvas.json` оставался лежать — и вместе с ним
+    # флаг `operator_saved`. Задача раскладки читает флаг из ФАЙЛА
+    # (`worker/tasks/layout.py`) и при нём выбрасывает свой результат: откат
+    # звал пересчёт с force=True, тот честно считал и молча ничего не писал.
+    # Холст производный, восстанавливается из graph_validated — держать его
+    # поверх отката нечем.
+    if ArtifactType.GRAPH_CANVAS in art_types:
+        from app.services.storage import StorageService
+        canvas_file = (StorageService().base_path / str(uid) / "graph"
+                       / "graph_canvas.json")
+        try:
+            canvas_file.unlink()
+            logger.info("rollback %s: снят холст %s", uid, canvas_file.name)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            logger.warning("rollback %s: холст не удалён (%s)", uid, exc)
+
     # Откат за этап рамки: вернуть сырое изображение в канонический image.png из
     # бэкапа image_raw.png (при очистке мы перезаписали image.png очищенным).
     if ArtifactType.ORIGINAL_CLEANED in art_types:
@@ -232,8 +256,30 @@ async def rollback_diagram(
     diagram.error_stage = None
     await db.commit()
 
+    # Откат СНОСИТ артефакт холста (GRAPH_CANVAS числится за COMPLETED), но
+    # проходит мимо точек запуска раскладки: вернуться можно на бусину
+    # привязки, а она ПОСЛЕ контуров, и `complete_contour_validation` второй
+    # раз не позовётся. Без этого оператор шёл вперёд и получал в «Ручной
+    # правке» pretransform-холст БЕЗ раскладки — молча.
+    #
+    # force=True: на возврате холст пересчитывается ВСЕГДА, даже если истина не
+    # менялась (§3.2). Переиспользовать прежний нельзя не из-за экономии — он
+    # несёт правки оператора, сделанные до возврата, а они не сохраняются.
+    # Индекс берём от САМОГО target, а не от `target_idx`: тот считается в
+    # общем try с `current_idx` и обнуляется, когда текущий статус не из
+    # _STAGE_ORDER. А это как раз частый случай возврата — после «Ручной
+    # правки» статус GENERATING_FXML, и его в списке нет. `target` же
+    # гарантированно в списке: проверено выше.
+    layout = None
+    if _STAGE_ORDER.index(target) >= _STAGE_ORDER.index(
+            DiagramStatus.CONTOURS_VALIDATED):
+        layout = await dispatch_layout(uid, db, force=True)
+        logger.info("rollback %s -> %s: раскладка %s", uid, target.value,
+                    (layout or {}).get("status"))
+
     return {
         "status": target.value,
         "deleted_artifacts": deleted_count,
         "uid": str(uid),
+        "layout": layout,
     }

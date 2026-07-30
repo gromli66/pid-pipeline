@@ -101,7 +101,10 @@ class StatusProvider(QObject):
 
                 # Стадии — для детерминированного прогресс-бара / окна ошибки.
                 # Эмитим каждый опрос: ETA пересчитывается по elapsed (динамично).
-                self.stages_updated.emit(uid, self.api_client.get_stages(uid))
+                stages = self.api_client.get_stages(uid)
+                self.stages_updated.emit(uid, stages)
+                busy = any((s.get("status") or "").lower() in
+                           ("running", "pending") for s in (stages or []))
 
                 last = self._last_status.get(uid)
                 if last != status_info.status:
@@ -112,7 +115,15 @@ class StatusProvider(QObject):
                     self._last_status[uid] = status_info.status
                     self.status_updated.emit(uid, status_info)
 
-                    if status_info.status in self._FINAL_STATUSES:
+                    # НЕ БРОСАЕМ ОПРОС, ПОКА ЕСТЬ БЕГУЩАЯ СТАДИЯ. Статус и
+                    # стадии — разные оси: `OCR_BOUND` числится финальным
+                    # («ждёт оператора»), а под ним в это время считается
+                    # раскладка. Первый же опрос снимал слежение, кнопка
+                    # «Ручной правки» оставалась заглушенной той стадией,
+                    # которая давно завершилась, и оператор ждал вечно
+                    # (замер 8d517a35: опрос в 13:16:07 -> unwatch, раскладка
+                    # закончилась в 13:16:13, узнать об этом было некому).
+                    if status_info.status in self._FINAL_STATUSES and not busy:
                         self.unwatch(uid)
 
             except APIError as exc:

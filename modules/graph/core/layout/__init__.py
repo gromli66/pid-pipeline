@@ -22,12 +22,15 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from . import axial, spread
-from ._graph import edges, nodes_by_id
+from . import _shapes, axial, spread
+from ..graph_access import edges, nodes_by_id
 from .params import LayoutParams
-from .seating import reseat_all_endpoints
+from ..seating import reseat_all_endpoints
 
 __all__ = ["layout", "LayoutParams"]
+
+_AUTO = object()   # сентинел: построить ShapeIndex самому (None — валидное
+                   # значение «считать по габаритам», поэтому не годится)
 
 
 # Пороги, которые слой раздвигания читает из модульных констант в теле
@@ -75,19 +78,47 @@ def _apply(params):
     spread.DEBUG_COMP = False
 
 
-def place(graph, params=None):
+def shape_index(graph, params=None):
+    """`_shapes.ShapeIndex` по графу, либо None, если сверка по габаритам.
+
+    Таблица легальных пар считается по ДЕТЕКТИРОВАННЫМ габаритам, которые
+    `canvas_input.to_canvas` кладёт в `graph.detected_bbox`. Их нет — значит
+    граф пришёл не штатным путём (синтетика, тест, старый артефакт); тогда
+    амнистировать нечего и пары считаются пустыми, а форма всё равно
+    учитывается.
+    """
+    p = params or LayoutParams()
+    if not p.shape_overlaps:
+        return None
+    detected = graph.get("graph", {}).get("detected_bbox")
+    legal = _shapes.legal_pairs(graph, detected, p.border_tol) if detected \
+        else ()
+    return _shapes.ShapeIndex(graph, legal)
+
+
+def place(graph, params=None, shapes=_AUTO):
     """Только расстановка (слой 1). Мутирует graph, возвращает статистику.
 
     Рёбра становятся прямыми: маршрут раскладка не сохраняет — `waypoints` и
     `path` очищаются, это «пересобрать раскладку», а не «подправить».
     """
     p = params or LayoutParams()
+    if shapes is _AUTO:
+        shapes = shape_index(graph, p)
+    bands = None
+    if p.band_block:
+        # ось полосы берётся по НАРИСОВАННОЙ ориентации ребра, то есть по
+        # холсту, который видит оператор: концы там посажены, а не
+        # спроецированы. Вход раскладки для этого пересаживается на копии.
+        drawn = deepcopy(graph)
+        reseat_all_endpoints(drawn)
+        bands = axial.build_bands(graph, drawn)
     for e in edges(graph):
         e["waypoints"] = []
         if "path" in e:
             e["path"] = []
     stats = axial.place(graph, canvas=tuple(p.canvas), fill=p.fill,
-                        inset=float(p.margin))
+                        inset=float(p.margin), shapes=shapes, bands=bands)
     reseat_all_endpoints(graph)
     return stats
 
@@ -105,13 +136,14 @@ def layout(graph, params=None, stages=None):
     """
     p = params or LayoutParams()
     _apply(p)
+    shapes = shape_index(graph, p)
 
     # до-раскладочная геометрия: источник оси «оригинал» в лестнице ходов
     # (§4.5 SOLUTION.md) — у ребра к крупному блоку центроид лежит глубоко
     # внутри, и по центроидам получается диагональ, хотя труба входит по оси.
     orig = deepcopy(graph)
 
-    axial_stats = place(graph, p)
+    axial_stats = place(graph, p, shapes=shapes)
     base_v16 = deepcopy(graph)
     if stages is not None:
         # снимки, а не сами объекты: `orig` и `base_v16` уходят в раздвигание
@@ -126,7 +158,8 @@ def layout(graph, params=None, stages=None):
     spread_stats = spread.spread(
         graph, orig, p.floor, p.target, p.passes,
         base_v16=base_v16, band=p.band, unlock_zero=p.unlock_zero,
-        compound=p.compound, comp_push=p.comp_push)
+        compound=p.compound, comp_push=p.comp_push,
+        legal=shapes.legal if shapes is not None else None)
     reseat_all_endpoints(graph)
 
     after = len(spread.defects(graph, nodes_by_id(graph), p.floor))

@@ -372,6 +372,39 @@ class VPSC:
             ok = self._run(list(self.cons), max_iter) and ok
         return ok
 
+    def solve_keep_tier(self, max_iter=200000, rounds=20, tier=0):
+        """`solve`, но расщепляются ТОЛЬКО ограничения яруса `tier`.
+
+        Штатный `solve` ищет худшее по `_eff_lm`, а тот вычитает PRIO_BONUS у
+        всего, что priority > 0, — то есть старший ярус рвётся ПЕРВЫМ. Для
+        ограничений, которые заданы ПАРОЙ ВСТРЕЧНЫХ неравенств (створ блока —
+        цикл в графе ограничений), это значит, что пара не доживает до
+        оптимума никогда. Здесь порядок обратный: старшие ярусы держатся, а
+        доводка идёт по нулевому.
+        """
+        ok = self.satisfy(max_iter=max_iter)
+        for _ in range(rounds):
+            roots = {}
+            for v in self.vars:
+                roots.setdefault(id(v.block), v)
+            for v in roots.values():
+                self._compute_lm(v)
+            worst = None
+            for c in self.cons:
+                if (c.active and c.priority == tier and c.lm < -EPS
+                        and c.splits < MAX_SPLITS):
+                    if worst is None or c.lm < worst.lm:
+                        worst = c
+            if worst is None:
+                break
+            worst.active = False
+            worst.splits += 1
+            self._rebuild(worst.left)
+            self._rebuild(worst.right)
+            self.stats["splits"] += 1
+            ok = self._run(list(self.cons), max_iter) and ok
+        return ok
+
     # ------------------------------------------------------------ результаты
     def positions(self):
         return {v.key: v.position for v in self.vars}

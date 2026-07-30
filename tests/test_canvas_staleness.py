@@ -104,7 +104,10 @@ def test_layout_version_change_stales(monkeypatch):
     canvas = _canvas_from(validated)
     assert canvas_state.is_stale(canvas, validated)[0] is False
 
-    monkeypatch.setattr(canvas_state, "LAYOUT_CODE_VERSION", "2")
+    # ЛЮБАЯ другая версия, а не «2»: константа поднимается при каждой правке
+    # алгоритма, и прибитое число превращало бы тест в ложное зелёное
+    monkeypatch.setattr(canvas_state, "LAYOUT_CODE_VERSION",
+                        canvas_state.LAYOUT_CODE_VERSION + "-next")
     stale, reason = canvas_state.is_stale(canvas, validated)
     assert stale is True and "версия" in reason
 
@@ -206,7 +209,10 @@ def test_module_imports_without_qt():
                          text=True, cwd=str(__import__("pathlib").Path(
                              __file__).resolve().parents[1]))
     assert out.returncode == 0, out.stderr
-    assert out.stdout.strip().startswith("1+fs")
+    # версия кода, а не «1»: смысл теста — что модуль поднимается БЕЗ Qt и
+    # отдаёт версию, а не в конкретном её значении
+    assert out.stdout.strip().startswith(
+        canvas_state.LAYOUT_CODE_VERSION + "+fs")
 
 
 # ───────────── текст живёт своим хешем ─────────────

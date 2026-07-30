@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""_graph.py — доступ к графу для раскладки (утилиты без ввода-вывода).
+"""graph_access.py — доступ к графу: общие утилиты без ввода-вывода.
 
 Источник: стенд `_scratch/layout_align/harness/graph_io.py` (строки 32-119).
 Перенесено без изменения логики — см. docs/planning/AUTO_LAYOUT_INTEGRATION.md, Э2.

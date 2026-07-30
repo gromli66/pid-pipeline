@@ -30,6 +30,10 @@ RUN pip install --no-cache-dir -r requirements/api.txt && \
 
 # Копируем приложение
 COPY app/ /app/app/
+# modules — из-за авто-раскладки: API считает устаревание холста тем же общим
+# модулем, что клиент и воркер (modules/graph/core/canvas_state.py, §3.6).
+# Тяжёлого не тянет: ни cv2, ни numpy, ни torch на импорте.
+COPY modules/ /app/modules/
 
 # Healthcheck
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

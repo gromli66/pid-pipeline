@@ -46,4 +46,5 @@ _scratch/layout_align/SOLUTION.md    <- итог, конвейер, все ре�
 
 Перенос решения в прод (`modules/graph/core/`) — отдельная задача, см. §11
 SOLUTION.md: консолидация форка в один модуль, выверка порогов глазами,
-решение по остатку, проверка на графах вне корпуса.
+решение по остатку, проверка на графах вне корпуса. План переноса —
+[planning/AUTO_LAYOUT_INTEGRATION.md](planning/AUTO_LAYOUT_INTEGRATION.md).

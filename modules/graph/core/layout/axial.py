@@ -12,8 +12,9 @@ from __future__ import annotations
 
 from . import _vpsc
 from ._axes import MODE as AXIS_MODE, TOL as AXIS_TOL, build_axes
-from ._graph import (edge_ends, edges, is_connector, node_cxy, node_wh,
-                     nodes_by_id, set_node_pos)
+from ..graph_access import (edge_ends, edge_polyline, edges,
+                            is_connector, node_cxy, node_wh,
+                            nodes_by_id, set_node_pos)
 
 GAP = 14.0        # px: требуемый зазор блок-блок (порог заказчика, W3)
 GAP_MIN = 1.0     # px: минимальный зазор, если 14 не влезает в холст.
@@ -26,6 +27,9 @@ RETRIES = 6       # попыток ужать зазор, если резуль�
 WALL_W = 1e9      # вес стенки холста (практически закреплена)
 ORDER_GAP = 0.0   # порядок осей: >= 0, совпадение координат разрешено
 BIAS = 1.0        # перекос раздачи пар в пользу X (>1 — «раскладывать вширь»)
+BAND_TIER = 1     # ярус створных полос: рвутся раньше сепарации и порядка
+BAND_AREA = 30000.0  # px²: порог «крупного блока» для створа
+BAND_DEG = 6         # и его степень (замер: ровно 3 узла на 8 графах)
 PIPE_MIN = 12.0   # px: минимальная длина трубы (порог заказчика, W2).
                   # 0 — требование выключено
 _SAME = object()  # сентинел: pipe_base по умолчанию наследует gap base
@@ -122,7 +126,7 @@ def _clear0(a, b, base):
                abs((ay + a["oy"]) - (by + b["oy"])) - a["hh"] - b["hh"])
 
 
-def conflicts(items, gap, eps=1e-6, base=None, floor=0.0):
+def conflicts(items, gap, eps=1e-6, base=None, floor=0.0, shapes=None):
     """Пары боксов, у которых зазор по ОБЕИМ осям меньше требуемого.
 
     Требуемый зазор пары — НЕ ПРОСТО gap, а «не хуже, чем было»:
@@ -136,6 +140,15 @@ def conflicts(items, gap, eps=1e-6, base=None, floor=0.0):
     развести — это ворота W1).
     Пары с коннектором пропускаются: коннектор — точка нулевой площади,
     наложением он не считается.
+
+    shapes (`_shapes.ShapeIndex`): если задан, пара ищется по РЕАЛЬНОЙ ФОРМЕ
+    узла, а не по габариту, и пара, наложенная в ДЕТЕКТИРОВАННОЙ геометрии,
+    не разводится вовсе. Габарит невыпуклого контура почти вдвое больше самой
+    фигуры (c2f79462/node_28: заполненность 0.537), и по нему расстановка
+    выселяла из бака всю обвязку — 30 узлов внутри габарита превращались в 0.
+    Величина расталкивания остаётся габаритной: VPSC разводит скаляром по
+    одной оси, а флажок предиката к тому времени уже отобрал только пары,
+    которые и правда конфликтуют.
     -> [(ka, kb, need_x, need_y, ov_x, ov_y)], где need_* — требуемое
     расстояние между ЦЕНТРАМИ БОКСОВ по оси, ov_* — насколько его не хватает.
     eps: пара, разведённая РОВНО на требуемый зазор, выходит из солвера с
@@ -146,10 +159,22 @@ def conflicts(items, gap, eps=1e-6, base=None, floor=0.0):
 
     blocks = [it for it in items if not it["conn"]]
     half = gap / 2.0
-    geoms = [shp_box(it["cx"] + it["ox"] - it["hw"] - half,
-                     it["cy"] + it["oy"] - it["hh"] - half,
-                     it["cx"] + it["ox"] + it["hw"] + half,
-                     it["cy"] + it["oy"] + it["hh"] + half) for it in blocks]
+    if shapes is None:
+        geoms = [shp_box(it["cx"] + it["ox"] - it["hw"] - half,
+                         it["cy"] + it["oy"] - it["hh"] - half,
+                         it["cx"] + it["ox"] + it["hw"] + half,
+                         it["cy"] + it["oy"] + it["hh"] + half)
+                 for it in blocks]
+    else:
+        geoms = []
+        for it in blocks:
+            g = shapes.at(it["key"], it["cx"], it["cy"])
+            if g is None:
+                g = shp_box(it["cx"] + it["ox"] - it["hw"],
+                            it["cy"] + it["oy"] - it["hh"],
+                            it["cx"] + it["ox"] + it["hw"],
+                            it["cy"] + it["oy"] + it["hh"])
+            geoms.append(g.buffer(half, join_style=2))
     tree = STRtree(geoms)
     out = []
     for i, g in enumerate(geoms):
@@ -158,8 +183,16 @@ def conflicts(items, gap, eps=1e-6, base=None, floor=0.0):
             if j <= i:
                 continue
             a, b = blocks[i], blocks[j]
-            req = gap if base is None else min(
-                gap, max(floor, _clear0(a, b, base)))
+            if shapes is not None and not g.intersects(geoms[j]):
+                continue
+            c0 = None if base is None else _clear0(a, b, base)
+            if base is None:
+                req = gap
+            elif shapes is not None and c0 <= 0.0 \
+                    and shapes.is_legal(a["key"], b["key"]):
+                req = min(gap, c0)          # легальная пара: как было, не хуже
+            else:
+                req = min(gap, max(floor, c0))
             need_x = a["hw"] + b["hw"] + req
             need_y = a["hh"] + b["hh"] + req
             dx = abs((a["cx"] + a["ox"]) - (b["cx"] + b["ox"]))
@@ -331,7 +364,7 @@ def fit_keep(coords, seps, marg, usable, keep_max=1.0, iters=30):
 
 
 def _demand(items, xaxes, yaxes, xa, ya, by_key, canvas, gap, inset,
-            pipes=None, base=None, floor=0.0, bias=BIAS):
+            pipes=None, base=None, floor=0.0, bias=BIAS, shapes=None):
     """Минимально необходимая ширина/высота при данном зазоре: (need_x, need_y).
 
     Считается ЛЕВОЙ ПРЕДЕЛЬНОЙ раскладкой (min_extent) по свежему раздаванию
@@ -339,8 +372,8 @@ def _demand(items, xaxes, yaxes, xa, ya, by_key, canvas, gap, inset,
     """
     sep = {"x": {}, "y": {}}
     pipes = pipes or {"x": [], "y": []}
-    assign_axis(conflicts(items, gap, base=base, floor=floor), xa, ya, sep,
-                canvas, bias)
+    assign_axis(conflicts(items, gap, base=base, floor=floor,
+                          shapes=shapes), xa, ya, sep, canvas, bias)
     out = []
     for axis, axlist, idx, okey, hkey in (("x", xaxes, xa, "ox", "hw"),
                                           ("y", yaxes, ya, "oy", "hh")):
@@ -366,7 +399,7 @@ def thresholds(scale, gap, gap_min, pipe_min):
 
 def fit_scale(graph, items, xaxes, yaxes, xa, ya, by_key, canvas, gap,
               gap_min, pipe_min, base, inset=INSET, iters=14, bias=BIAS,
-              pipe_base=_SAME):
+              pipe_base=_SAME, shapes=None):
     """Наибольшая доля порогов, при которой осевая раскладка ВЛЕЗАЕТ В ХОЛСТ.
 
     Зачем. Зазор 14 px и труба 12 px — пороги заказчика, но выполнимы они не
@@ -390,7 +423,7 @@ def fit_scale(graph, items, xaxes, yaxes, xa, ya, by_key, canvas, gap,
         g, pm = thresholds(sc, gap, gap_min, pipe_min)
         return _demand(items, xaxes, yaxes, xa, ya, by_key, canvas, g, inset,
                        pipe_specs(graph, xa, ya, by_key, pm, pipe_base),
-                       base, gap_min, bias)
+                       base, gap_min, bias, shapes)
 
     def fits(d):
         return d[0] <= usable[0] and d[1] <= usable[1]
@@ -411,8 +444,94 @@ def fit_scale(graph, items, xaxes, yaxes, xa, ya, by_key, canvas, gap,
     return best
 
 
+def _drawn_orient(e):
+    """H/V/None ребра по НАРИСОВАННОЙ хорде (короче 6 px — не определена)."""
+    pl = edge_polyline(e)
+    if len(pl) < 2:
+        return None
+    dx, dy = abs(pl[-1][0] - pl[0][0]), abs(pl[-1][1] - pl[0][1])
+    if dx < 6.0 and dy < 6.0:
+        return None
+    return "H" if dx >= dy else "V"
+
+
+def big_blocks(graph, area=BAND_AREA, deg=BAND_DEG):
+    """Крупные блоки, вокруг которых строится створ. -> [node_id].
+
+    Порог замерен, а не выбран: площадь >= 30000 px² и степень >= 6 дают ровно
+    три узла на корпусе из восьми графов (c2f79462/node_28 S=229848 deg=13,
+    13d1ef5f/node_71 S=127203 deg=13, 8d517a35/node_53 S=37146 deg=11), и до
+    ближайшего непрошедшего (a6d28736/node_2, S=18724) разрыв двукратный —
+    порог стоит в пустоте, а не подогнан к данным.
+    """
+    d = {}
+    for e in edges(graph):
+        s, t = edge_ends(e)
+        for k in (s, t):
+            if k is not None:
+                d[k] = d.get(k, 0) + 1
+    out = []
+    for n in graph.get("nodes", []):
+        bb = n.get("bbox")
+        if is_connector(n) or not bb or len(bb) != 4:
+            continue
+        if (bb[2] - bb[0]) * (bb[3] - bb[1]) >= area and d.get(n["id"], 0) >= deg:
+            out.append(n["id"])
+    return sorted(out)
+
+
+def build_bands(graph, drawn, area=BAND_AREA, deg=BAND_DEG):
+    """Створные полосы вокруг крупных блоков. -> {'x': [...], 'y': [...]}.
+
+    `drawn` — граф С ПОСАЖЕННЫМИ КОНЦАМИ (то, что видит оператор): ось полосы
+    берётся по ориентации ребра на нём, а не по центроидам. H-труба держится
+    створом по Y, V-труба — по X; ребро без ориентации получает ось по
+    большему запасу.
+    Полоса = весь створ габарита блока: `lo/hi` — допустимая разность
+    координат осей «партнёр минус блок».
+    """
+    byid = nodes_by_id(graph)
+    blocks = set(big_blocks(graph, area, deg))
+    if not blocks:
+        return {"x": [], "y": []}
+    orient = {e["id"]: _drawn_orient(e) for e in edges(drawn)}
+    out, seen = {"x": [], "y": []}, set()
+    for e in edges(graph):
+        s, t = edge_ends(e)
+        if s is None or t is None:
+            continue
+        b = s if s in blocks else (t if t in blocks else None)
+        if b is None:
+            continue
+        p = t if b == s else s
+        if p in blocks or (b, p) in seen:
+            continue
+        B, P = byid.get(b), byid.get(p)
+        if B is None or P is None or "centroid" not in P:
+            continue
+        bb = B.get("bbox")
+        if not bb or len(bb) != 4:
+            continue
+        bx, by = node_cxy(B)
+        px, py = node_cxy(P)
+        band = {}
+        for ax, c, pc, o, h in (
+                ("x", bx, px, (bb[0] + bb[2]) / 2.0 - bx, (bb[2] - bb[0]) / 2.0),
+                ("y", by, py, (bb[1] + bb[3]) / 2.0 - by, (bb[3] - bb[1]) / 2.0)):
+            band[ax] = (o - h, o + h, min(pc - c - (o - h), (o + h) - (pc - c)))
+        ax = {"H": "y", "V": "x"}.get(orient.get(e["id"]))
+        if ax is None:
+            ax = "x" if band["x"][2] >= band["y"][2] else "y"
+        lo, hi, _room = band[ax]
+        if lo > hi:
+            continue
+        seen.add((b, p))
+        out[ax].append((b, p, lo, hi))
+    return out
+
+
 def solve_axis(axlist, by_key, idx, specs, desired, limit, off_key, half_key,
-               base_coords, inset=INSET, keep=1.0):
+               base_coords, inset=INSET, keep=1.0, bands=()):
     """VPSC по одной оси. -> (координаты осей, ok, stats солвера, keep_eff).
 
     Ограничения (все ярус 0, все направлены по возрастанию индекса оси,
@@ -425,6 +544,15 @@ def solve_axis(axlist, by_key, idx, specs, desired, limit, off_key, half_key,
       * сепарация пары узлов: C(v_i, v_j, gap = hw_a+hw_b+gap + ox_a - ox_b);
       * холст: две стенки веса 1e9 на 0 и limit, каждая ось обязана влезть
         между ними своим самым крупным членом + inset.
+
+    bands — СТВОР КРУПНОГО БЛОКА: [(block_key, partner_key, lo, hi)],
+    удержать ось партнёра в полосе габарита блока. Это ПАРА ВСТРЕЧНЫХ
+    неравенств, то есть цикл, поэтому они идут ЯРУСОМ 1 и решаются
+    `solve_keep_tier`: при несовместности жертвуется полоса, а не
+    сепарация или порядок. Зачем: у блока одна координата на 13 точек
+    подключения, партнёра ось тянет к его центроиду, и труба входит в бок
+    за 200-300 px оттуда. Правило замерено без исключений: партнёр в
+    створе по X ИЛИ по Y -> труба ортогональна.
     """
     n = len(axlist)
     coords = list(base_coords)
@@ -443,6 +571,16 @@ def solve_axis(axlist, by_key, idx, specs, desired, limit, off_key, half_key,
     for i, (ml, mr) in enumerate(marg):
         cons.append(_vpsc.Constraint(lo, var[i], ml + inset, tag="canvas"))
         cons.append(_vpsc.Constraint(var[i], hi, mr + inset, tag="canvas"))
+    n_bands = 0
+    for b_key, p_key, b_lo, b_hi in bands:
+        ib, ip = idx.get(b_key), idx.get(p_key)
+        if ib is None or ip is None or ib == ip:
+            continue
+        cons.append(_vpsc.Constraint(var[ib], var[ip], b_lo,
+                                     priority=BAND_TIER, tag="band+"))
+        cons.append(_vpsc.Constraint(var[ip], var[ib], -b_hi,
+                                     priority=BAND_TIER, tag="band-"))
+        n_bands += 1
     solver = _vpsc.VPSC(var + [lo, hi], cons)
     # solve(), а не satisfy(). satisfy_VPSC отдаёт ЛЮБУЮ допустимую точку, и
     # при желаемых координатах, уже растянутых на весь холст (fill=1), эта
@@ -450,7 +588,7 @@ def solve_axis(axlist, by_key, idx, specs, desired, limit, off_key, half_key,
     # (замерено на 51b339ab — на 355 px, 145 узлов за кромкой). Оптимум же
     # обязан прижать стенки к 0 и limit, пока допустимая точка внутри холста
     # вообще существует, — за это отвечает их вес.
-    ok = solver.solve()
+    ok = solver.solve_keep_tier() if n_bands else solver.solve()
     return [v.position for v in var], ok, solver.stats, keep_eff
 
 
@@ -480,7 +618,8 @@ def _desired(axlist, by_key, off_key, half_key, limit, fill, inset=INSET):
 def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
           tol=AXIS_TOL, mode=AXIS_MODE, rounds=ROUNDS, fill=1.0, keep=1.0,
           pipe_min=PIPE_MIN, bias=BIAS, inset=INSET, retries=RETRIES,
-          cap_input=True, cap_gap=None, cap_pipe=None):
+          cap_input=True, cap_gap=None, cap_pipe=None, shapes=None,
+          bands=None):
     """Осевая расстановка: мутирует graph, возвращает статистику.
 
     cap_input=True (v16): пороги «не хуже чем было» — зазор/труба капаются
@@ -493,6 +632,9 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
     cap_gap=True, cap_pipe=False значит: зазор блок-блок остаётся капнутым «не
     хуже чем было» (спрос не взрывается, как при полном uncap v22, где сняли
     ОБА кап), а труба получает полный pipe_min по РЕАЛЬНЫМ границам концов.
+
+    shapes (`_shapes.ShapeIndex`): наложения по реальной форме узла с
+    амнистией детектированных пар. None — прежнее поведение по габаритам.
     """
     items = items_of(graph)
     by_key = {it["key"]: it for it in items}
@@ -528,7 +670,8 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
     dy = _desired(yaxes, by_key, "oy", "hh", canvas[1], fill, inset)
     scale0, demand = fit_scale(graph, items, xaxes, yaxes, xa, ya, by_key,
                                canvas, gap, gap_min, pipe_min, gap_base,
-                               inset, bias=bias, pipe_base=pipe_base)
+                               inset, bias=bias, pipe_base=pipe_base,
+                               shapes=shapes)
 
     st = {"axes_x": len(xaxes), "axes_y": len(yaxes), "cells_split": n_split,
           "snap_max_px": round(snap_max, 2), "gap_want": gap,
@@ -563,6 +706,7 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
             # бисекция была вынуждена ронять пороги до 7 % от заказанных).
             # Для них цель одна — ворота W1, то есть отсутствие наложения.
             assign_axis(conflicts(items, g if _r == 0 else gap_min,
+                                  shapes=shapes,
                                   base=gap_base, floor=gap_min),
                         xa, ya, sep, canvas, bias)
             for axis, axlist, idx, des, lim, okey, hkey, ckey, c0 in (
@@ -571,7 +715,8 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
                 pos, good, sst, keff = solve_axis(
                     axlist, by_key, idx,
                     list(sep[axis].values()) + pipes[axis], des, lim,
-                    okey, hkey, c0, inset, keep)
+                    okey, hkey, c0, inset, keep,
+                    bands=(bands or {}).get(axis, ()))
                 for i, a in enumerate(axlist):
                     a["coord"] = pos[i]
                 for it in items:
@@ -585,6 +730,7 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
             # а не по полному зазору: полный зазор для пар, порождённых самой
             # раскладкой, сознательно не требуется (см. выше)
             residual = len(conflicts(items, gap_min, base=base_pos,
+                                     shapes=shapes,
                                      floor=gap_min))
             if residual == 0:
                 break
@@ -616,7 +762,7 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
         inf["over"] = round(over, 2)
         inf["sep_x"], inf["sep_y"] = len(sep["x"]), len(sep["y"])
         inf["residual_tight_pairs"] = residual
-        inf["overlaps_left"] = len(conflicts(items, 0.0))
+        inf["overlaps_left"] = len(conflicts(items, 0.0, shapes=shapes))
         return inf, [a["coord"] for a in xaxes], [a["coord"] for a in yaxes]
 
     # ПОРОГИ ДОСУЖИВАЮТСЯ ПО ФАКТУ, а не по нижней оценке. fit_scale считает

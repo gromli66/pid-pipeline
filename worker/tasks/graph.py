@@ -32,6 +32,81 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _canvas_is_fresh(canvas_path, validated_path, diagram_uid) -> bool:
+    """Можно ли экспортировать этот холст, или он отстал от graph_validated.
+
+    Экспорт брал холст по одному факту существования файла, а файл переживает
+    rollback (удаляется только строка артефакта). Плюс с автозапуском раскладки
+    холст появляется у КАЖДОЙ диаграммы, так что «существует» перестало значить
+    «актуален». Сверка — общим модулем, тем же, что зовёт клиент.
+
+    Холст без метки версии (собран до появления меток) считается свежим: это
+    ручная правка оператора, сделанная старым клиентом, и терять её нельзя.
+    """
+    import json as _json
+
+    from modules.graph.core import canvas_state
+
+    if not validated_path.exists():
+        return True          # сверять не с чем — прежнее поведение
+    try:
+        canvas = _json.loads(canvas_path.read_text(encoding="utf-8"))
+        validated = _json.loads(validated_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        logger.warning("[%s] холст не читается (%s) — беру graph_validated",
+                       diagram_uid, exc)
+        return False
+    if not canvas_state.read_state(canvas)["layout_version"]:
+        logger.info("[%s] холст без метки версии — считаю ручной правкой",
+                    diagram_uid)
+        return True
+    stale, reason = canvas_state.is_stale(canvas, validated)
+    if stale:
+        logger.warning("[%s] холст устарел (%s) — экспорт идёт из "
+                       "graph_validated", diagram_uid, reason)
+        return False
+    return True
+
+
+def _mirror_text(canvas_graph, validated_path, diagram_uid) -> None:
+    """Подмешать подписи и привязки из graph_validated в холст (в памяти).
+
+    Файл холста НЕ трогаем: правки оператора — не дело экспорта. Если текст на
+    холсте правился руками (`text_edited`), первоисточником стал сам холст, и
+    импорт молча его не затирает.
+    """
+    import json as _json
+
+    if not validated_path.exists():
+        return
+    from modules.graph.core import canvas_state, text_import
+
+    if canvas_state.read_state(canvas_graph)["text_edited"]:
+        logger.info("[%s] текст правился на холсте — импорт не нужен",
+                    diagram_uid)
+        return
+    try:
+        validated = _json.loads(validated_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        logger.warning("[%s] graph_validated не читается (%s) — текст в FXML "
+                       "берётся как есть", diagram_uid, exc)
+        return
+    stale, reason = canvas_state.text_is_stale(canvas_graph, validated)
+    if not stale:
+        return
+    try:
+        stats = text_import.import_text(canvas_graph, validated)
+    except Exception as exc:  # noqa: BLE001 — экспорт важнее подписей
+        logger.warning("[%s] импорт текста на холст не удался: %s",
+                       diagram_uid, exc, exc_info=True)
+        return
+    canvas_graph.setdefault("graph", {}).setdefault(
+        "canvas_transform", {})["text_imported_sha"] = \
+        canvas_state.text_projection_sha(validated)
+    logger.info("[%s] текст импортирован в холст перед экспортом (%s): %s",
+                diagram_uid, reason, stats)
+
+
 # =============================================================================
 # task_build_graph — построение графа (Phase 5)
 # =============================================================================
@@ -475,9 +550,13 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None, bridge_gap
             graph_json_path = diagram_dir / "graph" / "graph.json"
 
             # WYSIWYG: холст — результат «Ручной правки», последней стадии перед
-            # экспортом, поэтому он в приоритете. При откате назад rollback его
-            # удаляет, так что само его наличие значит «правка актуальна».
-            if graph_canvas_path.exists():
+            # экспортом, поэтому он в приоритете. Но брать его по одному факту
+            # существования нельзя: rollback удаляет только строку артефакта, а
+            # файл остаётся на диске, и после возврата назад экспорт уносил бы
+            # УСТАРЕВШУЮ раскладку. Свежесть сверяем тем же модулем, что и
+            # клиент (§3.8 п. 4 плана AUTO_LAYOUT_INTEGRATION.md).
+            if graph_canvas_path.exists() and _canvas_is_fresh(
+                    graph_canvas_path, graph_validated_path, diagram_uid):
                 input_graph_path = graph_canvas_path
                 logger.info("Using canvas graph (WYSIWYG): %s", input_graph_path)
             elif graph_validated_path.exists():
@@ -503,6 +582,15 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None, bridge_gap
             import json
             with open(input_graph_path, 'r', encoding='utf-8') as f:
                 graph_data = json.load(f)
+
+            # Зеркало текста (§3.8 п. 4 плана). Холст — продукт раскладки,
+            # текст в нём не первоисточник: задача считает раскладку ДО OCR,
+            # когда ни одного text_block ещё не существует. Если оператор
+            # вкладку так и не открыл, FXML ушёл бы без единого <Text> и без
+            # KKS (KKS берётся из bindings). Клиентский импорт экспорт не
+            # чинит — подмешиваем тем же общим модулем.
+            if input_graph_path == graph_canvas_path:
+                _mirror_text(graph_data, graph_validated_path, diagram_uid)
 
         nodes_count = len(graph_data.get('nodes', []))
         edges_count = len(graph_data.get('links', []))

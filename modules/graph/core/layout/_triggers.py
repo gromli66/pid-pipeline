@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import math
 
-from ._graph import (edge_ends, edge_polyline, edges, is_connector, node_cxy,
-                     nodes_by_id)
+from ..graph_access import (edge_ends, edge_polyline, edges, is_connector,
+                            node_cxy, nodes_by_id)
 
 FLOOR = 6.0    # px: порог «схлопнуто / впритык»
 MAGI = 60.0    # px: порог «магистраль»

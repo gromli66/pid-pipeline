@@ -16,14 +16,18 @@
 """
 from __future__ import annotations
 
+import logging
 import math
 from collections import defaultdict
 
 from . import _gate as topo_gate
+from . import _shapes
 from ._gap import FLOOR, gap_and_seam, shape_box
-from ._graph import (edge_ends, edge_polyline, edges, is_connector, move_node,
-                     node_cxy, nodes_by_id)
-from .seating import reseat_all_endpoints, reseat_edge
+from ..graph_access import (edge_ends, edge_polyline, edges, is_connector,
+                            move_node, node_cxy, nodes_by_id)
+from ..seating import reseat_all_endpoints, reseat_edge
+
+logger = logging.getLogger(__name__)
 
 TARGET = 12.0     # px: желаемая длина трубы (порог заказчика)
 TAIL_MAX = 12     # узлов: до этого размера сторона считается «концевой веткой»
@@ -424,20 +428,70 @@ def _boxes(graph):
     return out
 
 
-def overlaps(graph):
-    """Число перекрывающихся пар боксов (касание НЕ считается)."""
-    from shapely.geometry import box as shp_box
+def _frozen_nodes(graph, legal=None):
+    """Узлы НЕЛЕГАЛЬНО наложенных пар — их слой не двигает.
+
+    Форма узла — нарисованная (`segmentation`, иначе bbox), пары из
+    `legal` (наложены в детектированной геометрии) не считаются: их право
+    там быть — решение заказчика, и замораживать из-за них соседей нельзя.
+    """
     from shapely.strtree import STRtree
-    bx = _boxes(graph)
-    geoms = [shp_box(*b) for _k, b in bx]
+    ids, geoms = [], []
+    for n in graph.get("nodes", []):
+        if "centroid" not in n or is_connector(n):
+            continue
+        g = _shapes.shape_of(n)
+        if g is None or g.is_empty or g.area <= 0.0:
+            continue
+        ids.append(n["id"])
+        geoms.append(g)
+    if not geoms:
+        return set()
+    legal = legal or ()
     tree = STRtree(geoms)
-    n = 0
+    out = set()
     for i, g in enumerate(geoms):
         for j in tree.query(g, predicate="intersects"):
             j = int(j)
-            if j > i and g.intersection(geoms[j]).area > 1e-9:
-                n += 1
-    return n
+            if j <= i or g.intersection(geoms[j]).area <= 1e-9:
+                continue
+            if tuple(sorted((ids[i], ids[j]))) in legal:
+                continue
+            out.add(ids[i])
+            out.add(ids[j])
+    return out
+
+
+def overlaps(graph, legal=None):
+    """Число перекрывающихся пар (касание НЕ считается).
+
+    Меряет ТО ЖЕ, ЧТО СУДЬЯ: по нарисованной форме узла и без ЛЕГАЛЬНЫХ
+    пар. Габаритный счёт врал в обе стороны — засчитывал наложением узел
+    в пустом углу невыпуклого контура и не отличал законную пару из
+    детекции от созданной ходом.
+    """
+    from shapely.strtree import STRtree
+    ids, geoms = [], []
+    for n in graph.get("nodes", []):
+        if "centroid" not in n or is_connector(n):
+            continue
+        g = _shapes.shape_of(n)
+        if g is None or g.is_empty or g.area <= 0.0:
+            continue
+        ids.append(n["id"])
+        geoms.append(g)
+    if not geoms:
+        return 0
+    legal = legal or ()
+    tree = STRtree(geoms)
+    cnt = 0
+    for i, g in enumerate(geoms):
+        for j in tree.query(g, predicate="intersects"):
+            j = int(j)
+            if (j > i and g.intersection(geoms[j]).area > 1e-9
+                    and tuple(sorted((ids[i], ids[j]))) not in legal):
+                cnt += 1
+    return cnt
 
 
 PEN_TOL = 12.0    # px: допуск на СУММАРНОЕ ухудшение глубины по всему листу.
@@ -688,7 +742,7 @@ def seam_cuts(e, byid, axis, gidx, gcoord):
 
 def spread(graph, orig, floor=FLOOR, target=TARGET, passes=PASSES,
            verbose=True, base_v16=None, band="both", unlock_zero=False,
-           compound=False, comp_push=False):
+           compound=False, comp_push=False, legal=None):
     """base_v16 задан -> в приёмку добавляется ЗАПРЕТ ПЕРЕСТАНОВОК.
 
     Замер показал, зачем он нужен: без него узел за несколько проходов уезжал
@@ -702,7 +756,7 @@ def spread(graph, orig, floor=FLOOR, target=TARGET, passes=PASSES,
     base_bop, base_pipe_pen = box_on_pipe_depth(graph, byid)
     base_magi = box_on_magi_drawn(graph, byid)
     base_pen = penetration_sum(graph, byid)
-    base_ovl = overlaps(graph)
+    base_ovl = overlaps(graph, legal)
     # БАЗА ДИАГОНАЛЕЙ, а не абсолютный ноль: v16 сам оставляет диагонали
     # относительно оригинала (a6d28736 — 7, 8d517a35 — 6, 13d1ef5f — 3,
     # 6e7144d5 — 1; на 51b случайно 0). Абсолютное «> 0» блокировало ВСЕ ходы
@@ -712,20 +766,12 @@ def spread(graph, orig, floor=FLOOR, target=TARGET, passes=PASSES,
     # часть боксов ровно на границу, абсолютная проверка отвергала ВСЕ ходы
     # (замер a6d28736 с полем 24px: 128 -> 128, ноль принятых).
     base_marg = margin_violation(graph)
-    # узлы с наложением бокс-бокс не трогаем вовсе (правило заказчика)
-    frozen = set()
-    if base_ovl:
-        from shapely.geometry import box as shp_box
-        from shapely.strtree import STRtree
-        bx = _boxes(graph)
-        geoms = [shp_box(*b) for _k, b in bx]
-        tree = STRtree(geoms)
-        for i, g in enumerate(geoms):
-            for j in tree.query(g, predicate="intersects"):
-                j = int(j)
-                if j > i and g.intersection(geoms[j]).area > 1e-9:
-                    frozen.add(bx[i][0])
-                    frozen.add(bx[j][0])
+    # узлы с наложением не трогаем вовсе (правило заказчика). Считаем тем же
+    # судьёй, что и приёмка: по РЕАЛЬНОЙ ФОРМЕ и без ЛЕГАЛЬНЫХ пар. Прежний
+    # предикат был габаритным и амнистии не знал — на 13d1ef5f из 15
+    # замороженных пар 10 законны (узел стоит на баке ещё в детектированной
+    # геометрии), и слой не чинил трубы, которые чинить можно.
+    frozen = _frozen_nodes(graph, legal)
 
     stats = {"accepted": 0, "by_group": 0, "by_solo": 0,
              "by_cascade": 0, "by_push": 0, "aligned": 0, "symmetric": 0,
@@ -820,7 +866,7 @@ def spread(graph, orig, floor=FLOOR, target=TARGET, passes=PASSES,
         now = defects(graph, byid, floor)
         bad = (margin_violation(graph) > base_marg + 1e-6
                or (target_eid is not None and target_eid in now)
-               or overlaps(graph) > base_ovl
+               or overlaps(graph, legal) > base_ovl
                or len(bop - base_bop) > 0
                or bool(box_on_magi_drawn(graph, byid) - base_magi)
                or pipe_pen > base_pipe_pen + pen_tol
@@ -843,7 +889,7 @@ def spread(graph, orig, floor=FLOOR, target=TARGET, passes=PASSES,
                 why.append("рамка")
             if target_eid is not None and target_eid in now:
                 why.append("целевое не вылечено")
-            if overlaps(graph) > base_ovl:
+            if overlaps(graph, legal) > base_ovl:
                 why.append("наложение боксов")
             if len(bop - base_bop) > 0:
                 why.append("труба в чужом боксе")
@@ -861,7 +907,7 @@ def spread(graph, orig, floor=FLOOR, target=TARGET, passes=PASSES,
                 why.append("перестановки")
             if gate_local(t_edges):
                 why.append("гейт: сторона входа / прямизна")
-            print(f"      [comp] {dbg}: отказ — {', '.join(why)}")
+            logger.debug("[comp] %s: отказ — %s", dbg, ", ".join(why))
         if bad:
             for grp, dx, dy in moves:
                 for k in grp:
@@ -1107,8 +1153,10 @@ def spread(graph, orig, floor=FLOOR, target=TARGET, passes=PASSES,
                         acc += 1
                 total += acc
                 if verbose:
-                    print(f"    полоса {tag}/{axis} раунд {_r + 1}: принято {acc}"
-                          f", дефектов {len(defects(graph, byid, floor))}")
+                    logger.info(
+                        "полоса %s/%s раунд %d: принято %d, дефектов %d",
+                        tag, axis, _r + 1, acc,
+                        len(defects(graph, byid, floor)))
                 if not acc:
                     break
         stats["band_" + tag] += total
@@ -1287,8 +1335,10 @@ def spread(graph, orig, floor=FLOOR, target=TARGET, passes=PASSES,
                 if not (compound and try_compound(e, eid)):
                     stats["rejected"] += 1
         if verbose:
-            print(f"    проход {p + 1}: принято {stats['accepted'] - n_before}"
-                  f", дефектов осталось {len(defects(graph, byid, floor))}")
+            logger.info(
+                "проход %d: принято %d, дефектов осталось %d",
+                p + 1, stats["accepted"] - n_before,
+                len(defects(graph, byid, floor)))
         if stats["accepted"] == n_before:
             # РАЗДВИГАНИЕ ВСТАЛО. На входе v16 полосе нечего переносить (слак
             # по Y = 0 на всех разрезах), а вот здесь место уже появилось:

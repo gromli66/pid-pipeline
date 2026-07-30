@@ -230,6 +230,17 @@ class EditWaypointHandler(ModeHandler):
         return True
 
     def on_move(self, ed, x, y, event):
+        # Кнопка отпущена — жеста нет. У вьюпорта включён mouse tracking, и без
+        # этой проверки потерянный release (alt-tab, модальное окно) оставлял
+        # конец ребра приклеенным к курсору: маршрут объявлялся ручным, а
+        # waypoints стирались — молча, без действия оператора.
+        from PySide6.QtCore import Qt
+        if not (event.buttons() & Qt.MouseButton.LeftButton):
+            if ed.dragging_waypoint:
+                ed._end_waypoint_drag()
+            elif ed._dragging_endpoint:
+                ed._end_endpoint_drag()
+            return True
         if ed.dragging_waypoint:
             ed._drag_waypoint_to(x, y)
         elif ed._dragging_endpoint:

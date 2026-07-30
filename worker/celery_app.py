@@ -30,6 +30,7 @@ celery_app = Celery(
         "worker.tasks.graph",
         "worker.tasks.ocr",
         "worker.tasks.contours",
+        "worker.tasks.layout",
     ]
 )
 
@@ -76,6 +77,7 @@ celery_app.conf.task_routes = {
     "worker.tasks.graph.*": {"queue": "default"},
     "worker.tasks.ocr.*": {"queue": "ocr"},
     "worker.tasks.contours.*": {"queue": "sam2"},
+    "worker.tasks.layout.*": {"queue": "default"},
 }
 
 

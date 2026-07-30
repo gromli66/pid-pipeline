@@ -31,6 +31,7 @@ _PIPELINE = [
     "graph_building",
     "graph_validation",
     "contour_extraction",
+    "layout",
     "ocr",
     "fxml_generation",
 ]
@@ -49,6 +50,7 @@ _STAGE_LABELS = {
     "graph_building": "Сборка схемы",
     "graph_validation": "Проверка схемы",
     "contour_extraction": "Контуры элемента",
+    "layout": "Раскладка схемы",
     "ocr": "Распознавание текста",
     "fxml_generation": "Экспорт",
 }
@@ -120,6 +122,10 @@ _DEFAULT_BUDGETS = {
     "graph_building": 25,
     "graph_validation": None,
     "contour_extraction": 40,
+    # ПРОВИЗОРНО. Замер на dev-CPU: 936 узлов — 72 с. Боевой CPU-only
+    # ожидаемо в 2-5 раз медленнее, модели время-от-размера нет.
+    # Перемерять по docs/AUTO_LAYOUT_E2E_TESTPLAN.md §5.
+    "layout": 180,
     "ocr": 45,
     "fxml_generation": 15,
 }

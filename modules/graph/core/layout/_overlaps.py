@@ -12,11 +12,20 @@ from __future__ import annotations
 from shapely import STRtree
 from shapely.geometry import Point, box as shp_box
 
-def collect_items(graph):
+from . import _shapes
+
+
+def collect_items(graph, shape=True):
     """[(nid, is_conn, rect|None, geom)] — по всем узлам графа.
 
     rect = (x1, y1, x2, y2) из bbox, если он невырожден; иначе None и узел
     представлен точкой центроида (коннекторы, узлы без bbox).
+
+    geom — НАРИСОВАННАЯ форма узла (`segmentation`, иначе bbox), а не габарит:
+    у невыпуклого контура габарит почти вдвое больше фигуры, и по нему судья
+    засчитывал наложением узел, стоящий в пустом углу. rect остаётся
+    габаритным — по нему считаются глубины в отчёте.
+    shape=False возвращает прежнее, чисто габаритное поведение.
     """
     items = []
     degenerate = []
@@ -30,7 +39,9 @@ def collect_items(graph):
             if x2 - x1 > 0.0 and y2 - y1 > 0.0:
                 rect = (x1, y1, x2, y2)
         if rect is not None:
-            geom = shp_box(*rect)
+            geom = _shapes.shape_of(n) if shape else shp_box(*rect)
+            if geom is None:
+                geom = shp_box(*rect)
         else:
             c = n.get("centroid")
             if not c or len(c) < 2:
@@ -89,12 +100,19 @@ def strict_pairs(items):
     return pos, touch
 
 
-def strict_block_pairs(graph):
+def strict_block_pairs(graph, legal=None, shape=True):
     """Число строго пересекающихся пар block-block.
 
     Эквивалент `verify_overlaps.verify(graph)["strict"]["by_kind"]
     ["block-block"]` стенда: там это счётчик по тем же записям strict_pairs.
+
+    legal: множество пар `(a, b)` (a < b), наложенных в ДЕТЕКТИРОВАННОЙ
+    геометрии — они законны (решение заказчика) и в счёт не идут. Считается
+    `_shapes.legal_pairs` по `graph.detected_bbox`.
     """
-    items, _degenerate = collect_items(graph)
+    items, _degenerate = collect_items(graph, shape=shape)
     pos, _touch = strict_pairs(items)
-    return sum(1 for r in pos if r["kind"] == "block-block")
+    if not legal:
+        return sum(1 for r in pos if r["kind"] == "block-block")
+    return sum(1 for r in pos if r["kind"] == "block-block"
+               and tuple(sorted((r["a"], r["b"]))) not in legal)

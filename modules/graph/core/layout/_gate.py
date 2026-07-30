@@ -15,8 +15,8 @@ import numpy as np
 
 from . import _overlaps
 from . import _triggers as triggers
-from ._graph import (edge_ends, edge_polyline, edges, is_connector, node_cxy,
-                     nodes_by_id)
+from ..graph_access import (edge_ends, edge_polyline, edges, is_connector,
+                            node_cxy, nodes_by_id)
 
 TIE_EPS = 2.0      # px: пара считалась «на одной оси» в оригинале
                    # (перенесено из harness/metrics.py стенда)
@@ -190,8 +190,15 @@ def _side_changed(after_e, orig_e, v16_e, after_b, orig_b, v16_b):
     return n
 
 
-def verify(after, orig, base_v16):
-    """Гейт хода. Возвращает dict инвариантов + ok (bool)."""
+def verify(after, orig, base_v16, legal=None):
+    """Гейт хода. Возвращает dict инвариантов + ok (bool).
+
+    legal: пары, наложенные в ДЕТЕКТИРОВАННОЙ геометрии. Они законны
+    (решение заказчика 2026-07-29: наложения, пришедшие из построения и
+    проверки, имеют право там быть) и в счётчик `overlaps` не идут —
+    иначе инвариант «ноль наложений» краснеет на входе, который сам их
+    содержит. Считаются `_shapes.legal_pairs` по `graph.detected_bbox`.
+    """
     after_b = nodes_by_id(after)
     orig_b = nodes_by_id(orig)
     v16_b = nodes_by_id(base_v16)
@@ -205,7 +212,7 @@ def verify(after, orig, base_v16):
     straight_broken = _straight_broken(after_e, v16_e)
     side_changed = _side_changed(after_e, orig_e, v16_e, after_b, orig_b, v16_b)
 
-    overlaps = _overlaps.strict_block_pairs(after)
+    overlaps = _overlaps.strict_block_pairs(after, legal)
 
     box_after = len(triggers.detect(after)["box_on_magi"])
     box_v16 = len(triggers.detect(base_v16)["box_on_magi"])

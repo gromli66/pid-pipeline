@@ -324,11 +324,17 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
     def _contour_endpoint(self, node_id: str, point, toward):
         """Конец ребра на границе НАРИСОВАННОГО контура (только отрисовка).
 
-        В модели конец сидит на границе фикс-бокса — это то, что уйдёт в FXML,
-        и менять его нельзя. Но пока на экране нарисован контур (скины
-        выключены), труба обязана доходить до него, а не теряться внутри фигуры.
-        Луч ведём от центроида к следующей точке пути — ребро остаётся
-        коллинеарным самому себе.
+        Если конец сидит на границе фикс-бокса (так уходит в FXML), а на экране
+        нарисован контур (скины выключены), труба обязана доходить до него, а
+        не теряться внутри фигуры — тогда ведём луч от центроида к следующей
+        точке пути, ребро остаётся коллинеарным самому себе.
+
+        НО если конец УЖЕ на контуре — не трогаем. Посадка (`seating`) сажает
+        его туда сама и по оси прямизны, а повторная доводка лучом из центроида
+        сбивала ортогональную трубу в диагональ: на боевом c2f79462 в файле
+        было 1 косое ребро из 130, а на экране — вся звезда из центра
+        деаэратора (13 рёбер, конец каждого лежит на контуре с точностью
+        0.000 px).
         """
         node = self.nodes.get(node_id)
         if not node or not point or not toward:
@@ -338,9 +344,12 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         c = node.get('centroid')
         if not c:
             return point
-        from modules.graph.core.pretransform import project_ray_to_polygon
-        r = project_ray_to_polygon(node.get('segmentation'), c[1], c[0],
-                                   toward[1], toward[0])
+        from modules.graph.core.pretransform import (point_on_polygon,
+                                                     project_ray_to_polygon)
+        seg = node.get('segmentation')
+        if point_on_polygon(seg, point[1], point[0]):
+            return point
+        r = project_ray_to_polygon(seg, c[1], c[0], toward[1], toward[0])
         return [r[1], r[0]] if r else point
 
     def _visual_edge_ends(self, edge_key: tuple, edge_data: dict):
@@ -1550,6 +1559,15 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self._drag_prev_x = node_data['centroid'][1]
         self._drag_prev_y = node_data['centroid'][0]
 
+        # СМЕЩЕНИЕ ЗАХВАТА: узел едет на дельту курсора, а не прыгает в него.
+        # Без этого первый же кадр drag телепортировал центроид ровно под
+        # курсор — на боевом c2f79462 так уехал node_103 на 7.68 px при пороге
+        # клика 8, то есть «щёлкнул рядом с узлом» превращалось в сдвиг.
+        gx = getattr(self, '_ctrl_lmb_start_x', None)
+        gy = getattr(self, '_ctrl_lmb_start_y', None)
+        self._drag_grab_dx = (node_data['centroid'][1] - gx) if gx is not None else 0.0
+        self._drag_grab_dy = (node_data['centroid'][0] - gy) if gy is not None else 0.0
+
         self._batch_drag = (node_id in self.selected_nodes and len(self.selected_nodes) > 1)
 
         if self._batch_drag:
@@ -1601,7 +1619,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 return
             self._batch_move_fast(dx, dy)
         else:
-            self._move_single_node(self.dragging_node, x, y)
+            self._move_single_node(self.dragging_node,
+                                   x + getattr(self, '_drag_grab_dx', 0.0),
+                                   y + getattr(self, '_drag_grab_dy', 0.0))
         self._update_selection_visuals()
 
     def _batch_move_fast(self, dx: float, dy: float):
@@ -2031,6 +2051,8 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                     best = (key, 'target')
         return best
 
+    EP_DRAG_THRESHOLD = 5.0   # px сцены: ниже — это клик, а не перетаскивание
+
     def _start_endpoint_drag(self, ep_hit):
         edge_key, endpoint = ep_hit
         edge_data = self.model.find_edge_data(edge_key)
@@ -2038,6 +2060,12 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             side_key = '_src_side' if endpoint == 'source' else '_tgt_side'
             self._dragging_endpoint = ep_hit
             self._dragging_ep_start_side = edge_data.get(side_key, 'right')
+            # порог клик/drag: без него дрожь в 1 px объявляла маршрут
+            # ручным (`_manual_route`) и стирала waypoints
+            pt = edge_data.get('source_point' if endpoint == 'source'
+                               else 'target_point') or [0.0, 0.0]
+            self._ep_drag_origin = (float(pt[1]), float(pt[0]))
+            self._ep_drag_armed = False
             snap_cmd = AutoFixCommand(self.model, self._redraw_all)
             snap_cmd.description = "Перемещение endpoint"
             snap_cmd.execute()
@@ -2066,6 +2094,11 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         """
         if not self._dragging_endpoint:
             return
+        ox, oy = getattr(self, '_ep_drag_origin', (x, y))
+        if not getattr(self, '_ep_drag_armed', False):
+            if ((x - ox) ** 2 + (y - oy) ** 2) ** 0.5 <= self.EP_DRAG_THRESHOLD:
+                return                       # ещё клик, маршрут не трогаем
+            self._ep_drag_armed = True
         edge_key, endpoint = self._dragging_endpoint
         edge_data = self.model.find_edge_data(edge_key)
         if not edge_data:

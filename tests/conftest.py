@@ -6,6 +6,16 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
+# test_ocr_phase0.py — не pytest-модуль, а скрипт-проверка: печатает отчёт и
+# зовёт sys.exit() на УРОВНЕ МОДУЛЯ. Pytest ловит это как INTERNALERROR и
+# ОБРЫВАЕТ сбор целиком, поэтому всё, что идёт после него по алфавиту, в
+# обычный прогон не попадало вовсе — test_phase7_cyrillic, test_refactoring,
+# test_refactoring_v2, test_stage7_graph_flow, test_text_import, tests/ui,
+# tests/test_worker. Запускать руками: python tests/test_ocr_phase0.py
+# (в pytest.ini такая попытка уже была, но там collect_ignore не действует —
+# это переменная conftest, а не опция ini, отсюда и PytestConfigWarning).
+collect_ignore = ["test_ocr_phase0.py"]
+
 # Add project root
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))

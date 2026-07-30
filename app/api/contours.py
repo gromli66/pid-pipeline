@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_async_db
 from app.models import Diagram, DiagramStatus, Artifact, ArtifactType
+from app.services.layout_dispatch import dispatch_layout
 from app.services.storage import StorageService
 
 router = APIRouter()
@@ -336,7 +337,11 @@ async def auto_accept_contours(
     diagram.error_stage = None
     await db.commit()
 
-    return {"status": "ok", "nodes_accepted": accepted}
+    # Контуры закрыты — геометрия финальная, можно раскладывать. Диспетчер
+    # идемпотентен: повторное подтверждение на ту же истину задачу не плодит.
+    layout = await dispatch_layout(uid, db)
+
+    return {"status": "ok", "nodes_accepted": accepted, "layout": layout}
 
 
 @router.post("/{uid}/complete")
@@ -375,7 +380,10 @@ async def complete_contour_validation(
     diagram.error_stage = None
     await db.commit()
 
-    return {"status": "ok", "message": "Contour validation completed"}
+    layout = await dispatch_layout(uid, db)
+
+    return {"status": "ok", "message": "Contour validation completed",
+            "layout": layout}
 
 
 @router.put("/{uid}/training")

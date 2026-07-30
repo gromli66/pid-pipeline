@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import math
 
-from ._graph import is_connector, node_cxy
+from ..graph_access import is_connector, node_cxy
 
 FLOOR = 6.0        # px: порог видимости трубы (0.75 * min_gap)
 

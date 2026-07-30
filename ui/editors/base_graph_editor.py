@@ -202,6 +202,16 @@ class BaseGraphEditor(QGraphicsView):
         # Фоновая подложка и её затемнение (0..1). 0.6 ≈ прежний вид (alpha 153).
         self._bg_item: QGraphicsPixmapItem | None = None
         self._bg_darkness: float = 0.6
+        # Подложка = исходный растр. После авто-раскладки она перестаёт быть
+        # системой отсчёта: узлы переставлены (~99 %), а лист заполняется весь,
+        # тогда как растр вписан letterbox-ом и уже. Показывать её по умолчанию
+        # нельзя — картинка становится нечитаемой. Ставит вкладка по флагу
+        # canvas_transform.layout_applied.
+        self._bg_visible: bool = True
+        # Лист холста: без подложки границу листа видно не было — чёрный фон
+        # сливался с пустотой за краем. Светлая тема = как в САПР и в FXML.
+        self._sheet_item = None
+        self._light_theme: bool = True
         self.setMouseTracking(True)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
 
@@ -365,9 +375,22 @@ class BaseGraphEditor(QGraphicsView):
                         self.img_width, self.img_height)
 
         self._apply_visuals(canvas=self._canvas_mode)
+        self._apply_theme_colors()
+
+        # Z=-1: лист. Только в холсте: там сцена и есть лист 1920x1080, и без
+        # него не видно, где он кончается (подложка эту роль больше не играет).
+        self._sheet_item = None
+        if self._canvas_mode:
+            self._sheet_item = QGraphicsRectItem(
+                QRectF(0, 0, self.canvas_w, self.canvas_h))
+            self._sheet_item.setBrush(QBrush(self._sheet_color()))
+            self._sheet_item.setPen(QPen(QColor("#888"), 0))
+            self._sheet_item.setZValue(-1)
+            self.scene.addItem(self._sheet_item)
 
         # Z=0: Original image (darkened)
-        if self.original_image and not self.original_image.isNull():
+        if (self._bg_visible and self.original_image
+                and not self.original_image.isNull()):
             darkened = self.original_image.copy().convertToFormat(QImage.Format.Format_ARGB32)
             painter = QPainter(darkened)
             painter.fillRect(darkened.rect(), QColor(0, 0, 0, int(self._bg_darkness * 255)))
@@ -378,6 +401,8 @@ class BaseGraphEditor(QGraphicsView):
             self._bg_item.setPos(self._bg_offx, self._bg_offy)
             self._bg_item.setZValue(0)
             self.scene.addItem(self._bg_item)
+        else:
+            self._bg_item = None
 
         # Z=1: Edges
         self._draw_all_edges()
@@ -385,8 +410,16 @@ class BaseGraphEditor(QGraphicsView):
         # Z=2-3: Nodes
         self._draw_all_nodes()
 
-        self.setSceneRect(QRectF(0, 0, scene_w, scene_h))
-        self.fitInView(self.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        # Запас вокруг листа, иначе сцену не подвинуть мышкой. ScrollHandDrag
+        # панорамирует прокруткой, а прокрутка ограничена sceneRect: когда лист
+        # целиком влезает в окно, двигать нечего — схватить и сдвинуть можно
+        # было только после зума. Лист при этом вписывается как раньше: сам
+        # он, а не расширенная сцена.
+        pad_x, pad_y = scene_w * 0.5, scene_h * 0.5
+        sheet = QRectF(0, 0, scene_w, scene_h)
+        self.setSceneRect(QRectF(-pad_x, -pad_y,
+                                 scene_w + 2 * pad_x, scene_h + 2 * pad_y))
+        self.fitInView(sheet, Qt.AspectRatioMode.KeepAspectRatio)
 
     def set_left_gutter(self, px: int):
         """Отступ слева у видимой области (px виджета).
@@ -473,6 +506,45 @@ class BaseGraphEditor(QGraphicsView):
         tx, ty = target_point[1], target_point[0]
         path.lineTo(tx, ty)
         return path
+
+    # ---- лист, подложка, тема ----
+
+    def _sheet_color(self) -> QColor:
+        """Цвет листа. Тёмная тема — чуть светлее пустоты, чтобы край был виден."""
+        return QColor("#ffffff") if self._light_theme else QColor(52, 52, 52)
+
+    def _apply_theme_colors(self):
+        """Цвета, зависящие от темы. Узлы не трогаем: синий/зелёный/красный
+        читаются и на белом, и на тёмном, а вот рёбра по умолчанию БЕЛЫЕ —
+        на белом листе они бы просто исчезли."""
+        if self._light_theme:
+            self.setBackgroundBrush(QBrush(QColor(30, 30, 30)))   # пустота за листом
+            self.COLOR_EDGE = QColor(40, 40, 40, 200)
+            self.COLOR_KKS_LABEL_BG = QColor(255, 255, 255, 190)
+        else:
+            self.setBackgroundBrush(QBrush(QColor(30, 30, 30)))
+            self.COLOR_EDGE = QColor(255, 255, 255, 150)
+            self.COLOR_KKS_LABEL_BG = QColor(0, 0, 0, 160)
+
+    def set_light_theme(self, light: bool):
+        """Светлый лист + тёмный граф (как в САПР и в FXML) или прежний тёмный."""
+        light = bool(light)
+        if light == self._light_theme:
+            return
+        self._light_theme = light
+        self.setup_scene()
+
+    def set_background_visible(self, visible: bool):
+        """Показывать ли исходный растр под графом.
+
+        После раскладки он не соответствует графу и по умолчанию скрыт; включают
+        его, чтобы свериться с оригиналом и прочитать текст.
+        """
+        visible = bool(visible)
+        if visible == self._bg_visible:
+            return
+        self._bg_visible = visible
+        self.setup_scene()
 
     def set_background_darkness(self, darkness: float):
         """Затемнение фоновой подложки. darkness 0..1 (0 — оригинал, 1 — чёрный)."""
@@ -1487,7 +1559,38 @@ class BaseGraphEditor(QGraphicsView):
         """
         return True
 
+    def focusOutEvent(self, event):
+        """Ушёл фокус — снять защёлку Ctrl и оборвать незавершённый drag.
+
+        `ctrl_pressed` ставится в keyPressEvent и снимается только в
+        keyReleaseEvent. При alt-tab отпускание клавиши уходит другому окну,
+        защёлка остаётся взведённой, и следующий же клик по холсту начинает
+        перетаскивание узла — оператор об этом не просил.
+        """
+        self._reset_drag_state()
+        super().focusOutEvent(event)
+
+    def leaveEvent(self, event):
+        self._reset_drag_state()
+        super().leaveEvent(event)
+
+    def _reset_drag_state(self):
+        if getattr(self, '_ctrl_lmb_dragging', False):
+            self._end_ctrl_drag()
+        self._ctrl_lmb_dragging = False
+        self._ctrl_lmb_pending = False
+        self.ctrl_pressed = False
+        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+
     def mousePressEvent(self, event):
+        # Модификатор события — истина, защёлка `ctrl_pressed` — лишь эхо:
+        # она переживает alt-tab, а `event.modifiers()` всегда актуален.
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            self.ctrl_pressed = True
+        elif event.button() == Qt.MouseButton.LeftButton:
+            self.ctrl_pressed = False
+
         if self.ctrl_pressed and event.button() == Qt.MouseButton.LeftButton:
             pos = self.mapToScene(event.pos())
             x, y = pos.x(), pos.y()
@@ -1569,6 +1672,18 @@ class BaseGraphEditor(QGraphicsView):
     def mouseMoveEvent(self, event):
         pos = self.mapToScene(event.pos())
         x, y = pos.x(), pos.y()
+
+        # ЗАЛИПШИЙ DRAG. У вьюпорта включён setMouseTracking, поэтому move
+        # приходит и с ОТПУЩЕННОЙ кнопкой. Если release потерялся (клик мимо
+        # окна, alt-tab, модальный диалог), узел ехал за курсором дальше и
+        # уезжал на сотни px — молча, без единого жеста оператора. Замер на
+        # боевом c2f79462: так сдвинуло 5 узлов (до 305 px), автосейв записал
+        # это на сервер, и 1 косое ребро на листе стало 9.
+        if not (event.buttons() & Qt.MouseButton.LeftButton):
+            if getattr(self, '_ctrl_lmb_dragging', False):
+                self._end_ctrl_drag()
+            self._ctrl_lmb_dragging = False
+            self._ctrl_lmb_pending = False
 
         # Ctrl+ЛКМ: отложенное решение клик/drag
         if getattr(self, '_ctrl_lmb_pending', False):

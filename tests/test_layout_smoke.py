@@ -35,7 +35,7 @@ TIME_BUDGET_S = 60.0     # смоук, не бенчмарк: на dev-маши�
 def run():
     """Одна раскладка на весь модуль: она не бесплатная."""
     from modules.graph.core.layout import LayoutParams, layout
-    from modules.graph.core.layout.input import to_canvas
+    from modules.graph.core.canvas_input import to_canvas
 
     src = json.loads(FIXTURE.read_text(encoding="utf-8"))
     src_copy = deepcopy(src)

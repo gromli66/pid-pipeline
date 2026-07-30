@@ -148,7 +148,12 @@ _BEAD_DEFS = [
 
     (BEAD_EDIT_GRAPH,    "edit_graph",  DiagramStatus.GENERATING_FXML,
      set(),
-     DiagramStatus.OCR_COMPLETED),   # доступно сразу после OCR (привязка внутри ручной правки)
+     # Гейт (решение заказчика 2026-07-28, §3.2 плана авто-раскладки): вкладка
+     # не открывается, пока не подтверждена привязка. Раньше здесь стоял
+     # OCR_COMPLETED — «привязка внутри ручной правки»; теперь привязка
+     # делается в своей вкладке, а этот гейт прячет 2-5 минут счёта раскладки.
+     # Режим «ОКР привязка» внутри редактора остаётся для доводки после входа.
+     DiagramStatus.OCR_BOUND),
 
     (BEAD_FXML,          "fxml",        DiagramStatus.COMPLETED,
      {DiagramStatus.GENERATING_FXML},
@@ -178,6 +183,24 @@ def _beads_for_status(status: DiagramStatus) -> list:
             result.append((bead_idx, BeadState.AVAILABLE))
         # else: UNAVAILABLE (default)
     return result
+
+
+
+def _stage_stuck(stage, limit_s: float = None, now=None) -> bool:
+    """Стадия висит дольше предела ожидания — кнопку больше не глушим.
+
+    Тот же предел, что у гейта «Ручной правки» (`layout_gate.WAIT_LIMIT_S`):
+    правило одно на оба места, иначе гейт пускал бы, а кнопка оставалась
+    мёртвой. Отсчёт от `started_at`, а если задача так и не стартовала — от
+    `created_at`; нет ни того ни другого — не глушим вовсе.
+    """
+    from datetime import datetime
+    from ui.services.layout_gate import WAIT_LIMIT_S, _parse_dt
+    t = _parse_dt(stage.get("started_at")) or _parse_dt(stage.get("created_at"))
+    if t is None:
+        return True
+    return ((now or datetime.utcnow()) - t).total_seconds() > (
+        limit_s or WAIT_LIMIT_S)
 
 
 def _buttons_for_status(status: DiagramStatus):
@@ -274,6 +297,9 @@ _STAGE_TYPE_TO_KEY = {
     "graph_validation": "val_graph",
     "contour_extraction": "contours",
     "ocr": "ocr",
+    # Раскладка считается за спиной оператора, пока он в «Привязке подписей»,
+    # и льёт процентами кнопку той вкладки, которую держит закрытой (§3.2).
+    "layout": "edit_graph",
     "fxml_generation": "fxml",
 }
 
@@ -766,10 +792,9 @@ class DiagramWorkspace(QWidget):
                         self._action_buttons["ocr_binding"].setEnabled(True)
                         self._action_buttons["ocr_binding"].setStyleSheet(_BTN_STYLE_YELLOW)
                         self.beads.set_state(BEAD_OCR_BINDING, BeadState.AVAILABLE)
-                    if "edit_graph" in self._action_buttons:
-                        self._action_buttons["edit_graph"].setEnabled(True)
-                        self._action_buttons["edit_graph"].setStyleSheet(_BTN_STYLE_YELLOW)
-                        self.beads.set_state(BEAD_EDIT_GRAPH, BeadState.AVAILABLE)
+                    # «Ручная правка» по факту OCR-артефакта БОЛЬШЕ НЕ ОТКРЫВАЕТСЯ:
+                    # гейт §3.2 — сначала привязка, потом готовая раскладка
+                    # (ui/services/layout_gate.py, применяется в _on_stages_updated).
                 else:
                     # OCR ещё работает — запустить периодическую проверку
                     self._start_ocr_poll()
@@ -796,10 +821,9 @@ class DiagramWorkspace(QWidget):
                 self._action_buttons["ocr_binding"].setEnabled(True)
                 self._action_buttons["ocr_binding"].setStyleSheet(_BTN_STYLE_YELLOW)
                 self.beads.set_state(BEAD_OCR_BINDING, BeadState.AVAILABLE)
-            if "edit_graph" in self._action_buttons:
-                self._action_buttons["edit_graph"].setEnabled(True)
-                self._action_buttons["edit_graph"].setStyleSheet(_BTN_STYLE_YELLOW)
-                self.beads.set_state(BEAD_EDIT_GRAPH, BeadState.AVAILABLE)
+            # «Ручная правка» по факту OCR-артефакта БОЛЬШЕ НЕ ОТКРЫВАЕТСЯ:
+            # гейт §3.2 — сначала привязка, потом готовая раскладка
+            # (ui/services/layout_gate.py, применяется в _on_stages_updated).
 
     # =================================================================
     # OCR artifact polling (independent of DiagramStatus changes)
@@ -844,10 +868,9 @@ class DiagramWorkspace(QWidget):
                     self._action_buttons["ocr_binding"].setEnabled(True)
                     self._action_buttons["ocr_binding"].setStyleSheet(_BTN_STYLE_YELLOW)
                     self.beads.set_state(BEAD_OCR_BINDING, BeadState.AVAILABLE)
-                if "edit_graph" in self._action_buttons:
-                    self._action_buttons["edit_graph"].setEnabled(True)
-                    self._action_buttons["edit_graph"].setStyleSheet(_BTN_STYLE_YELLOW)
-                    self.beads.set_state(BEAD_EDIT_GRAPH, BeadState.AVAILABLE)
+                # «Ручная правка» по факту OCR-артефакта БОЛЬШЕ НЕ ОТКРЫВАЕТСЯ:
+                # гейт §3.2 — сначала привязка, потом готовая раскладка
+                # (ui/services/layout_gate.py, применяется в _on_stages_updated).
             else:
                 # OCR ещё бежит, а основной опрос статуса на паузе (built/гейт →
                 # unwatch): тикаем заливку OCR-кнопки здесь, чтобы её % рос
@@ -922,6 +945,29 @@ class DiagramWorkspace(QWidget):
             processing.discard(_mi[0])
             available.add(_mi[0])
 
+        # БЕГУЩАЯ СТАДИЯ — «в процессе» тем же механизмом, что у всех
+        # остальных этапов. `_buttons_for_status` считает состояние по
+        # СТАТУСУ диаграммы, а у раскладки своего статуса нет: она
+        # невидимая стадия между привязкой и «Ручной правкой», и её кнопка
+        # оставалась доступной, пока раскладка ещё считалась. Здесь
+        # бегущая стадия переводит свою кнопку в processing напрямую —
+        # дальше её рисует и заливает процентами штатный путь
+        # (`_STAGE_TYPE_TO_KEY` уже содержит "layout": "edit_graph").
+        for _st in (getattr(self, "_last_stages", None) or []):
+            if (_st.get("status") or "").lower() != "running":
+                continue          # pending без старта кнопку не глушит
+            # ВЫХОД ПО ПРЕДЕЛУ. Иначе повисшая задача глушила бы кнопку
+            # навсегда: гейт-то пускает после WAIT_LIMIT_S, но нажать
+            # было бы нечего. Отсчёт от created_at, если старта не было.
+            if _stage_stuck(_st):
+                continue
+            _k = _STAGE_TYPE_TO_KEY.get(
+                (_st.get("stage_type") or "").lower())
+            if _k and _k in self._action_buttons:
+                processing.add(_k)
+                available.discard(_k)
+                completed.discard(_k)
+
         # Перекрыть pipe/junction если подтверждены по отдельности
         if status == DiagramStatus.VALIDATING_MASKS:
             if self._pipe_confirmed:
@@ -981,6 +1027,17 @@ class DiagramWorkspace(QWidget):
                 label = _KEY_LABELS.get(key)
                 if label:
                     btn.setText(label)
+
+
+        # ГЕЙТ ПОСЛЕДНИМ. Статус и стадии приходят ДВУМЯ независимыми
+        # опросами: статус меняется сразу после подтверждения привязки и
+        # включает кнопку, а стадии подтянутся следующим тиком. В это окно
+        # оператор успевал войти во вкладку до готовности раскладки и
+        # видел холст БЕЗ неё — «то же, что в проверке». Повторный заход
+        # уже показывал раскладку, и выглядело это как случайность.
+        stages = getattr(self, "_last_stages", None)
+        if stages is not None:
+            self._apply_layout_gate(stages)
 
     def _restyle_button(self, key: str, status: DiagramStatus):
         """Вернуть ОДНОЙ кнопке базовый вид по статусу, не трогая остальные.
@@ -1880,6 +1937,17 @@ class DiagramWorkspace(QWidget):
     def _open_graph_editor(self):
         """Фаза 2 — AdvancedGraphTab: продвинутый редактор графа."""
         try:
+            # Раскладка не удалась или не успела: пускаем, но говорим об этом
+            # прямо. Молча открыть холст без раскладки нельзя — оператор
+            # увидит ровно то, на что жаловался («ничего не изменилось»).
+            # Состояние кнопки ведёт ШТАТНЫЙ механизм: бегущая стадия ->
+            # processing (см. _update_buttons), готовая -> available. Своего
+            # замка здесь больше нет: он делал синхронный HTTP прямо в
+            # обработчике клика, на GUI-потоке, и окно замирало до ответа.
+            _gate = getattr(self, "_layout_gate", None)
+            if _gate is not None and _gate.warn:
+                QMessageBox.information(self, "Раскладка схемы", _gate.warn)
+
             _pc = self._get_project_code()
 
             from ui.tabs.advanced_graph_tab import AdvancedGraphTab
@@ -2142,6 +2210,14 @@ class DiagramWorkspace(QWidget):
 
         self._close_tab_and_restore_header()
 
+        # Слежение ОБЯЗАТЕЛЬНО: сразу за привязкой идёт «Ручная правка», а её
+        # гейт живёт стадией `layout` — без опроса /stages он не считается
+        # вовсе. Раньше этот обработчик только закрывал вкладку, схема из
+        # наблюдения выпадала, и кнопка оставалась активной и без процентов,
+        # хотя раскладка ещё считалась (~15 с против 7 с на весь маршрут).
+        self.status_provider.watch(self._uid)
+        self._refresh_status()
+
     # =================================================================
     # Status Provider callback
     # =================================================================
@@ -2157,6 +2233,7 @@ class DiagramWorkspace(QWidget):
         """
         if uid != self._uid:
             return
+        self._last_stages = stages
         from ui.services.progress_model import compute_progress
         # Бюджеты — p50 реальных длительностей с боевого железа (кэш на сессию);
         # {} при недоступности → progress_model берёт свой статический сид.
@@ -2178,7 +2255,57 @@ class DiagramWorkspace(QWidget):
         for _key in getattr(self, "_filled_keys", {}):
             if _key not in new_filled:
                 self._restyle_button(_key, self._last_status)
+        # Набор бегущих стадий изменился -> перерисовать кнопки штатным
+        # путём: он и переводит кнопку в processing (см. _update_buttons).
+        # Заливку возвращаем сразу после, иначе _update_buttons сотрёт %
+        # у соседних ещё бегущих кнопок (регрессия §8.10).
+        if set(new_filled) != set(getattr(self, "_filled_keys", {})):
+            self._update_buttons(self._last_status)
+            for _key, _pct in new_filled.items():
+                btn = self._action_buttons[_key]
+                label = dict(self._BUTTON_DEFS).get(_key, _key)
+                btn.setStyleSheet(_btn_fill_style(_pct / 100.0))
+                btn.setText(f"{label} · {_pct}%")
         self._filled_keys = new_filled
+        self._apply_layout_gate(stages)
+
+    def _apply_layout_gate(self, stages):
+        """Гейт «Ручной правки»: пускать только с готовой раскладкой (§3.2).
+
+        Состояние берётся из стадии `layout`, а не из наличия холста:
+        отсутствие файла неразличимо между «считает», «упала» и «не
+        стартовала». Пока гейт ждёт, вкладка закрыта — значит и клиентский
+        автосейв холста не активен, отдельного выключателя не нужно.
+        """
+        from ui.services.layout_gate import gate_state
+
+        btn = self._action_buttons.get("edit_graph")
+        if btn is None:
+            return
+        gate = gate_state(stages, getattr(self._last_status, "value", None))
+        self._layout_gate = gate
+
+        if gate.allow:
+            # РАЗБЛОКИРОВАТЬ. Гейт только выключал кнопку и полагался на то,
+            # что её включит `_update_buttons` — а тот зовётся по смене
+            # СТАТУСА, и статус после привязки так и остаётся `ocr_bound`.
+            # Раскладка заканчивалась, а кнопка оставалась серой навсегда.
+            if getattr(self, "_gate_blocked", False):
+                self._gate_blocked = False
+                btn.setEnabled(True)
+                btn.setToolTip("")
+                self._restyle_button("edit_graph", self._last_status)
+            return          # дальше обычные правила кнопки в силе
+        self._gate_blocked = True
+        btn.setToolTip(gate.reason)
+        if gate.waiting:
+            # Вид кнопки (синяя, некликабельная, с процентами) ставит
+            # штатный путь `_update_buttons` -> processing. Здесь только
+            # бусина и подсказка, чтобы не спорить с ним за стиль.
+            self.beads.set_state(BEAD_EDIT_GRAPH, BeadState.IN_PROGRESS)
+        else:
+            btn.setEnabled(False)
+            btn.setStyleSheet(_BTN_STYLE_GRAY)
 
     @Slot(str, object)
     def _on_status_updated(self, uid: str, status_info):

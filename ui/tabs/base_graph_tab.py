@@ -69,6 +69,59 @@ def _pretransform_to_canvas(graph_path: Path, image_path: Path, out_path: Path) 
     return True
 
 
+def _import_text_into_canvas(canvas_path: Path, source_path: Path) -> bool:
+    """Подписи и привязки из graph_validated — на холст (§3.8 плана).
+
+    Холст считает задача раскладки ДО OCR, когда в графе нет ни одного
+    text_block. Без этого импорта вкладка открылась бы вообще без подписей, а
+    оператор к тому моменту уже прошёл привязку.
+
+    Позиции — по якорям §3.9: блок остаётся у СВОЕГО элемента, а не там, где
+    он был на листе. Тот же модуль подмешивает текст воркеру на экспорте.
+
+    Правится файл во временном каталоге (скачанная копия), не артефакт на
+    сервере: на сервер он уедет обычным сохранением холста.
+    """
+    from modules.graph.core import canvas_state, text_import
+
+    try:
+        canvas = json.loads(Path(canvas_path).read_text(encoding="utf-8"))
+        source = json.loads(Path(source_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        logger.warning("текст на холст не импортирован (%s)", exc)
+        return False
+
+    if canvas_state.read_state(canvas)["text_edited"]:
+        return False        # текст правился на холсте — он и первоисточник
+    stale, reason = canvas_state.text_is_stale(canvas, source)
+    if not stale:
+        return False
+    try:
+        stats = text_import.import_text(canvas, source)
+    except Exception as exc:  # noqa: BLE001 — без подписей вкладка всё равно нужна
+        logger.exception("импорт текста на холст не удался: %s", exc)
+        return False
+
+    canvas.setdefault("graph", {}).setdefault(
+        "canvas_transform", {})["text_imported_sha"] = \
+        canvas_state.text_projection_sha(source)
+    Path(canvas_path).write_text(json.dumps(canvas, ensure_ascii=False),
+                                 encoding="utf-8")
+    logger.info("текст импортирован на холст (%s): %s", reason, stats)
+    return True
+
+
+def _canvas_has_layout(canvas_path: Path) -> bool:
+    """Холст — продукт авто-раскладки, а не pretransform-фолбэка."""
+    from modules.graph.core import canvas_state
+
+    try:
+        canvas = json.loads(Path(canvas_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return canvas_state.has_layout(canvas)
+
+
 def _canvas_is_stale(canvas_path: Path, source_path: Path) -> bool:
     """Холст устарел, если геометрия graph_validated изменилась после сборки.
 
@@ -330,8 +383,14 @@ class BaseGraphTab(AppearanceMixin, QWidget):
                     saved = artifacts.get("graph_canvas")
                     if saved and not _canvas_is_stale(saved, artifacts["graph_json"]):
                         # Холст актуален — грузим правки оператора как есть
+                        _import_text_into_canvas(
+                            Path(saved), Path(artifacts["graph_json"]))
                         graph_for_editor = saved
                         editor._canvas_mode = True
+                        # Холст с раскладкой узлы переставил, а подложка — это
+                        # исходный растр: она больше не система отсчёта и по
+                        # умолчанию прячется (включается в панели вида).
+                        editor._bg_visible = not _canvas_has_layout(Path(saved))
                         logger.info("Загружен сохранённый холст graph_canvas")
                     else:
                         if saved:
@@ -380,8 +439,33 @@ class BaseGraphTab(AppearanceMixin, QWidget):
     def _appearance_editor(self):
         return self._editor
 
+    def _on_light_sheet_toggled(self, on: bool):
+        """Светлый лист + тёмные рёбра (как в САПР) или прежний тёмный вид."""
+        from ui.services.ui_settings import UISettings
+
+        UISettings.instance().set_appearance(self.uid, "light_sheet",
+                                             1 if on else 0)
+        if self._editor is not None:
+            self._editor.set_light_theme(on)
+
     def _build_appearance_controls(self, panel):
         from PySide6.QtGui import QColor
+        from ui.services.ui_settings import UISettings
+
+        # Подложка после раскладки не соответствует графу и скрыта по
+        # умолчанию; включают её, чтобы свериться с оригиналом и прочитать
+        # текст. Затемнение имеет смысл только при включённой подложке.
+        _s = UISettings.instance()
+        panel.add_checkbox(
+            "Показать подложку",
+            bool(getattr(self._editor, "_bg_visible", True)),
+            lambda on: self._editor and self._editor.set_background_visible(on),
+        )
+        panel.add_checkbox(
+            "Светлый лист",
+            bool(_s.get_appearance(self.uid, "light_sheet", 1)),
+            self._on_light_sheet_toggled,
+        )
         self._add_bg_darkness_slider(panel)
         self._add_color_setting(
             panel, "Цвет рёбер", "edge_color", QColor(255, 255, 255),
@@ -418,6 +502,14 @@ class BaseGraphTab(AppearanceMixin, QWidget):
         if ed is None:
             return
         from PySide6.QtGui import QColor
+        from ui.services.ui_settings import UISettings
+        # Тема — ПЕРЕД цветом рёбер: она задаёт их дефолт (на белом листе белые
+        # рёбра не видны), а явно выбранный оператором цвет применяется после
+        # и остаётся главнее.
+        if hasattr(ed, "set_light_theme"):
+            ed.set_light_theme(
+                bool(UISettings.instance().get_appearance(
+                    self.uid, "light_sheet", 1)))
         if hasattr(ed, "set_edge_color"):
             self._apply_saved_color("edge_color", QColor(255, 255, 255), ed.set_edge_color)
         if hasattr(ed, "set_size_factor"):

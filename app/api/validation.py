@@ -9,6 +9,7 @@ Mask validation endpoints:
 
 import asyncio
 import json
+import logging
 import shutil
 from uuid import UUID
 
@@ -21,8 +22,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_async_db
 from app.models import Diagram, DiagramStatus, Artifact, ArtifactType
 from app.services.dispatch import async_safe_dispatch
+from app.services.layout_dispatch import dispatch_layout
 from app.services.storage import StorageService
 from modules.graph.core import canvas_state
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -944,7 +948,26 @@ async def save_canvas_graph(
     except (UnicodeDecodeError, ValueError) as exc:
         raise HTTPException(status_code=400,
                             detail=f"Invalid canvas JSON: {exc}") from exc
-    canvas_state.mark_operator_saved(canvas)
+    # Флаг ставится, только если ГЕОМЕТРИЯ и правда отличается от лежащего
+    # холста. Раньше он ставился на каждое сохранение, а автосейв шлёт запрос
+    # по таймеру (120 с) — то есть один заход во вкладку НАВСЕГДА запрещал
+    # пересчёт раскладки (`worker/tasks/layout.py` выбрасывает результат при
+    # `operator_saved`). Замер на c2f79462: холст улетел на сервер через два
+    # тика автосейва, оператор ничего не сохранял.
+    same, was_saved = False, False
+    if await storage.file_exists(uid, "graph", "graph_canvas.json"):
+        try:
+            prev = json.loads(await storage.read_text(uid, "graph",
+                                                      "graph_canvas.json"))
+            same = (canvas_state.graph_projection_sha(prev)
+                    == canvas_state.graph_projection_sha(canvas))
+            was_saved = canvas_state.read_state(prev)["operator_saved"]
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            logger.warning("canvas/save: прежний холст не прочитан (%s)", exc)
+    if not same:
+        canvas_state.mark_operator_saved(canvas)
+    elif was_saved:
+        canvas_state.mark_operator_saved(canvas)   # правки были раньше, несём
     content = json.dumps(canvas, ensure_ascii=False).encode("utf-8")
 
     file_path, file_size = await storage.save_file(
@@ -1026,16 +1049,27 @@ async def complete_graph_validation(
                    "(кнопка «Сохранить»), затем подтвердите.",
         )
 
+    # Возврат в «Проверку схемы» уже ПОСЛЕ контуров — единственный путь, на
+    # котором геометрия меняется после запуска раскладки. Истина сменилась,
+    # значит холст невалиден и пересчитывается (§3.2 плана). На прямом пути
+    # (BUILT/VALIDATING_GRAPH) раскладку звать рано: контуры ещё впереди, и
+    # они снова поменяют segmentation.
+    returned_after_contours = diagram.status in (
+        DiagramStatus.OCR_BOUND, DiagramStatus.OCR_COMPLETED)
+
     # Обновляем статус
     # Если пришли из OCR_BOUND (после привязки + редактор) → сразу GENERATING_FXML
     # Если из более ранних статусов → VALIDATED_GRAPH (Simple flow → OCR)
-    if diagram.status in (DiagramStatus.OCR_BOUND, DiagramStatus.OCR_COMPLETED):
+    if returned_after_contours:
         diagram.status = DiagramStatus.GENERATING_FXML
     else:
         diagram.status = DiagramStatus.VALIDATED_GRAPH
     diagram.error_message = None
     diagram.error_stage = None
     await db.commit()
+
+    if returned_after_contours:
+        await dispatch_layout(uid, db)
 
     # Auto-dispatch FXML generation
     task_id = await async_safe_dispatch(
