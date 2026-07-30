@@ -111,6 +111,35 @@ def _import_text_into_canvas(canvas_path: Path, source_path: Path) -> bool:
     return True
 
 
+def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
+    """Страховка §8.3.1 EDITOR_AFTER_LAYOUT_PLAN (решение заказчика: чинить
+    при открытии): пересадить концы рёбер холста по канону `seating`.
+
+    Свежий выход раскладки каноничен by construction — для него это no-op.
+    Чинится смесь контрактов посадки, которую редакторские инструменты
+    создают своими дубль-реализациями, пока Э1 не сделан (замер
+    tools/reseat_preview_probe.py: на старых холстах до 14.8% концов).
+
+    Правится скачанная temp-копия (паттерн `_import_text_into_canvas`):
+    undo-стек и автосейв не затрагиваются, на сервер починка уедет обычным
+    сохранением оператора.
+    """
+    from modules.graph.core.pretransform import seat_edge_endpoints
+
+    try:
+        canvas = json.loads(Path(canvas_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        logger.warning("починка посадки концов пропущена (%s)", exc)
+        return False
+    moved = seat_edge_endpoints(canvas)
+    if not moved:
+        return False
+    Path(canvas_path).write_text(json.dumps(canvas, ensure_ascii=False),
+                                 encoding="utf-8")
+    logger.info("посадка концов при открытии: пересажено %d концов", moved)
+    return True
+
+
 def _canvas_has_layout(canvas_path: Path) -> bool:
     """Холст — продукт авто-раскладки, а не pretransform-фолбэка."""
     from modules.graph.core import canvas_state
@@ -385,6 +414,9 @@ class BaseGraphTab(AppearanceMixin, QWidget):
                         # Холст актуален — грузим правки оператора как есть
                         _import_text_into_canvas(
                             Path(saved), Path(artifacts["graph_json"]))
+                        # §8.3.1: посадка концов чинится при каждом открытии
+                        # (на каноничном холсте — no-op).
+                        _reseat_canvas_endpoints(Path(saved))
                         graph_for_editor = saved
                         editor._canvas_mode = True
                         # Холст с раскладкой узлы переставил, а подложка — это
