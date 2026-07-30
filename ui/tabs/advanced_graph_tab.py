@@ -201,26 +201,26 @@ class AdvancedGraphTab(SimpleGraphTab):
         self.mode_group.addButton(self.btn_optimize_edge)
         row.addWidget(self.btn_optimize_edge)
 
-        btn_optimize_all = QPushButton("Оптимизировать все")
-        btn_optimize_all.setToolTip(
+        self.btn_optimize_all = QPushButton("Оптимизировать все")
+        self.btn_optimize_all.setToolTip(
             "Выровнять под прямой угол сразу все неперпендикулярные рёбра."
         )
-        btn_optimize_all.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        btn_optimize_all.clicked.connect(self._optimize_all_edges)
-        row.addWidget(btn_optimize_all)
+        self.btn_optimize_all.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_optimize_all.clicked.connect(self._optimize_all_edges)
+        row.addWidget(self.btn_optimize_all)
 
-        btn_auto_fix = QPushButton("Авто-выравнивание")
-        btn_auto_fix.setToolTip(
+        self.btn_auto_fix = QPushButton("Авто-выравнивание")
+        self.btn_auto_fix.setToolTip(
             "Автоматически выровнять цепочки узлов по горизонтали и вертикали "
             "и спрямить рёбра.\nCtrl+Z — отменить."
         )
-        btn_auto_fix.setStyleSheet(
+        self.btn_auto_fix.setStyleSheet(
             "QPushButton { background-color: #FF9800; color: white; font-weight: bold; }"
             "QPushButton:hover { background-color: #F57C00; }"
         )
-        btn_auto_fix.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        btn_auto_fix.clicked.connect(self._auto_fix)
-        row.addWidget(btn_auto_fix)
+        self.btn_auto_fix.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_auto_fix.clicked.connect(self._auto_fix)
+        row.addWidget(self.btn_auto_fix)
 
         self.btn_waypoints = QPushButton("Точки изгиба")
         self.btn_waypoints.setCheckable(True)
@@ -643,6 +643,36 @@ class AdvancedGraphTab(SimpleGraphTab):
             self._editor.resize_panel_show_cb = self._show_resize_panel
             self._editor.resize_panel_classes_cb = self._resize_classes_cb
             self._editor.resize_panel_state_cb = self._resize_state_cb
+        self._apply_layout_lock()
+
+    _LAYOUT_LOCK_REASON = (
+        "Авто-раскладка уже выполнена — она сделала эту работу.\n"
+        "Инструмент доступен только на холстах без раскладки."
+    )
+
+    def _apply_layout_lock(self):
+        """Э4-00: после авто-раскладки авто-инструменты выравнивания выключены.
+
+        Замер §1.1 плана EDITOR_AFTER_LAYOUT: поверх раскладки автовыравнивание/
+        оптимизация — регрессия на 5 из 7 графов корпуса. На фолбэк- и legacy-
+        холстах (layout_applied=False или метки нет) кнопки работают как раньше.
+        """
+        from modules.graph.core import canvas_state
+
+        locked = False
+        if self._editor is not None:
+            locked = canvas_state.has_layout(getattr(self._editor, "graph_data", None) or {})
+        for btn in (self.btn_optimize_edge, self.btn_optimize_all, self.btn_auto_fix):
+            if locked:
+                if btn.isEnabled():
+                    btn.setProperty("_pre_lock_tooltip", btn.toolTip())
+                btn.setEnabled(False)
+                btn.setToolTip(self._LAYOUT_LOCK_REASON)
+            elif not btn.isEnabled():
+                btn.setEnabled(True)
+                orig = btn.property("_pre_lock_tooltip")
+                if orig is not None:
+                    btn.setToolTip(orig)
 
     # =================================================================
     # Оформление: + цвета рёбер по стадиям
