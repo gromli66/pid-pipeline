@@ -1,8 +1,8 @@
 # UI_GUIDE.md — Руководство по UI приложения
 
 **Аудитория:** DEV  
-**Версия:** 1.0  
-**Обновлено:** 2026-04-09  
+**Версия:** 1.1  
+**Обновлено:** 2026-07-30  
 **Связанные документы:** ARCHITECTURE.md, STATUS_MACHINE.md, CODING_GUIDE.md, API.md
 
 ---
@@ -244,6 +244,12 @@ Signals: `confirmed()` — подтверждение завершения ва�
 Добавляет к SimpleGraphTab: routing, optimize, drag, multi-select, waypoints, auto-fix, perp stats.
 
 Кнопки toolbar: все режимы Simple + Optimise, L-Route, Drag, Multi-select, Edit waypoints, Auto-Fix, Perp Stats.
+
+Это вкладка «Ручная правка» — единственная работает в холсте 1920x1080 (WYSIWYG, `USE_CANVAS = True`). Особенности холста:
+
+- **Замок авто-инструментов.** На холсте с `layout_applied: true` (продукт авто-раскладки) кнопки «Оптимизировать», «Оптимизировать все» и «Авто-выравнивание» выключены с поясняющим тултипом (`_apply_layout_lock`); на фолбэк- и legacy-холстах работают как раньше.
+- **Очаги остатка раскладки.** Если есть артефакт `residual_defects.json` и его `canvas_sha` совпадает с загруженным холстом, в тулбаре появляется красная кнопка «Очаги (N)»: нумерованные маркеры на холсте (`ResidualLayerMixin`, `ui/editors/residual_layer_mixin.py`) и левая панель-список (`ResidualPanel`, `ui/widgets/residual_panel.py`) с переходом-зумом к очагу по клику.
+- **Починка посадки концов.** При открытии актуального холста концы рёбер пересаживаются каноном `seating` (`ui/tabs/base_graph_tab.py::_reseat_canvas_endpoints`, канон — `modules/graph/core/pretransform.seat_edge_endpoints`); правится локальная temp-копия, на сервер починка уезжает обычным сохранением оператора.
 
 ### 5.6 ContourTab
 

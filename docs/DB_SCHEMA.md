@@ -1,8 +1,8 @@
 # DB_SCHEMA.md — Схема базы данных
 
 **Аудитория:** DEV
-**Версия:** 1.1
-**Обновлено:** 2026-04-09
+**Версия:** 1.2
+**Обновлено:** 2026-07-30
 **Связанные документы:** [ARCHITECTURE.md](ARCHITECTURE.md), [STATUS_MACHINE.md](STATUS_MACHINE.md), [API.md](API.md)
 
 ---
@@ -226,7 +226,7 @@ erDiagram
 
 ### ArtifactType
 
-Определён в `app/models/artifact.py`. 32 значения. Полное описание — см. [ARCHITECTURE.md §6](ARCHITECTURE.md#6-артефакты-pipeline).
+Определён в `app/models/artifact.py`. 33 значения. Полное описание — см. [ARCHITECTURE.md §6](ARCHITECTURE.md#6-артефакты-pipeline).
 
 ### StageType
 
@@ -246,6 +246,7 @@ erDiagram
 | `graph_validation` | Валидация графа (UI) |
 | `contour_extraction` | SAM2 контуры |
 | `ocr` | Surya + PaddleOCR |
+| `layout` | Авто-раскладка графа на холсте перед «Ручной правкой» |
 | `fxml_generation` | Генерация FXML |
 
 ### StageStatus
@@ -321,6 +322,8 @@ convention = {
 | `0008_add_current_step` | `current_step` у диаграммы |
 | `0009_add_graph_canvas` | Добавление `graph_canvas` в `artifacttype` |
 | `0010_add_junction_points` | Добавление `junction_points`, `junction_points_validated` в `artifacttype` |
+| `0011_add_layout_stagetype` | Добавление `layout` в `stagetype` (стадия авто-раскладки) |
+| `0012_add_residual_defects` | Добавление `residual_defects` в `artifacttype`; накатывать раньше кода воркера (как `0010`) |
 
 **Порядок деплоя для `0010`:** миграция накатывается **раньше** кода воркера —
 иначе insert нового значения enum уронит этап junction для всех диаграмм.

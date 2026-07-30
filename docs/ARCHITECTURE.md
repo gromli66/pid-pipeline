@@ -1,8 +1,8 @@
 # ARCHITECTURE.md — Архитектура P&ID Pipeline
 
 **Аудитория:** ALL
-**Версия:** 1.1
-**Обновлено:** 2026-04-09
+**Версия:** 1.2
+**Обновлено:** 2026-07-30
 **Связанные документы:** [GLOSSARY.md](GLOSSARY.md), [STATUS_MACHINE.md](STATUS_MACHINE.md), [DB_SCHEMA.md](DB_SCHEMA.md), [DATA_FORMATS.md](DATA_FORMATS.md)
 
 ---
@@ -183,6 +183,8 @@ storage/diagrams/{uid}/
 ├── graph/
 │   ├── graph.json             # Граф (автоматический)
 │   ├── graph_validated.json   # Граф (после валидации)
+│   ├── graph_canvas.json      # Холст «Ручной правки» 1920x1080 (WYSIWYG)
+│   ├── residual_defects.json  # Остаточные очаги после авто-раскладки
 │   └── graph_overlay.png      # Визуализация графа (debug)
 ├── contours/
 │   ├── contours_auto.json     # SAM2 контуры (автоматические)
@@ -226,6 +228,8 @@ storage/diagrams/{uid}/
 | `JUNCTION_POINTS_VALIDATED` | `junction/` | `points_validated.json` | JSON | Junction validation |
 | `GRAPH_JSON` | `graph/` | `graph.json` | JSON | Graph build |
 | `GRAPH_VALIDATED` | `graph/` | `graph_validated.json` | JSON | Graph validation |
+| `GRAPH_CANVAS` | `graph/` | `graph_canvas.json` | JSON | Layout (авто-раскладка) / Ручная правка |
+| `RESIDUAL_DEFECTS` | `graph/` | `residual_defects.json` | JSON | Layout (авто-раскладка) |
 | `CONTOURS_AUTO` | `contours/` | `contours_auto.json` | JSON | SAM2 extraction |
 | `CONTOURS_VALIDATED` | `contours/` | `contours_validated.json` | JSON | Contour validation |
 | `OCR_CLEANED` | `ocr/` | `ocr_cleaned.png` | PNG | OCR |
@@ -236,6 +240,8 @@ storage/diagrams/{uid}/
 | `DETECTION_OVERLAY` | `detection/` | `detection_overlay.png` | PNG | Debug |
 | `SEGMENTATION_OVERLAY` | `segmentation/` | `segmentation_overlay.png` | PNG | Debug |
 | `GRAPH_OVERLAY` | `graph/` | `graph_overlay.png` | PNG | Debug |
+
+`GRAPH_CANVAS` — производная от `GRAPH_VALIDATED` в холсте 1920x1080: её строит задача раскладки (`worker/tasks/layout.py`) и правит вкладка «Ручная правка»; назад в `GRAPH_VALIDATED` не конвертируется. `RESIDUAL_DEFECTS` — остаточные очаги после авто-раскладки для адресной дочистки оператором; производен от `GRAPH_CANVAS` и при откате удаляется вместе с ним (`app/api/rollback.py`).
 
 Подробное описание JSON-форматов — см. [DATA_FORMATS.md](DATA_FORMATS.md).
 
