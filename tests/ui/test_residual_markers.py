@@ -105,6 +105,53 @@ def test_marker_follows_node_positions(editor):
     assert c.y() == pytest.approx(120.0, abs=3.0)
 
 
+def test_marker_sits_at_gap_not_centroid_mid(qapp, tmp_path):
+    """У крупного блока центроид в сотнях px от щели — маркер невидимой трубы
+    обязан стоять у щели (середина текущих нарисованных концов ребра)."""
+    from PySide6.QtWidgets import QGraphicsEllipseItem
+
+    from ui.editors.advanced_graph_editor import AdvancedGraphEditor
+
+    graph = {
+        "directed": False, "multigraph": False,
+        "graph": {"image_size": [1080, 1920]},
+        "nodes": [
+            {"id": "big", "type": "equipment", "class_name": "unknow",
+             "centroid": [250.0, 250.0], "bbox": [100, 100, 400, 400],
+             "degree": 1},
+            {"id": "small", "type": "equipment", "class_name": "unknow",
+             "centroid": [200.0, 422.0], "bbox": [402, 180, 442, 220],
+             "degree": 1},
+        ],
+        "links": [
+            {"id": "e1", "source": "big", "target": "small",
+             "source_point": [200.0, 400.0], "target_point": [200.0, 402.0],
+             "waypoints": []},
+        ],
+        "text_blocks": [], "bindings": [],
+    }
+    img = QImage(500, 500, QImage.Format_ARGB32)
+    img.fill(QColor("white"))
+    img_path = tmp_path / "raster.png"
+    img.save(str(img_path))
+    graph_path = tmp_path / "graph.json"
+    graph_path.write_text(json.dumps(graph), encoding="utf-8")
+    ed = AdvancedGraphEditor()
+    assert ed.load_data(str(img_path), str(graph_path))
+
+    ed.set_residual_defects({
+        "invisible_edges": [{"edge_id": "e1", "nodes": ["big", "small"],
+                             "gap": 2.0, "point": [401.0, 200.0]}],
+        "box_on_magi": [], "overlaps": [],
+    })
+    ring = next(it for it in _marker_items(ed)
+                if isinstance(it, QGraphicsEllipseItem))
+    c = ring.sceneBoundingRect().center()
+    # Щель у x=401, y=200; середина центроидов (336, 225) — далеко мимо.
+    assert c.x() == pytest.approx(401.0, abs=3.0)
+    assert c.y() == pytest.approx(200.0, abs=3.0)
+
+
 def test_focus_residual_centers_view(editor):
     editor.set_residual_defects(_residual())
     editor.focus_residual(0)

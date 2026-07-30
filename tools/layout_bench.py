@@ -211,27 +211,33 @@ def text_metrics(before, after, anchor_max=ANCHOR_MAX):
 
 # ───────────────────────────── приёмка ─────────────────────────────
 
-def _legal_leak(aft, pseudo_pairs):
-    """Псевдолегальные пары, наложенные ПОСЛЕ раскладки. Порог — всегда 0.
+def _legal_leak(aft, base, pseudo_pairs):
+    """Псевдолегальные пары, СТАВШИЕ наложенными после раскладки. Порог 0.
 
     Псевдо-пара — амнистия близости BORDER_TOL (во вкладке правки графа
     коллизии НЕТ). Строгий судья Э13 такие пары больше не прощает — они уже
     входят в `overlaps_after`; колонка показывает, кого именно перестали
     амнистировать (§3.2 EDITOR_AFTER_LAYOUT_PLAN).
+
+    Метаправило «сравнение с базой входа»: пара, наложенная по нарисованной
+    форме уже НА ВХОДЕ раскладки (base = stages["orig"], после словаря
+    размеров), — не утечка слоя, слой её не создавал.
     """
     if not pseudo_pairs:
         return 0
-    byid = {n["id"]: n for n in aft.get("nodes") or []}
-    leak = 0
-    for a, b in pseudo_pairs:
+    a_byid = {n["id"]: n for n in aft.get("nodes") or []}
+    b_byid = {n["id"]: n for n in base.get("nodes") or []}
+
+    def _overlapped(byid, a, b):
         na, nb = byid.get(a), byid.get(b)
         if na is None or nb is None:
-            continue
+            return False
         sa, sb = _shapes.shape_of(na), _shapes.shape_of(nb)
-        if sa is not None and sb is not None \
-                and sa.intersection(sb).area > 1e-6:
-            leak += 1
-    return leak
+        return (sa is not None and sb is not None
+                and sa.intersection(sb).area > 1e-6)
+
+    return sum(1 for a, b in pseudo_pairs
+               if _overlapped(a_byid, a, b) and not _overlapped(b_byid, a, b))
 
 
 def check(uid8, canvas_dir=None, with_text=True):
@@ -265,7 +271,7 @@ def check(uid8, canvas_dir=None, with_text=True):
         "defects_after": st["defects_after"],
         "diag_before": g16["new_diagonals"], "diag_after": gaf["new_diagonals"],
         "overlaps_before": g16["overlaps"], "overlaps_after": gaf["overlaps"],
-        "legal_leak": _legal_leak(aft, legal_solver - legal),
+        "legal_leak": _legal_leak(aft, orig, legal_solver - legal),
         "side_changed": gaf["side_changed"],
         "straight_broken": gaf["straight_broken"],
         # СВЯЗНОСТЬ — «не хуже базы», а не абсолют: гейт сравнивает набор id с

@@ -100,6 +100,44 @@ def test_buttons_alive_on_legacy_canvas_without_stamp(qapp, monkeypatch, tmp_pat
         assert btn.isEnabled()
 
 
+def _editor_with(tmp_path, graph):
+    from ui.editors.advanced_graph_editor import AdvancedGraphEditor
+
+    img = QImage(400, 400, QImage.Format_ARGB32)
+    img.fill(QColor("white"))
+    img_path = tmp_path / "raster.png"
+    img.save(str(img_path))
+    graph_path = tmp_path / "graph.json"
+    graph_path.write_text(json.dumps(graph), encoding="utf-8")
+    ed = AdvancedGraphEditor()
+    assert ed.load_data(str(img_path), str(graph_path))
+    return ed
+
+
+def test_apply_resize_skips_full_graph_autofix_after_layout(qapp, monkeypatch, tmp_path):
+    """Обход Э4-00 закрыт: «Применить» в панели «Размеры» не запускает
+    полнографный auto_fix_graph на холсте после раскладки."""
+    import ui.editors.advanced_graph_editor as age
+
+    calls = []
+    monkeypatch.setattr(age, "auto_fix_graph", lambda *a, **k: calls.append(1))
+    ed = _editor_with(tmp_path, _graph(layout_applied=True))
+    ed._resize_sel = {"a"}
+    ed.apply_resize(width=50, height=50)
+    assert calls == []
+
+
+def test_apply_resize_keeps_autofix_on_fallback_canvas(qapp, monkeypatch, tmp_path):
+    import ui.editors.advanced_graph_editor as age
+
+    calls = []
+    monkeypatch.setattr(age, "auto_fix_graph", lambda *a, **k: calls.append(1))
+    ed = _editor_with(tmp_path, _graph(layout_applied=False))
+    ed._resize_sel = {"a"}
+    ed.apply_resize(width=50, height=50)
+    assert calls == [1]
+
+
 def test_unlock_restores_original_tooltip(qapp, monkeypatch, tmp_path):
     """Повторная загрузка холста без раскладки возвращает кнопки к жизни."""
     tab = _make_tab(monkeypatch, tmp_path, _graph(layout_applied=True))

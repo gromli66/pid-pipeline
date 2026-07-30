@@ -6,9 +6,11 @@
 `set_residual_defects()` только для холста с совпадающим `canvas_sha`.
 
 Маркер — нумерованное красное кольцо на Z=9 (поверх всех слоёв редактора,
-см. карту Z в base_graph_editor.setup_scene). Позиция маркера живая: считается
-от текущих item'ов узлов, а не от координат из файла — очаг едет за узлом,
-пока оператор его дочищает; точка из файла — фолбэк для удалённых узлов.
+см. карту Z в base_graph_editor.setup_scene). Позиция маркера живая — очаг
+едет за правкой оператора: невидимая труба — середина ТЕКУЩИХ нарисованных
+концов ребра (не центроидов: у крупного контура центроид в сотнях px от
+щели), остальные виды — от item'ов узлов; точка из файла — фолбэк для
+удалённых рёбер/узлов.
 
 `_redraw_all` базового редактора сносит все item'ы с Z>0 — слой пересоздаётся
 в `AdvancedGraphEditor._redraw_all` (тот же контракт, что у OCR-слоя).
@@ -87,6 +89,20 @@ class ResidualLayerMixin:
     # Отрисовка
     # -----------------------------------------------------------------
     def _residual_scene_point(self, spot):
+        # Невидимая труба: очаг — щель между ФОРМАМИ, живая точка — середина
+        # текущих нарисованных концов ребра. Целиться по центроидам нельзя:
+        # у крупного контура центроид лежит в сотнях px от щели.
+        if spot["kind"] == "invisible_edge" and len(spot["node_ids"]) == 2:
+            model = getattr(self, "model", None)
+            if model is not None:
+                e = model.find_edge_data(model.edge_key(*spot["node_ids"]))
+                if e:
+                    sp, tp = e.get("source_point"), e.get("target_point")
+                    if sp and tp:   # [y,x] → [x,y]
+                        return ((sp[1] + tp[1]) / 2.0, (sp[0] + tp[0]) / 2.0)
+            p = spot.get("point")
+            if p and len(p) >= 2:
+                return (float(p[0]), float(p[1]))
         pts = []
         for nid in spot["node_ids"]:
             it = self.node_items.get(nid)

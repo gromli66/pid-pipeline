@@ -13,11 +13,22 @@ import pytest
 pytest.importorskip("shapely")
 
 from modules.graph.core.layout import _overlaps, _shapes
+from modules.graph.core.layout.params import LayoutParams
+
+# Порог решателя в тестах берётся тем же маршрутом, что в проде
+# (layout/__init__.py: p.border_tol) и бенче — не через _shapes.BORDER_TOL.
+SOLVER_TOL = LayoutParams().border_tol
+
+
+def test_solver_tol_single_source():
+    """_shapes.BORDER_TOL и LayoutParams.border_tol — два литерала одной
+    величины; их дрейф при тюнинге (Э7) должен будить тесты, а не молчать."""
+    assert SOLVER_TOL == _shapes.BORDER_TOL
 
 
 def _graph():
     """A — блок с настоящим контуром; B — блок в 1 px от контура A
-    (0 < зазор < BORDER_TOL=3 → псевдо-пара, амнистия близости);
+    (0 < зазор < BORDER_TOL → псевдо-пара, амнистия близости);
     C — блок, реально пересекающий A в детекции (настоящая легальная пара)."""
     return {
         "nodes": [
@@ -40,9 +51,18 @@ def _det(g):
     return {n["id"]: n["bbox"] for n in g["nodes"]}
 
 
+def _overlap_b_onto_a(g):
+    """«Операция» наложила B на A: сдвиг влево на 15 px."""
+    after = deepcopy(g)
+    b = after["nodes"][1]
+    b["bbox"] = [186, 140, 216, 160]
+    b["centroid"] = [150.0, 201.0]
+    return after
+
+
 def test_solver_amnesties_border_pair_judge_does_not():
     g = _graph()
-    solver = _shapes.legal_pairs(g, _det(g), _shapes.BORDER_TOL)
+    solver = _shapes.legal_pairs(g, _det(g), SOLVER_TOL)
     strict = _shapes.legal_pairs(g, _det(g), 0.0)
     assert ("a", "b") in solver, "решателю псевдо-пара легальна (BORDER_TOL)"
     assert ("a", "b") not in strict, "судье амнистия близости не положена"
@@ -53,14 +73,9 @@ def test_solver_amnesties_border_pair_judge_does_not():
 
 def test_judge_sees_pseudo_pair_overlapped_after_operation():
     g = _graph()
-    solver = _shapes.legal_pairs(g, _det(g), _shapes.BORDER_TOL)
+    solver = _shapes.legal_pairs(g, _det(g), SOLVER_TOL)
     strict = _shapes.legal_pairs(g, _det(g), 0.0)
-
-    # «Операция» наложила B на A: сдвиг влево на 15 px.
-    after = deepcopy(g)
-    b = after["nodes"][1]
-    b["bbox"] = [186, 140, 216, 160]
-    b["centroid"] = [150.0, 201.0]
+    after = _overlap_b_onto_a(g)
 
     # Латентная дыра до Э13: судья со старым набором пару прощал.
     assert _overlaps.strict_block_pairs(after, solver) == 0
@@ -68,7 +83,7 @@ def test_judge_sees_pseudo_pair_overlapped_after_operation():
     assert _overlaps.strict_block_pairs(after, strict) == 1
 
 
-def test_bench_legal_leak_counts_only_overlapped_pseudo():
+def test_bench_legal_leak_counts_only_new_overlaps():
     import importlib.util
     from pathlib import Path
 
@@ -80,16 +95,16 @@ def test_bench_legal_leak_counts_only_overlapped_pseudo():
     spec.loader.exec_module(lb)
 
     g = _graph()
-    solver = _shapes.legal_pairs(g, _det(g), _shapes.BORDER_TOL)
+    solver = _shapes.legal_pairs(g, _det(g), SOLVER_TOL)
     strict = _shapes.legal_pairs(g, _det(g), 0.0)
     pseudo = solver - strict
     assert pseudo == {("a", "b")}
+    after = _overlap_b_onto_a(g)
 
     # До операции псевдо-пара не наложена — утечки нет.
-    assert lb._legal_leak(g, pseudo) == 0
-
-    after = deepcopy(g)
-    b = after["nodes"][1]
-    b["bbox"] = [186, 140, 216, 160]
-    b["centroid"] = [150.0, 201.0]
-    assert lb._legal_leak(after, pseudo) == 1
+    assert lb._legal_leak(g, g, pseudo) == 0
+    # Наложена после операции, на входе — нет: утечка.
+    assert lb._legal_leak(after, g, pseudo) == 1
+    # Метаправило «сравнение с базой входа»: пара, наложенная уже НА ВХОДЕ
+    # раскладки, — не утечка слоя.
+    assert lb._legal_leak(after, after, pseudo) == 0

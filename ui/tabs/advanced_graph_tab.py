@@ -425,10 +425,31 @@ class AdvancedGraphTab(SimpleGraphTab):
 
     def _on_resize_panel_visibility(self, shown: bool):
         """Панель показана → сдвинуть видимую область редактора вправо,
-        чтобы панель не перекрывала левый край листа; скрыта → вернуть."""
-        from ui.widgets.object_resize_panel import PANEL_WIDTH
+        чтобы панель не перекрывала левый край листа; скрыта → вернуть.
+
+        Левые шторки взаимоисключены («Размеры» и «Очаги» рисуются в одном
+        слоте x=0), а отступ считается единой точкой `_update_left_gutter` —
+        иначе закрытие одной шторки сбрасывало бы отступ при открытой другой.
+        """
+        if shown:
+            panel = getattr(self, "_residual_panel", None)
+            if panel is not None and panel.is_shown:
+                panel.hide_panel()
+        self._update_left_gutter()
+
+    def _update_left_gutter(self):
+        """Единый расчёт левого отступа редактора от состояния обеих шторок."""
+        from ui.widgets.object_resize_panel import PANEL_WIDTH as RESIZE_W
+        from ui.widgets.residual_panel import PANEL_WIDTH as RESIDUAL_W
+        gutter = 0
+        panel = getattr(self, "_resize_panel", None)
+        if panel is not None and panel.is_shown:
+            gutter = max(gutter, RESIZE_W)
+        panel = getattr(self, "_residual_panel", None)
+        if panel is not None and panel.is_shown:
+            gutter = max(gutter, RESIDUAL_W)
         if self._editor and hasattr(self._editor, "set_left_gutter"):
-            self._editor.set_left_gutter(PANEL_WIDTH if shown else 0)
+            self._editor.set_left_gutter(gutter)
 
     def _update_resize_panel_bounds(self):
         p = getattr(self, "_resize_panel", None)
@@ -741,9 +762,13 @@ class AdvancedGraphTab(SimpleGraphTab):
         return self._residual_panel
 
     def _on_residual_panel_visibility(self, shown: bool):
-        from ui.widgets.residual_panel import PANEL_WIDTH
-        if self._editor and hasattr(self._editor, "set_left_gutter"):
-            self._editor.set_left_gutter(PANEL_WIDTH if shown else 0)
+        """Зеркало _on_resize_panel_visibility: шторки взаимоисключены,
+        отступ считает единый _update_left_gutter."""
+        if shown:
+            panel = getattr(self, "_resize_panel", None)
+            if panel is not None and panel.is_shown:
+                panel.hide_panel()
+        self._update_left_gutter()
 
     def _on_residual_jump(self, index: int):
         if self._editor and hasattr(self._editor, "focus_residual"):

@@ -237,7 +237,7 @@ async def rollback_diagram(
             f = graph_dir / fname
             try:
                 f.unlink()
-                logger.info("rollback %s: снят холст %s", uid, f.name)
+                logger.info("rollback %s: снят %s", uid, f.name)
             except FileNotFoundError:
                 pass
             except OSError as exc:

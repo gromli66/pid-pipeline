@@ -2635,11 +2635,17 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
 
         # развести наслоившихся соседей, затем довести рёбра до ортогональности
         self._spread_overlaps(grower_ids)
-        auto_fix_graph(
-            self.nodes, self.edges_data,
-            equip_max_shift=self.EQUIP_MAX_SHIFT,
-            conn_max_shift=self.CONN_MAX_SHIFT,
-        )
+        # Э4-00: на холсте после авто-раскладки полнографный auto_fix даёт
+        # регрессию (замер §1.1 EDITOR_AFTER_LAYOUT_PLAN) — тот же инструмент,
+        # что заперт кнопкой «Авто-выравнивание»; расталкивание выше остаётся
+        # локальным вокруг изменённых узлов.
+        from modules.graph.core import canvas_state
+        if not canvas_state.has_layout(self.graph_data or {}):
+            auto_fix_graph(
+                self.nodes, self.edges_data,
+                equip_max_shift=self.EQUIP_MAX_SHIFT,
+                conn_max_shift=self.CONN_MAX_SHIFT,
+            )
 
         self._redraw_all()
         self.model.rebuild_edge_data_index()

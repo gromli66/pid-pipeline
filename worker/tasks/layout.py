@@ -219,6 +219,11 @@ def task_run_layout(self, diagram_uid: str, stage_id: int = None,
                 mime_type="application/json",
             ))
 
+        # Холст и его строка артефакта фиксируются ДО расчёта остатка: сбой
+        # вспомогательного блока ниже не должен ни откатить их, ни оставить
+        # PG-транзакцию в аварийном состоянии перед complete_stage.
+        db.commit()
+
         # ─── Э12: остаток — оператору адресно ───
         # Строго ПОСЛЕ обеих защит и записи холста: файл-сирота при
         # выброшенном результате невозможен. Ошибка здесь раскладку не валит:
@@ -250,6 +255,9 @@ def task_run_layout(self, diagram_uid: str, stage_id: int = None,
             logger.info("[%s] остаток раскладки: %d очагов",
                         diagram_uid, residual["total"])
         except Exception as exc:  # noqa: BLE001 — подсветка не валит раскладку
+            # rollback обязателен: упавший запрос абортит PG-транзакцию, и без
+            # него итоговый db.commit() уронил бы задачу после записи холста.
+            db.rollback()
             logger.exception("[%s] остаток раскладки не посчитан: %s",
                              diagram_uid, exc)
 

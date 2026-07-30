@@ -123,7 +123,13 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
     Правится скачанная temp-копия (паттерн `_import_text_into_canvas`):
     undo-стек и автосейв не затрагиваются, на сервер починка уедет обычным
     сохранением оператора.
+
+    Ручная посадка оператора (`_manual_route`) неприкосновенна (инвариант
+    плана, приёмка T-D.3): канон вернул бы такой конец на луч — концы и
+    waypoints этих рёбер восстанавливаются после прогона.
     """
+    from copy import deepcopy
+
     from modules.graph.core.pretransform import seat_edge_endpoints
 
     try:
@@ -131,7 +137,22 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
     except (OSError, ValueError) as exc:
         logger.warning("починка посадки концов пропущена (%s)", exc)
         return False
-    moved = seat_edge_endpoints(canvas)
+    edges_list = (canvas.get("links") if "links" in canvas
+                  else canvas.get("edges")) or []
+    snap = [deepcopy((e.get("source_point"), e.get("target_point"),
+                      e.get("waypoints"))) for e in edges_list]
+    seat_edge_endpoints(canvas)
+    moved = 0
+    for e, (sp0, tp0, wp0) in zip(edges_list, snap):
+        if e.get("_manual_route"):
+            e["source_point"] = sp0
+            e["target_point"] = tp0
+            if wp0 is None:
+                e.pop("waypoints", None)
+            else:
+                e["waypoints"] = wp0
+        else:
+            moved += (e.get("source_point") != sp0) + (e.get("target_point") != tp0)
     if not moved:
         return False
     Path(canvas_path).write_text(json.dumps(canvas, ensure_ascii=False),
