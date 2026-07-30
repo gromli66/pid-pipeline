@@ -68,6 +68,13 @@ CORPUS = {
 #      2 -> 1; ценой двух дефектов (8d517a35 103->0 стало 104->0 — там
 #      бесплатно, 13d1ef5f 22->2 стало 23->3, c2f79462 13->3 стало 13->4).
 #      На пяти графах без крупного блока — бит-в-бит как без него.
+#   5. Э13 (решение заказчика 2026-07-31, §7.1.1 EDITOR_AFTER_LAYOUT_PLAN):
+#      судья без допуска близости — legal для `_gate.verify` считается с
+#      tol=0 (легально только пересечение площадью > 0 в детекции), допуск
+#      BORDER_TOL остаётся решателю внутри `layout()`. По аудиту
+#      (tools/legal_audit_probe.py) все 11 псевдо-пар корпуса не наложены
+#      после раскладки — числа таблицы бит-в-бит, новая колонка
+#      «утечка» (legal_leak) обязана быть 0.
 EXPECT = {"51b339ab": (297, 7), "a6d28736": (128, 4), "8d517a35": (104, 0),
           "89ca7583": (26, 1), "13d1ef5f": (23, 3), "6e7144d5": (14, 0),
           "5137af27": (8, 0), "d74eb9f1": (0, 0)}
@@ -204,6 +211,29 @@ def text_metrics(before, after, anchor_max=ANCHOR_MAX):
 
 # ───────────────────────────── приёмка ─────────────────────────────
 
+def _legal_leak(aft, pseudo_pairs):
+    """Псевдолегальные пары, наложенные ПОСЛЕ раскладки. Порог — всегда 0.
+
+    Псевдо-пара — амнистия близости BORDER_TOL (во вкладке правки графа
+    коллизии НЕТ). Строгий судья Э13 такие пары больше не прощает — они уже
+    входят в `overlaps_after`; колонка показывает, кого именно перестали
+    амнистировать (§3.2 EDITOR_AFTER_LAYOUT_PLAN).
+    """
+    if not pseudo_pairs:
+        return 0
+    byid = {n["id"]: n for n in aft.get("nodes") or []}
+    leak = 0
+    for a, b in pseudo_pairs:
+        na, nb = byid.get(a), byid.get(b)
+        if na is None or nb is None:
+            continue
+        sa, sb = _shapes.shape_of(na), _shapes.shape_of(nb)
+        if sa is not None and sb is not None \
+                and sa.intersection(sb).area > 1e-6:
+            leak += 1
+    return leak
+
+
 def check(uid8, canvas_dir=None, with_text=True):
     g = _load_input(uid8, canvas_dir)
     if g is None:
@@ -217,8 +247,11 @@ def check(uid8, canvas_dir=None, with_text=True):
     # Наложения, пришедшие из ПОСТРОЕНИЯ И ПРОВЕРКИ, законны (решение
     # заказчика 2026-07-29) — судья их не считает. Таблица строится по
     # детектированным габаритам, которые кладёт `to_canvas`.
-    legal = _shapes.legal_pairs(orig, orig.get("graph", {}).get(
-        "detected_bbox"), LayoutParams().border_tol)
+    # Э13: у СУДЬИ допуска близости нет (tol=0 — легально только пересечение
+    # площадью > 0), BORDER_TOL остаётся решателю внутри `layout()`.
+    det = orig.get("graph", {}).get("detected_bbox")
+    legal_solver = _shapes.legal_pairs(orig, det, LayoutParams().border_tol)
+    legal = _shapes.legal_pairs(orig, det, 0.0)
     vb, ab = nodes_by_id(v16), nodes_by_id(aft)
     g16 = _gate.verify(v16, orig, v16, legal)
     gaf = _gate.verify(aft, orig, v16, legal)
@@ -232,6 +265,7 @@ def check(uid8, canvas_dir=None, with_text=True):
         "defects_after": st["defects_after"],
         "diag_before": g16["new_diagonals"], "diag_after": gaf["new_diagonals"],
         "overlaps_before": g16["overlaps"], "overlaps_after": gaf["overlaps"],
+        "legal_leak": _legal_leak(aft, legal_solver - legal),
         "side_changed": gaf["side_changed"],
         "straight_broken": gaf["straight_broken"],
         # СВЯЗНОСТЬ — «не хуже базы», а не абсолют: гейт сравнивает набор id с
@@ -256,6 +290,8 @@ def check(uid8, canvas_dir=None, with_text=True):
         reg.append("диагонали")
     if r["overlaps_after"] > r["overlaps_before"]:
         reg.append("наложения")
+    if r["legal_leak"]:
+        reg.append("утечка легальности")
     if r["side_changed"]:
         reg.append("сторона входа")
     if r["straight_broken"]:
@@ -321,14 +357,15 @@ def main():
     if not rows:
         return 1
     print()
-    print("| uid | узлов | дефекты | диаг | налож | стор | прям | связн | перест | "
+    print("| uid | узлов | дефекты | диаг | налож | утечка | стор | прям | связн | перест | "
           "бокс-на-магистр | проникн.форм | время |")
-    print("|---|---|---|---|---|---|---|---|---|---|---|---|")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for r in rows:
         print(f"| {r['uid']} | {r['nodes']} | "
               f"{r['defects_before']} -> {r['defects_after']} | "
               f"{r['diag_before']}->{r['diag_after']} | "
               f"{r['overlaps_before']}/{r['overlaps_after']} | "
+              f"{r['legal_leak']} | "
               f"{r['side_changed']} | {r['straight_broken']} | "
               f"{'OK' if not r['connectivity_changed'] else 'СЛОМАНА'} | "
               f"{r['order_local']} | {r['magi_before']} -> {r['magi_after']} | "
