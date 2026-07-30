@@ -61,6 +61,10 @@ class ArtifactType(str, enum.Enum):
     # WYSIWYG: производная от GRAPH_VALIDATED в холсте 1920x1080.
     # Правится только в «Ручной правке», назад в GRAPH_VALIDATED не пишется.
     GRAPH_CANVAS = "graph_canvas"
+    # Э12: остаточные очаги после авто-раскладки (невидимые трубы, боксы на
+    # чужих трубах, нелегальные наложения) — подсветка в «Ручной правке».
+    # Производен от GRAPH_CANVAS, живёт и сносится вместе с ним.
+    RESIDUAL_DEFECTS = "residual_defects"
 
     # Contours (SAM2)
     CONTOURS_AUTO = "contours_auto"

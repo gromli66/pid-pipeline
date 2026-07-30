@@ -49,6 +49,7 @@ from ui.editors.graph_geometry import (
 )
 from ui.editors.edge_routing import distribute_connection_points, route_edge as route_edge_v2, segment_intersects_bbox
 from ui.editors.autofix_chains import auto_fix_graph
+from ui.editors.residual_layer_mixin import ResidualLayerMixin
 from ui.editors.ocr_layer_mixin import (
     OcrLayerMixin, AddOcrBlockHandler, OcrBindHandler,
 )
@@ -87,7 +88,7 @@ class EditEdgeDashHandler(ModeHandler):
         return True
 
 
-class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
+class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
     """Полный редактор: routing, оптимизация, drag, multi-select, waypoints, auto-fix.
 
     Плюс OCR-слой (OcrLayerMixin): текст-блоки и их привязка к узлам/рёбрам,
@@ -100,6 +101,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
     def __init__(self):
         super().__init__()
         self._init_ocr_layer()
+        self._init_residual_layer()
 
         # ── Viewport mouse tracking для hover tooltip ──
         self.viewport().setMouseTracking(True)
@@ -490,6 +492,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         if hasattr(self, "_ocr_block_items"):
             self._ocr_block_items.clear()
             self._ocr_hl_restore = []
+        # Слой очагов остатка (Э12): item'ы сняты Base'ом, сбросить ссылки.
+        if hasattr(self, "_residual_items"):
+            self._residual_items = []
         # Призрак вставки не переживает перерисовку сцены (item'ы удалены).
         if getattr(self, "_paste_ghost", None) is not None:
             self._paste_ghost = None
@@ -504,6 +509,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         # OCR текст-блоки поверх графа (видимы только в состоянии 'ocr').
         if hasattr(self, "_ocr_block_items"):
             self.refresh_ocr_layer()
+        # Маркеры очагов остатка (Э12) — пересоздать поверх.
+        if hasattr(self, "_residual_spots"):
+            self._redraw_residual_markers()
 
     def _after_statistics_update(self):
         """Обновить multi-select визуалы."""

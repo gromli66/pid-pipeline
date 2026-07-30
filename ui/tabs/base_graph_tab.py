@@ -196,9 +196,13 @@ class _GraphArtifactDownloader(QObject):
         optional = [
             ("coco_validated", "coco_validated.json"),
         ]
-        # WYSIWYG-вкладка: свой артефакт-холст, если он уже сохранялся
+        # WYSIWYG-вкладка: свой артефакт-холст, если он уже сохранялся,
+        # и остаток раскладки для подсветки очагов (Э12).
         if self.want_canvas:
-            optional = optional + [("graph_canvas", "graph_canvas.json")]
+            optional = optional + [
+                ("graph_canvas", "graph_canvas.json"),
+                ("residual_defects", "residual_defects.json"),
+            ]
 
         try:
             for art_type, filename in required:
@@ -397,6 +401,9 @@ class BaseGraphTab(AppearanceMixin, QWidget):
         self.loading_label.hide()
 
         try:
+            # Остаток раскладки (Э12): показывает только AdvancedGraphTab,
+            # путь сохраняется здесь — artifacts дальше не передаются.
+            self._residual_path = artifacts.get("residual_defects")
             editor = self._create_editor()
             editor.status_callback = lambda msg: self.status_label.setText(msg)
             editor.stats_callback = self._update_stats

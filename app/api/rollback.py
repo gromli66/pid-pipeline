@@ -108,6 +108,9 @@ _STAGE_ARTIFACTS = {
         # из свежего graph_validated. Обратно холст не конвертируется — pretransform
         # необратим (фикс-размеры затирают детекционные, declust двигает символы).
         ArtifactType.GRAPH_CANVAS,
+        # Остаток раскладки (Э12) производен от холста — сносится вместе с ним,
+        # иначе вкладка подсветит очаги несуществующего холста.
+        ArtifactType.RESIDUAL_DEFECTS,
     ],
 }
 
@@ -228,15 +231,17 @@ async def rollback_diagram(
     # поверх отката нечем.
     if ArtifactType.GRAPH_CANVAS in art_types:
         from app.services.storage import StorageService
-        canvas_file = (StorageService().base_path / str(uid) / "graph"
-                       / "graph_canvas.json")
-        try:
-            canvas_file.unlink()
-            logger.info("rollback %s: снят холст %s", uid, canvas_file.name)
-        except FileNotFoundError:
-            pass
-        except OSError as exc:
-            logger.warning("rollback %s: холст не удалён (%s)", uid, exc)
+        graph_dir = StorageService().base_path / str(uid) / "graph"
+        # residual_defects.json производен от холста — сносится вместе с ним.
+        for fname in ("graph_canvas.json", "residual_defects.json"):
+            f = graph_dir / fname
+            try:
+                f.unlink()
+                logger.info("rollback %s: снят холст %s", uid, f.name)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                logger.warning("rollback %s: %s не удалён (%s)", uid, f.name, exc)
 
     # Откат за этап рамки: вернуть сырое изображение в канонический image.png из
     # бэкапа image_raw.png (при очистке мы перезаписали image.png очищенным).

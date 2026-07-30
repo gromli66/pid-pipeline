@@ -176,6 +176,22 @@ class AdvancedGraphTab(SimpleGraphTab):
         self._build_ocr_panel(toolbar)
         self._build_style_panel(toolbar)
 
+        # --- Очаги остатка раскладки (Э12): видима только при остатке ---
+        self.btn_residual = QPushButton("Очаги")
+        self.btn_residual.setToolTip(
+            "Остаточные очаги после авто-раскладки: невидимые трубы, боксы на "
+            "чужих трубах, наложения блоков.\n"
+            "Открывает список; клик по строке — переход к очагу на холсте."
+        )
+        self.btn_residual.setStyleSheet(
+            "QPushButton { background-color: #C0392B; color: white; }"
+            "QPushButton:hover { background-color: #E74C3C; }"
+        )
+        self.btn_residual.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_residual.clicked.connect(self._toggle_residual_panel)
+        self.btn_residual.setVisible(False)
+        toolbar.addWidget(self.btn_residual)
+
     # =================================================================
     # Панели инструментов состояний (сменяющееся окно)
     # =================================================================
@@ -644,6 +660,7 @@ class AdvancedGraphTab(SimpleGraphTab):
             self._editor.resize_panel_classes_cb = self._resize_classes_cb
             self._editor.resize_panel_state_cb = self._resize_state_cb
         self._apply_layout_lock()
+        self._load_residual_markers()
 
     _LAYOUT_LOCK_REASON = (
         "Авто-раскладка уже выполнена — она сделала эту работу.\n"
@@ -673,6 +690,76 @@ class AdvancedGraphTab(SimpleGraphTab):
                 orig = btn.property("_pre_lock_tooltip")
                 if orig is not None:
                     btn.setToolTip(orig)
+
+    # =================================================================
+    # Очаги остатка раскладки (Э12)
+    # =================================================================
+
+    def _load_residual_markers(self):
+        """Подсветить очаги остатка, если артефакт есть и холст — тот самый."""
+        import json
+        from pathlib import Path
+
+        ed = self._editor
+        path = getattr(self, "_residual_path", None)
+        show = False
+        if (ed is not None and path
+                and getattr(ed, "_canvas_mode", False)
+                and hasattr(ed, "set_residual_defects")):
+            from modules.graph.core import canvas_state
+            try:
+                data = json.loads(Path(path).read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                logger.warning("остаток раскладки не прочитан (%s)", exc)
+                data = None
+            # Остаток привязан к конкретному холсту: после ручных правок,
+            # починки посадки или пересборки фолбэком sha разойдётся —
+            # устаревшие очаги молча не подсвечиваются.
+            if data and data.get("canvas_sha") == \
+                    canvas_state.graph_projection_sha(ed.graph_data):
+                ed.set_residual_defects(data)
+                spots = ed.residual_spots()
+                if spots:
+                    self._ensure_residual_panel().set_spots(spots)
+                    self.btn_residual.setText(f"Очаги ({len(spots)})")
+                    show = True
+        self.btn_residual.setVisible(show)
+        if not show:
+            if ed is not None and hasattr(ed, "clear_residual_defects"):
+                ed.clear_residual_defects()
+            panel = getattr(self, "_residual_panel", None)
+            if panel is not None and panel.is_shown:
+                panel.hide_panel()
+
+    def _ensure_residual_panel(self):
+        if getattr(self, "_residual_panel", None) is None:
+            from ui.widgets.residual_panel import ResidualPanel
+            p = ResidualPanel(self)
+            p.on_jump = self._on_residual_jump
+            p.on_visibility = self._on_residual_panel_visibility
+            self._residual_panel = p
+        return self._residual_panel
+
+    def _on_residual_panel_visibility(self, shown: bool):
+        from ui.widgets.residual_panel import PANEL_WIDTH
+        if self._editor and hasattr(self._editor, "set_left_gutter"):
+            self._editor.set_left_gutter(PANEL_WIDTH if shown else 0)
+
+    def _on_residual_jump(self, index: int):
+        if self._editor and hasattr(self._editor, "focus_residual"):
+            self._editor.focus_residual(index)
+            self._editor.setFocus()
+
+    @Slot()
+    def _toggle_residual_panel(self):
+        p = self._ensure_residual_panel()
+        if self._editor is not None:
+            geo = self._editor.geometry()
+            p.set_bounds(geo.top(), geo.height())
+        if p.is_shown:
+            p.hide_panel()
+        else:
+            p.show_panel()
 
     # =================================================================
     # Оформление: + цвета рёбер по стадиям
