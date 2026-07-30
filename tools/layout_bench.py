@@ -23,6 +23,7 @@ import json
 import math
 import sys
 import time
+from copy import deepcopy
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -35,6 +36,7 @@ from modules.graph.core.graph_access import (edge_ends,            # noqa: E402
                                              edge_polyline, edges,
                                              is_connector, nodes_by_id)
 from modules.graph.core.canvas_input import to_canvas               # noqa: E402
+from modules.graph.core import pretransform                         # noqa: E402
 
 CORPUS = {
     "51b339ab": "51b339ab-3e4c-429c-ac5f-49c44cb9c755",
@@ -211,6 +213,61 @@ def text_metrics(before, after, anchor_max=ANCHOR_MAX):
 
 # ───────────────────────────── приёмка ─────────────────────────────
 
+def _seat_kind(node):
+    """Тип узла-хозяина конца — теми же ветками, что `seating.node_anchor`:
+    connector / skin (FIXED_SIZES, content-rect) / polygon (контур) / bbox."""
+    if node is None:
+        return "bbox"
+    if is_connector(node):
+        return "connector"
+    bb = node.get("bbox")
+    has_bbox = bool(bb) and len(bb) == 4
+    if has_bbox and node.get("class_name") in pretransform.FIXED_SIZES:
+        return "skin"
+    seg = node.get("segmentation")
+    has_poly = bool(seg) and isinstance(seg, list) and len(seg) >= 6
+    if has_poly and (not has_bbox or not node.get("_axis")):
+        return "polygon"
+    return "bbox"
+
+
+def seat_violations(graph, tol=0.5):
+    """§3.2 EDITOR_AFTER_LAYOUT_PLAN: концы рёбер вне канона посадки.
+
+    Канон — `pretransform.seat_edge_endpoints` (единый модуль посадки, судья
+    не переизобретается): прогон на deepcopy графа и счёт концов, ушедших от
+    сохранённых дальше tol px, с разбивкой по типу узла-хозяина. Точки
+    source/target_point — [y, x], расстояние осе-симметрично.
+
+    Колонка ОТЧЁТНАЯ: выход раскладки каноничен by construction (ожидаемо 0);
+    в regressions НЕ входит — набор метрик приёмки заморожен (§3.4 плана).
+    """
+    ref = deepcopy(graph)
+    pretransform.seat_edge_endpoints(ref)
+    byid = nodes_by_id(graph)
+    by_type = {"connector": 0, "skin": 0, "polygon": 0, "bbox": 0}
+    total = viol = 0
+    worst = 0.0
+    for e0, e1 in zip(edges(graph), edges(ref)):
+        s, t = edge_ends(e0)
+        for nid, key in ((s, "source_point"), (t, "target_point")):
+            p0, p1 = e0.get(key), e1.get(key)
+            if p1 is None:
+                continue
+            total += 1
+            if p0 is None:
+                d = float("inf")   # конца в данных нет — канон его требует
+            else:
+                d = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+            if d > tol:
+                viol += 1
+                by_type[_seat_kind(byid.get(nid))] += 1
+                if d != float("inf"):
+                    worst = max(worst, d)
+    return {"total_ends": total, "violations": viol, "by_type": by_type,
+            "max_px": round(worst, 2)}
+
+
 def _legal_leak(aft, base, pseudo_pairs):
     """Псевдолегальные пары, СТАВШИЕ наложенными после раскладки. Порог 0.
 
@@ -288,6 +345,10 @@ def check(uid8, canvas_dir=None, with_text=True):
         "pen_before": round(spread.penetration_sum(v16, vb), 1),
         "pen_after": round(spread.penetration_sum(aft, ab), 1),
     }
+    sv = seat_violations(aft)
+    r["seat_violations"] = sv["violations"]
+    r["seat_violations_by_type"] = sv["by_type"]
+    r["seat_max_px"] = sv["max_px"]
     if with_text:
         r.update(text_metrics(orig, aft))
 
@@ -364,8 +425,8 @@ def main():
         return 1
     print()
     print("| uid | узлов | дефекты | диаг | налож | утечка | стор | прям | связн | перест | "
-          "бокс-на-магистр | проникн.форм | время |")
-    print("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+          "бокс-на-магистр | проникн.форм | посадка | время |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for r in rows:
         print(f"| {r['uid']} | {r['nodes']} | "
               f"{r['defects_before']} -> {r['defects_after']} | "
@@ -375,7 +436,8 @@ def main():
               f"{r['side_changed']} | {r['straight_broken']} | "
               f"{'OK' if not r['connectivity_changed'] else 'СЛОМАНА'} | "
               f"{r['order_local']} | {r['magi_before']} -> {r['magi_after']} | "
-              f"{r['pen_before']} -> {r['pen_after']} | {r['time_s']}s |")
+              f"{r['pen_before']} -> {r['pen_after']} | "
+              f"{r['seat_violations']} | {r['time_s']}s |")
     tb = sum(r["defects_before"] for r in rows)
     ta = sum(r["defects_after"] for r in rows)
     print(f"\nИТОГО дефектов: {tb} -> {ta}")
