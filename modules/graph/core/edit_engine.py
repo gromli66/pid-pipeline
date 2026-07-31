@@ -31,31 +31,117 @@ from . import ports as port_model
 from . import seating
 
 
-def seat_end(node, other_node, edge_data, role, cur, ref_x, ref_y,
-             try_slack, snap_threshold):
-    """Посадка конца ребра на узел (перенос `_seat_end_ported`, Э2a).
+_NORMAL_SIDE = {(1.0, 0.0): "R", (-1.0, 0.0): "L",
+                (0.0, -1.0): "T", (0.0, 1.0): "B"}
 
-    Порядок (спека заказчика, §2.1/§6.1 плана):
-      1. станция Э10 (`seating._poly_even_seat`) — канон, приоритетнее всего;
-      2. ЭФФЕКТИВНЫЙ замок прямизны: ось подводящего сегмента
-         (`_seg_lock`), иначе слабина по дальнему якорю
-         (`straight_slack_lock`, только try_slack). Замок берётся, только
-         если форма реально накрыла ось (`port_model.lock_respected`) —
-         «прямая, как сейчас»; неэффективный замок раньше молча
-         превращался в ray-посадку (кламп в угол) — источник «конец
-         гуляет по периметру»;
-      3. порт с гистерезисом (`port_model.choose_port`): конец сидит в
-         порту (центр грани / прямой участок контура / центроид
-         коннектора / ручной порт) и НЕ ползёт при смене направления на
-         соседа; смена — только с изнанки (обобщение side-flip) или при
-         радикальном выигрыше маршрута.
+
+def _rect_seated(node) -> bool:
+    """Конец узла сидит на рамке посадки (не контур, не коннектор)."""
+    from . import edit_checks
+    return edit_checks._rect_seated(node)
+
+
+def _port_side(rect, px, py, tol=1.5):
+    """Грань рамки, на которой лежит точка: 'L'|'R'|'T'|'B'|None."""
+    x1, y1, x2, y2 = rect
+    if abs(px - x1) <= tol and y1 - tol <= py <= y2 + tol:
+        return "L"
+    if abs(px - x2) <= tol and y1 - tol <= py <= y2 + tol:
+        return "R"
+    if abs(py - y1) <= tol and x1 - tol <= px <= x2 + tol:
+        return "T"
+    if abs(py - y2) <= tol and x1 - tol <= px <= x2 + tol:
+        return "B"
+    return None
+
+
+def _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y):
+    """Слот на грани side для edge_data среди рёбер узла на той же грани.
+
+    Членство: авто-рёбра узла, чей текущий конец лежит на грани
+    (`_manual_route` не участвуют — их концы там, где поставил оператор).
+    Порядок слотов — по проекции ДАЛЬНЕГО ориентира ребра (смежный
+    waypoint, иначе противоположный конец) на ось грани: при drag узла
+    дальние концы неподвижны — порядок стабилен по построению, слоты не
+    мерцают. Тай-брейк — id ребра. Возвращает (x, y)."""
+    rect = seating._anchor_rect(node)
+    nid = node.get("id")
+    horiz = side in ("T", "B")
+
+    def _proj_ref(e, end_key):
+        wps = e.get("waypoints") or []
+        refp = (wps[0] if end_key == "source_point" else wps[-1]) if wps \
+            else e.get("target_point" if end_key == "source_point"
+                       else "source_point")
+        if refp is None:
+            return None
+        return float(refp[1]) if horiz else float(refp[0])
+
+    entries = [(ref_x if horiz else ref_y, str(edge_data.get("id")), True)]
+    for e in node_edges or []:
+        if e is edge_data or e.get("_manual_route"):
+            continue
+        if (e.get("source") or e.get("from")) == nid:
+            end_key = "source_point"
+        elif (e.get("target") or e.get("to")) == nid:
+            end_key = "target_point"
+        else:
+            continue
+        p = e.get(end_key)
+        if p is None \
+                or _port_side(rect, float(p[1]), float(p[0])) != side:
+            continue
+        proj = _proj_ref(e, end_key)
+        if proj is None:
+            continue
+        entries.append((proj, str(e.get("id")), False))
+    entries.sort(key=lambda t: (t[0], t[1]))
+    idx = next(i for i, t in enumerate(entries) if t[2])
+    slots = port_model.side_slots(node, side, len(entries))
+    return slots[idx][0], slots[idx][1]
+
+
+def seat_end(node, other_node, edge_data, role, cur, ref_x, ref_y,
+             try_slack, snap_threshold, node_edges=None):
+    """Посадка конца ребра на узел — единые ворота (Э2a/Э2b).
+
+    Коннектор и полигон (посадка «как получились», спека заказчика):
+      1. станция Э10 (`seating._poly_even_seat`) — канон, приоритетнее;
+      2. ЭФФЕКТИВНЫЙ замок прямизны (`_seg_lock`, слабина
+         `straight_slack_lock` при try_slack) — только если форма реально
+         накрыла ось (`lock_respected`);
+      3. порт с гистерезисом (`choose_port`).
+
+    Рамочные узлы (бокс/скин) — Э2b, решение заказчика «А->В»
+    (2026-07-31): конец ВСЕГДА жёстко в порту — ручной порт свят, иначе
+    слот вокруг середины выбранной грани (`side_slots`; одна труба —
+    ровно середина). Замки прямизны конец по грани НЕ скользят («прямая
+    важнее порта» отменено): малый увод оси соседа даёт честное колено,
+    его лечит микро-доводка сдвигом узла (Э4). Сторона и ручной порт
+    держатся гистерезисом `choose_port_entry`; слоты не мерцают
+    (порядок — по дальним ориентирам, см. `_slot_seat`). Угол рамки
+    непредставим по построению: слоты не доходят до углов, замковый
+    кламп в угол исключён вместе с замками.
 
     cur — текущий конец [y, x] (гистерезис «остаться на своём порту»),
-    role — 's'|'t' для станции Э10. Возвращает (x, y).
+    role — 's'|'t' для станции Э10; node_edges — рёбра узла (для слотов;
+    None => k=1, чистая середина). Возвращает (x, y).
     """
     station = seating._poly_even_seat(node, edge_data, role, (ref_x, ref_y))
     if station:
         return station
+
+    if _rect_seated(node):
+        p = port_model.choose_port_entry(
+            node, (cur[1], cur[0]) if cur else None, (ref_x, ref_y),
+            float(snap_threshold))
+        if p[4]:                                   # ручной порт свят
+            return p[0], p[1]
+        side = _NORMAL_SIDE.get((p[2], p[3]))
+        if side is None:                           # точечный фолбэк
+            return p[0], p[1]
+        return _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y)
+
     lock = None
     if cur:
         lock = seating._seg_lock((cur[1], cur[0]), (ref_x, ref_y))

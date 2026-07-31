@@ -1085,9 +1085,13 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
             return False
         sx, sy = sp[1], sp[0]
         tx, ty = tp[1], tp[0]
-        threshold = (self.snap_threshold / 2.0) if alive \
-            else float(self.snap_threshold)
-        if min(abs(tx - sx), abs(ty - sy)) < threshold:
+        # Э2b («А->В»): конец жёстко в порту, слабина больше не скользит
+        # его по грани — «почти-соосной» пары без колена не существует.
+        # Прямая без маршрута — только СТРОГО осевая (0.5px); иначе роутер
+        # обязан построить колено. Прежняя мёртвая зона гистерезиса
+        # (snap/2..snap) оставляла диагонали 1-12px — файлы заказчика
+        # «33» (dx=1.53) и bag (dy=1.7/2.6).
+        if min(abs(tx - sx), abs(ty - sy)) <= 0.5:
             # Требование заказчика (скрины 2026-07-31): труба СКВОЗЬ чужое
             # оборудование недопустима и у соосной пары — конфликт прямой
             # (прошивание нутра ИЛИ прижатие ближе ROUTE_CLEARANCE к чужой
@@ -1889,13 +1893,18 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                          cur, ref_x, ref_y, try_slack):
         """Делегат движка (Э2a): вся посадка — `edit_engine.seat_end`.
 
-        Логика (станция Э10 → эффективный замок → порт с гистерезисом)
-        перенесена без изменений; см. докстринг движка."""
+        Э2b: движку передаются рёбра узла — рамочные концы садятся в
+        слоты вокруг середины грани (несколько труб в грань не сливаются
+        в точку); см. докстринг движка."""
         from modules.graph.core import edit_engine
 
+        nid = node.get('id')
+        node_edges = [e for e in self.edges_data
+                      if nid in (e.get('source'), e.get('target'))]
         return edit_engine.seat_end(node, other_node, edge_data, role,
                                     cur, ref_x, ref_y, try_slack,
-                                    float(self.snap_threshold))
+                                    float(self.snap_threshold),
+                                    node_edges=node_edges)
 
     @staticmethod
     def _end_pierces_own_node(node, end_yx, adj_yx):

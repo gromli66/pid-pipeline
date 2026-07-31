@@ -459,8 +459,12 @@ def test_drag_across_neighbor_flips_far_side(qapp, tmp_path):
     assert e["target_point"][1] == pytest.approx(480.0, abs=0.5)
     # ближний конец — на ЛЕВОЙ грани уехавшего box_a (bbox теперь 560..640)
     assert e["source_point"][1] == pytest.approx(560.0, abs=0.5)
-    # труба прямая по общей оси и ортогональная, прошивания box_b нет
-    assert e["source_point"][0] == pytest.approx(e["target_point"][0], abs=0.5)
+    # А->В (Э2b, переобъявление): концы жёстко в ПОРТАХ — общей slack-оси
+    # больше нет («прямая важнее порта» отменена заказчиком 2026-07-31).
+    # Ближний — середина левой грани box_a (y=235), дальний — середина
+    # правой грани box_b (y=270); их связывает ортогональное колено.
+    assert e["source_point"][0] == pytest.approx(235.0, abs=0.5)
+    assert e["target_point"][0] == pytest.approx(270.0, abs=0.5)
     pts = _full_path_xy(e)
     _assert_orthogonal(pts)
     bb = next(n for n in ed.model.graph_data["nodes"]
@@ -750,12 +754,13 @@ def test_batch_drag_with_yielding_edge(qapp, tmp_path):
     assert _yield_state(ed, e) == s1, "redo batch не вернул обход"
 
 
-def test_drag_almost_coaxial_pair_stays_straight_on_far_axis(qapp, tmp_path):
-    """Слабина прямизны по ДАЛЬНЕМУ КОНЦУ (Э3): бокс сдвинут на 20px по Y
-    относительно соседа, диапазоны рамок ещё пересекаются — ближний конец
-    обязан сесть на ось неподвижного дальнего конца (труба строго
-    горизонтальна, вход на грани, не лучом в угол), дальний конец
-    байт-в-байт."""
+def test_drag_offaxis_seats_on_port_with_honest_bend(qapp, tmp_path):
+    """А->В (Э2b, переобъявление теста слабины Э3): бокс сдвинут на 20px по
+    Y — раньше слабина прямизны СКОЛЬЗИЛА ближний конец по грани на ось
+    дальнего (вариант «Б», отменён заказчиком 2026-07-31). Теперь конец
+    ЖЁСТКО в порту (середина грани сдвинутого бокса), увод оси даёт
+    честное ортогональное колено; дальний конец байт-в-байт. Прямизну
+    возвращает микро-доводка сдвигом узла (Э4), не сползание конца."""
     graph = {
         "directed": False, "multigraph": False,
         "graph": {"image_size": [1080, 1920]},
@@ -782,9 +787,13 @@ def test_drag_almost_coaxial_pair_stays_straight_on_far_axis(qapp, tmp_path):
 
     e = ed.model.find_edge_data(key)
     assert e["target_point"] == far_before          # дальний конец не тронут
-    # ближний конец: на оси дальнего конца (y=200) и на грани бокса (x=160)
-    assert e["source_point"][0] == pytest.approx(200.0, abs=0.5)
+    # ближний конец: ПОРТ — середина правой грани сдвинутого бокса
+    # (y=180, x=160), НЕ ось дальнего (200): скольжение отменено
+    assert e["source_point"][0] == pytest.approx(180.0, abs=0.5)
     assert e["source_point"][1] == pytest.approx(160.0, abs=0.5)
+    # увод оси даёт честное колено: маршрут есть и он ортогонален
+    assert e.get("waypoints"), "колено обязано быть маршрутом, не диагональю"
+    _assert_orthogonal(_full_path_xy(e))
 
 
 def test_screen_equals_file_end_on_contour(qapp, tmp_path):
@@ -1010,13 +1019,13 @@ def test_batch_drag_route_preview_equals_result(qapp, tmp_path):
         "отпускание batch-drag изменило показанный маршрут/конец"
 
 
-def test_drag_away_and_back_restores_straight(qapp, tmp_path):
-    """Э7-c («увёл-вернул»): жест 1 рожает авто-маршрут (флаг _auto_route
-    отличает его от waypoints оператора — ребро остаётся routable); жест 2
-    возвращает узел на ось — ребро снова прямое: waypoints пусты, флага
-    нет, концы байт-в-байт исходные. Мёртвое авто-колено в данных не
-    остаётся (раньше ребро с waypoints выпадало из routable-набора и
-    маршрут замерзал навсегда)."""
+def test_drag_away_and_back_keeps_ports_nonport_pair(qapp, tmp_path):
+    """А->В (Э2b, переобъявление «увёл-вернул»): исходная прямая фикстуры —
+    slack-ось y=235, НЕ порт (середина грани box_a — y=200). После жеста
+    туда-обратно конец живёт в ПОРТУ, а не в старой slack-точке: увод оси
+    (порт 200 vs дальний 235) остаётся честным ортогональным коленом.
+    Дальний конец байт-в-байт (C6). Байт-восстановление прямой при
+    увёл-вернул гарантируется только ПОРТОВЫМ парам — см. следующий тест."""
     g = _graph_two_boxes()
     _assert_canonical(g)
     ed = _editor(qapp, tmp_path, g)
@@ -1027,10 +1036,41 @@ def test_drag_away_and_back_restores_straight(qapp, tmp_path):
     assert e.get("_auto_route") is True, "авто-маршрут обязан нести флаг"
 
     _drag(ed, "box_a", 140.0, 200.0)          # возврат ровно в исходную
+    assert e["source_point"] == [200.0, 180.0]      # порт: середина грани
+    assert e["target_point"] == [235.0, 400.0]      # дальний байт-в-байт
+    assert e["waypoints"], "увод порт-ось обязан остаться коленом"
+    _assert_orthogonal(_full_path_xy(e))
+
+
+def test_drag_away_and_back_restores_straight_port_pair(qapp, tmp_path):
+    """Э7-c («увёл-вернул») в мире портов: пара, строго соосная ЧЕРЕЗ ПОРТЫ
+    (середины граней на одной оси), после жеста туда-обратно снова прямая:
+    waypoints пусты, флаг снят, концы байт-в-байт исходные."""
+    nodes = [
+        {"id": "box_a", "type": "equipment", "centroid": [200.0, 140.0],
+         "bbox": [100.0, 160.0, 180.0, 240.0], "segmentation": None,
+         "class_id": 99, "class_name": "unknow", "degree": 1},
+        {"id": "box_b", "type": "equipment", "centroid": [200.0, 440.0],
+         "bbox": [400.0, 160.0, 480.0, 240.0], "segmentation": None,
+         "class_id": 99, "class_name": "unknow", "degree": 1},
+    ]
+    links = [{"id": "edge_1", "source": "box_a", "target": "box_b",
+              "source_point": [200.0, 180.0], "target_point": [200.0, 400.0],
+              "waypoints": []}]
+    g = _wrap(nodes, links)
+    _assert_canonical(g)
+    ed = _editor(qapp, tmp_path, g)
+    e = ed.model.find_edge_data(ed.model.edge_key("box_a", "box_b"))
+
+    _drag(ed, "box_a", 140.0, 330.0)          # увод вниз: маршрут родился
+    assert e["waypoints"], "маршрут обязан был родиться"
+    assert e.get("_auto_route") is True
+
+    _drag(ed, "box_a", 140.0, 200.0)          # возврат ровно в исходную
     assert e["waypoints"] == [], "мёртвое авто-колено осталось в данных"
     assert "_auto_route" not in e, "флаг обязан гаснуть вместе с маршрутом"
-    assert e["source_point"] == [235.0, 180.0]
-    assert e["target_point"] == [235.0, 400.0]
+    assert e["source_point"] == [200.0, 180.0]
+    assert e["target_point"] == [200.0, 400.0]
 
 
 def test_drag_hysteresis_no_flicker(qapp, tmp_path):
@@ -1063,11 +1103,13 @@ def test_drag_hysteresis_no_flicker(qapp, tmp_path):
         assert e["waypoints"], f"маршрут мигнул (умер) на y={fy}"
         assert len(e["waypoints"]) == shape, f"форма изменилась на y={fy}"
         _assert_orthogonal(_full_path_xy(e))
-    ed.drag_node_to(120.0, 240.0)      # слабина ожила — прямая, гашение
-    assert e["waypoints"] == [], "ниже порога гашения маршрут обязан погаснуть"
+    # А->В (Э2b): слабины больше нет — гашение только при СТРОГОЙ
+    # соосности: порт-середина грани ложится ровно на ось конна (y=200)
+    ed.drag_node_to(120.0, 200.0)
+    assert e["waypoints"] == [], "строгая соосность обязана погасить маршрут"
     assert "_auto_route" not in e
     assert e["source_point"] == pytest.approx([200.0, 160.0]), \
-        "слабина прямизны обязана вернуть конец на ось конна"
+        "конец обязан сидеть в порту на общей оси"
     ed.end_drag_node()
 
 

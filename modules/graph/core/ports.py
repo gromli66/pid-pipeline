@@ -36,6 +36,7 @@ from __future__ import annotations
 import math
 
 MIN_POLY_EDGE = 16.0      # px: минимальная длина прямого участка контура
+SLOT_PITCH = 18.0         # px: шаг слотов вокруг середины грани (Э2b)
 PORT_MATCH_TOL = 0.75     # px: «конец сидит на порту»
 BACKSIDE_EPS = 0.5        # px: допуск изнанки (dot нормали с направлением)
 RADICAL_LEN_FACTOR = 1.5  # выигрыш длины (в snap_threshold) для смены порта
@@ -200,6 +201,34 @@ def rescale_manual_ports(node, old_bbox, new_bbox):
         p["dy"] = float(p.get("dy", 0.0)) * sy
 
 
+def side_slots(node, side, k):
+    """k слотов на грани рамки посадки, симметрично вокруг середины (Э2b).
+
+    Решение заказчика 2026-07-31: одна труба в грань — ровно середина
+    (k=1 бит-равен candidate_ports), несколько — равномерные слоты вокруг
+    середины, шаг min(SLOT_PITCH, длина_грани/(k+1)) — крайние слоты не
+    доходят до углов по построению. side из {'L','R','T','B'}; порядок —
+    по возрастанию координаты вдоль грани. [(x, y, nx, ny, False), ...]."""
+    from modules.graph.core import seating
+
+    rect = seating._anchor_rect(node)
+    if rect is None or k < 1:
+        return []
+    x1, y1, x2, y2 = rect
+    horiz = side in ("T", "B")               # ось грани — x
+    lo, hi = (x1, x2) if horiz else (y1, y2)
+    center = (lo + hi) / 2.0
+    pitch = 0.0 if k == 1 else min(SLOT_PITCH, (hi - lo) / (k + 1))
+    offs = [(j - (k - 1) / 2.0) * pitch for j in range(k)]
+    if side == "L":
+        return [(x1, center + o, -1.0, 0.0, False) for o in offs]
+    if side == "R":
+        return [(x2, center + o, 1.0, 0.0, False) for o in offs]
+    if side == "T":
+        return [(center + o, y1, 0.0, -1.0, False) for o in offs]
+    return [(center + o, y2, 0.0, 1.0, False) for o in offs]
+
+
 def nearest_port(node, x, y, radius):
     """Ближайший порт узла (ручной или кандидат) в радиусе, иначе None."""
     best, best_d = None, float(radius)
@@ -263,12 +292,21 @@ def choose_port(node, cur_xy, ref_xy, snap_threshold):
     выигрывает радикально (короче на >= RADICAL_LEN_FACTOR * snap_threshold
     при не большем числе колен). cur_xy=None (нет текущего) — лучший порт.
     """
+    p = choose_port_entry(node, cur_xy, ref_xy, snap_threshold)
+    return p[0], p[1]
+
+
+def choose_port_entry(node, cur_xy, ref_xy, snap_threshold):
+    """То же, что choose_port, но возвращает ПОЛНЫЙ кортеж кандидата
+    (x, y, nx, ny, manual) — движку редактора (Э2b) нужны нормаль (сторона
+    грани) и признак ручного порта. Поведение выбора бит-идентично."""
     rx, ry = ref_xy
     ports = all_ports(node)
     if not ports:
-        return _node_cxy(node)
+        cx, cy = _node_cxy(node)
+        return (cx, cy, 0.0, 0.0, False)
     if len(ports) == 1:
-        return ports[0][0], ports[0][1]
+        return ports[0]
 
     cx, cy = _node_cxy(node)
     ux, uy = rx - cx, ry - cy
@@ -291,9 +329,9 @@ def choose_port(node, cur_xy, ref_xy, snap_threshold):
                 <= max(float(snap_threshold), 4.0):
             cur = cand
     if cur is None or _backside(cur, rx, ry):
-        return best[0], best[1]
+        return best
     if _l1(cur, rx, ry) - _l1(best, rx, ry) \
             >= RADICAL_LEN_FACTOR * float(snap_threshold) \
             and _bends(best, rx, ry) <= _bends(cur, rx, ry):
-        return best[0], best[1]
-    return cur[0], cur[1]
+        return best
+    return cur
