@@ -342,16 +342,21 @@ class SimpleGraphEditor(BaseGraphEditor):
             r = self.EQUIPMENT_MARKER_RADIUS
             self.node_items[node_id].setRect(cx - r, cy - r, r * 2, r * 2)
 
-        # Пересчитать связанные рёбра (как при drag)
-        cx, cy = node['centroid'][1], node['centroid'][0]
+        # Пересчитать связанные рёбра (advanced-редактор переопределяет:
+        # движок, только ближний конец)
+        self._reseat_after_resize(node_id)
+
+    def _reseat_after_resize(self, node_id: str):
+        """База: пересадка концов рёбер узла после resize (point-to-point).
+
+        ВНИМАНИЕ: переписывает ОБА конца по центроидам — легаси-контракт
+        простого редактора. «Ручная правка» (AdvancedGraphEditor)
+        переопределяет: движок, только ближний конец (Э2d)."""
         for edge in self.edges_data:
             if edge['source'] == node_id or edge['target'] == node_id:
                 other_id = edge['target'] if edge['source'] == node_id else edge['source']
-                other = self.nodes.get(other_id)
-                if not other:
+                if self.nodes.get(other_id) is None:
                     continue
-                ocx, ocy = other['centroid'][1], other['centroid'][0]
-                # Пересчитать connection points (простой point-to-point)
                 sp_x, sp_y = self.get_connection_point(edge['source'],
                     self.nodes[edge['target']]['centroid'][1],
                     self.nodes[edge['target']]['centroid'][0])

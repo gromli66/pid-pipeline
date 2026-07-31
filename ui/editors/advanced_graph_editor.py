@@ -1924,6 +1924,23 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                                     float(self.snap_threshold),
                                     node_edges=node_edges)
 
+    def _reseat_after_resize(self, node_id: str):
+        """Э2d (переопределение легаси Simple): после resize/расталкивания
+        пересаживается ТОЛЬКО конец у изменённого узла — движком
+        (порт/слот/контур); дальние концы соседей неприкосновенны (C6).
+        Прежний путь переписывал ОБА конца по центроидам: терял порты,
+        рушил дальние концы и косил стабы маршрутов. _manual_route —
+        перепроекция на новую границу, как в drag."""
+        for edge in self.edges_data:
+            if node_id not in (edge.get('source'), edge.get('target')):
+                continue
+            if edge.get('_manual_route'):
+                self._reproject_manual_endpoints(edge)
+                self._update_edge_path(
+                    self.model.edge_key(edge['source'], edge['target']))
+            else:
+                self._reseat_moved_end(edge, node_id)
+
     def _engine_finish_ends(self, edge_data: dict):
         """Э2c: довести ОБА конца ребра до контракта движка после канонной
         оси — порт/слот у рамочных, отступ/развод у полигонов, центроид у
@@ -3619,6 +3636,11 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
             new_w, new_h = short, long_
         node['bbox'] = [cx - new_w / 2, cy - new_h / 2, cx + new_w / 2, cy + new_h / 2]
         node['area'] = new_w * new_h
+        # Э2d: ручные порты — локальные смещения от центроида, при смене
+        # рамки масштабируются (панель «Размеры» их раньше теряла)
+        if node.get('_ports') and bb and len(bb) == 4:
+            from ui.editors import port_model
+            port_model.rescale_manual_ports(node, bb, node['bbox'])
 
     def _resize_node_poly(self, node: dict, scale: float):
         """Масштабировать полигон вокруг центроида с сохранением формы."""
@@ -3626,6 +3648,7 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         if not seg or len(seg) < 6:
             return
         cy, cx = node['centroid'][0], node['centroid'][1]
+        old_bb = list(node.get('bbox') or [])
         new, xs, ys = [], [], []
         for i in range(0, len(seg) - 1, 2):
             nx = cx + (seg[i] - cx) * scale
@@ -3637,6 +3660,10 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         node['bbox'] = [min(xs), min(ys), max(xs), max(ys)]
         if node.get('area'):
             node['area'] = node['area'] * (scale * scale)
+        # Э2d: ручные порты масштабируются вместе с формой
+        if node.get('_ports') and len(old_bb) == 4:
+            from ui.editors import port_model
+            port_model.rescale_manual_ports(node, old_bb, node['bbox'])
 
     def _move_node_geom(self, node_id: str, dx: float, dy: float):
         """Сдвинуть узел (centroid + bbox + segmentation) на (dx, dy)."""
@@ -3700,6 +3727,8 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                     any_push = True
             if not any_push:
                 break
+        # Э2d: кого сдвинули — тем пересадить рёбра (раньше концы висели)
+        return [nid for nid in active if nid not in growers]
 
     def apply_resize(self, width=None, height=None, scale=None):
         """Применить размеры к набору + расталкивание + auto_fix рёбер."""
@@ -3726,7 +3755,12 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         grower_ids = [nid for nid in self._resize_sel if self.nodes.get(nid)]
 
         # развести наслоившихся соседей, затем довести рёбра до ортогональности
-        self._spread_overlaps(grower_ids)
+        pushed = self._spread_overlaps(grower_ids)
+        # Э2d: рёбра всех затронутых узлов пересаживаются движком (только
+        # ближние концы); раньше на layout-холсте концы сдвинутых соседей
+        # оставались висеть (auto_fix ниже заперт замком Э4-00)
+        for nid in dict.fromkeys(list(grower_ids) + pushed):
+            self._reseat_after_resize(nid)
         # Э4-00: на холсте после авто-раскладки полнографный auto_fix даёт
         # регрессию (замер §1.1 EDITOR_AFTER_LAYOUT_PLAN) — тот же инструмент,
         # что заперт кнопкой «Авто-выравнивание»; расталкивание выше остаётся

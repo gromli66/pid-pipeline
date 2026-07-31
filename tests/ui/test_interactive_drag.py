@@ -1225,3 +1225,35 @@ def test_route_through_poly_contour_still_rejected(qapp, tmp_path):
         assert e["waypoints"] == clean
     finally:
         age.route_edge_v2 = orig
+
+
+# ── Э2d: resize через движок ─────────────────────────────────────────────
+
+def test_resize_reseats_only_near_end(qapp, tmp_path):
+    """Э2d: resize пересаживает ТОЛЬКО концы у изменённого узла (движок,
+    порт); дальний конец соседа байт-в-байт. Легаси-путь переписывал ОБА
+    конца по центроидам (терял порты, рушил C6)."""
+    g = _graph_two_boxes()
+    ed = _editor(qapp, tmp_path, g)
+    e = ed.model.find_edge_data(ed.model.edge_key("box_a", "box_b"))
+    tp_before = list(e["target_point"])
+
+    node = ed.nodes["box_a"]
+    node["bbox"] = [90.0, 150.0, 190.0, 250.0]   # раздули вокруг центра
+    ed._reseat_after_resize("box_a")
+
+    assert e["target_point"] == tp_before          # C6: дальний не тронут
+    assert e["source_point"] == [200.0, 190.0]     # порт новой грани
+
+
+def test_size_panel_rescales_manual_ports(qapp, tmp_path):
+    """Э2d: панель «Размеры» масштабирует ручные порты (раньше теряла)."""
+    g = _graph_two_boxes()
+    ed = _editor(qapp, tmp_path, g)
+    node = ed.nodes["box_a"]
+    node["segmentation"] = [100.0, 160.0, 180.0, 160.0,
+                            180.0, 240.0, 100.0, 240.0]
+    node["_ports"] = [{"dx": 40.0, "dy": 0.0}]
+
+    ed._resize_node_poly(node, 2.0)
+    assert node["_ports"] == [{"dx": 80.0, "dy": 0.0}]
