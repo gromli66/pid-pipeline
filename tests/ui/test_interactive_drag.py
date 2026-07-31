@@ -533,6 +533,15 @@ def test_straight_coaxial_pipe_routes_around_foreign_box(qapp, tmp_path):
     for a, b in zip(pts, pts[1:]):
         assert not _seg_crosses_bbox(a, b, mid_bb), \
             f"сегмент {a}->{b} прошивает чужой бокс"
+    # КЛИРЕНС: обходной сегмент не липнет к грани обходимого бокса вплотную
+    # (скрин заказчика «вдоль границы»); допуск чуть мягче ROUTE_CLEARANCE=6.
+    x1, y1, x2, y2 = mid_bb
+    for a, b in zip(pts, pts[1:]):
+        if abs(a[0] - b[0]) <= 0.5:      # V-сегмент вдоль вертикальных граней
+            lo, hi = min(a[1], b[1]), max(a[1], b[1])
+            if hi > y1 and lo < y2 and x1 - 10 < a[0] < x2 + 10:
+                gap = min(abs(a[0] - x1), abs(a[0] - x2))
+                assert gap >= 5.0, f"V-сегмент x={a[0]:.1f} липнет к грани (зазор {gap:.2f})"
 
 
 def test_drag_almost_coaxial_pair_stays_straight_on_far_axis(qapp, tmp_path):

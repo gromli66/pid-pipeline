@@ -1128,6 +1128,14 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
 
         obstacle_bboxes, existing_paths, reserve = self._route_gesture_inputs(
             edge_data, sx, sy, tx, ty)
+        # КЛИРЕНС (скрин заказчика «вдоль границы», 2026-07-31): препятствия
+        # раздуваются на ROUTE_CLEARANCE — маршрут держит зазор от чужих
+        # граней, а не липнет к ним вплотную (аналог standoff AutoCAD P&ID /
+        # shapeBufferDistance libavoid; полноценный клиренс+нуджинг — Э7-b).
+        c = self.ROUTE_CLEARANCE
+        obstacle_bboxes = [(b[0] - c, b[1] - c, b[2] + c, b[3] + c)
+                           for b in obstacle_bboxes]
+        reserve = [(b[0] - c, b[1] - c, b[2] + c, b[3] + c) for b in reserve]
 
         # BOUNDED-режим (Э7-перф, лимит U-кандидатов): роутим по ближним
         # препятствиям; если победивший маршрут прошивает препятствие из
@@ -1193,6 +1201,8 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
     ROUTE_EXACT_MAX_OBS = 40    # препятствий (узлов минус концы) для EXACT
     ROUTE_EXACT_MAX_PATHS = 60  # путей рёбер для EXACT
     ROUTE_RECT_PAD = 64         # запас прямоугольника маршрута, px
+    ROUTE_CLEARANCE = 6.0       # px: зазор маршрута от чужих граней (= floor
+                                # порога видимости трубы; standoff AutoCAD)
     ROUTE_OBS_CAP = 14          # BOUNDED: стартовых препятствий у прямой
     ROUTE_PATH_CAP = 12         # BOUNDED: путей в скоринге R8/R5
     ROUTE_AUGMENT_ITERS = 3     # BOUNDED: доуточнений по нарушениям R4
