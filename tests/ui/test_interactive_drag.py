@@ -498,6 +498,43 @@ def test_drag_across_neighbor_offaxis_flips_and_routes_same_frame(qapp, tmp_path
         assert not _seg_crosses_bbox(a, b, bb), f"сегмент {a}->{b} прошивает box_b"
 
 
+def test_straight_coaxial_pipe_routes_around_foreign_box(qapp, tmp_path):
+    """Скрин заказчика (CAPS, 2026-07-31): вертикальная СООСНАЯ труба шла
+    сквозь чужой бокс — прошивание нутра чужого оборудования рождает обход
+    так же, как увод с оси, даже когда div == 0."""
+    nodes = [
+        {"id": "top", "type": "equipment", "centroid": [80.0, 300.0],
+         "bbox": [260.0, 40.0, 340.0, 120.0], "segmentation": None,
+         "class_id": 99, "class_name": "unknow", "degree": 1},
+        {"id": "mid", "type": "equipment", "centroid": [200.0, 300.0],
+         "bbox": [260.0, 160.0, 340.0, 240.0], "segmentation": None,
+         "class_id": 99, "class_name": "unknow", "degree": 0},
+        {"id": "bot", "type": "equipment", "centroid": [330.0, 300.0],
+         "bbox": [260.0, 290.0, 340.0, 370.0], "segmentation": None,
+         "class_id": 99, "class_name": "unknow", "degree": 1},
+    ]
+    links = [{"id": "edge_1", "source": "top", "target": "bot",
+              "source_point": [120.0, 300.0], "target_point": [290.0, 300.0],
+              "waypoints": []}]
+    g = _wrap(nodes, links)
+    ed = _editor(qapp, tmp_path, g)
+    key = ed.model.edge_key("top", "bot")
+
+    # лёгкий сдвиг вдоль оси: пара остаётся соосной (div=0), но прямая
+    # прошивает mid — обход обязан родиться
+    _drag(ed, "top", 300.0, 90.0)
+
+    e = ed.model.find_edge_data(key)
+    assert e.get("waypoints"), "обход не родился — труба сквозь бокс"
+    pts = _full_path_xy(e)
+    _assert_orthogonal(pts)
+    mid_bb = next(n for n in ed.model.graph_data["nodes"]
+                  if n["id"] == "mid")["bbox"]
+    for a, b in zip(pts, pts[1:]):
+        assert not _seg_crosses_bbox(a, b, mid_bb), \
+            f"сегмент {a}->{b} прошивает чужой бокс"
+
+
 def test_drag_almost_coaxial_pair_stays_straight_on_far_axis(qapp, tmp_path):
     """Слабина прямизны по ДАЛЬНЕМУ КОНЦУ (Э3): бокс сдвинут на 20px по Y
     относительно соседа, диапазоны рамок ещё пересекаются — ближний конец

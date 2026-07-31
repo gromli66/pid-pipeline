@@ -280,10 +280,16 @@ def straight_slack_lock(src, tgt, anchor_x, anchor_y, straight_tol=STRAIGHT_TOL)
     ty1, ty2, tx1, tx2 = _axis_range(tgt)
     ylo, yhi = max(sy1, ty1), min(sy2, ty2)
     xlo, xhi = max(sx1, tx1), min(sx2, tx2)
+    # Ось обязана реально накрываться гранью сажаемого узла: иначе
+    # node_anchor клампит координату в край диапазона — конец в УГЛУ и
+    # чуть косая «прямая» (скрин заказчика 2026-07-31). За пределами
+    # грани честнее луч/маршрут, чем угол.
     h = (ylo - yhi <= straight_tol and abs(scy - tcy) <=
-         (sy2 - sy1) / 2 + (ty2 - ty1) / 2 + straight_tol)
+         (sy2 - sy1) / 2 + (ty2 - ty1) / 2 + straight_tol
+         and sy1 - 0.5 <= anchor_y <= sy2 + 0.5)
     v = (xlo - xhi <= straight_tol and abs(scx - tcx) <=
-         (sx2 - sx1) / 2 + (tx2 - tx1) / 2 + straight_tol)
+         (sx2 - sx1) / 2 + (tx2 - tx1) / 2 + straight_tol
+         and sx1 - 0.5 <= anchor_x <= sx2 + 0.5)
     if h and v:
         # как в Э2: при двух достижимых осях — доминирующее направление
         if abs(tcx - scx) >= abs(tcy - scy):

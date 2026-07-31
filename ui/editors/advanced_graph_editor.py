@@ -1113,7 +1113,12 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         threshold = (self.snap_threshold / 2.0) if alive \
             else float(self.snap_threshold)
         if min(abs(tx - sx), abs(ty - sy)) < threshold:
-            return False
+            # Требование заказчика (скрины 2026-07-31): труба СКВОЗЬ чужое
+            # оборудование недопустима и у соосной пары — прошивание нутра
+            # чужого бокса рождает обход так же, как увод с оси. Пока
+            # прошивания нет, почти-прямые не роутятся (гистерезис H7).
+            if not self._straight_pierces_obstacle(edge_data, sx, sy, tx, ty):
+                return False
 
         src_id, tgt_id = edge_data['source'], edge_data['target']
         src_bbox = self._get_node_bbox(src_id)
@@ -1191,6 +1196,36 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
     ROUTE_OBS_CAP = 14          # BOUNDED: стартовых препятствий у прямой
     ROUTE_PATH_CAP = 12         # BOUNDED: путей в скоринге R8/R5
     ROUTE_AUGMENT_ITERS = 3     # BOUNDED: доуточнений по нарушениям R4
+
+    def _straight_pierces_obstacle(self, edge_data: dict,
+                                   sx: float, sy: float,
+                                   tx: float, ty: float) -> bool:
+        """Прямой отрезок концов проходит сквозь НУТРО чужого бокса?
+
+        Касание границы (труба вдоль кромки) прошиванием не считается —
+        bbox ужимается на 0.75px; развод таких прижатий — нуджинг (Э11).
+        На кадре drag берётся кэш жеста (O(N) дешёвый bbox-отсев), вне
+        жеста (add_edge) — все узлы."""
+        src_id, tgt_id = edge_data['source'], edge_data['target']
+        ctx = self._drag_route_ctx
+        nodes_iter = ctx['nodes'] if ctx is not None else \
+            [(nid, None) for nid in self.nodes]
+        lo_x, hi_x = min(sx, tx), max(sx, tx)
+        lo_y, hi_y = min(sy, ty), max(sy, ty)
+        for nid, bbox in nodes_iter:
+            if nid == src_id or nid == tgt_id:
+                continue
+            bb = bbox if bbox is not None else self._get_node_bbox(nid)
+            if not bb:
+                continue
+            x1, y1, x2, y2 = bb
+            if x2 < lo_x or x1 > hi_x or y2 < lo_y or y1 > hi_y:
+                continue
+            sx1, sy1, sx2, sy2 = x1 + 0.75, y1 + 0.75, x2 - 0.75, y2 - 0.75
+            if sx1 < sx2 and sy1 < sy2 and segment_intersects_bbox(
+                    sx, sy, tx, ty, (sx1, sy1, sx2, sy2)):
+                return True
+        return False
 
     def _route_gesture_inputs(self, edge_data: dict,
                               sx: float, sy: float,
