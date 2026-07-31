@@ -1051,3 +1051,117 @@ def test_drag_hysteresis_no_flicker(qapp, tmp_path):
     assert e["waypoints"] == [], "ниже порога гашения маршрут обязан погаснуть"
     assert "_auto_route" not in e
     ed.end_drag_node()
+
+
+# ── Полигонные препятствия: наложения судятся по РЕАЛЬНОМУ контуру ───────
+#
+# Файл заказчика graph_edited_star.json: коннекторы живут в «кармане»
+# невыпуклого гиганта (деаэратор node_28, bbox 616x373, заполненность
+# ~0.54) — маршрут над ПУСТЫМ углом габарита браковался за «пересечение»
+# bbox, роутинг молча отказывал, диагонали оставались. Известная ловушка
+# проекта (modules/graph/core/layout/_shapes.py): габарит невыпуклого
+# контура почти вдвое больше фигуры — наложения судятся по реальной форме.
+
+# L-контур «станции»: левая колонна x[200,280] + нижняя плита y[420,500];
+# карман (пустой угол bbox [200,200,600,500]) — x>280, y<420.
+L_STATION = [200.0, 200.0, 280.0, 200.0, 280.0, 420.0,
+             600.0, 420.0, 600.0, 500.0, 200.0, 500.0]
+
+
+def _graph_poly_pocket(extra_nodes=()):
+    """Невыпуклый полигон без скина + коннектор в его кармане + коннектор
+    снаружи справа; ребро между коннекторами (концы = центроиды, канон)."""
+    nodes = [
+        {"id": "station", "type": "equipment", "centroid": [350.0, 240.0],
+         "bbox": [200.0, 200.0, 600.0, 500.0],
+         "segmentation": list(L_STATION),
+         "class_id": 99, "class_name": "unknow", "degree": 0},
+        {"id": "conn_a", "type": "connector", "centroid": [300.0, 450.0],
+         "bbox": None, "segmentation": None,
+         "class_id": -1, "class_name": "connector", "degree": 1},
+        {"id": "conn_b", "type": "connector", "centroid": [120.0, 700.0],
+         "bbox": None, "segmentation": None,
+         "class_id": -1, "class_name": "connector", "degree": 1},
+    ] + list(extra_nodes)
+    links = [
+        {"id": "edge_1", "source": "conn_a", "target": "conn_b",
+         "source_point": [300.0, 450.0], "target_point": [120.0, 700.0],
+         "waypoints": []},
+    ]
+    return _wrap(nodes, links)
+
+
+def test_drag_connector_in_poly_pocket_births_route_over_empty_corner(
+        qapp, tmp_path):
+    """Синтетика «звезды»: коннектор в кармане невыпуклого полигона, граф
+    большой (BOUNDED). Обход при drag РОЖДАЕТСЯ над пустым углом bbox
+    полигона (раньше блокировался браковкой по габариту + запирался
+    негативным кэшем fail_anchor) и реальный контур не прошит."""
+    from ui.editors.advanced_graph_editor import _seg_pierces_polygon
+
+    # 41 дальний филлер → узлов 44, препятствий > ROUTE_EXACT_MAX_OBS (40):
+    # режим BOUNDED — тот же, что на боевом листе заказчика.
+    fillers = [
+        {"id": f"filler_{i}", "type": "equipment",
+         "centroid": [100.0 + (i // 7) * 60.0 + 10.0,
+                      1000.0 + (i % 7) * 60.0 + 10.0],
+         "bbox": [1000.0 + (i % 7) * 60.0, 100.0 + (i // 7) * 60.0,
+                  1020.0 + (i % 7) * 60.0, 120.0 + (i // 7) * 60.0],
+         "segmentation": None,
+         "class_id": 99, "class_name": "unknow", "degree": 0}
+        for i in range(41)
+    ]
+    g = _graph_poly_pocket(extra_nodes=fillers)
+    _assert_canonical(g)
+    ed = _editor(qapp, tmp_path, g, canvas=True)
+    e = ed.model.find_edge_data(ed.model.edge_key("conn_a", "conn_b"))
+
+    ed.start_drag_node("conn_a")
+    ctx = ed._drag_route_ctx
+    assert ctx["bounded"], "фикстура обязана попадать в BOUNDED-режим"
+    assert [nid for nid, _seg in ctx["polys"]] == ["station"], \
+        "полигон без скина обязан лежать в кэше контуров, не в bbox-узлах"
+    assert "station" not in [nid for nid, _bb in ctx["nodes"]]
+    ed.drag_node_to(450.0, 380.0)      # увод в кармане: div 130 >> порога
+    ed.end_drag_node()
+
+    assert e["waypoints"], \
+        "обход над пустым углом bbox полигона обязан родиться"
+    assert e.get("_auto_route") is True
+    pts = _full_path_xy(e)
+    _assert_orthogonal(pts)
+    for a, b in zip(pts, pts[1:]):
+        assert not _seg_pierces_polygon(a[0], a[1], b[0], b[1], L_STATION), \
+            f"сегмент {a} -> {b} прошивает реальный контур станции"
+
+
+def test_route_through_poly_contour_still_rejected(qapp, tmp_path):
+    """Негатив: маршрут СКВОЗЬ реальный контур полигона бракуется — над
+    пустым углом bbox легален лишь путь, не задевающий фигуру. Роутер
+    подменяется: сперва отдаёт маршрут сквозь левую колонну L-контура
+    (reject, waypoints не появляются), затем маршрут по карману (принят)."""
+    import ui.editors.advanced_graph_editor as age
+
+    g = _graph_poly_pocket()
+    _assert_canonical(g)
+    ed = _editor(qapp, tmp_path, g)
+    e = ed.model.find_edge_data(ed.model.edge_key("conn_a", "conn_b"))
+    orig = age.route_edge_v2
+
+    # сквозь колонну: (450,300) -> (240,300) -> (240,120) -> (700,120)
+    piercing = [[300.0, 240.0], [120.0, 240.0]]
+    # по карману: (450,300) -> (700,300) -> (700,120)
+    clean = [[300.0, 700.0]]
+    try:
+        age.route_edge_v2 = lambda **kw: [list(w) for w in piercing]
+        assert ed._route_orthogonal(e) is False, \
+            "маршрут сквозь реальный контур обязан браковаться"
+        assert e["waypoints"] == [], "бракованный маршрут попал в данные"
+        assert "_auto_route" not in e
+
+        age.route_edge_v2 = lambda **kw: [list(w) for w in clean]
+        assert ed._route_orthogonal(e) is True, \
+            "маршрут над пустым углом bbox (мимо фигуры) обязан приниматься"
+        assert e["waypoints"] == clean
+    finally:
+        age.route_edge_v2 = orig

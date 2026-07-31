@@ -90,6 +90,75 @@ def _seg_dist2(px: float, py: float,
     return dx * dx + dy * dy
 
 
+def _node_poly_contour(node: dict) -> list | None:
+    """Плоский контур [x, y, ...] полигонного узла БЕЗ скина, иначе None.
+
+    Та же ветка, что канон посадки (seating._anchor_rect/node_anchor):
+    segmentation >= 3 точек, class_name вне FIXED_SIZES. У такого узла
+    габарит невыпуклого контура почти вдвое больше фигуры (докстринг
+    modules/graph/core/layout/_shapes.py; репро — деаэратор node_28,
+    bbox 616x373 при заполненности ~0.54) — судить его bbox'ом нельзя,
+    только реальной формой."""
+    from modules.graph.core import seating
+
+    seg = node.get('segmentation')
+    if seg and isinstance(seg, list) and len(seg) >= 6 \
+            and node.get('class_name') not in seating.FIXED_SIZES:
+        return seg
+    return None
+
+
+def _pt_in_polygon(px: float, py: float, pts: list) -> bool:
+    """Ray-casting: точка (px, py) внутри полигона [(x, y), ...]."""
+    inside = False
+    j = len(pts) - 1
+    for i in range(len(pts)):
+        xi, yi = pts[i]
+        xj, yj = pts[j]
+        if (yi > py) != (yj > py) and \
+                px < (xj - xi) * (py - yi) / (yj - yi) + xi:
+            inside = not inside
+        j = i
+    return inside
+
+
+def _seg_pierces_polygon(ax: float, ay: float,
+                         bx: float, by: float, seg: list) -> bool:
+    """Сегмент (ax,ay)-(bx,by) прошивает РЕАЛЬНЫЙ контур (плоский [x,y,...])?
+
+    Прошивание = строгое пересечение с ребром контура ИЛИ середина сегмента
+    внутри полигона (сегмент целиком в нутре). Касание контура (скользящий
+    коллинеарный сегмент, конец на контуре) прошиванием не считается — как
+    касание кромки bbox в _seg_conflicts_bbox. Проход над ПУСТЫМ углом
+    габарита невыпуклого контура легален — решение проекта: раскладка тоже
+    считает наложения по реальной форме, не по bbox. Чистый python: shapely
+    в UI запрещён (см. modules/graph/core/seating.py, requirements/ui.txt)."""
+    pts = list(zip(seg[0::2], seg[1::2]))
+    if len(pts) < 3:
+        return False
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    if max(ax, bx) < min(xs) or min(ax, bx) > max(xs) \
+            or max(ay, by) < min(ys) or min(ay, by) > max(ys):
+        return False
+
+    def cross(ox, oy, px, py, qx, qy):
+        return (px - ox) * (qy - oy) - (py - oy) * (qx - ox)
+
+    n = len(pts)
+    for i in range(n):
+        cx1, cy1 = pts[i]
+        cx2, cy2 = pts[(i + 1) % n]
+        d1 = cross(ax, ay, bx, by, cx1, cy1)
+        d2 = cross(ax, ay, bx, by, cx2, cy2)
+        d3 = cross(cx1, cy1, cx2, cy2, ax, ay)
+        d4 = cross(cx1, cy1, cx2, cy2, bx, by)
+        if ((d1 > 0 and d2 < 0) or (d1 < 0 and d2 > 0)) \
+                and ((d3 > 0 and d4 < 0) or (d3 < 0 and d4 > 0)):
+            return True
+    return _pt_in_polygon((ax + bx) / 2.0, (ay + by) / 2.0, pts)
+
+
 class EditEdgeDashHandler(ModeHandler):
     """Режим переключения ПУНКТИРА ребра.
 
@@ -1142,22 +1211,32 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
             src_side = self._seated_face(src_id, sx, sy, tx, ty)
             tgt_side = self._seated_face(tgt_id, tx, ty, sx, sy)
 
-        obstacle_bboxes, existing_paths, reserve = self._route_gesture_inputs(
-            edge_data, sx, sy, tx, ty)
-        # КЛИРЕНС (скрин заказчика «вдоль границы», 2026-07-31): препятствия
-        # раздуваются на ROUTE_CLEARANCE — маршрут держит зазор от чужих
-        # граней, а не липнет к ним вплотную (аналог standoff AutoCAD P&ID /
-        # shapeBufferDistance libavoid; полноценный клиренс+нуджинг — Э7-b).
+        obstacle_bboxes, existing_paths, reserve, poly_obs = \
+            self._route_gesture_inputs(edge_data, sx, sy, tx, ty)
+        # СЫРЫЕ прямоугольники — для браковки/донесения ниже: судится
+        # прошивание реального нутра, а не раздутой рамки (двойной запас
+        # клиренс+margin зажимал плотные места — маршрут отвергался, хотя
+        # лишь шёл в коридоре у грани).
+        all_raw = obstacle_bboxes + reserve
+        raw_reserve = reserve
+        # КЛИРЕНС (скрин заказчика «вдоль границы», 2026-07-31): ПРЯМОУГОЛЬНЫЕ
+        # препятствия раздуваются на ROUTE_CLEARANCE — маршрут держит зазор от
+        # чужих граней, а не липнет к ним вплотную (аналог standoff AutoCAD
+        # P&ID / shapeBufferDistance libavoid; клиренс+нуджинг — Э7-b).
+        # Полигонные узлы без скина в obstacle_bboxes НЕ попадают (их габарит
+        # закрывает пол-листа) — их реальные контуры (poly_obs) судят
+        # победивший маршрут ниже.
         c = self.ROUTE_CLEARANCE
         obstacle_bboxes = [(b[0] - c, b[1] - c, b[2] + c, b[3] + c)
                            for b in obstacle_bboxes]
         reserve = [(b[0] - c, b[1] - c, b[2] + c, b[3] + c) for b in reserve]
 
         # BOUNDED-режим (Э7-перф, лимит U-кандидатов): роутим по ближним
-        # препятствиям; если победивший маршрут прошивает препятствие из
-        # резерва — оно доносится в набор и маршрут перестраивается
-        # (ленивое доуточнение, детерминировано, <= ROUTE_AUGMENT_ITERS
-        # повторов). В наиве/EXACT reserve пуст — ровно один вызов.
+        # препятствиям; если победивший маршрут прошивает НУТРО препятствия
+        # из резерва (сырой bbox, ужатие 0.75) — оно доносится в набор
+        # (раздутым) и маршрут перестраивается (ленивое доуточнение,
+        # детерминировано, <= ROUTE_AUGMENT_ITERS повторов). В наиве/EXACT
+        # reserve пуст — ровно один вызов.
         for _ in range(1 + self.ROUTE_AUGMENT_ITERS):
             waypoints = route_edge_v2(
                 src_conn=(sx, sy), tgt_conn=(tx, ty),
@@ -1170,39 +1249,38 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                 break
             pts = ([(sx, sy)] + [(w[1], w[0]) for w in waypoints]
                    + [(tx, ty)])
-            violated, still = [], []
-            for bbox in reserve:
-                hit = False
-                for a, b in zip(pts, pts[1:]):
-                    if segment_intersects_bbox(a[0], a[1], b[0], b[1],
-                                               bbox, margin=2):
-                        hit = True
-                        break
-                (violated if hit else still).append(bbox)
+            violated, still, still_raw = [], [], []
+            for infl, raw in zip(reserve, raw_reserve):
+                if self._path_pierces_bbox_inner(pts, raw):
+                    violated.append(infl)
+                else:
+                    still.append(infl)
+                    still_raw.append(raw)
             if not violated:
                 break
             obstacle_bboxes = obstacle_bboxes + violated
-            reserve = still
+            reserve, raw_reserve = still, still_raw
         if not waypoints:
             return False
+        pts = ([(sx, sy)] + [(w[1], w[0]) for w in waypoints] + [(tx, ty)])
         ctx = self._drag_route_ctx
         if ctx is not None and ctx['bounded']:
             # BOUNDED: fallback-маршрут route_edge_v2 (нефильтрованный L при
             # полном провале кандидатов — зажатая позиция, стаб липнет к
             # соседу) прошивал бы узлы. Честнее оставить прямое ребро без
             # маршрута; в наиве/EXACT поведение прежнее (бит-паритет).
-            pts = ([(sx, sy)] + [(w[1], w[0]) for w in waypoints]
-                   + [(tx, ty)])
-            for bbox in obstacle_bboxes:
-                for a, b in zip(pts, pts[1:]):
-                    if segment_intersects_bbox(a[0], a[1], b[0], b[1],
-                                               bbox, margin=2):
-                        return False
-            for bbox in reserve:
-                for a, b in zip(pts, pts[1:]):
-                    if segment_intersects_bbox(a[0], a[1], b[0], b[1],
-                                               bbox, margin=2):
-                        return False
+            # Судятся СЫРЫЕ нутра (ужатие 0.75, без клиренса и margin):
+            # браковка ловит настоящее прошивание, а не проход в коридоре.
+            for bbox in all_raw:
+                if self._path_pierces_bbox_inner(pts, bbox):
+                    return False
+        # Полигонные препятствия — по РЕАЛЬНОМУ контуру (во всех режимах):
+        # прошивание фигуры бракует маршрут, проход над пустым углом её
+        # bbox легален (см. _node_poly_contour/_seg_pierces_polygon).
+        for pseg in poly_obs:
+            for a, b in zip(pts, pts[1:]):
+                if _seg_pierces_polygon(a[0], a[1], b[0], b[1], pseg):
+                    return False
         edge_data['waypoints'] = waypoints
         edge_data['_auto_route'] = True
         edge_data['_src_side'] = src_side
@@ -1237,14 +1315,26 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         труба легально живёт внутри рамки своей станции (репро
         edge_75 -> node_28). Такому концу отдаётся вырожденная рамка
         вокруг точки посадки; остальным — обычный bbox."""
-        from modules.graph.core import seating
-
         node = self.nodes.get(node_id) or {}
-        seg = node.get('segmentation')
-        if seg and isinstance(seg, list) and len(seg) >= 6 \
-                and node.get('class_name') not in seating.FIXED_SIZES:
+        if _node_poly_contour(node) is not None:
             return [px - 1.0, py - 1.0, px + 1.0, py + 1.0]
         return self._get_node_bbox(node_id)
+
+    @staticmethod
+    def _path_pierces_bbox_inner(pts: list, bbox) -> bool:
+        """Полилиния [(x, y), ...] заходит в НУТРО сырого bbox (ужатие
+        0.75px — касание кромки и проход по коридору у грани легальны)."""
+        x1, y1, x2, y2 = bbox
+        ix1, iy1, ix2, iy2 = x1 + 0.75, y1 + 0.75, x2 - 0.75, y2 - 0.75
+        if ix1 >= ix2 or iy1 >= iy2:
+            return False
+        inner = (ix1, iy1, ix2, iy2)
+        for a, b in zip(pts, pts[1:]):
+            # margin=0: дефолтный margin=2 раздувал бы нутро обратно
+            if segment_intersects_bbox(a[0], a[1], b[0], b[1], inner,
+                                       margin=0):
+                return True
+        return False
 
     @classmethod
     def _seg_conflicts_bbox(cls, ax: float, ay: float,
@@ -1279,22 +1369,50 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
             return gap < c and overlap > m
         return False
 
+    @classmethod
+    def _seg_conflicts_shape(cls, ax: float, ay: float,
+                             bx: float, by: float, shape) -> bool:
+        """Конфликт сегмента с ФОРМОЙ чужого узла: ('rect', bbox) |
+        ('poly', контур).
+
+        Прямоугольник — прежний _seg_conflicts_bbox (прошивание нутра ИЛИ
+        прижатие-hug). Полигон без скина — только прошивание РЕАЛЬНОГО
+        контура (_seg_pierces_polygon): hug-прижатие к полигону НЕ судится —
+        прижатие к габариту было бы ложным (труба легально живёт над пустым
+        углом bbox), а мелкая пластика зазоров у самого контура — территория
+        раскладки (Э7-b/libavoid), не drag-роутера."""
+        kind, geom = shape
+        if kind == 'poly':
+            return _seg_pierces_polygon(ax, ay, bx, by, geom)
+        return cls._seg_conflicts_bbox(ax, ay, bx, by, geom)
+
     def _straight_conflicts_obstacle(self, edge_data: dict,
                                      sx: float, sy: float,
                                      tx: float, ty: float) -> bool:
-        """Прямой отрезок концов конфликтует с чужим боксом
-        (_seg_conflicts_bbox: прошивание нутра ИЛИ прижатие ближе
-        ROUTE_CLEARANCE с перекрытием вдоль грани)?
+        """Прямой отрезок концов конфликтует с чужой формой?
+
+        Прямоугольные узлы — _seg_conflicts_bbox (прошивание нутра ИЛИ
+        прижатие ближе ROUTE_CLEARANCE с перекрытием вдоль грани).
+        Полигонные без скина — прошивание РЕАЛЬНОГО контура, без hug
+        (см. _seg_conflicts_shape).
 
         На кадре drag берётся кэш жеста (O(N) дешёвый bbox-отсев), вне
         жеста (add_edge) — все узлы."""
         src_id, tgt_id = edge_data['source'], edge_data['target']
         ctx = self._drag_route_ctx
-        nodes_iter = ctx['nodes'] if ctx is not None else \
-            [(nid, None) for nid in self.nodes]
         pad = self.ROUTE_CLEARANCE
         lo_x, hi_x = min(sx, tx) - pad, max(sx, tx) + pad
         lo_y, hi_y = min(sy, ty) - pad, max(sy, ty) + pad
+        if ctx is not None:
+            nodes_iter, polys_iter = ctx['nodes'], ctx['polys']
+        else:
+            nodes_iter, polys_iter = [], []
+            for nid, node in self.nodes.items():
+                seg = _node_poly_contour(node)
+                if seg is not None:
+                    polys_iter.append((nid, seg))
+                else:
+                    nodes_iter.append((nid, None))
         for nid, bbox in nodes_iter:
             if nid == src_id or nid == tgt_id:
                 continue
@@ -1305,12 +1423,28 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                 continue
             if self._seg_conflicts_bbox(sx, sy, tx, ty, bb):
                 return True
+        for nid, seg in polys_iter:
+            if nid == src_id or nid == tgt_id:
+                continue
+            if seg is None:                        # узел едет — контур свежий
+                seg = (self.nodes.get(nid) or {}).get('segmentation')
+            if seg and _seg_pierces_polygon(sx, sy, tx, ty, seg):
+                return True
         return False
 
     def _route_gesture_inputs(self, edge_data: dict,
                               sx: float, sy: float,
-                              tx: float, ty: float) -> tuple[list, list, list]:
-        """Входы route_edge_v2: (obstacle_bboxes, existing_paths, reserve).
+                              tx: float, ty: float
+                              ) -> tuple[list, list, list, list]:
+        """Входы route_edge_v2 + контуры: (obstacle_bboxes, existing_paths,
+        reserve, poly_contours).
+
+        Полигонные узлы без скина (_node_poly_contour) в obstacle_bboxes НЕ
+        попадают ни в одном режиме — их габарит почти вдвое больше фигуры и
+        закрывал бы пол-листа (роутер отвергал бы легальные маршруты над
+        пустым углом bbox; репро node_28/звезда). Вместо bbox их плоские
+        контуры возвращаются четвёртым списком — победивший маршрут судится
+        по реальной форме в _route_orthogonal.
 
         Вне жеста drag (_drag_route_ctx is None, путь add_edge) — полный
         наив: bbox всех узлов кроме концов + пути всех рёбер, порядок
@@ -1337,10 +1471,15 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         src_id, tgt_id = edge_data['source'], edge_data['target']
         ctx = self._drag_route_ctx
         if ctx is None:
-            obstacle_bboxes = [
-                self._get_node_bbox(nid) for nid in self.nodes
-                if nid != src_id and nid != tgt_id
-            ]
+            obstacle_bboxes, poly_contours = [], []
+            for nid, node in self.nodes.items():
+                if nid == src_id or nid == tgt_id:
+                    continue
+                seg = _node_poly_contour(node)
+                if seg is not None:
+                    poly_contours.append(seg)
+                else:
+                    obstacle_bboxes.append(self._get_node_bbox(nid))
             existing_paths = []
             for e in self.edges_data:
                 if e is edge_data:
@@ -1348,7 +1487,16 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                 pts = _edge_path_pts(e)
                 if pts:
                     existing_paths.append(pts)
-            return obstacle_bboxes, existing_paths, []
+            return obstacle_bboxes, existing_paths, [], poly_contours
+
+        poly_contours = []
+        for nid, seg in ctx['polys']:
+            if nid == src_id or nid == tgt_id:
+                continue
+            if seg is None:                        # узел едет — контур свежий
+                seg = (self.nodes.get(nid) or {}).get('segmentation')
+            if seg:
+                poly_contours.append(seg)
 
         if not ctx['bounded']:
             # -- EXACT: полные списки, порядок/значения — как наив --
@@ -1366,7 +1514,7 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                     pts = _edge_path_pts(e)
                 if pts:
                     existing_paths.append(pts)
-            return obstacles, existing_paths, []
+            return obstacles, existing_paths, [], poly_contours
 
         # -- BOUNDED: bbox-отсев прямоугольником маршрута + запас --
         # Прямоугольник накрывает и bbox КОНЦЕВЫХ узлов: route_edge_v2
@@ -1447,13 +1595,17 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
             scored_paths.sort(key=lambda t: (t[0], t[1]))
             scored_paths = scored_paths[:self.ROUTE_PATH_CAP]
             scored_paths.sort(key=lambda t: t[1])   # порядок списка рёбер
-        return kept, [t[2] for t in scored_paths], reserve
+        return kept, [t[2] for t in scored_paths], reserve, poly_contours
 
     def _build_drag_route_ctx(self, moving_ids: set) -> dict:
         """Э7-перф (а): кэш жеста — собирается ОДИН раз в start_drag_node.
 
-        nodes: [(nid, bbox|None)] в порядке self.nodes; None = узел едет,
-        его bbox читается свежим на каждом кадре. paths: [(edge, pts, bbox)]
+        nodes: [(nid, bbox|None)] в порядке self.nodes — только
+        ПРЯМОУГОЛЬНЫЕ формы; None = узел едет, его bbox читается свежим на
+        каждом кадре. polys: [(nid, контур|None)] — полигонные узлы без
+        скина (_node_poly_contour): в препятствия route_edge_v2 не идут,
+        конфликты судятся их РЕАЛЬНЫМ контуром; None = узел едет.
+        paths: [(edge, pts, bbox)]
         в порядке edges_data; pts=None = ребро живое (инцидентно едущим
         узлам или без концов) — путь строится на кадре. bounded: граф
         больше EXACT-порогов (см. _route_gesture_inputs); route_anchor:
@@ -1470,12 +1622,25 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         таскаемого узла: их маршрут рождён прижатием этого бокса в
         прошлом жесте — увод бокса обязан гасить его в прямую.
         """
-        node_entries = [
-            (nid, None if nid in moving_ids else self._get_node_bbox(nid))
-            for nid in self.nodes
-        ]
-        moving_bboxes = [bb for bb in (self._get_node_bbox(nid)
-                                       for nid in moving_ids) if bb]
+        node_entries, poly_entries = [], []
+        for nid, node in self.nodes.items():
+            seg = _node_poly_contour(node)
+            if seg is not None:
+                poly_entries.append((nid, None if nid in moving_ids else seg))
+            else:
+                node_entries.append(
+                    (nid, None if nid in moving_ids
+                     else self._get_node_bbox(nid)))
+        moving_shapes = []
+        for nid in moving_ids:
+            node = self.nodes.get(nid) or {}
+            seg = _node_poly_contour(node)
+            if seg is not None:
+                moving_shapes.append(('poly', seg))
+                continue
+            bb = self._get_node_bbox(nid)
+            if bb:
+                moving_shapes.append(('rect', bb))
         path_entries = []
         yield_cand = []
         yield_routed = set()
@@ -1492,12 +1657,13 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
             yield_cand.append((key, len(path_entries) - 1))
             if e.get('waypoints'):
                 sp, tp = e['source_point'], e['target_point']
-                if any(self._seg_conflicts_bbox(sp[1], sp[0], tp[1], tp[0],
-                                                bb) for bb in moving_bboxes):
+                if any(self._seg_conflicts_shape(sp[1], sp[0], tp[1], tp[0],
+                                                 sh) for sh in moving_shapes):
                     yield_routed.add(key)
-        bounded = (len(node_entries) - 2 > self.ROUTE_EXACT_MAX_OBS
+        bounded = (len(self.nodes) - 2 > self.ROUTE_EXACT_MAX_OBS
                    or len(path_entries) > self.ROUTE_EXACT_MAX_PATHS + 1)
-        return {'nodes': node_entries, 'paths': path_entries,
+        return {'nodes': node_entries, 'polys': poly_entries,
+                'paths': path_entries,
                 'bounded': bounded, 'route_anchor': {}, 'fail_anchor': {},
                 'yield': yield_cand, 'yield_routed': yield_routed}
 
@@ -1508,8 +1674,9 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         На каждом кадре drag (и одиночного, и batch) дополнительно
         обрабатываются НЕинцидентные «уступающие» рёбра — кандидаты из
         кэша жеста (ctx['yield']): авто-роутимые, чей ТЕКУЩИЙ путь
-        конфликтует (_seg_conflicts_bbox: прошивание ИЛИ прижатие) с
-        НОВЫМ bbox таскаемого узла; плюс уже переложенные этим жестом /
+        конфликтует (_seg_conflicts_shape: прошивание ИЛИ прижатие; для
+        полигонного узла — прошивание реального контура, без hug) с
+        НОВОЙ формой таскаемого узла; плюс уже переложенные этим жестом /
         засеянные на старте (yield_routed) — чтобы гасли обратно в
         прямую, когда конфликт исчез. Отбор дёшев: bbox-претест по кэшу
         жеста, кандидатов с конфликтом — единицы.
@@ -1527,8 +1694,14 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         ctx = self._drag_route_ctx
         if ctx is None or not ctx['yield']:
             return
-        boxes = [bb for bb in (self._get_node_bbox(nid)
-                               for nid in moved_ids) if bb]
+        boxes, shapes = [], []
+        for nid in moved_ids:
+            bb = self._get_node_bbox(nid)
+            if not bb:
+                continue
+            boxes.append(bb)          # union-претест — по габариту (консерв.)
+            seg = _node_poly_contour(self.nodes.get(nid) or {})
+            shapes.append(('poly', seg) if seg is not None else ('rect', bb))
         if not boxes:
             return
         pad = self.ROUTE_CLEARANCE + 1.0
@@ -1545,8 +1718,8 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                         or pbb[1] > uy2 or pbb[3] < uy1:
                     continue
                 if not any(
-                        self._seg_conflicts_bbox(a[0], a[1], b[0], b[1], bb)
-                        for bb in boxes
+                        self._seg_conflicts_shape(a[0], a[1], b[0], b[1], sh)
+                        for sh in shapes
                         for a, b in zip(pts, pts[1:])):
                     continue
             if not self._batch_drag and key not in self.drag_start_edge_points:
