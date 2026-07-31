@@ -75,10 +75,12 @@ def _pt_in_poly(px, py, pts):
     return inside
 
 
-def _poly_ports(seg):
-    """Середины прямых участков контура (соседние коллинеарные рёбра
-    сливаются в один участок), длиной >= MIN_POLY_EDGE; нормаль — наружу
-    (проба точкой: внутрь контура => перевернуть)."""
+def poly_runs(seg):
+    """ПРЯМЫЕ участки контура (соседние коллинеарные рёбра сливаются):
+    [(ax, ay, bx, by, nx, ny), ...] — концы участка + наружная нормаль
+    (проба точкой: внутрь контура => перевернуть). Участки любой длины;
+    порты из них строит `_poly_ports` (фильтр >= MIN_POLY_EDGE),
+    распределение концов по участку — движок редактора (Э2b+)."""
     pts = [(float(seg[i]), float(seg[i + 1]))
            for i in range(0, len(seg) - 1, 2)]
     if len(pts) >= 2 and pts[0] == pts[-1]:
@@ -105,7 +107,7 @@ def _poly_ports(seg):
         if not _collinear(_dir(i - 1), _dir(i)):
             start = i
             break
-    ports = []
+    runs = []
     i = 0
     while i < n:
         j = i
@@ -115,13 +117,23 @@ def _poly_ports(seg):
         bx, by = pts[(start + j + 1) % n]
         dx, dy = bx - ax, by - ay
         length = math.hypot(dx, dy)
-        if length >= MIN_POLY_EDGE:
-            mx, my = (ax + bx) / 2.0, (ay + by) / 2.0
+        if length > 1e-9:
             nx, ny = dy / length, -dx / length
-            if _pt_in_poly(mx + nx * 2.0, my + ny * 2.0, pts):
+            if _pt_in_poly((ax + bx) / 2.0 + nx * 2.0,
+                           (ay + by) / 2.0 + ny * 2.0, pts):
                 nx, ny = -nx, -ny
-            ports.append((mx, my, nx, ny, False))
+            runs.append((ax, ay, bx, by, nx, ny))
         i = j + 1
+    return runs
+
+
+def _poly_ports(seg):
+    """Середины прямых участков контура длиной >= MIN_POLY_EDGE
+    (участки и нормали — `poly_runs`)."""
+    ports = []
+    for ax, ay, bx, by, nx, ny in poly_runs(seg):
+        if math.hypot(bx - ax, by - ay) >= MIN_POLY_EDGE:
+            ports.append(((ax + bx) / 2.0, (ay + by) / 2.0, nx, ny, False))
     return ports
 
 

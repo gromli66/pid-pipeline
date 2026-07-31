@@ -115,3 +115,50 @@ def test_manual_route_edges_do_not_occupy_slots():
                                 100.0, 15.0, try_slack=False,
                                 snap_threshold=12, node_edges=[e1, e2])
     assert (x, y) == (40.0, 20.0)
+
+
+def _poly_node():
+    # квадратный контур 0..60, класс вне FIXED_SIZES — контурная посадка
+    return {"id": "p", "type": "equipment", "class_name": "unknow",
+            "centroid": [30.0, 30.0], "bbox": [0, 0, 60, 60],
+            "segmentation": [0, 0, 60, 0, 60, 60, 0, 60]}
+
+
+def test_poly_far_from_vertex_keeps_as_is():
+    # «как получились»: конец на участке дальше отступа — бит-в-бит
+    n = _poly_node()
+    x, y = edit_engine.seat_end(n, None, {"id": "e"}, "s", [25.0, 60.0],
+                                100.0, 25.0, try_slack=False,
+                                snap_threshold=12, node_edges=[])
+    assert (x, y) == (60.0, 25.0)
+
+
+def test_poly_end_pushed_off_vertex():
+    # решение 2026-08-01: конец в 2px от вершины сдвигается на отступ 6px
+    n = _poly_node()
+    x, y = edit_engine.seat_end(n, None, {"id": "e"}, "s", [2.0, 60.0],
+                                100.0, 2.0, try_slack=False,
+                                snap_threshold=12, node_edges=[])
+    assert (x, y) == (60.0, 6.0)
+
+
+def test_poly_two_edges_one_run_distributed():
+    # две трубы в один прямой участок — не в одну точку: симметрично
+    # вокруг середины участка, шаг min(18, 60/3)=18
+    n = _poly_node()
+    e1 = {"id": "e1", "source": "p", "target": "c1",
+          "source_point": [28.0, 60.0], "target_point": [28.0, 120.0],
+          "waypoints": []}
+    e2 = {"id": "e2", "source": "p", "target": "c2",
+          "source_point": [28.0, 60.0], "target_point": [32.0, 120.0],
+          "waypoints": []}
+    edges = [e1, e2]
+    x1, y1 = edit_engine.seat_end(n, None, e1, "s", e1["source_point"],
+                                  120.0, 28.0, try_slack=False,
+                                  snap_threshold=12, node_edges=edges)
+    e1["source_point"] = [y1, x1]
+    x2, y2 = edit_engine.seat_end(n, None, e2, "s", e2["source_point"],
+                                  120.0, 32.0, try_slack=False,
+                                  snap_threshold=12, node_edges=edges)
+    assert x1 == x2 == 60.0
+    assert (y1, y2) == (21.0, 39.0)           # 30 ± 18/2, порядок по ref

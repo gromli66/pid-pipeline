@@ -27,8 +27,12 @@
 """
 from __future__ import annotations
 
+import math
+
 from . import ports as port_model
 from . import seating
+
+VERTEX_MARGIN = 6.0   # px: конец не ближе к вершине контура (реш. 2026-08-01)
 
 
 _NORMAL_SIDE = {(1.0, 0.0): "R", (-1.0, 0.0): "L",
@@ -101,6 +105,78 @@ def _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y):
     return slots[idx][0], slots[idx][1]
 
 
+def _contour_seated(node) -> bool:
+    from . import edit_checks
+    return edit_checks._contour_seated(node)
+
+
+def _poly_adjust(node, node_edges, edge_data, px, py, ref_x, ref_y):
+    """Решение заказчика 2026-08-01: посадка на контур «как получились», НО
+    (а) не ближе VERTEX_MARGIN к вершине участка; (б) несколько труб в один
+    прямой участок распределяются вдоль него (шаг min(SLOT_PITCH,
+    длина/(k+1)), симметрично вокруг середины участка), а не в одну точку.
+
+    Членство и порядок — как у рамочных слотов (`_slot_seat`): авто-рёбра
+    узла с концами на ТОМ ЖЕ участке, порядок по проекции дальних
+    ориентиров на направление участка, тай-брейк id."""
+    seg = node.get("segmentation")
+    if not seg:
+        return px, py
+    nid = node.get("id")
+    for ax, ay, bx, by, _nx, _ny in port_model.poly_runs(seg):
+        dx, dy = bx - ax, by - ay
+        length = math.hypot(dx, dy)
+        if length < 1e-9:
+            continue
+        t = ((px - ax) * dx + (py - ay) * dy) / (length * length)
+        qx, qy = ax + t * dx, ay + t * dy
+        if math.hypot(px - qx, py - qy) > 0.75 or not -0.01 <= t <= 1.01:
+            continue
+
+        def _t_of(rx, ry):
+            return ((rx - ax) * dx + (ry - ay) * dy) / length
+
+        entries = []
+        for e in node_edges or []:
+            if e is edge_data or e.get("_manual_route"):
+                continue
+            if (e.get("source") or e.get("from")) == nid:
+                end_key = "source_point"
+            elif (e.get("target") or e.get("to")) == nid:
+                end_key = "target_point"
+            else:
+                continue
+            p = e.get(end_key)
+            if p is None:
+                continue
+            ex, ey = float(p[1]), float(p[0])
+            tt = ((ex - ax) * dx + (ey - ay) * dy) / (length * length)
+            if not -0.01 <= tt <= 1.01 \
+                    or math.hypot(ex - (ax + tt * dx),
+                                  ey - (ay + tt * dy)) > 0.75:
+                continue
+            wps = e.get("waypoints") or []
+            refp = (wps[0] if end_key == "source_point" else wps[-1]) if wps \
+                else e.get("target_point" if end_key == "source_point"
+                           else "source_point")
+            if refp is None:
+                continue
+            entries.append((_t_of(float(refp[1]), float(refp[0])),
+                            str(e.get("id")), False))
+        if not entries:
+            m = min(VERTEX_MARGIN, length / 2.0)
+            s = min(max(t * length, m), length - m)
+            return ax + (s / length) * dx, ay + (s / length) * dy
+        entries.append((_t_of(ref_x, ref_y), str(edge_data.get("id")), True))
+        entries.sort(key=lambda r: (r[0], r[1]))
+        idx = next(i for i, r in enumerate(entries) if r[2])
+        k = len(entries)
+        pitch = min(port_model.SLOT_PITCH, length / (k + 1))
+        s = length / 2.0 + (idx - (k - 1) / 2.0) * pitch
+        return ax + (s / length) * dx, ay + (s / length) * dy
+    return px, py
+
+
 def seat_end(node, other_node, edge_data, role, cur, ref_x, ref_y,
              try_slack, snap_threshold, node_edges=None):
     """Посадка конца ребра на узел — единые ворота (Э2a/Э2b).
@@ -154,7 +230,14 @@ def seat_end(node, other_node, edge_data, role, cur, ref_x, ref_y,
                 seating.node_anchor(node, ref_x, ref_y, lock), lock):
             lock = None
     if lock:
-        return seating.node_anchor(node, ref_x, ref_y, lock)
-    return port_model.choose_port(
-        node, (cur[1], cur[0]) if cur else None, (ref_x, ref_y),
-        float(snap_threshold))
+        pt = seating.node_anchor(node, ref_x, ref_y, lock)
+    else:
+        pt = port_model.choose_port(
+            node, (cur[1], cur[0]) if cur else None, (ref_x, ref_y),
+            float(snap_threshold))
+    if _contour_seated(node):
+        # решение 2026-08-01: отступ от вершин контура + распределение
+        # нескольких труб по прямому участку («не в одну точку»)
+        return _poly_adjust(node, node_edges, edge_data, pt[0], pt[1],
+                            ref_x, ref_y)
+    return pt
