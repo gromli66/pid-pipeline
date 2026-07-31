@@ -61,11 +61,11 @@ BaseGraphEditor          — рендеринг, zoom, hit testing, selection, e
 
 **AdvancedGraphEditor** (`ui/editors/advanced_graph_editor.py`, ~1940 строк) — полный редактор для production-валидации. Добавляет:
 
-- **L-route routing:** переопределяет `add_edge()` — перпендикулярные connection points через `connect_bbox_bbox` / `connect_bbox_polygon` / `connect_polygon_polygon`, автоматическая прокладка waypoints через `route_edge_v2()` с обходом obstacle bboxes
+- **Создание рёбер:** переопределяет `add_edge()` — концы садит КАНОН посадки `modules/graph/core/seating.reseat_edge` (Э1: коннектор → центроид, FIXED_SIZES-скин → граница content-rect, полигон → луч в контур, bbox → грань; тот же модуль, что сажает выход раскладки). Старые `connect_bbox_bbox`/… из `graph_geometry.py` в этом классе больше не используются — их единственный живой вызывающий `contour_editor.py` (растровые координаты, канон холста там неприменим)
 - **Edge building with waypoints:** `add_edge_with_waypoints()` — ручная прокладка ломаной (Ctrl+Click промежуточных точек)
-- **Optimize:** `optimize_edge()` — пересчёт connection points с сохранением оси; `optimize_all_edges()` — batch
+- **Optimize:** `optimize_edge()` — концы и ось от канона `seating` (Э1); `optimize_all_edges()` — batch; рёбра с `_manual_route` не пересаживаются
 - **Perpendicularity:** `edge_perp_scores` dict, `_before_edge_draw()` вычисляет score; неперпендикулярные рёбра — оранжевые, утолщённые
-- **Drag:** `start_drag_node()` / `drag_node_to()` / `end_drag_node()` — одиночный и batch (multi-select); `_batch_move_fast()` для группового drag без routing; `_recalculate_edge()` для полного пересчёта с distribute + route
+- **Drag:** `start_drag_node()` / `drag_node_to()` / `end_drag_node()` — одиночный и batch (multi-select); `_batch_move_fast()` для группового drag без routing; `_recalculate_edge()` — посадка концов каноном `seating` (Э1) + маршрут `route_edge_v2`
 - **Multi-select:** `selected_nodes` + `selected_edges` sets; `toggle_select_node/edge()`; rubber band (Shift+ЛКМ); `batch_delete()` — snapshot-based undo
 - **Waypoints:** показ/скрытие маркеров; `find_waypoint_at()`, drag/add/delete waypoint; endpoint markers — drag endpoint'а переключает сторону bbox
 - **Grid:** `toggle_grid()`, `snap_to_grid()`, `_compute_grid_size()` (по медиане ширины bbox'ов)

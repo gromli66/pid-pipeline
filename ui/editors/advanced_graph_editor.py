@@ -42,8 +42,6 @@ from ui.editors.graph_geometry import (
     bbox_exit_side, bbox_side_midpoint, closest_bbox_side,
     project_point_to_bbox_border, project_point_to_polygon_border,
     get_node_geometry, compute_edge_perpendicularity,
-    connect_bbox_bbox, connect_bbox_polygon, connect_polygon_polygon,
-    connect_point_bbox, connect_point_polygon,
     node_orientation_by_edges,
 )
 from ui.editors.edge_routing import route_edge as route_edge_v2, segment_intersects_bbox
@@ -521,9 +519,13 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
     # =================================================================
 
     def add_edge(self, node_a: str, node_b: str) -> bool:
-        """Добавить ребро с ПЕРПЕНДИКУЛЯРНЫМ соединением + L-route.
+        """Добавить ребро; посадка концов — канон `modules/graph/core/seating`.
 
-        Логика из оригинального graph_editor.py:1380-1530.
+        Э1-хвост: прежний дубль-контракт (connect_* из graph_geometry) заменён
+        каноном reseat_edge — коннектор = жёстко центроид, FIXED_SIZES-скин =
+        граница _skin_content_rect (и приоритетнее полигона), полигон = луч в
+        контур, bbox = грань. Семантика инструмента прежняя: ребро создаётся
+        без waypoints, маршрут не строится.
         """
         if node_a == node_b:
             self.update_status("Нельзя соединить узел с самим собой")
@@ -534,59 +536,15 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
             self.update_status(f"Ребро уже существует: {node_a} — {node_b}")
             return False
 
-        src = self.nodes[node_a]
-        tgt = self.nodes[node_b]
+        from modules.graph.core import seating
 
-        src_cx, src_cy = src['centroid'][1], src['centroid'][0]
-        tgt_cx, tgt_cy = tgt['centroid'][1], tgt['centroid'][0]
-
-        src_bbox = src.get('bbox')
-        tgt_bbox = tgt.get('bbox')
-        src_poly = src.get('segmentation')
-        tgt_poly = tgt.get('segmentation')
-
-        src_has_bbox = src_bbox and len(src_bbox) == 4
-        tgt_has_bbox = tgt_bbox and len(tgt_bbox) == 4
-        src_has_poly = src_poly and isinstance(src_poly, list) and len(src_poly) >= 6
-        tgt_has_poly = tgt_poly and isinstance(tgt_poly, list) and len(tgt_poly) >= 6
-
-        src_type = src.get('type', 'connector')
-        tgt_type = tgt.get('type', 'connector')
-        src_is_point = src_type == 'connector' and not src_has_bbox and not src_has_poly
-        tgt_is_point = tgt_type == 'connector' and not tgt_has_bbox and not tgt_has_poly
-
-        src_x, src_y, tgt_x, tgt_y = None, None, None, None
-        connection_type = "centroid"
-
-        if src_is_point and tgt_is_point:
-            src_x, src_y = src_cx, src_cy
-            tgt_x, tgt_y = tgt_cx, tgt_cy
-            connection_type = "point_point"
-        elif src_is_point:
-            if tgt_has_poly:
-                (src_x, src_y), (tgt_x, tgt_y), _ = connect_point_polygon((src_cx, src_cy), tgt_poly)
-            elif tgt_has_bbox:
-                (src_x, src_y), (tgt_x, tgt_y), connection_type = connect_point_bbox((src_cx, src_cy), tgt_bbox)
-        elif tgt_is_point:
-            if src_has_poly:
-                (tgt_x, tgt_y), (src_x, src_y), _ = connect_point_polygon((tgt_cx, tgt_cy), src_poly)
-            elif src_has_bbox:
-                (tgt_x, tgt_y), (src_x, src_y), connection_type = connect_point_bbox((tgt_cx, tgt_cy), src_bbox)
-        elif src_has_bbox and tgt_has_bbox and not src_has_poly and not tgt_has_poly:
-            (src_x, src_y), (tgt_x, tgt_y), connection_type = connect_bbox_bbox(src_bbox, tgt_bbox)
-        elif src_has_bbox and tgt_has_poly:
-            (src_x, src_y), (tgt_x, tgt_y), _ = connect_bbox_polygon(src_bbox, tgt_poly)
-        elif src_has_poly and tgt_has_bbox:
-            (tgt_x, tgt_y), (src_x, src_y), _ = connect_bbox_polygon(tgt_bbox, src_poly)
-        elif src_has_poly and tgt_has_poly:
-            (src_x, src_y), (tgt_x, tgt_y), _ = connect_polygon_polygon(src_poly, tgt_poly)
-        elif src_has_bbox and tgt_has_bbox:
-            (src_x, src_y), (tgt_x, tgt_y), connection_type = connect_bbox_bbox(src_bbox, tgt_bbox)
-
-        if src_x is None or tgt_x is None:
-            tgt_x, tgt_y = self.get_connection_point(node_b, src_cx, src_cy)
-            src_x, src_y = self.get_connection_point(node_a, tgt_x, tgt_y)
-            connection_type = "centroid_fallback"
+        probe = {'source': node_a, 'target': node_b,
+                 'source_point': None, 'target_point': None, 'waypoints': []}
+        seating.reseat_edge(self.nodes, probe)
+        sp, tp = probe['source_point'], probe['target_point']
+        src_x, src_y = sp[1], sp[0]
+        tgt_x, tgt_y = tp[1], tp[0]
+        connection_type = "seating"
 
         edge_data = self.model.create_edge_data(
             node_a, node_b,

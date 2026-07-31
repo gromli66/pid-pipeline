@@ -16,7 +16,9 @@ ALLOWLIST, и для них тест УТВЕРЖДАЕТ расхождение
      канон для него считается на ЕГО ЖЕ выходном состоянии узлов);
   5. BaseGraphEditor.get_connection_point  — загрузка/прочее;
   6. graph_to_fxml.get_line_endpoints      — экспорт FXML (try-import: модуль
-     чужой, при неимпортируемости — skip с пометкой).
+     чужой, при неимпортируемости — skip с пометкой);
+  7. AdvancedGraphEditor.add_edge          — СОЗДАНИЕ нового ребра (хвост Э1:
+     рёбер в графе ещё нет, инструмент сажает концы с нуля).
 
 Почему фикстура рукописная, а не подмножество tests/fixtures/layout/synth_med.json
 (предпочтение §4 T-B): в synth_med НИ ОДНОГО узла с segmentation (0 из 208) и
@@ -79,6 +81,7 @@ IMPLS = (
     "auto_fix_graph",
     "get_connection_point",
     "fxml_endpoints",
+    "add_edge",
 )
 
 # ── ALLOWLIST известных расхождений ──────────────────────────────────────
@@ -287,6 +290,20 @@ def results(qapp, tmp_path_factory):
             c = _end_xy(e, role)
             fx[case] = (math.hypot(m[0] - c[0], m[1] - c[1]), tuple(m), c)
         out["fxml_endpoints"] = fx
+
+    # 7. add_edge — создание нового ребра: старт БЕЗ рёбер (инструмент
+    #    отказывается добавлять существующее), пары — те же, что в фикстуре.
+    #    Созданным рёбрам возвращаются канонические id — для _diverge.
+    empty = deepcopy(fixture)
+    empty["links"] = []
+    ed = _editor(tmp_path_factory.mktemp("addedge"), empty)
+    for e in fixture["links"]:
+        assert ed.add_edge(e["source"], e["target"])
+    st = _state_from_editor(ed)
+    eid_by_pair = {(e["source"], e["target"]): e["id"] for e in fixture["links"]}
+    for e in st["links"]:
+        e["id"] = eid_by_pair[(e["source"], e["target"])]
+    out["add_edge"] = _diverge(st)
 
     return out
 
