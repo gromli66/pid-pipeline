@@ -1518,6 +1518,62 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         ax, ay = station if station else seating.node_anchor(node, ref_x, ref_y, lock)
         edge_data[point_key] = [ay, ax]
 
+        # Side-flip дальнего конца (скрины заказчика 2026-07-31): adjusting=End
+        # держит дальний конец байт-в-байт, но когда сдвинутый узел ПЕРЕСЁК
+        # соседа, прежняя грань стала изнаночной — труба прошивала бы свой же
+        # дальний узел. Смена стороны здесь — «нужда» (side_kept судит смену
+        # «БЕЗ нужды»): дальний конец пересаживается каноном на обращённую
+        # грань. Блок стоит ДО роутинга: маршрут ниже строится уже от
+        # правильной грани В ЭТОМ ЖЕ кадре (иначе на отпускании оставалась
+        # диагональ сквозь чужие блоки — второй скрин).
+        far_id = tgt_id if src_id == moved_node_id else src_id
+        far_node = self.nodes.get(far_id)
+        fp = edge_data.get(far_key)
+        if (far_node is not None and fp is not None
+                and not edge_data.get('_manual_route')):
+            wps_now = edge_data.get('waypoints') or []
+            far_adj = ((wps_now[-1] if far_key == 'target_point' else wps_now[0])
+                       if wps_now else edge_data[point_key])
+            if self._end_pierces_own_node(far_node, fp, far_adj):
+                fa_x, fa_y = far_adj[1], far_adj[0]
+                flock = seating._seg_lock((fp[1], fp[0]), (fa_x, fa_y))
+                if flock is None:
+                    flock = seating.straight_slack_lock(far_node, node,
+                                                        fa_x, fa_y)
+                fstation = seating._poly_even_seat(
+                    far_node, edge_data,
+                    's' if far_key == 'source_point' else 't', (fa_x, fa_y))
+                fx, fy = fstation if fstation else seating.node_anchor(
+                    far_node, fa_x, fa_y, flock)
+                edge_data[far_key] = [fy, fx]
+                if routable:
+                    # авто-маршрут строился от старой грани — сброс; роутинг
+                    # ниже перестроит его от новой конфигурации на этом кадре
+                    edge_data['waypoints'] = []
+                    edge_data.pop('_auto_route', None)
+                    reuse = False
+                    skip_route = False
+                    route_alive = False
+                    if self._drag_route_ctx is not None:
+                        self._drag_route_ctx['fail_anchor'].pop(edge_key, None)
+                        self._drag_route_ctx['route_anchor'].pop(edge_key, None)
+                if not (edge_data.get('waypoints') or []):
+                    # досадить ближний конец по новой грани дальнего
+                    nref = edge_data[far_key]
+                    nlock = seating._seg_lock(
+                        (edge_data[point_key][1], edge_data[point_key][0]),
+                        (nref[1], nref[0]))
+                    if nlock is None:
+                        nlock = seating.straight_slack_lock(
+                            node, far_node, nref[1], nref[0])
+                    nstation = seating._poly_even_seat(
+                        node, edge_data,
+                        's' if point_key == 'source_point' else 't',
+                        (nref[1], nref[0]))
+                    ax, ay = nstation if nstation else seating.node_anchor(
+                        node, nref[1], nref[0], nlock)
+                    edge_data[point_key] = [ay, ax]
+
         if routable and not reuse and not skip_route \
                 and self._route_orthogonal(edge_data, alive=route_alive):
             # Э6/Э7-a: увод больше слабины и порога — ортогональный маршрут;
@@ -1550,53 +1606,6 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                     node_now = self.nodes[moved_node_id]
                     self._drag_route_ctx['fail_anchor'][edge_key] = (
                         node_now['centroid'][1], node_now['centroid'][0])
-
-        # Side-flip дальнего конца (скрин заказчика 2026-07-31): adjusting=End
-        # держит дальний конец байт-в-байт, но когда сдвинутый узел ПЕРЕСЁК
-        # соседа, прежняя грань дальнего конца становится изнаночной — труба
-        # прошивает свой же дальний узел насквозь. Смена стороны здесь —
-        # «нужда» (side_kept плана судит смену «БЕЗ нужды»): дальний конец
-        # пересаживается каноном на обращённую грань, маршрут сбрасывается,
-        # ближний конец досаживается по новой геометрии. Расчёт одинаков на
-        # кадре и отпускании — паритет предпросмотра сохранён.
-        far_id = tgt_id if src_id == moved_node_id else src_id
-        far_node = self.nodes.get(far_id)
-        fp = edge_data.get(far_key)
-        if (far_node is not None and fp is not None
-                and not edge_data.get('_manual_route')):
-            wps_now = edge_data.get('waypoints') or []
-            far_adj = ((wps_now[-1] if far_key == 'target_point' else wps_now[0])
-                       if wps_now else edge_data[point_key])
-            if self._end_pierces_own_node(far_node, fp, far_adj):
-                fa_x, fa_y = far_adj[1], far_adj[0]
-                flock = seating._seg_lock((fp[1], fp[0]), (fa_x, fa_y))
-                if flock is None:
-                    flock = seating.straight_slack_lock(far_node, node,
-                                                        fa_x, fa_y)
-                fstation = seating._poly_even_seat(
-                    far_node, edge_data,
-                    's' if far_key == 'source_point' else 't', (fa_x, fa_y))
-                fx, fy = fstation if fstation else seating.node_anchor(
-                    far_node, fa_x, fa_y, flock)
-                edge_data[far_key] = [fy, fx]
-                # маршрут строился от старой грани — сбросить; следующий
-                # кадр/жест отроутит заново от новой конфигурации
-                edge_data['waypoints'] = []
-                edge_data.pop('_auto_route', None)
-                nref = edge_data[far_key]
-                nlock = seating._seg_lock(
-                    (edge_data[point_key][1], edge_data[point_key][0]),
-                    (nref[1], nref[0]))
-                if nlock is None:
-                    nlock = seating.straight_slack_lock(node, far_node,
-                                                        nref[1], nref[0])
-                nstation = seating._poly_even_seat(
-                    node, edge_data,
-                    's' if point_key == 'source_point' else 't',
-                    (nref[1], nref[0]))
-                ax, ay = nstation if nstation else seating.node_anchor(
-                    node, nref[1], nref[0], nlock)
-                edge_data[point_key] = [ay, ax]
 
         self._update_edge_path(edge_key)
         if not edge_data.get('waypoints'):

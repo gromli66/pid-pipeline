@@ -462,6 +462,42 @@ def test_drag_across_neighbor_flips_far_side(qapp, tmp_path):
         assert not _seg_crosses_bbox(a, b, bb), f"сегмент {a}->{b} прошивает box_b"
 
 
+def test_drag_across_neighbor_offaxis_flips_and_routes_same_frame(qapp, tmp_path):
+    """Второй скрин заказчика: флип стороны должен происходить ДО роутинга —
+    иначе на отпускании оставалась голая диагональ. Узел уводится за соседа
+    И с оси: дальний конец перелетает на обращённую грань, и В ТОМ ЖЕ кадре
+    рождается ортогональный маршрут (без диагоналей, без прошивания)."""
+    nodes = [
+        {"id": "box_a", "type": "equipment", "centroid": [200.0, 140.0],
+         "bbox": [100.0, 160.0, 180.0, 240.0], "segmentation": None,
+         "class_id": 99, "class_name": "unknow", "degree": 1},
+        {"id": "box_b", "type": "equipment", "centroid": [240.0, 440.0],
+         "bbox": [400.0, 200.0, 480.0, 280.0], "segmentation": None,
+         "class_id": 99, "class_name": "unknow", "degree": 1},
+    ]
+    links = [{"id": "edge_1", "source": "box_a", "target": "box_b",
+              "source_point": [220.0, 180.0], "target_point": [220.0, 400.0],
+              "waypoints": []}]
+    g = _wrap(nodes, links)
+    ed = _editor(qapp, tmp_path, g)
+    key = ed.model.edge_key("box_a", "box_b")
+
+    # box_a уводится далеко вправо-вниз ЗА box_b, вне слабины (dy=110)
+    _drag(ed, "box_a", 620.0, 350.0)
+
+    e = ed.model.find_edge_data(key)
+    # дальний конец перелетел на обращённую (правую) грань box_b
+    assert e["target_point"][1] == pytest.approx(480.0, abs=0.5)
+    # ортогональный маршрут родился в том же жесте, диагоналей нет
+    assert e.get("waypoints"), "маршрут не родился — осталась диагональ"
+    pts = _full_path_xy(e)
+    _assert_orthogonal(pts)
+    bb = next(n for n in ed.model.graph_data["nodes"]
+              if n["id"] == "box_b")["bbox"]
+    for a, b in zip(pts, pts[1:]):
+        assert not _seg_crosses_bbox(a, b, bb), f"сегмент {a}->{b} прошивает box_b"
+
+
 def test_drag_almost_coaxial_pair_stays_straight_on_far_axis(qapp, tmp_path):
     """Слабина прямизны по ДАЛЬНЕМУ КОНЦУ (Э3): бокс сдвинут на 20px по Y
     относительно соседа, диапазоны рамок ещё пересекаются — ближний конец
