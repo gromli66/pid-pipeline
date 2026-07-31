@@ -433,6 +433,35 @@ def test_visual_ends_are_what_is_drawn(qapp, tmp_path):
     assert (last.x, last.y) == pytest.approx((vtp[1], vtp[0]))
 
 
+def test_drag_across_neighbor_flips_far_side(qapp, tmp_path):
+    """Скрин заказчика 2026-07-31: узел перетащен НА ДРУГУЮ СТОРОНУ соседа.
+    Жёсткое «дальний конец неприкосновенен» оставляло конец на изнаночной
+    грани — труба прошивала блок насквозь. Смена стороны здесь — «нужда»:
+    дальний конец перелетает на обращённую грань, труба прямая, прошивания
+    нет."""
+    g = _graph_two_boxes()
+    _assert_canonical(g)
+    ed = _editor(qapp, tmp_path, g)
+    key = ed.model.edge_key("box_a", "box_b")
+
+    # box_a (слева, bbox 100..180) уводится далеко ВПРАВО за box_b (400..480)
+    _drag(ed, "box_a", 600.0, 235.0)
+
+    e = ed.model.find_edge_data(key)
+    # дальний конец у box_b перелетел на ПРАВУЮ грань (x=480)
+    assert e["target_point"][1] == pytest.approx(480.0, abs=0.5)
+    # ближний конец — на ЛЕВОЙ грани уехавшего box_a (bbox теперь 560..640)
+    assert e["source_point"][1] == pytest.approx(560.0, abs=0.5)
+    # труба прямая по общей оси и ортогональная, прошивания box_b нет
+    assert e["source_point"][0] == pytest.approx(e["target_point"][0], abs=0.5)
+    pts = _full_path_xy(e)
+    _assert_orthogonal(pts)
+    bb = next(n for n in ed.model.graph_data["nodes"]
+              if n["id"] == "box_b")["bbox"]
+    for a, b in zip(pts, pts[1:]):
+        assert not _seg_crosses_bbox(a, b, bb), f"сегмент {a}->{b} прошивает box_b"
+
+
 def test_drag_almost_coaxial_pair_stays_straight_on_far_axis(qapp, tmp_path):
     """Слабина прямизны по ДАЛЬНЕМУ КОНЦУ (Э3): бокс сдвинут на 20px по Y
     относительно соседа, диапазоны рамок ещё пересекаются — ближний конец

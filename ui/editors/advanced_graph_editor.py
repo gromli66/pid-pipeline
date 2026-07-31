@@ -1551,6 +1551,53 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                     self._drag_route_ctx['fail_anchor'][edge_key] = (
                         node_now['centroid'][1], node_now['centroid'][0])
 
+        # Side-flip дальнего конца (скрин заказчика 2026-07-31): adjusting=End
+        # держит дальний конец байт-в-байт, но когда сдвинутый узел ПЕРЕСЁК
+        # соседа, прежняя грань дальнего конца становится изнаночной — труба
+        # прошивает свой же дальний узел насквозь. Смена стороны здесь —
+        # «нужда» (side_kept плана судит смену «БЕЗ нужды»): дальний конец
+        # пересаживается каноном на обращённую грань, маршрут сбрасывается,
+        # ближний конец досаживается по новой геометрии. Расчёт одинаков на
+        # кадре и отпускании — паритет предпросмотра сохранён.
+        far_id = tgt_id if src_id == moved_node_id else src_id
+        far_node = self.nodes.get(far_id)
+        fp = edge_data.get(far_key)
+        if (far_node is not None and fp is not None
+                and not edge_data.get('_manual_route')):
+            wps_now = edge_data.get('waypoints') or []
+            far_adj = ((wps_now[-1] if far_key == 'target_point' else wps_now[0])
+                       if wps_now else edge_data[point_key])
+            if self._end_pierces_own_node(far_node, fp, far_adj):
+                fa_x, fa_y = far_adj[1], far_adj[0]
+                flock = seating._seg_lock((fp[1], fp[0]), (fa_x, fa_y))
+                if flock is None:
+                    flock = seating.straight_slack_lock(far_node, node,
+                                                        fa_x, fa_y)
+                fstation = seating._poly_even_seat(
+                    far_node, edge_data,
+                    's' if far_key == 'source_point' else 't', (fa_x, fa_y))
+                fx, fy = fstation if fstation else seating.node_anchor(
+                    far_node, fa_x, fa_y, flock)
+                edge_data[far_key] = [fy, fx]
+                # маршрут строился от старой грани — сбросить; следующий
+                # кадр/жест отроутит заново от новой конфигурации
+                edge_data['waypoints'] = []
+                edge_data.pop('_auto_route', None)
+                nref = edge_data[far_key]
+                nlock = seating._seg_lock(
+                    (edge_data[point_key][1], edge_data[point_key][0]),
+                    (nref[1], nref[0]))
+                if nlock is None:
+                    nlock = seating.straight_slack_lock(node, far_node,
+                                                        nref[1], nref[0])
+                nstation = seating._poly_even_seat(
+                    node, edge_data,
+                    's' if point_key == 'source_point' else 't',
+                    (nref[1], nref[0]))
+                ax, ay = nstation if nstation else seating.node_anchor(
+                    node, nref[1], nref[0], nlock)
+                edge_data[point_key] = [ay, ax]
+
         self._update_edge_path(edge_key)
         if not edge_data.get('waypoints'):
             sp, tp = edge_data['source_point'], edge_data['target_point']
@@ -1561,6 +1608,30 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         else:
             self.edge_perp_scores[edge_key] = {'is_good': True, 'score': 1.0,
                                                'source_angle': 0}
+
+    @staticmethod
+    def _end_pierces_own_node(node, end_yx, adj_yx):
+        """Конец сидит на ИЗНАНОЧНОЙ грани: первый сегмент от конца уходит
+        внутрь прямоугольника посадки собственного узла. Полигонные узлы без
+        скина пропускаются (их bbox шире фигуры — проба внутри bbox легальна
+        над вырезом контура); коннекторы — тоже (rect нет)."""
+        from modules.graph.core import seating
+
+        seg = node.get('segmentation')
+        if seg and isinstance(seg, list) and len(seg) >= 6 \
+                and node.get('class_name') not in seating.FIXED_SIZES:
+            return False
+        rect = seating._anchor_rect(node)
+        if rect is None:
+            return False
+        x1, y1, x2, y2 = rect
+        ex, ey = end_yx[1], end_yx[0]
+        dx, dy = adj_yx[1] - ex, adj_yx[0] - ey
+        dist = math.hypot(dx, dy)
+        if dist < 1e-6:
+            return False
+        px, py = ex + dx / dist * 2.0, ey + dy / dist * 2.0   # 2px вдоль сегмента
+        return x1 + 0.25 < px < x2 - 0.25 and y1 + 0.25 < py < y2 - 0.25
 
     def _shift_bound_blocks(self, node_id: str, dx: float, dy: float):
         """Э3: текст-блоки, ПРИВЯЗАННЫЕ к узлу, едут за ним на ту же дельту
