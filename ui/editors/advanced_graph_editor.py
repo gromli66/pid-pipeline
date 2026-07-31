@@ -59,6 +59,37 @@ _NAPRAVLENIE_CLASS = "napravlenie"
 _NAPRAVLENIE_STROKE = "#333333"
 
 
+def _edge_path_pts(e: dict) -> list | None:
+    """Полный путь ребра в (x, y) для route_edge_v2 или None без концов."""
+    sp, tp = e.get('source_point'), e.get('target_point')
+    if not sp or not tp:
+        return None
+    return ([(sp[1], sp[0])]
+            + [(w[1], w[0]) for w in e.get('waypoints', [])]
+            + [(tp[1], tp[0])])
+
+
+def _pts_bbox(pts: list) -> tuple:
+    """Габарит полилинии (x1, y1, x2, y2)."""
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _seg_dist2(px: float, py: float,
+               ax: float, ay: float, bx: float, by: float) -> float:
+    """Квадрат расстояния точки (px,py) до отрезка (ax,ay)-(bx,by)."""
+    vx, vy = bx - ax, by - ay
+    d2 = vx * vx + vy * vy
+    if d2 <= 1e-9:
+        dx, dy = px - ax, py - ay
+        return dx * dx + dy * dy
+    t = ((px - ax) * vx + (py - ay) * vy) / d2
+    t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+    dx, dy = px - (ax + t * vx), py - (ay + t * vy)
+    return dx * dx + dy * dy
+
+
 class EditEdgeDashHandler(ModeHandler):
     """Режим переключения ПУНКТИРА ребра.
 
@@ -180,6 +211,15 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         self._batch_internal_edges: list = []
         self._batch_boundary_edges: list = []
         self._batch_bound_blocks: list = []
+        # Э6/Э7-a: рёбра, которые drag ведёт сам (на старте жеста без
+        # маршрута оператора: waypoints пусты ИЛИ несут флаг _auto_route,
+        # и не _manual_route) — только им разрешено рожать/перестраивать
+        # ортогональный маршрут на кадрах протяжки.
+        self._drag_routable_edges: set = set()
+        # Э7-перф: кэш жеста для входов route_edge_v2 (bbox'ы узлов + пути
+        # рёбер собираются один раз в start_drag_node; двигающиеся узлы и
+        # инцидентные им рёбра читаются свежими на каждом кадре).
+        self._drag_route_ctx: dict | None = None
         self._drag_prev_x: float = 0
         self._drag_prev_y: float = 0
 
@@ -552,8 +592,16 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         Э1-хвост: прежний дубль-контракт (connect_* из graph_geometry) заменён
         каноном reseat_edge — коннектор = жёстко центроид, FIXED_SIZES-скин =
         граница _skin_content_rect (и приоритетнее полигона), полигон = луч в
-        контур, bbox = грань. Семантика инструмента прежняя: ребро создаётся
-        без waypoints, маршрут не строится.
+        контур, bbox = грань.
+
+        Э6/Э7-a: если посаженное каноном ребро НЕ прямое (осевое расхождение
+        концов >= snap_threshold — гистерезис, см. _route_orthogonal), вместо
+        косой диагонали строится ортогональный L/Z-маршрут (требование
+        заказчика 2026-07-31); после маршрута концы пересаживаются повторным
+        reseat_edge — для ребра С waypoints канон сажает конец по оси
+        подводящего сегмента (_seg_lock), посадка остаётся каноничной
+        (матрица T-B tests/test_seat_contract.py). «Минимум пересечений труб»
+        здесь не реализуется — см. докстринг _route_orthogonal (Э7-b).
         """
         if node_a == node_b:
             self.update_status("Нельзя соединить узел с самим собой")
@@ -569,6 +617,9 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         probe = {'source': node_a, 'target': node_b,
                  'source_point': None, 'target_point': None, 'waypoints': []}
         seating.reseat_edge(self.nodes, probe)
+        if self._route_orthogonal(probe):
+            # канон для рёбер с waypoints: концы на оси подводящих сегментов
+            seating.reseat_edge(self.nodes, probe)
         sp, tp = probe['source_point'], probe['target_point']
         src_x, src_y = sp[1], sp[0]
         tgt_x, tgt_y = tp[1], tp[0]
@@ -579,6 +630,11 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
             source_point=[src_y, src_x],
             target_point=[tgt_y, tgt_x],
         )
+        if probe['waypoints']:
+            edge_data['waypoints'] = [list(wp) for wp in probe['waypoints']]
+            # Э7-c: авто-маршрут (не оператора) — следующий drag вправе
+            # перестраивать/гасить его (_drag_routable_edges).
+            edge_data['_auto_route'] = True
         edge_data['straight_line_distance'] = math.sqrt((tgt_x - src_x)**2 + (tgt_y - src_y)**2)
         edge_data['connection_type'] = connection_type
 
@@ -920,6 +976,9 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         from modules.graph.core import seating
 
         edge_data['waypoints'] = []
+        # Э7-c: маршрут пересобирается НЕ drag'ом (optimize/L-route/цикл
+        # сторон) — итог принадлежит оператору, авто-флаг снимается.
+        edge_data.pop('_auto_route', None)
         seating.reseat_edge(self.nodes, edge_data)
         sp, tp = edge_data['source_point'], edge_data['target_point']
         sx, sy = sp[1], sp[0]
@@ -991,6 +1050,385 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
             edge_data[point_key] = [py, px]
             edge_data[side_key] = closest_bbox_side(self._get_node_bbox(node_id), px, py)
 
+    def _seated_face(self, node_id: str, px: float, py: float,
+                     other_x: float, other_y: float) -> str:
+        """Сторона узла для route_edge_v2: грань, на которой сидит конец.
+
+        Коннектор — точка (конец == центроид == центр виртуального bbox),
+        грань вырождена: сторона берётся по направлению на другой конец
+        (bbox_exit_side). Прочие — ближайшая к посаженной точке грань bbox
+        (closest_bbox_side): stub роутера выходит перпендикулярно ИМЕННО
+        этой грани, подводящий сегмент ⟂ ей же — конец после пересадки по
+        оси сегмента остаётся на своей грани, а не уезжает лучом в угол.
+        """
+        node = self.nodes.get(node_id) or {}
+        bbox = self._get_node_bbox(node_id)
+        if node.get('type') == 'connector' or not node.get('bbox'):
+            cx, cy = node['centroid'][1], node['centroid'][0]
+            return bbox_exit_side(bbox, cx, cy, other_x, other_y)
+        return closest_bbox_side(bbox, px, py)
+
+    def _route_orthogonal(self, edge_data: dict, alive: bool = False) -> bool:
+        """Э6/Э7-a-лайт: ортогональный маршрут для НЕпрямого ребра.
+
+        Требование заказчика (2026-07-31): при переносе узла и создании
+        ребра «путь ортогональный, с минимальным пересечением труб, БЕЗ
+        пересечения узлов, минимальной длины» — вместо косой диагонали.
+        Маршрут строит СУЩЕСТВУЮЩИЙ route_edge_v2
+        (ui/editors/edge_routing.py): R1 ортогональность, R4 обход bbox
+        чужих узлов, R6 минимум поворотов, длина в скоринге.
+        ОГРАНИЧЕНИЕ: «минимум пересечений труб» в этом заходе НЕ
+        реализуется (это Э7-b, libavoid) — пересечения лишь штрафуются
+        скорингом R8 по текущим путям остальных рёбер.
+
+        Гистерезис (Э6/H7, два порога): расхождение осей посаженных концов
+        div = min(|dx|, |dy|):
+          * рождение — div >= snap_threshold (alive=False);
+          * гашение — div < snap_threshold / 2 (alive=True);
+          * между порогами существующее состояние сохраняется — маршрут у
+            границы не мигает «родился/умер» на соседних кадрах.
+        Порог — тот же snap_threshold = grid_size // 2 (деф. 12; после
+        _compute_grid_size — четверть медианной ширины бокса), которым
+        _recalculate_edge гасит waypoints у почти-соосных концов. Слабина
+        прямизны (straight_slack_lock, 805ccd4) при этом уже отработала у
+        вызывающего и для почти-соосной пары даёт min(...) == 0 —
+        приоритет прямой трубы над коленом обеспечен по построению.
+
+        Успешный маршрут помечается флагом ребра `_auto_route` (Э7-c):
+        авто-колено отличимо от waypoints оператора, следующий drag вправе
+        его перестраивать и гасить. Флаг снимает вызывающий, когда маршрут
+        гаснет (waypoints=[]); в graph_projection_sha он не попадает
+        (canvas_state._EDGE_KEYS — белый список), FXML его игнорирует.
+
+        Концы НЕ трогает (пишет только waypoints + кэши сторон) —
+        пересадка концов по осям подводящих сегментов остаётся
+        вызывающему. Возвращает True, если маршрут построен.
+        """
+        sp = edge_data.get('source_point')
+        tp = edge_data.get('target_point')
+        if not sp or not tp:
+            return False
+        sx, sy = sp[1], sp[0]
+        tx, ty = tp[1], tp[0]
+        threshold = (self.snap_threshold / 2.0) if alive \
+            else float(self.snap_threshold)
+        if min(abs(tx - sx), abs(ty - sy)) < threshold:
+            return False
+
+        src_id, tgt_id = edge_data['source'], edge_data['target']
+        src_bbox = self._get_node_bbox(src_id)
+        tgt_bbox = self._get_node_bbox(tgt_id)
+        src_side = self._seated_face(src_id, sx, sy, tx, ty)
+        tgt_side = self._seated_face(tgt_id, tx, ty, sx, sy)
+
+        obstacle_bboxes, existing_paths, reserve = self._route_gesture_inputs(
+            edge_data, sx, sy, tx, ty)
+
+        # BOUNDED-режим (Э7-перф, лимит U-кандидатов): роутим по ближним
+        # препятствиям; если победивший маршрут прошивает препятствие из
+        # резерва — оно доносится в набор и маршрут перестраивается
+        # (ленивое доуточнение, детерминировано, <= ROUTE_AUGMENT_ITERS
+        # повторов). В наиве/EXACT reserve пуст — ровно один вызов.
+        for _ in range(1 + self.ROUTE_AUGMENT_ITERS):
+            waypoints = route_edge_v2(
+                src_conn=(sx, sy), tgt_conn=(tx, ty),
+                src_side=src_side, tgt_side=tgt_side,
+                src_bbox=src_bbox, tgt_bbox=tgt_bbox,
+                obstacle_bboxes=obstacle_bboxes,
+                existing_edge_paths=existing_paths,
+            )
+            if not reserve or not waypoints:
+                break
+            pts = ([(sx, sy)] + [(w[1], w[0]) for w in waypoints]
+                   + [(tx, ty)])
+            violated, still = [], []
+            for bbox in reserve:
+                hit = False
+                for a, b in zip(pts, pts[1:]):
+                    if segment_intersects_bbox(a[0], a[1], b[0], b[1],
+                                               bbox, margin=2):
+                        hit = True
+                        break
+                (violated if hit else still).append(bbox)
+            if not violated:
+                break
+            obstacle_bboxes = obstacle_bboxes + violated
+            reserve = still
+        if not waypoints:
+            return False
+        ctx = self._drag_route_ctx
+        if ctx is not None and ctx['bounded']:
+            # BOUNDED: fallback-маршрут route_edge_v2 (нефильтрованный L при
+            # полном провале кандидатов — зажатая позиция, стаб липнет к
+            # соседу) прошивал бы узлы. Честнее оставить прямое ребро без
+            # маршрута; в наиве/EXACT поведение прежнее (бит-паритет).
+            pts = ([(sx, sy)] + [(w[1], w[0]) for w in waypoints]
+                   + [(tx, ty)])
+            for bbox in obstacle_bboxes:
+                for a, b in zip(pts, pts[1:]):
+                    if segment_intersects_bbox(a[0], a[1], b[0], b[1],
+                                               bbox, margin=2):
+                        return False
+            for bbox in reserve:
+                for a, b in zip(pts, pts[1:]):
+                    if segment_intersects_bbox(a[0], a[1], b[0], b[1],
+                                               bbox, margin=2):
+                        return False
+        edge_data['waypoints'] = waypoints
+        edge_data['_auto_route'] = True
+        edge_data['_src_side'] = src_side
+        edge_data['_tgt_side'] = tgt_side
+        return True
+
+    # Э7-перф (H7): режимы подбора входов route_edge_v2 на кадре drag.
+    # EXACT: графы, где полные списки дешёвые, — вход бит-в-бит как наив.
+    # BOUNDED: большие графы — префильтр прямоугольником маршрута + запас,
+    # дальний хвост препятствий сворачивается в квадрантные блоки
+    # (консервативно, «лимит U-кандидатов»), пути — ближайшие к прямой.
+    ROUTE_EXACT_MAX_OBS = 40    # препятствий (узлов минус концы) для EXACT
+    ROUTE_EXACT_MAX_PATHS = 60  # путей рёбер для EXACT
+    ROUTE_RECT_PAD = 64         # запас прямоугольника маршрута, px
+    ROUTE_OBS_CAP = 14          # BOUNDED: стартовых препятствий у прямой
+    ROUTE_PATH_CAP = 12         # BOUNDED: путей в скоринге R8/R5
+    ROUTE_AUGMENT_ITERS = 3     # BOUNDED: доуточнений по нарушениям R4
+
+    def _route_gesture_inputs(self, edge_data: dict,
+                              sx: float, sy: float,
+                              tx: float, ty: float) -> tuple[list, list, list]:
+        """Входы route_edge_v2: (obstacle_bboxes, existing_paths, reserve).
+
+        Вне жеста drag (_drag_route_ctx is None, путь add_edge) — полный
+        наив: bbox всех узлов кроме концов + пути всех рёбер, порядок
+        словаря/списка; reserve пуст.
+
+        На кадре drag — кэш жеста (дефект перф H7, кадр был O(N^2+N*E)):
+          * маленькие графы (<= ROUTE_EXACT_MAX_*) — те же полные списки,
+            в том же порядке и с теми же значениями, что наив (статика из
+            кэша, двигающееся — свежим чтением): маршрут бит-в-бит равен
+            неоптимизированному (это проверяет временная сверка в репро);
+            reserve пуст;
+          * большие графы — BOUNDED: препятствия за прямоугольником
+            маршрута + ROUTE_RECT_PAD отбрасываются bbox-отсевом (простое
+            пересечение прямоугольников, без shapely), из оставшихся
+            ROUTE_OBS_CAP ближайших к прямой конн-конн идут в набор сразу
+            (лимит U-кандидатов: 4 кандидата на препятствие), остальные —
+            в reserve: _route_orthogonal доносит их в набор, только если
+            победивший маршрут их прошивает (ленивое доуточнение R4);
+            пути — до ROUTE_PATH_CAP ближайших к прямой из пересекающих
+            регион. Здесь маршрут может отличаться от наивного (меньше
+            дальних U-обходов) — осознанная цена перф на CPU-only листах
+            (боевой лист ~937 узлов).
+        """
+        src_id, tgt_id = edge_data['source'], edge_data['target']
+        ctx = self._drag_route_ctx
+        if ctx is None:
+            obstacle_bboxes = [
+                self._get_node_bbox(nid) for nid in self.nodes
+                if nid != src_id and nid != tgt_id
+            ]
+            existing_paths = []
+            for e in self.edges_data:
+                if e is edge_data:
+                    continue
+                pts = _edge_path_pts(e)
+                if pts:
+                    existing_paths.append(pts)
+            return obstacle_bboxes, existing_paths, []
+
+        if not ctx['bounded']:
+            # -- EXACT: полные списки, порядок/значения — как наив --
+            obstacles = []
+            for nid, bbox in ctx['nodes']:
+                if nid == src_id or nid == tgt_id:
+                    continue
+                obstacles.append(bbox if bbox is not None
+                                 else self._get_node_bbox(nid))
+            existing_paths = []
+            for e, pts, _bb in ctx['paths']:
+                if e is edge_data:
+                    continue
+                if pts is None:
+                    pts = _edge_path_pts(e)
+                if pts:
+                    existing_paths.append(pts)
+            return obstacles, existing_paths, []
+
+        # -- BOUNDED: bbox-отсев прямоугольником маршрута + запас --
+        # Прямоугольник накрывает и bbox КОНЦЕВЫХ узлов: route_edge_v2
+        # генерирует U-кандидатов и вокруг src/tgt bbox (обход себя,
+        # generate_candidates: all_obs + [src_bbox, tgt_bbox]) — их трубы
+        # ходят на bbox+15 за пределами конн-прямоугольника.
+        pad = float(self.ROUTE_RECT_PAD)
+        sb = self._get_node_bbox(src_id)
+        tb = self._get_node_bbox(tgt_id)
+        rx1 = min(sx, tx, sb[0], tb[0]) - pad
+        rx2 = max(sx, tx, sb[2], tb[2]) + pad
+        ry1 = min(sy, ty, sb[1], tb[1]) - pad
+        ry2 = max(sy, ty, sb[3], tb[3]) + pad
+
+        near, rest = [], []
+        for nid, bbox in ctx['nodes']:
+            if nid == src_id or nid == tgt_id:
+                continue
+            if bbox is None:
+                bbox = self._get_node_bbox(nid)
+            if (bbox[2] >= rx1 and bbox[0] <= rx2
+                    and bbox[3] >= ry1 and bbox[1] <= ry2):
+                near.append(bbox)
+            else:
+                rest.append(bbox)
+        # кольцо: кандидаты (U-трубы) ходят на ~15px за габарит ближних
+        # препятствий — препятствия сразу за ним обязаны попасть в резерв
+        if near and rest:
+            nb_x1 = min(b[0] for b in near) - 32
+            nb_y1 = min(b[1] for b in near) - 32
+            nb_x2 = max(b[2] for b in near) + 32
+            nb_y2 = max(b[3] for b in near) + 32
+            if nb_x1 < rx1 or nb_y1 < ry1 or nb_x2 > rx2 or nb_y2 > ry2:
+                still = []
+                for bbox in rest:
+                    if (bbox[2] >= nb_x1 and bbox[0] <= nb_x2
+                            and bbox[3] >= nb_y1 and bbox[1] <= nb_y2):
+                        near.append(bbox)
+                    else:
+                        still.append(bbox)
+                rest = still
+
+        kept, reserve = near, []
+        if len(kept) > self.ROUTE_OBS_CAP:
+            order = sorted(
+                range(len(kept)),
+                key=lambda i: (_seg_dist2(
+                    (kept[i][0] + kept[i][2]) / 2.0,
+                    (kept[i][1] + kept[i][3]) / 2.0,
+                    sx, sy, tx, ty), i))
+            ind_idx = sorted(order[:self.ROUTE_OBS_CAP])
+            res_idx = sorted(order[self.ROUTE_OBS_CAP:])
+            reserve = [kept[i] for i in res_idx]
+            kept = [kept[i] for i in ind_idx]
+
+        # регион кандидатов: прямоугольник маршрута + габарит препятствий
+        kx1 = min([rx1] + [b[0] for b in kept]) - 20
+        ky1 = min([ry1] + [b[1] for b in kept]) - 20
+        kx2 = max([rx2] + [b[2] for b in kept]) + 20
+        ky2 = max([ry2] + [b[3] for b in kept]) + 20
+
+        # -- пути: пересекающие регион, до ROUTE_PATH_CAP ближайших --
+        scored_paths = []
+        for idx, (e, pts, bb) in enumerate(ctx['paths']):
+            if e is edge_data:
+                continue
+            if pts is None:
+                pts = _edge_path_pts(e)
+                if not pts:
+                    continue
+                bb = _pts_bbox(pts)
+            if bb[2] < kx1 or bb[0] > kx2 or bb[3] < ky1 or bb[1] > ky2:
+                continue
+            d = _seg_dist2((bb[0] + bb[2]) / 2.0, (bb[1] + bb[3]) / 2.0,
+                           sx, sy, tx, ty)
+            scored_paths.append((d, idx, pts))
+        if len(scored_paths) > self.ROUTE_PATH_CAP:
+            scored_paths.sort(key=lambda t: (t[0], t[1]))
+            scored_paths = scored_paths[:self.ROUTE_PATH_CAP]
+            scored_paths.sort(key=lambda t: t[1])   # порядок списка рёбер
+        return kept, [t[2] for t in scored_paths], reserve
+
+    def _build_drag_route_ctx(self, moving_ids: set) -> dict:
+        """Э7-перф (а): кэш жеста — собирается ОДИН раз в start_drag_node.
+
+        nodes: [(nid, bbox|None)] в порядке self.nodes; None = узел едет,
+        его bbox читается свежим на каждом кадре. paths: [(edge, pts, bbox)]
+        в порядке edges_data; pts=None = ребро живое (инцидентно едущим
+        узлам или без концов) — путь строится на кадре. bounded: граф
+        больше EXACT-порогов (см. _route_gesture_inputs); route_anchor:
+        {edge_key: (cx, cy)} — позиция узла на момент последнего роутинга
+        ребра (переиспользование маршрута, _can_reuse_route).
+        """
+        node_entries = [
+            (nid, None if nid in moving_ids else self._get_node_bbox(nid))
+            for nid in self.nodes
+        ]
+        path_entries = []
+        for e in self.edges_data:
+            if e['source'] in moving_ids or e['target'] in moving_ids:
+                path_entries.append((e, None, None))
+            else:
+                pts = _edge_path_pts(e)
+                path_entries.append(
+                    (e, pts, _pts_bbox(pts) if pts else None))
+        bounded = (len(node_entries) - 2 > self.ROUTE_EXACT_MAX_OBS
+                   or len(path_entries) > self.ROUTE_EXACT_MAX_PATHS + 1)
+        return {'nodes': node_entries, 'paths': path_entries,
+                'bounded': bounded, 'route_anchor': {}, 'fail_anchor': {}}
+
+    def _routing_failed_nearby(self, edge_key: tuple,
+                               moved_node_id: str) -> bool:
+        """Э7-перф (BOUNDED): негативный кэш — попытка роутинга провалилась
+        (зажатая позиция, fallback отвергнут), и узел с тех пор не уехал на
+        >= snap_threshold: не жечь полный роутинг на каждом кадре, ребро
+        остаётся прямым до заметного сдвига. EXACT — без кэша."""
+        ctx = self._drag_route_ctx
+        if ctx is None or not ctx['bounded']:
+            return False
+        anchor = ctx['fail_anchor'].get(edge_key)
+        node = self.nodes.get(moved_node_id)
+        if anchor is None or node is None:
+            return False
+        cy, cx = node['centroid']
+        return abs(cx - anchor[0]) + abs(cy - anchor[1]) < self.snap_threshold
+
+    def _can_reuse_route(self, edge_data: dict, edge_key: tuple,
+                         moved_node_id: str) -> bool:
+        """Э7-перф (BOUNDED): живой авто-маршрут переиспользуется, пока узел
+        не уехал от позиции последнего роутинга на >= snap_threshold
+        (Manhattan). Ближний конец при этом пересаживается по подводящему
+        сегменту как у обычного ребра с waypoints — форма маршрута отстаёт
+        от узла не больше чем на порог. Гашение не запаздывает: при грубой
+        оценке div < snap_threshold/2 (порог гашения гистерезиса)
+        переиспользование запрещено — кадр честно перероутит и погасит.
+        В EXACT-режиме (маленькие графы) не применяется: там роутинг дешёв
+        и маршрут пересобирается каждый кадр.
+        """
+        ctx = self._drag_route_ctx
+        if ctx is None or not ctx['bounded']:
+            return False
+        anchor = ctx['route_anchor'].get(edge_key)
+        node = self.nodes.get(moved_node_id)
+        if anchor is None or node is None:
+            return False
+        if node.get('segmentation') or node.get('skin_info'):
+            # полигонные станции/скины сажают конец мимо оси bbox-замка —
+            # предсказать ортогональность подводящего стаба нельзя
+            return False
+        cy, cx = node['centroid']
+        if abs(cx - anchor[0]) + abs(cy - anchor[1]) >= self.snap_threshold:
+            return False
+        wps = edge_data.get('waypoints') or []
+        if edge_data['source'] == moved_node_id:
+            w, cur = wps[0], edge_data.get('source_point')
+            far = edge_data.get('target_point')
+        else:
+            w, cur = wps[-1], edge_data.get('target_point')
+            far = edge_data.get('source_point')
+        if not cur or not far:
+            return False
+        bbox = self._get_node_bbox(moved_node_id)
+        # подводящий сегмент осевой, и его ось всё ещё в створе грани
+        # сдвинутого узла — посадка замком оси оставит стаб ортогональным
+        if abs(cur[1] - w[1]) <= 0.5:                 # V-стаб: общий x
+            if not (bbox[0] + 2 <= w[1] <= bbox[2] - 2):
+                return False
+        elif abs(cur[0] - w[0]) <= 0.5:               # H-стаб: общий y
+            if not (bbox[1] + 2 <= w[0] <= bbox[3] - 2):
+                return False
+        else:
+            return False                              # уже диагональ
+        fx, fy = far[1], far[0]
+        dx = fx - min(max(fx, bbox[0]), bbox[2])
+        dy = fy - min(max(fy, bbox[1]), bbox[3])
+        return min(abs(dx), abs(dy)) >= self.snap_threshold / 2.0
+
     def _reseat_moved_end(self, edge_data: dict, moved_node_id: str):
         """Э3 (семантика GoJS adjusting=End): пересадить ТОЛЬКО конец ребра
         у сдвинутого узла; дальний конец и промежуточные waypoints
@@ -1010,6 +1448,22 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         reseat_edge целиком здесь звать нельзя: он выводит ось из НОВОЙ
         геометрии и пересаживает оба конца (дальний уезжал в 25/36 прогонов
         interactive_bench — замер Э0).
+
+        Э6/Э7-a: ребру, у которого на старте drag НЕ было маршрута
+        оператора (_drag_routable_edges: waypoints пусты или _auto_route),
+        при уводе с оси больше слабины и порога строится ортогональный
+        L/Z-маршрут (_route_orthogonal) от НЕПОДВИЖНОГО дальнего конца;
+        маршрут прошлого кадра протяжки стирается и строится заново —
+        кадр == отпускание (отпускание НИЧЕГО не пересчитывает). Ближний
+        конец пересаживается каноном по оси подводящего сегмента
+        (node_anchor + _seg_lock — как reseat_edge для рёбер с waypoints),
+        дальний конец байт-в-байт (route_edge_v2 концов не двигает).
+
+        Э7-перф, только BOUNDED (большие графы): живой маршрут
+        переиспользуется, пока узел не уехал на >= snap_threshold от
+        позиции последнего роутинга (_can_reuse_route), а провальная
+        попытка не повторяется до такого же сдвига (_routing_failed_nearby)
+        — кадр не жжёт полный роутинг впустую.
         """
         from modules.graph.core import seating
 
@@ -1017,6 +1471,25 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         if node is None:
             return
         src_id, tgt_id = edge_data['source'], edge_data['target']
+        edge_key = self.model.edge_key(src_id, tgt_id)
+        routable = edge_key in self._drag_routable_edges
+        # Э6/H7-гистерезис: жив ли авто-маршрут на входе кадра — от этого
+        # зависит порог _route_orthogonal (рождение/гашение).
+        route_alive = routable and bool(edge_data.get('waypoints'))
+        # Э7-перф (BOUNDED): живой маршрут переиспользуется, пока узел не
+        # уехал от позиции последнего роутинга — ребро на этом кадре
+        # ведётся как обычное с waypoints (конец по подводящему сегменту).
+        reuse = route_alive and self._can_reuse_route(
+            edge_data, edge_key, moved_node_id)
+        # негативный кэш (BOUNDED): рядом с этой позицией роутинг уже
+        # проваливался — не повторять попытку на каждом кадре
+        skip_route = (routable and not route_alive
+                      and self._routing_failed_nearby(edge_key, moved_node_id))
+        if route_alive and not reuse:
+            # авто-маршрут прошлого кадра протяжки: перестраивается с нуля
+            # от текущей геометрии (waypoints оператора сюда не попадают —
+            # такие рёбра в _drag_routable_edges не заносятся)
+            edge_data['waypoints'] = []
         wps = edge_data.get('waypoints') or []
         if src_id == moved_node_id:
             point_key, far_key = 'source_point', 'target_point'
@@ -1045,9 +1518,41 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         ax, ay = station if station else seating.node_anchor(node, ref_x, ref_y, lock)
         edge_data[point_key] = [ay, ax]
 
-        edge_key = self.model.edge_key(src_id, tgt_id)
+        if routable and not reuse and not skip_route \
+                and self._route_orthogonal(edge_data, alive=route_alive):
+            # Э6/Э7-a: увод больше слабины и порога — ортогональный маршрут;
+            # ближний конец пересаживается по оси подводящего сегмента
+            # (последний сегмент ⟂ грани — конец на грани, не в углу).
+            if self._drag_route_ctx is not None:
+                node_now = self.nodes[moved_node_id]
+                self._drag_route_ctx['route_anchor'][edge_key] = (
+                    node_now['centroid'][1], node_now['centroid'][0])
+                self._drag_route_ctx['fail_anchor'].pop(edge_key, None)
+            new_wps = edge_data['waypoints']
+            ref2 = new_wps[0] if point_key == 'source_point' else new_wps[-1]
+            ref2_x, ref2_y = ref2[1], ref2[0]
+            cur2 = edge_data[point_key]
+            lock2 = seating._seg_lock((cur2[1], cur2[0]), (ref2_x, ref2_y))
+            station2 = seating._poly_even_seat(
+                node, edge_data, 's' if point_key == 'source_point' else 't',
+                (ref2_x, ref2_y))
+            ax, ay = station2 if station2 else seating.node_anchor(
+                node, ref2_x, ref2_y, lock2)
+            edge_data[point_key] = [ay, ax]
+        elif routable and not reuse:
+            # Э7-c: маршрут погашен (гистерезис: div < порога) — ребро
+            # снова прямое, авто-флаг снимается вместе с waypoints.
+            edge_data.pop('_auto_route', None)
+            if self._drag_route_ctx is not None:
+                self._drag_route_ctx['route_anchor'].pop(edge_key, None)
+                if not skip_route and self._drag_route_ctx['bounded']:
+                    # позиция провала — негативный кэш до сдвига на порог
+                    node_now = self.nodes[moved_node_id]
+                    self._drag_route_ctx['fail_anchor'][edge_key] = (
+                        node_now['centroid'][1], node_now['centroid'][0])
+
         self._update_edge_path(edge_key)
-        if not wps:
+        if not edge_data.get('waypoints'):
             sp, tp = edge_data['source_point'], edge_data['target_point']
             self.edge_perp_scores[edge_key] = compute_edge_perpendicularity(
                 (sp[1], sp[0]), (tp[1], tp[0]),
@@ -1617,6 +2122,7 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         self._drag_grab_dy = (node_data['centroid'][0] - gy) if gy is not None else 0.0
 
         self._batch_drag = (node_id in self.selected_nodes and len(self.selected_nodes) > 1)
+        self._drag_routable_edges = set()
 
         if self._batch_drag:
             self._batch_snap_cmd = BatchDragCommand(self.model, self._redraw_all)
@@ -1639,6 +2145,14 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                     self._batch_internal_edges.append(e)
                 else:
                     self._batch_boundary_edges.append(e)
+                    # Э6/Э7-a: boundary-ребро без маршрута оператора drag
+                    # ведёт сам (то же правило, что у одиночного drag);
+                    # Э7-c: авто-маршрут прошлого жеста (_auto_route) —
+                    # тоже наш, перестраивается и гасится.
+                    if not e.get('_manual_route') and (
+                            not e.get('waypoints') or e.get('_auto_route')):
+                        self._drag_routable_edges.add(
+                            self.model.edge_key(sid, tid))
 
             # Э3: блоки, привязанные к узлам выделения, едут вместе с группой
             # (undo покрыт snapshot'ом BatchDragCommand — он включает text_blocks)
@@ -1663,7 +2177,19 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                         # (adjusting=End), но ручные рёбра перепроецируются
                         # мимо undo — DragNodeCommand возвращает всё скопом.
                         'waypoints': [wp.copy() for wp in edge_data.get('waypoints', [])],
+                        # Э7-c: авто-флаг живёт/умирает вместе с маршрутом —
+                        # undo обязан вернуть и его.
+                        '_auto_route': bool(edge_data.get('_auto_route')),
                     }
+                    # Э6/Э7-a: ребро без маршрута оператора на старте жеста
+                    # drag ведёт сам — вправе рожать/перестраивать
+                    # ортогональный маршрут на кадрах; Э7-c: авто-маршрут
+                    # прошлого жеста (_auto_route) — тоже наш; маршрут
+                    # оператора (ручные waypoints) и _manual_route — табу.
+                    if not edge_data.get('_manual_route') and (
+                            not edge_data.get('waypoints')
+                            or edge_data.get('_auto_route')):
+                        self._drag_routable_edges.add(key)
             # Э3: бэкап bbox привязанных текст-блоков — они едут за узлом,
             # undo обязан вернуть и их (тест T-C: undo возвращает оба).
             self.drag_start_block_bboxes = {}
@@ -1673,6 +2199,13 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                 blk = self.model.find_text_block(b.get("block_id"))
                 if blk and blk.get("bbox"):
                     self.drag_start_block_bboxes[b["block_id"]] = list(blk["bbox"])
+
+        # Э7-перф (а): кэш препятствий и путей — один раз на весь жест
+        # (нужен только если drag ведёт хоть один маршрут сам)
+        self._drag_route_ctx = (
+            self._build_drag_route_ctx(
+                set(self.selected_nodes) if self._batch_drag else {node_id})
+            if self._drag_routable_edges else None)
 
     def drag_node_to(self, x: float, y: float):
         """Переместить узел/группу."""
@@ -1766,10 +2299,10 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
             self._update_edge_path(edge_key)
 
         for e in self._batch_boundary_edges:
-            # Э3: тот же расчёт, что на отпускании, — честный предпросмотр
-            # (прежний fast-midpoint стирал waypoints и «перепрыгивал» грань
-            # на отпускании — H7). Расчёт O(1) на ребро: node_anchor одного
-            # узла, без routing — отдельный fast-путь не нужен.
+            # Э3/H7: единственный расчёт boundary-ребра — здесь, на кадре;
+            # отпускание НИЧЕГО не пересчитывает (итог жеста = последний
+            # кадр), иначе Гаусс-Зейдель по свежим путям соседей двигал
+            # маршрут и конец после отпускания (32/46 расхождений в репро).
             if e.get('_manual_route'):
                 self._recalculate_edge(e)   # ручной: только удержание на границе
             else:
@@ -1789,9 +2322,13 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         node_id = self.dragging_node
 
         if self._batch_drag:
-            # Пересчитать boundary edges нормально
-            self._batch_recalculate_boundary_edges()
-
+            # H7-паритет (Гаусс-Зейдель): boundary-рёбра НЕ пересчитываются
+            # на отпускании. Каждый кадр протяжки уже посадил концы и маршруты
+            # той же _reseat_moved_end; повторный прогон здесь скорил бы
+            # маршруты против СВЕЖИХ путей соседних рёбер (кадры скорили
+            # против прошлого кадра) — маршрут и даже посаженный конец
+            # прыгали на отпускании (32/46 расхождений в репро).
+            # Итог жеста = ровно состояние последнего кадра протяжки.
             self._batch_snap_cmd.finalize()
             self.undo_mgr.push_executed(self._batch_snap_cmd)
             self._batch_snap_cmd = None
@@ -1810,24 +2347,13 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         self._batch_internal_edges = []
         self._batch_boundary_edges = []
         self._batch_bound_blocks = []
+        self._drag_routable_edges = set()
+        self._drag_route_ctx = None
         self.drag_start_centroid = None
         self.drag_start_bbox = []
         self.drag_start_segmentation = []
         self.drag_start_edge_points = {}
         self.drag_start_block_bboxes = {}
-
-    def _batch_recalculate_boundary_edges(self):
-        """Отпускание batch-drag: ТО ЖЕ правило, что на протяжке (Э3,
-        adjusting=End) — пересаживается только конец у узла из выделения,
-        той же функцией (_reseat_moved_end идемпотентна: предпросмотр == итог).
-        Internal-рёбра уехали жёстким сдвигом и каноничны трансляцией."""
-        sel = self.selected_nodes
-        for e in self._batch_boundary_edges:
-            if e.get('_manual_route'):
-                self._recalculate_edge(e)
-                continue
-            near = e['source'] if e['source'] in sel else e['target']
-            self._reseat_moved_end(e, near)
 
     def _move_single_node(self, node_id: str, x: float, y: float):
         """Переместить один узел; у инцидентных рёбер пересадить ТОЛЬКО
@@ -2003,6 +2529,9 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         edge_key, wp_idx = self.dragging_waypoint
         edge_data = self.model.find_edge_data(edge_key)
         if edge_data and self.dragging_wp_start:
+            # Э7-c: оператор тронул waypoint — маршрут больше не авто
+            # (drag не вправе его перестраивать)
+            edge_data.pop('_auto_route', None)
             new_wp = edge_data['waypoints'][wp_idx].copy()
             cmd = MoveWaypointCommand(self.model, self, edge_key, wp_idx,
                                       self.dragging_wp_start, new_wp)
@@ -2012,6 +2541,10 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         self.update_status("Waypoint перемещён")
 
     def _add_waypoint_on_segment(self, edge_key: tuple, segment_index: int, x: float, y: float):
+        edge_data = self.model.find_edge_data(edge_key)
+        if edge_data is not None:
+            # Э7-c: ручная правка маршрута — авто-флаг снимается
+            edge_data.pop('_auto_route', None)
         snapped_x, snapped_y = self.snap_to_grid(x, y)
         new_wp = [snapped_y, snapped_x]
         cmd = AddWaypointCommand(self.model, self, edge_key, segment_index, new_wp)
@@ -2027,6 +2560,8 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         if wp_idx >= len(waypoints):
             return
         old_wp = waypoints[wp_idx].copy()
+        # Э7-c: ручная правка маршрута — авто-флаг снимается
+        edge_data.pop('_auto_route', None)
         cmd = DeleteWaypointCommand(self.model, self, edge_key, wp_idx, old_wp)
         self.undo_mgr.execute(cmd)
         self._refresh_waypoint_markers_for_edge(edge_key)

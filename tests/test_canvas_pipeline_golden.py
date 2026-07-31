@@ -44,7 +44,7 @@ EDGE_KEYS = {
     "length", "straight_line_distance", "is_terminal", "manual",
     "render_color", "render_width", "color", "dashed", "diameter_text",
     "diameter_value", "connection_type", "_src_side", "_tgt_side",
-    "_manual_route",
+    "_manual_route", "_auto_route",
 }
 NODE_REQUIRED = {"id", "type", "centroid"}
 EDGE_REQUIRED = {"source", "target", "source_point", "target_point"}

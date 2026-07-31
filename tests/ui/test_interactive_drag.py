@@ -3,7 +3,8 @@
 
 План: docs/planning/EDITOR_AFTER_LAYOUT_PLAN.md §4 T-C (пп. 1, 2, 4, 5) +
 Э3a (§7): семантика adjusting=End, честный предпросмотр, подписи-якоря,
-«экран == файл» (H6).
+«экран == файл» (H6) + Э6/Э7-a (§7, H7): ортогональный маршрут при уводе
+с оси (drag и add_edge), гистерезис почти-прямых, предпросмотр маршрута.
 Вызываются те же внутренние методы, что дёргает mouse-механика редактора:
 start_drag_node / drag_node_to / end_drag_node
 (advanced_graph_editor.py:3464/3474/3496 и mode_handlers/advanced_handlers.py:89-103).
@@ -149,6 +150,31 @@ def _dist(a, b):
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
+def _full_path_xy(e):
+    """Полный путь ребра в (x, y): source_point -> waypoints -> target_point."""
+    pts = [(e["source_point"][1], e["source_point"][0])]
+    pts += [(w[1], w[0]) for w in (e.get("waypoints") or [])]
+    pts.append((e["target_point"][1], e["target_point"][0]))
+    return pts
+
+
+def _assert_orthogonal(pts):
+    """Каждый сегмент пути строго H или V (tol 0.5px)."""
+    for a, b in zip(pts, pts[1:]):
+        assert abs(a[0] - b[0]) <= 0.5 or abs(a[1] - b[1]) <= 0.5, \
+            f"диагональный сегмент {a} -> {b}"
+
+
+def _seg_crosses_bbox(a, b, bbox):
+    """Ортогональный сегмент a->b (x,y) заходит в НУТРО bbox [x1,y1,x2,y2]?"""
+    x1, y1, x2, y2 = bbox
+    if abs(a[1] - b[1]) <= 0.5:      # H
+        return y1 < a[1] < y2 and min(a[0], b[0]) < x2 and max(a[0], b[0]) > x1
+    if abs(a[0] - b[0]) <= 0.5:      # V
+        return x1 < a[0] < x2 and min(a[1], b[1]) < y2 and max(a[1], b[1]) > y1
+    return True                       # диагональ — консервативно «пересекает»
+
+
 # ── T-C.1: drag узла — дальний конец неприкосновенен ─────────────────────
 
 def test_drag_node_far_end_untouched(qapp, tmp_path):
@@ -232,7 +258,11 @@ def test_drag_perpendicular_far_end_bitexact(qapp, tmp_path):
     ось (замер этой фикстуры: [235,400] -> [310,400], 75px). При adjusting=End
     конец у B байт-в-байт прежний; ближний конец сажается каноном
     `node_anchor` к дальнему концу (ось y=235 вне нового Y-диапазона узла
-    [310,390] -> грань к соседу, поперечная координата зажата в рамку)."""
+    [310,390] -> грань к соседу, поперечная координата зажата в рамку).
+
+    Э6/Э7-a: увод оси (75px) больше порога snap_threshold — ребро получает
+    ортогональный маршрут (до подключения роутера тут утверждалось
+    waypoints == [] — drag оставлял косую диагональ)."""
     g = _graph_two_boxes()
     _assert_canonical(g)
     ed = _editor(qapp, tmp_path, g)
@@ -244,7 +274,8 @@ def test_drag_perpendicular_far_end_bitexact(qapp, tmp_path):
     assert json.dumps(e["target_point"]) == tp_before, (
         f"far_end_moved: {tp_before} -> {e['target_point']}")
     assert e["source_point"] == pytest.approx([310.0, 180.0])
-    assert e["waypoints"] == [], "drag не должен рожать waypoints"
+    assert e["waypoints"], "увод 75px > порога — маршрут обязан родиться (Э7-a)"
+    _assert_orthogonal(_full_path_xy(e))
 
 
 def test_drag_keeps_waypoints_intact(qapp, tmp_path):
@@ -475,3 +506,238 @@ def test_screen_equals_file_end_on_bbox_face(qapp, tmp_path):
     assert d <= 0.5, (
         f"screen_vs_file: данные {e['source_point']}, нарисовано {vsp}, "
         f"расхождение {d:.2f}px")
+
+
+# ── Э6/Э7-a: ортогональный маршрут при drag и add_edge ───────────────────
+#
+# Требование заказчика (2026-07-31): при переносе узла и создании ребра
+# «путь ортогональный, без пересечения узлов, минимальной длины» —
+# вместо косой диагонали. Роутер — существующий route_edge_v2
+# (ui/editors/edge_routing.py), подключение — _route_orthogonal.
+
+def _obstacle_node():
+    """Чужой узел между box_a и box_b (ниже прямой оси y=235)."""
+    return {"id": "obs", "type": "equipment", "centroid": [320.0, 300.0],
+            "bbox": [260.0, 280.0, 340.0, 360.0], "segmentation": None,
+            "class_id": 99, "class_name": "unknow", "degree": 0}
+
+
+def test_drag_offaxis_births_orthogonal_route(qapp, tmp_path):
+    """Большой увод с оси (55px > snap_threshold 20): ребро получает
+    ортогональный маршрут — все сегменты H/V, путь НЕ заходит в bbox чужого
+    узла (R4 route_edge_v2), дальний конец байт-в-байт, ближний конец на
+    грани сдвинутого узла и подводящий сегмент ⟂ грани (не луч в угол)."""
+    g = _graph_two_boxes(extra_nodes=[_obstacle_node()])
+    _assert_canonical(g)
+    ed = _editor(qapp, tmp_path, g)
+    e = ed.model.find_edge_data(ed.model.edge_key("box_a", "box_b"))
+    tp_before = json.dumps(e["target_point"])
+
+    _drag(ed, "box_a", 140.0, 330.0)   # вниз на 130px: слабина и порог позади
+
+    assert json.dumps(e["target_point"]) == tp_before, "дальний конец тронут"
+    wps = e["waypoints"]
+    assert wps, "маршрут обязан был родиться"
+    pts = _full_path_xy(e)
+    _assert_orthogonal(pts)
+    obs_bbox = ed.nodes["obs"]["bbox"]
+    for a, b in zip(pts, pts[1:]):
+        assert not _seg_crosses_bbox(a, b, obs_bbox), \
+            f"сегмент {a} -> {b} прошивает чужой узел obs {obs_bbox}"
+    # ближний конец на правой грани нового положения box_a, не в углу:
+    sp = e["source_point"]
+    bbox_a = ed.nodes["box_a"]["bbox"]
+    assert sp[1] == pytest.approx(bbox_a[2]), "конец не на правой грани"
+    assert bbox_a[1] - 0.5 <= sp[0] <= bbox_a[3] + 0.5
+    # подводящий сегмент ⟂ грани (горизонтален): первый waypoint на оси конца
+    assert wps[0][0] == pytest.approx(sp[0], abs=0.5), \
+        "подводящий сегмент не перпендикулярен грани"
+
+
+def test_drag_route_preview_equals_result(qapp, tmp_path):
+    """H7: маршрут виден уже НА кадре протяжки и байт-в-байт равен итогу
+    после отпускания — никакого «маршрут появился после отпускания»."""
+    g = _graph_two_boxes(extra_nodes=[_obstacle_node()])
+    _assert_canonical(g)
+    ed = _editor(qapp, tmp_path, g)
+    e = ed.model.find_edge_data(ed.model.edge_key("box_a", "box_b"))
+
+    ed.start_drag_node("box_a")
+    ed.drag_node_to(140.0, 330.0)
+    assert e["waypoints"], "маршрут обязан быть уже на кадре протяжки"
+    preview = _edge_proj(e)
+    ed.end_drag_node()
+
+    assert _edge_proj(e) == preview, "отпускание изменило показанный маршрут"
+
+
+def test_drag_small_offaxis_no_microknee(qapp, tmp_path):
+    """Гистерезис (Э6/H7): увод оси МЕНЬШЕ порога snap_threshold — waypoints
+    НЕ рождаются. Здесь слабина прямизны уже мертва (перекрытие диапазонов
+    сломано на 6px > tol 3), но расхождение осей 6px < порога 20 — остаётся
+    честная лёгкая диагональ, а не дрожащее микро-колено."""
+    g = _graph_box_conn()
+    _assert_canonical(g)
+    ed = _editor(qapp, tmp_path, g)
+    e = ed.model.find_edge_data(ed.model.edge_key("box", "conn"))
+    # порог фикстуры: медианная ширина бокса 80 -> grid 40 -> snap 20
+    assert ed.snap_threshold == 20
+
+    _drag(ed, "box", 120.0, 246.0)   # вниз на 46px: слабина (до 43px) мертва
+
+    assert e["waypoints"] == [], "почти-прямое ребро не должно рожать колени"
+    assert e["target_point"] == [200.0, 300.0], "конец у коннектора тронут"
+    assert e["source_point"] == pytest.approx([206.0, 160.0])
+
+
+def test_drag_undo_after_route_restores_bytewise(qapp, tmp_path):
+    """Undo после drag с рождённым маршрутом — побайтово (waypoints входят
+    в снапшоты DragNodeCommand); redo возвращает маршрут."""
+    g = _graph_two_boxes()
+    ed = _editor(qapp, tmp_path, g)
+    key = ed.model.edge_key("box_a", "box_b")
+
+    s0 = _state(ed, "box_a", key)
+    _drag(ed, "box_a", 140.0, 350.0)
+    s1 = _state(ed, "box_a", key)
+    assert ed.model.find_edge_data(key)["waypoints"], \
+        "маршрут обязан был родиться (иначе тест пуст)"
+
+    ed.undo()
+    assert _state(ed, "box_a", key) == s0, "undo не вернул состояние до drag"
+    ed.redo()
+    assert _state(ed, "box_a", key) == s1, "redo не вернул маршрут"
+
+
+def test_add_edge_between_offset_nodes_routes_orthogonally(qapp, tmp_path):
+    """add_edge между разнесёнными по диагонали узлами: вместо косой прямой —
+    ортогональный маршрут; концы каноничны (повторный reseat_edge канона —
+    no-op байт-в-байт, как в матрице T-B), подводящие сегменты ⟂ граням."""
+    nodes = [
+        {"id": "p", "type": "equipment", "centroid": [140.0, 140.0],
+         "bbox": [100.0, 100.0, 180.0, 180.0], "segmentation": None,
+         "class_id": 99, "class_name": "unknow", "degree": 0},
+        {"id": "q", "type": "equipment", "centroid": [340.0, 440.0],
+         "bbox": [400.0, 300.0, 480.0, 380.0], "segmentation": None,
+         "class_id": 99, "class_name": "unknow", "degree": 0},
+    ]
+    ed = _editor(qapp, tmp_path, _wrap(nodes, []))
+
+    assert ed.add_edge("p", "q")
+
+    e = ed.model.find_edge_data(ed.model.edge_key("p", "q"))
+    assert e["waypoints"], "маршрут обязан был родиться (увод 120px > порога)"
+    pts = _full_path_xy(e)
+    _assert_orthogonal(pts)
+    # концы каноничны: пересадка каноном — no-op
+    from modules.graph.core.seating import reseat_edge
+    c = copy.deepcopy(e)
+    reseat_edge(ed.nodes, c)
+    assert c["source_point"] == e["source_point"], "конец p не каноничен"
+    assert c["target_point"] == e["target_point"], "конец q не каноничен"
+    assert c["waypoints"] == e["waypoints"]
+
+
+# ── H7: batch-паритет, «увёл-вернул» (Э7-c), гистерезис (два порога) ─────
+
+def _graph_batch_routable():
+    """a1,a2 слева (выделение), c1,c2 справа; два прямых H-ребра — оба
+    routable (без waypoints оператора, не _manual_route)."""
+    def box(nid, cx, cy):
+        return {"id": nid, "type": "equipment",
+                "centroid": [float(cy), float(cx)],
+                "bbox": [cx - 40.0, cy - 40.0, cx + 40.0, cy + 40.0],
+                "segmentation": None, "class_id": 99, "class_name": "unknow",
+                "degree": 1}
+    nodes = [box("a1", 100, 100), box("a2", 100, 280),
+             box("c1", 480, 100), box("c2", 480, 280)]
+    links = [
+        {"id": "e1", "source": "a1", "target": "c1",
+         "source_point": [100.0, 140.0], "target_point": [100.0, 440.0],
+         "waypoints": []},
+        {"id": "e2", "source": "a2", "target": "c2",
+         "source_point": [280.0, 140.0], "target_point": [280.0, 440.0],
+         "waypoints": []},
+    ]
+    return _wrap(nodes, links)
+
+
+def test_batch_drag_route_preview_equals_result(qapp, tmp_path):
+    """H7-паритет (дефект Гаусса-Зейделя): batch-drag с >= 2 routable
+    boundary-рёбрами — отпускание НИЧЕГО не пересчитывает, итог жеста
+    байт-в-байт равен последнему кадру протяжки. Раньше отпускание
+    перескорировало маршрут каждого ребра против СВЕЖИХ путей соседей
+    (кадры скорили против прошлого кадра) — маршрут и даже посаженный
+    конец прыгали (32/46 расхождений в репро)."""
+    g = _graph_batch_routable()
+    _assert_canonical(g)
+    ed = _editor(qapp, tmp_path, g)
+    e1 = ed.model.find_edge_data(ed.model.edge_key("a1", "c1"))
+    e2 = ed.model.find_edge_data(ed.model.edge_key("a2", "c2"))
+
+    ed.selected_nodes = {"a1", "a2"}
+    ed.start_drag_node("a1")
+    # многокадровая протяжка вниз-вправо: оба ребра сходят с осей на 60px
+    for fx, fy in ((133.0, 120.0), (166.0, 140.0), (200.0, 160.0)):
+        ed.drag_node_to(fx, fy)
+    assert e1["waypoints"] and e2["waypoints"], \
+        "оба boundary-ребра обязаны нести маршрут (иначе тест пуст)"
+    preview = (_edge_proj(e1), _edge_proj(e2))
+    ed.end_drag_node()
+
+    assert (_edge_proj(e1), _edge_proj(e2)) == preview, \
+        "отпускание batch-drag изменило показанный маршрут/конец"
+
+
+def test_drag_away_and_back_restores_straight(qapp, tmp_path):
+    """Э7-c («увёл-вернул»): жест 1 рожает авто-маршрут (флаг _auto_route
+    отличает его от waypoints оператора — ребро остаётся routable); жест 2
+    возвращает узел на ось — ребро снова прямое: waypoints пусты, флага
+    нет, концы байт-в-байт исходные. Мёртвое авто-колено в данных не
+    остаётся (раньше ребро с waypoints выпадало из routable-набора и
+    маршрут замерзал навсегда)."""
+    g = _graph_two_boxes()
+    _assert_canonical(g)
+    ed = _editor(qapp, tmp_path, g)
+    e = ed.model.find_edge_data(ed.model.edge_key("box_a", "box_b"))
+
+    _drag(ed, "box_a", 140.0, 330.0)          # увод вниз: маршрут родился
+    assert e["waypoints"], "маршрут обязан был родиться"
+    assert e.get("_auto_route") is True, "авто-маршрут обязан нести флаг"
+
+    _drag(ed, "box_a", 140.0, 200.0)          # возврат ровно в исходную
+    assert e["waypoints"] == [], "мёртвое авто-колено осталось в данных"
+    assert "_auto_route" not in e, "флаг обязан гаснуть вместе с маршрутом"
+    assert e["source_point"] == [235.0, 180.0]
+    assert e["target_point"] == [235.0, 400.0]
+
+
+def test_drag_hysteresis_no_flicker(qapp, tmp_path):
+    """Э6/H7-гистерезис (два порога): рождение при div >= snap_threshold
+    (20), гашение при div < snap_threshold/2 (10), между порогами
+    существующее состояние сохраняется. Колебание div 19.5 <-> 20.5 вокруг
+    порога рождения не меняет форму — маршрут, родившись, живёт (не мигает
+    «родился/умер» на соседних кадрах); гаснет только ниже 10.
+
+    Фикстура box+conn: при y бокса > 240 конн-ось y=200 ниже Y-диапазона
+    бокса — конец прижат к его нижней кромке, div = y - 240 (замер
+    test_drag_small_offaxis_no_microknee: y=246 -> div 6)."""
+    g = _graph_box_conn()
+    _assert_canonical(g)
+    ed = _editor(qapp, tmp_path, g)
+    e = ed.model.find_edge_data(ed.model.edge_key("box", "conn"))
+    assert ed.snap_threshold == 20
+
+    ed.start_drag_node("box")
+    ed.drag_node_to(120.0, 260.5)      # div 20.5 >= 20 — маршрут родился
+    assert e["waypoints"], "маршрут обязан родиться (div 20.5)"
+    shape = len(e["waypoints"])
+    for fy in (259.5, 260.5, 259.5, 260.5):
+        ed.drag_node_to(120.0, fy)     # div 19.5/20.5 — полоса гистерезиса
+        assert e["waypoints"], f"маршрут мигнул (умер) на y={fy}"
+        assert len(e["waypoints"]) == shape, f"форма изменилась на y={fy}"
+        _assert_orthogonal(_full_path_xy(e))
+    ed.drag_node_to(120.0, 245.0)      # div 5 < 10 — гашение
+    assert e["waypoints"] == [], "ниже порога гашения маршрут обязан погаснуть"
+    assert "_auto_route" not in e
+    ed.end_drag_node()

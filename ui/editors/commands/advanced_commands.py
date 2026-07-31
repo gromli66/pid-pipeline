@@ -90,6 +90,8 @@ class DragNodeCommand(Command):
                     'source_point': (edge_data.get('source_point') or []).copy(),
                     'target_point': (edge_data.get('target_point') or []).copy(),
                     'waypoints': [wp.copy() for wp in edge_data.get('waypoints', [])],
+                    # Э7-c: авто-флаг маршрута живёт/умирает с waypoints
+                    '_auto_route': bool(edge_data.get('_auto_route')),
                 }
         # Текст-блоки — те же id, что сняты на старте drag (привязка блока
         # во время drag измениться не может)
@@ -133,6 +135,12 @@ class DragNodeCommand(Command):
                         edge_data['target_point'] = points['target_point'].copy()
                     if 'waypoints' in points:
                         edge_data['waypoints'] = [wp.copy() for wp in points['waypoints']]
+                    if '_auto_route' in points:
+                        # Э7-c: восстановить присутствие/отсутствие флага
+                        if points['_auto_route']:
+                            edge_data['_auto_route'] = True
+                        else:
+                            edge_data.pop('_auto_route', None)
 
         if block_bboxes:
             for bid, bb in block_bboxes.items():
