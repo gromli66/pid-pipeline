@@ -22,6 +22,11 @@ cd "$SRC/cola"
 CXX="${CXX:-g++}"
 FLAGS="-O2 -fPIC -std=c++17 -DNDEBUG -DUSE_ASSERT_EXCEPTIONS -DSWIG_PYTHON_SILENT_MEMLEAK -I."
 
+# libcola/config.h генерирует autotools; мы собираем без них — заглушка
+# (тот же приём, что в проверенной MSVC-сборке: третий микропатч разведки).
+printf '/* заглушка: сборка без autotools, см. vendor/adaptagrams/build */\n' \
+    > libcola/config.h
+
 for lib in libvpsc libcola libtopology libdialect libavoid; do
     echo "===== $lib ====="
     for f in "$lib"/*.cpp; do
