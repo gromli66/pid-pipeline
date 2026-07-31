@@ -80,6 +80,64 @@ def test_manual_route_endpoints_survive(tmp_path):
     assert g2["links"][0]["target_point"] == [100.0, 296.0]
 
 
+def _stub_canvas(tmp_path, extra_nodes=()):
+    """Конец на правой грани бокса ВНЕ порта, перпендикулярный стаб к wp:
+    sp [115, 120] -> wp [115, 200] -> wp [50, 200] -> коннектор [50, 300]."""
+    g = {
+        "directed": False,
+        "multigraph": False,
+        "graph": {"image_size": [1080, 1920]},
+        "nodes": [
+            {"id": "a", "type": "equipment", "class_name": "unknow",
+             "centroid": [100.0, 100.0], "bbox": [80.0, 80.0, 120.0, 120.0]},
+            {"id": "b", "type": "connector", "class_name": "connector",
+             "centroid": [50.0, 300.0], "bbox": None},
+        ] + list(extra_nodes),
+        "links": [{"id": "e1", "source": "a", "target": "b",
+                   "source_point": [115.0, 120.0],
+                   "target_point": [50.0, 300.0],
+                   "waypoints": [[115.0, 200.0], [50.0, 200.0]]}],
+        "text_blocks": [],
+        "bindings": [],
+    }
+    p = tmp_path / "graph_canvas.json"
+    p.write_text(json.dumps(g), encoding="utf-8")
+    return p
+
+
+def test_wp_end_with_perpendicular_stub_migrates_to_port(tmp_path):
+    """Этап A: конец С waypoints и перпендикулярным стабом мигрирует на порт
+    ВМЕСТЕ с осевым сдвигом смежного waypoint — стаб остаётся
+    перпендикулярным грани, ортогональность маршрута цела."""
+    from ui.tabs.base_graph_tab import _reseat_canvas_endpoints
+
+    p = _stub_canvas(tmp_path)
+    assert _reseat_canvas_endpoints(p)
+    g = json.loads(p.read_text(encoding="utf-8"))
+    e = g["links"][0]
+    assert e["source_point"] == [100.0, 120.0], \
+        "конец обязан мигрировать в порт (центр правой грани)"
+    assert e["waypoints"][0] == [100.0, 200.0], \
+        "смежный waypoint обязан сдвинуться вдоль грани на ту же величину"
+    assert e["waypoints"][1] == [50.0, 200.0], "дальний waypoint тронут"
+    assert e["target_point"] == [50.0, 300.0]
+
+
+def test_wp_end_migration_blocked_by_foreign_box(tmp_path):
+    """Сдвинутый стаб прошил бы чужую рамку — конец НЕ мигрирует."""
+    from ui.tabs.base_graph_tab import _reseat_canvas_endpoints
+
+    wall = {"id": "w", "type": "equipment", "class_name": "unknow",
+            "centroid": [100.0, 160.0], "bbox": [140.0, 90.0, 180.0, 110.0]}
+    p = _stub_canvas(tmp_path, extra_nodes=[wall])
+    assert not _reseat_canvas_endpoints(p), \
+        "миграция сквозь чужую рамку обязана быть отброшена (файл не переписан)"
+    g = json.loads(p.read_text(encoding="utf-8"))
+    e = g["links"][0]
+    assert e["source_point"] == [115.0, 120.0]
+    assert e["waypoints"] == [[115.0, 200.0], [50.0, 200.0]]
+
+
 def test_manual_route_preserved_among_reseated_edges(tmp_path):
     """Смешанный холст: обычное ребро чинится, ручное — не тронуто."""
     from ui.tabs.base_graph_tab import _reseat_canvas_endpoints

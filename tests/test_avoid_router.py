@@ -121,13 +121,20 @@ def test_waypoints_exclude_endpoints_and_are_yx():
 
 
 def test_manhattan_path_between_offset_blocks():
-    """Смещённые блоки без препятствий -> манхэттен-путь (L, без диагоналей)."""
+    """Смещённые блоки без препятствий -> манхэттен-путь (L, без диагоналей).
+
+    Этап A: маршрут начинается в ПОРТУ, поэтому вместе с waypoints
+    применяются и новые концы (`ends_out`) — как это делает apply_routing.
+    """
     g = _graph([_block("a", 100, 100), _block("b", 300, 260)],
                [_edge("e1", "a", "b")])
-    routed = route_graph(g)
+    ends = {}
+    routed = route_graph(g, None, ends)
     assert "e1" in routed and routed["e1"], "смещённой паре нужен излом"
     e = next(iter(edges(g)))
     e["waypoints"] = routed["e1"]
+    if "e1" in ends:
+        e["source_point"], e["target_point"] = ends["e1"]
     assert _polyline_ortho(e), f"диагональ в маршруте: {edge_polyline(e)}"
 
 
@@ -187,6 +194,34 @@ def test_route_survives_aggressive_gc():
     finally:
         gc.set_threshold(*old)
     assert stressed == baseline
+
+
+def test_pin_lands_on_port_not_corner():
+    """Этап A: пара «бокс -> крупный полигон», канон-луч сажает конец бокса
+    в УГОЛ рамки (жалоба заказчика: edge_52 graph_edited_33). Пин роутинга
+    обязан встать в ПОРТ (центр грани), и после apply_routing конец ребра —
+    портовый, не угловой."""
+    a = _block("a", 100, 100)                       # bbox [80, 80, 120, 120]
+    poly = {"id": "p", "type": "block", "class_name": "testpoly",
+            "centroid": [300.0, 400.0],             # [y, x]
+            "bbox": [300.0, 200.0, 500.0, 400.0],
+            "segmentation": [300.0, 200.0, 500.0, 200.0,
+                             500.0, 400.0, 300.0, 400.0]}
+    g = _graph([a, poly], [_edge("e1", "a", "p")])
+    e = next(iter(edges(g)))
+    # канон действительно даёт угол бокса: обе координаты на границах рамки
+    assert e["source_point"] == [120.0, 120.0], "фикстура не воспроизводит угол"
+
+    base = deepcopy(g)
+    stats = apply_routing(g, base, base, LayoutParams())
+    assert stats["routed"] >= 1 and not stats["reverted"]
+    sp = e["source_point"]
+    # конец — в порту (центр правой грани), не в углу
+    assert sp == [100.0, 120.0], f"конец не в порту: {sp}"
+    x_on = min(abs(sp[1] - 80.0), abs(sp[1] - 120.0)) <= 1.0
+    y_on = min(abs(sp[0] - 80.0), abs(sp[0] - 120.0)) <= 1.0
+    assert not (x_on and y_on), f"конец остался на углу рамки: {sp}"
+    assert _polyline_ortho(e), f"маршрут не ортогонален: {edge_polyline(e)}"
 
 
 # ───────────────────────── apply_routing ─────────────────────────

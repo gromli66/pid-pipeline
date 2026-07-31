@@ -111,6 +111,68 @@ def _import_text_into_canvas(canvas_path: Path, source_path: Path) -> bool:
     return True
 
 
+def _stub_pierces_foreign(byid, e, a_yx, b_yx) -> bool:
+    """Осевой стаб a->b ([y, x]) прошивает ЧУЖУЮ рамку? Простая проверка по
+    bbox (контур — консервативно его рамкой); узлы самого ребра исключены,
+    касание грани (усадка 1 px) прошиванием не считается."""
+    own = {e.get("source") or e.get("from"), e.get("target") or e.get("to")}
+    lox, hix = sorted((float(a_yx[1]), float(b_yx[1])))
+    loy, hiy = sorted((float(a_yx[0]), float(b_yx[0])))
+    for nid, n in byid.items():
+        if nid in own:
+            continue
+        bb = n.get("bbox")
+        if not bb or len(bb) != 4:
+            continue
+        x1, y1, x2, y2 = (float(v) for v in bb)
+        if lox < x2 - 1.0 and hix > x1 + 1.0 \
+                and loy < y2 - 1.0 and hiy > y1 + 1.0:
+            return True
+    return False
+
+
+def _migrate_stub_end(e, end_key, node, byid, snap=8.0) -> bool:
+    """Этап A: конец С waypoints и перпендикулярным стабом -> порт узла
+    ВМЕСТЕ с осевым сдвигом смежного waypoint (координата wp вдоль грани
+    сдвигается на ту же величину — ортогональность сохранена). Стоп-краны:
+    порт ушёл с той же грани, сдвиг ломает следующий сегмент, сдвинутый
+    стаб прошил бы чужую рамку."""
+    from ui.editors import port_model
+
+    wps = e.get("waypoints") or []
+    if not wps:
+        return False
+    p = e[end_key]
+    first = end_key == "source_point"
+    wp = wps[0] if first else wps[-1]
+    horiz = abs(p[0] - wp[0]) <= 0.5            # стаб горизонтален ([y, x])
+    px, py = port_model.choose_port(node, (p[1], p[0]), (wp[1], wp[0]), snap)
+    if horiz:
+        if abs(px - p[1]) > 0.75:               # порт не на той же грани
+            return False
+        new_p, new_wp = [py, px], [wp[0] + (py - p[0]), wp[1]]
+    else:
+        if abs(py - p[0]) > 0.75:
+            return False
+        new_p, new_wp = [py, px], [wp[0], wp[1] + (px - p[1])]
+    # сдвиг не должен скосить следующий сегмент (за смежным wp)
+    nxt = (wps[1] if first else wps[-2]) if len(wps) >= 2 else \
+        (e.get("target_point") if first else e.get("source_point"))
+    if nxt is not None:
+        if horiz and abs(wp[0] - float(nxt[0])) <= 0.5:
+            return False
+        if not horiz and abs(wp[1] - float(nxt[1])) <= 0.5:
+            return False
+    if _stub_pierces_foreign(byid, e, new_p, new_wp):
+        return False
+    e[end_key] = new_p
+    if first:
+        wps[0] = new_wp
+    else:
+        wps[-1] = new_wp
+    return True
+
+
 def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
     """Страховка §8.3.1 EDITOR_AFTER_LAYOUT_PLAN (решение заказчика: чинить
     при открытии): пересадить концы рёбер холста по канону `seating`.
@@ -183,6 +245,34 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
                         or abs(new[1] - ref[1]) <= 0.5):
                 continue        # канон дал строгую прямую — прямизна важнее
             e[end_key] = orig   # конец остаётся в своём порту
+        # Этап A, обратное направление: конец НЕ на порту мигрирует на
+        # лучший порт узла (канон-луч сажает бокс->полигон в УГОЛ — скрин
+        # заказчика graph_edited_33). Тот же судья, что в drag
+        # (`port_model.choose_port`) — сторож == судья. Строгая прямая ПАРЫ
+        # (без waypoints) неприкосновенна; конец С waypoints и
+        # перпендикулярным стабом мигрирует вместе с осевым сдвигом
+        # смежного waypoint (`_migrate_stub_end`), свежие холсты после
+        # портовых пинов роутинга выходят уже портовыми.
+        for end_key, node_key, alt_key in (("source_point", "source", "from"),
+                                           ("target_point", "target", "to")):
+            p = e.get(end_key)
+            node = byid.get(e.get(node_key) or e.get(alt_key))
+            if p is None or node is None:
+                continue
+            if port_model.is_on_port(node, p[1], p[0]):
+                continue
+            ref = _end_ref(e, end_key)
+            aligned = ref is not None and (abs(p[0] - ref[0]) <= 0.5
+                                           or abs(p[1] - ref[1]) <= 0.5)
+            if aligned:
+                if e.get("waypoints"):
+                    # перпендикулярный стаб к waypoint — на порт со сдвигом
+                    _migrate_stub_end(e, end_key, node, byid)
+                continue        # строгая прямая пары — прямизна важнее порта
+            px, py = port_model.choose_port(node, (p[1], p[0]),
+                                            (ref[1], ref[0]) if ref
+                                            else (p[1], p[0]), 8.0)
+            e[end_key] = [py, px]
         moved += (e.get("source_point") != sp0) + (e.get("target_point") != tp0)
     if not moved:
         return False

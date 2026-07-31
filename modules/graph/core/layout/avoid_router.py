@@ -9,7 +9,9 @@ libavoid (`vendor/adaptagrams`, загрузчик `_avoid_binding`).
 
 Контракт:
   * координаты УЗЛОВ не трогаются вообще — меняются только `waypoints`
-    (и посадка концов routed-рёбер тем же каноном `seating.reseat_edge`);
+    (и посадка концов routed-рёбер: пины — в ПОРТАХ узлов (`ports.py`,
+    этап A, судья тот же, что у drag в редакторе), финальная пересадка —
+    тем же каноном `seating.reseat_edge` по замку оси стаба);
   * рёбра с `_manual_route` или непустыми `waypoints` оператора — не роутятся;
   * waypoints — [[y, x], ...], ТОЛЬКО промежуточные точки (концевые точки в
     списке не дублируются — мина терминальной точки, T-A.5 плана);
@@ -34,6 +36,10 @@ import logging
 from copy import deepcopy
 
 from . import _gate, spread
+# ports лежит в core/, НЕ в layout/: его импортирует UI (port_model), а
+# layout/__init__ тянет shapely+numpy, которых нет в requirements/ui.txt —
+# та же ловушка, от которой canvas_state вынесен из пакета (см. его docstring).
+from .. import ports
 from ._avoid_binding import avoid_available, load  # noqa: F401 (re-export)
 from .params import LayoutParams
 from ..graph_access import edge_ends, edge_polyline, edges, is_connector, \
@@ -48,6 +54,10 @@ ORTHO_TOL = 1.5     # px: сегмент маршрута ортогонален
 PIN_TOL = 0.5       # px: маршрут обязан начинаться/кончаться в пине
 PIERCE_SHRINK = 2.0  # px: усадка формы при детекте прошивания — как
                      # spread.box_on_magi_drawn (сторож мерит как судья)
+PORT_SNAP = 8.0      # px: snap-порог гистерезиса `ports.choose_port` — как
+                     # у drag в редакторе (сторож == судья, этап A)
+STRAIGHT_EPS = 0.5   # px: канон посадил конец строгой прямой к другому
+                     # концу — прямая неприкосновенна, порт не применяется
 
 
 def _polygon_pts(node):
@@ -161,7 +171,38 @@ def _ortho(pts, tol=ORTHO_TOL):
                for i in range(1, len(pts)))
 
 
-def route_graph(graph, params=None):
+def _pin_port(node, cur_xy, ref_xy):
+    """Точка пина конца на узле — порт (этап A), не канон-луч.
+
+    Судья тот же, что у drag в редакторе: `ports.choose_port` с гистерезисом
+    от канонической точки. Ручные порты оператора (node['_ports']) — в
+    приоритете: если среди них есть не-изнаночный, выбирается лучший из них.
+
+    Порт не имеет права увести конец на ЧУЖУЮ сторону bbox: судья
+    side_changed (`_gate._side_set`) режет такой ход, и пер-рёберный сторож
+    apply_routing откатил бы всё ребро вместе с обходом — сторож == судья,
+    поэтому фильтр стоит уже на выборе пина. У крупного контура это ровно
+    случай «порт на дальнем прямом участке» (node_28 c2f79462): вход трубы
+    не переезжает на другой бок аппарата, конец остаётся канонным.
+    """
+    rx, ry = ref_xy
+    manual = [p for p in ports.manual_ports(node)
+              if not ports._backside(p, rx, ry)]
+    if manual:
+        best = min(manual, key=lambda p: (ports._bends(p, rx, ry),
+                                          ports._l1(p, rx, ry)))
+        cand = (best[0], best[1])
+    else:
+        cand = ports.choose_port(node, cur_xy, ref_xy, PORT_SNAP)
+    bb = node.get("bbox")
+    if bb and len(bb) == 4:
+        if not (_gate._side_set(cur_xy[0], cur_xy[1], bb)
+                & _gate._side_set(cand[0], cand[1], bb)):
+            return cur_xy
+    return cand
+
+
+def route_graph(graph, params=None, ends_out=None):
     """Ортогональные маршруты рёбер вокруг чужих форм.
 
     -> {edge_id: [[y, x], ...]} — только рёбра, чей маршрут принят и
@@ -169,14 +210,79 @@ def route_graph(graph, params=None):
     и сами рёбра graph НЕ мутируются — применяет вызывающий
     (`apply_routing`).
 
-    Пины — из канона посадки: конец уже посажен `seating` (source/target_point
-    на грани/контуре), пин ставится ровно в эту точку (absolute-offset от
-    угла формы), ConnDir — по грани. Коннектор — точечный ConnEnd в центроиде.
+    Пины — в ПОРТАХ узлов (этап A, `layout/ports.py`): канон-луч у пары
+    «бокс -> крупный контур» даёт УГОЛ рамки (жалоба заказчика: edge_52
+    graph_edited_33), портовый пин — центр грани/прямого участка, тем же
+    судьёй, что drag в редакторе. Исключения: конец, посаженный каноном
+    СТРОГОЙ прямой к другому концу (соосность/слабина, STRAIGHT_EPS), и
+    коннектор (точечный ConnEnd в центроиде) — остаются как есть.
+    Соосная пара, чей маршрут НЕ остался прямым (прямую не пропустили
+    препятствия — прямизны всё равно нет), перероучивается вторым проходом
+    уже с портовыми пинами: иначе конец так и стоит в углу канона.
+    ConnDir — по грани рамки посадки.
+
+    ends_out: если передан dict, туда кладутся НОВЫЕ концы принятых рёбер,
+    ушедшие от канона в порт: {edge_id: ([y, x] source, [y, x] target)} —
+    в том числе для рёбер, чей портовый маршрут остался прямым (в основном
+    словаре их нет). Применяет вызывающий.
     """
-    ag = load()
     p = params or LayoutParams()
     byid = nodes_by_id(graph)
 
+    routable = []
+    for e in edges(graph):
+        eid = e.get("id")
+        # неприкосновенность: ручной маршрут и waypoints оператора
+        if eid is None or e.get("_manual_route") or (e.get("waypoints") or []):
+            continue
+        if not e.get("source_point") or not e.get("target_point"):
+            continue
+        routable.append(e)
+    if not routable:
+        return {}
+
+    geoms = _shape_geoms(graph, byid)
+    acc = _route_pass(graph, byid, geoms, routable, p, force_ports=False)
+    redo = [e for e in routable
+            if acc.get(e.get("id")) is not None
+            and acc[e.get("id")][2]                    # был строгий exempt
+            and len(acc[e.get("id")][0]) > 2]          # но маршрут с изломами
+    if redo:
+        acc.update(_route_pass(graph, byid, geoms, redo, p, force_ports=True))
+
+    out = {}
+    for e in routable:
+        eid = e.get("id")
+        got = acc.get(eid)
+        if got is None:
+            continue
+        pts, pin_xy, _exempt = got
+        (spx, spy), (tpx, tpy) = pin_xy
+        sp, tp = e["source_point"], e["target_point"]
+        new_sp, new_tp = [float(spy), float(spx)], [float(tpy), float(tpx)]
+        if ends_out is not None and (
+                abs(new_sp[0] - sp[0]) > 1e-9 or abs(new_sp[1] - sp[1]) > 1e-9
+                or abs(new_tp[0] - tp[0]) > 1e-9
+                or abs(new_tp[1] - tp[1]) > 1e-9):
+            ends_out[eid] = (new_sp, new_tp)           # концы — в порты
+        mid = pts[1:-1]                                # без концевых (T-A.5)
+        if not mid:
+            continue                                   # прямая — менять нечего
+        out[eid] = [[float(y), float(x)] for x, y in mid]
+    return out
+
+
+def _route_pass(graph, byid, geoms, edge_list, p, force_ports):
+    """Один проход libavoid по рёбрам edge_list.
+
+    -> {edge_id: (pts, pin_xy, straight_exempt)} — только ПРИНЯТЫЕ маршруты
+    (пины/ортогональность/прошивание — те же сторожа, что и раньше);
+    pts — [(x, y), ...] упрощённой полилинии ВМЕСТЕ с концами,
+    pin_xy — ((x, y) source, (x, y) target) выбранных пинов,
+    straight_exempt — хотя бы один блочный конец оставлен на каноне из-за
+    строгой прямой пары (при force_ports=True всегда False).
+    """
+    ag = load()
     router = ag.Router(ag.OrthogonalRouting)
     router.setRoutingParameter(ag.shapeBufferDistance, float(p.route_buffer))
     router.setRoutingParameter(ag.idealNudgingDistance, float(p.route_nudge))
@@ -198,26 +304,34 @@ def route_graph(graph, params=None):
         keep += [poly, ref]
         shape_refs[n["id"]] = (ref, (bb[0], bb[1]), bb)
 
-    conns = []          # (edge_id, edge, ConnRef)
+    conns = []          # (edge_id, edge, ConnRef, pin_xy, straight_exempt)
     pin_class = 100
-    for e in edges(graph):
+    for e in edge_list:
         eid = e.get("id")
-        # неприкосновенность: ручной маршрут и waypoints оператора
-        if eid is None or e.get("_manual_route") or (e.get("waypoints") or []):
-            continue
         sp, tp = e.get("source_point"), e.get("target_point")
-        if not sp or not tp:
-            continue
         s, t = edge_ends(e)
         ends = []
-        for nid, pt in ((s, sp), (t, tp)):
+        pin_xy = []
+        exempt = False
+        for nid, pt, other in ((s, sp, tp), (t, tp, sp)):
             node = byid.get(nid)
             if node is None:
                 break
             x, y = float(pt[1]), float(pt[0])          # [y, x] -> (x, y)
             if is_connector(node) or nid not in shape_refs:
+                pin_xy.append((x, y))
                 ends.append(ag.ConnEnd(ag.Point(x, y), ag.ConnDirAll))
             else:
+                # этап A: пин — в порт узла, кроме конца на строгой прямой
+                # к другому концу (прямизна пары важнее порта)
+                ox, oy = float(other[1]), float(other[0])
+                straight = abs(x - ox) <= STRAIGHT_EPS \
+                    or abs(y - oy) <= STRAIGHT_EPS
+                if straight and not force_ports:
+                    exempt = True
+                else:
+                    x, y = _pin_port(node, (x, y), (ox, oy))
+                pin_xy.append((x, y))
                 ref, (bx1, by1), bb = shape_refs[nid]
                 pin_class += 1
                 seat_rect = _anchor_rect(node) or bb
@@ -230,25 +344,24 @@ def route_graph(graph, params=None):
             continue
         conn = ag.ConnRef(router, ends[0], ends[1])
         keep.append(conn)
-        conns.append((eid, e, conn))
+        conns.append((eid, e, conn, pin_xy, exempt))
 
     if not conns:
         return {}
     router.processTransaction()
 
-    geoms = _shape_geoms(graph, byid)
     out = {}
-    for eid, e, conn in conns:
+    for eid, e, conn, pin_xy, exempt in conns:
         r = conn.displayRoute()
         pts = [(r.ps[i].x, r.ps[i].y) for i in range(r.size())]
         if len(pts) < 2:
             continue
         pts = _simplify(pts)
-        sp, tp = e["source_point"], e["target_point"]
-        # маршрут обязан начинаться и кончаться в пинах (= посаженных концах)
-        if abs(pts[0][0] - sp[1]) > PIN_TOL or abs(pts[0][1] - sp[0]) > PIN_TOL \
-                or abs(pts[-1][0] - tp[1]) > PIN_TOL \
-                or abs(pts[-1][1] - tp[0]) > PIN_TOL:
+        (spx, spy), (tpx, tpy) = pin_xy
+        # маршрут обязан начинаться и кончаться в пинах (= выбранных портах)
+        if abs(pts[0][0] - spx) > PIN_TOL or abs(pts[0][1] - spy) > PIN_TOL \
+                or abs(pts[-1][0] - tpx) > PIN_TOL \
+                or abs(pts[-1][1] - tpy) > PIN_TOL:
             log.debug("роутинг %s: маршрут ушёл от посаженного конца — пропуск",
                       eid)
             continue
@@ -264,10 +377,7 @@ def route_graph(graph, params=None):
             log.debug("роутинг %s: маршрут прошивает %s (недостижимый пин, "
                       "fallback) — пропуск", eid, sorted(new_hit - old_hit))
             continue
-        mid = pts[1:-1]                                # без концевых (T-A.5)
-        if not mid:
-            continue                                   # прямая — менять нечего
-        out[eid] = [[float(y), float(x)] for x, y in mid]
+        out[eid] = (pts, pin_xy, exempt and not force_ports)
     del keep
     return out
 
@@ -310,21 +420,32 @@ def apply_routing(graph, orig, base_v16, params=None, legal=None):
     pre_magi = len(spread.box_on_magi_drawn(graph, byid))
     pre_defects = len(spread.defects(graph, byid, p.floor))
 
-    routed = route_graph(graph, p)
-    stats = {"routed": len(routed), "reverted": False, "reasons": []}
-    if not routed:
+    ends_new = {}
+    routed = route_graph(graph, p, ends_new)
+    stats = {"routed": len(set(routed) | set(ends_new)),
+             "reverted": False, "reasons": []}
+    if not routed and not ends_new:
         return stats
 
     saved = {}
     for e in edges(graph):
         eid = e.get("id")
-        if eid not in routed:
+        if eid not in routed and eid not in ends_new:
             continue
         saved[eid] = (e, _snapshot(e))
         pre_sides = _end_sides(byid, e)
-        e["waypoints"] = deepcopy(routed[eid])
-        # пере-посадка концов по осям подводящих сегментов — тем же каноном
-        reseat_edge(byid, e)
+        if eid in ends_new:
+            # этап A: концы — в выбранные порты (пины роутинга)
+            e["source_point"] = deepcopy(ends_new[eid][0])
+            e["target_point"] = deepcopy(ends_new[eid][1])
+        e["waypoints"] = deepcopy(routed.get(eid, []))
+        # пере-посадка концов по осям подводящих сегментов — тем же каноном:
+        # порт задаёт координату вдоль грани (замок оси стаба), стаб к нему
+        # перпендикулярен (ConnDir пина) — канон воспроизводит порт. У
+        # прямого портового маршрута (без waypoints) концы уже в портах,
+        # пересаживать не по чему — прямизну судит _ortho ниже.
+        if e["waypoints"]:
+            reseat_edge(byid, e)
         # посадка не имеет права ни скосить подводящий сегмент, ни увести
         # конец на другую грань (пин с ConnDirAll может выйти не той
         # стороной — судья `_side_changed` такое режет, откатываем адресно)
