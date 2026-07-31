@@ -592,9 +592,10 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         probe = {'source': node_a, 'target': node_b,
                  'source_point': None, 'target_point': None, 'waypoints': []}
         seating.reseat_edge(self.nodes, probe)
+        self._engine_finish_ends(probe)          # Э2c: порт/слот, не угол
         if self._route_orthogonal(probe):
-            # канон для рёбер с waypoints: концы на оси подводящих сегментов
-            seating.reseat_edge(self.nodes, probe)
+            # концы на осях подводящих сегментов, в портах движка
+            self._engine_finish_ends(probe)
         sp, tp = probe['source_point'], probe['target_point']
         src_x, src_y = sp[1], sp[0]
         tgt_x, tgt_y = tp[1], tp[0]
@@ -656,6 +657,16 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
             # потом источник (по РЕАЛЬНОЙ точке на цели)
             tgt_x, tgt_y = self.get_connection_point(node_b, src_cx, src_cy)
             src_x, src_y = self.get_connection_point(node_a, tgt_x, tgt_y)
+        # Э2c: канонная посадка доводится движком (порт/слот, не угол);
+        # waypoints оператора неприкосновенны — полигонная ветка сдвигает
+        # только смежное колено при перпендикулярном стабе
+        probe = {'source': node_a, 'target': node_b,
+                 'source_point': [src_y, src_x], 'target_point': [tgt_y, tgt_x],
+                 'waypoints': [wp.copy() for wp in waypoints]}
+        self._engine_finish_ends(probe)
+        src_y, src_x = probe['source_point']
+        tgt_y, tgt_x = probe['target_point']
+        waypoints = probe['waypoints']
 
         edge_data = self.model.create_edge_data(
             node_a, node_b,
@@ -791,6 +802,7 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         probe = {'source': original_source_id, 'target': original_target_id,
                  'source_point': None, 'target_point': None, 'waypoints': []}
         seating.reseat_edge(self.nodes, probe)
+        self._engine_finish_ends(probe)          # Э2c: порт/слот, не угол
         new_sp = probe['source_point']
         new_tp = probe['target_point']
         src_x, src_y = new_sp[1], new_sp[0]
@@ -955,6 +967,7 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         # сторон) — итог принадлежит оператору, авто-флаг снимается.
         edge_data.pop('_auto_route', None)
         seating.reseat_edge(self.nodes, edge_data)
+        self._engine_finish_ends(edge_data)      # Э2c: порт/слот, не угол
         sp, tp = edge_data['source_point'], edge_data['target_point']
         sx, sy = sp[1], sp[0]
         tx, ty = tp[1], tp[0]
@@ -1899,12 +1912,39 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         from modules.graph.core import edit_engine
 
         nid = node.get('id')
+        # соседи по грани/участку; своё ребро исключается ПО ПАРЕ узлов
+        # (инструменты работают с probe-копией — по идентичности объекта
+        # реальное ребро посчиталось бы соседом самому себе)
         node_edges = [e for e in self.edges_data
-                      if nid in (e.get('source'), e.get('target'))]
+                      if nid in (e.get('source'), e.get('target'))
+                      and not (e.get('source') == edge_data.get('source')
+                               and e.get('target') == edge_data.get('target'))]
         return edit_engine.seat_end(node, other_node, edge_data, role,
                                     cur, ref_x, ref_y, try_slack,
                                     float(self.snap_threshold),
                                     node_edges=node_edges)
+
+    def _engine_finish_ends(self, edge_data: dict):
+        """Э2c: довести ОБА конца ребра до контракта движка после канонной
+        оси — порт/слот у рамочных, отступ/развод у полигонов, центроид у
+        коннектора; угол непредставим. Для инструментов (optimize,
+        add_edge, recalculate), пересчитывающих ребро целиком: понятия
+        «дальний конец» здесь нет — это не жест drag."""
+        for role, point_key, other_key, node_key in (
+                ('s', 'source_point', 'target_point', 'source'),
+                ('t', 'target_point', 'source_point', 'target')):
+            node = self.nodes.get(edge_data.get(node_key))
+            p = edge_data.get(point_key)
+            if node is None or p is None:
+                continue
+            wps = edge_data.get('waypoints') or []
+            ref = (wps[0] if role == 's' else wps[-1]) if wps \
+                else edge_data.get(other_key)
+            if not ref:
+                continue
+            x, y = self._seat_end_ported(node, None, edge_data, role, p,
+                                         ref[1], ref[0], try_slack=False)
+            edge_data[point_key] = [y, x]
 
     @staticmethod
     def _end_pierces_own_node(node, end_yx, adj_yx):
