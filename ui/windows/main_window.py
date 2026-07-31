@@ -26,8 +26,22 @@ from ui.widgets.upload_dialog import UploadDialog
 from ui._version import __version__ as APP_VERSION
 
 # Базовый заголовок окна: в собранном клиенте показываем версию-дату,
-# из исходников (dev) — без суффикса.
+# из исходников (dev) — исполняемый git-коммит: «какой код я гоняю»
+# проверяется взглядом на заголовок, а не верой (запрос заказчика после
+# путаницы с перезапусками во время правок).
 APP_TITLE = "P&ID Pipeline" if APP_VERSION == "dev" else f"P&ID Pipeline {APP_VERSION}"
+if APP_VERSION == "dev":
+    try:
+        import subprocess
+        from pathlib import Path as _Path
+        _r = subprocess.run(
+            ["git", "log", "-1", "--format=%h %cd", "--date=format:%d.%m %H:%M"],
+            cwd=_Path(__file__).resolve().parents[2],
+            capture_output=True, text=True, timeout=3)
+        if _r.returncode == 0 and _r.stdout.strip():
+            APP_TITLE = f"P&ID Pipeline [dev {_r.stdout.strip()}]"
+    except (OSError, subprocess.SubprocessError):
+        pass  # без git заголовок остаётся прежним
 
 
 class MainWindow(QMainWindow):
