@@ -1,0 +1,93 @@
+diff --git a/cola/libavoid/assertions.h b/cola/libavoid/assertions.h
+index 1715622..33fdfd8 100644
+--- a/cola/libavoid/assertions.h
++++ b/cola/libavoid/assertions.h
+@@ -33,7 +33,7 @@
+ 
+ #else // Not NDEBUG
+ 
+-  #ifdef _MSC_VER
++  #if defined(_MSC_VER) && !defined(USE_ASSERT_EXCEPTIONS)
+     // Compiling with Microsoft Visual C++ compiler
+ 
+     // Prevent inclusion of min and max macros.
+diff --git a/cola/libdialect/constraints.cpp b/cola/libdialect/constraints.cpp
+index 942a73a..0c40174 100644
+--- a/cola/libdialect/constraints.cpp
++++ b/cola/libdialect/constraints.cpp
+@@ -215,8 +215,8 @@ void SepPair::transform(SepTransform tf) {
+     switch(tf) {
+         case SepTransform::ROTATE90CW:
+             // Swap x- and y-types.
+-            swap(xst, yst);
+-            swap(xgt, ygt);
++            std::swap(xst, yst);
++            std::swap(xgt, ygt);
+             // xgap <- -ygap
+             // ygap <- +xgap
+             g = xgap;
+@@ -225,8 +225,8 @@ void SepPair::transform(SepTransform tf) {
+             break;
+         case SepTransform::ROTATE90ACW:
+             // Swap x- and y-types.
+-            swap(xst, yst);
+-            swap(xgt, ygt);
++            std::swap(xst, yst);
++            std::swap(xgt, ygt);
+             // xgap <- +ygap
+             // ygap <- -xgap
+             g = xgap;
+@@ -248,8 +248,8 @@ void SepPair::transform(SepTransform tf) {
+             break;
+         case SepTransform::FLIPMD:
+             // Swap x- and y-types.
+-            swap(xst, yst);
+-            swap(xgt, ygt);
++            std::swap(xst, yst);
++            std::swap(xgt, ygt);
+             // xgap <- +ygap
+             // ygap <- +xgap
+             g = xgap;
+@@ -258,8 +258,8 @@ void SepPair::transform(SepTransform tf) {
+             break;
+         case SepTransform::FLIPOD:
+             // Swap x- and y-types.
+-            swap(xst, yst);
+-            swap(xgt, ygt);
++            std::swap(xst, yst);
++            std::swap(xgt, ygt);
+             // xgap <- -ygap
+             // ygap <- -xgap
+             g = xgap;
+diff --git a/cola/libdialect/trees.cpp b/cola/libdialect/trees.cpp
+index efb067a..dc07fee 100644
+--- a/cola/libdialect/trees.cpp
++++ b/cola/libdialect/trees.cpp
+@@ -750,12 +750,12 @@ void Tree::addConstraints(Graph &G, bool alignRoot) {
+     bool isVertical = Compass::isVerticalCard(m_growthDir);
+     // Function to compare Nodes by their transverse coordinate:
+     std::function<bool(Node_SP, Node_SP)> transCoordCmp = isVertical ?
+-                [](const Node_SP &a, const Node_SP &b)->bool{ return a->getCentre().x < b->getCentre().x; } :
+-                [](const Node_SP &a, const Node_SP &b)->bool{ return a->getCentre().y < b->getCentre().y; } ;
++                +[](const Node_SP &a, const Node_SP &b)->bool{ return a->getCentre().x < b->getCentre().x; } :
++                +[](const Node_SP &a, const Node_SP &b)->bool{ return a->getCentre().y < b->getCentre().y; } ;
+     // Funciton to compare Nodes by their axial dimension:
+     std::function<bool(Node_SP, Node_SP)> axialMeasureCmp = isVertical ?
+-                [](const Node_SP &a, const Node_SP &b)->bool{ return a->getDimensions().second < b->getDimensions().second; } :
+-                [](const Node_SP &a, const Node_SP &b)->bool{ return a->getDimensions().first < b->getDimensions().first; } ;
++                +[](const Node_SP &a, const Node_SP &b)->bool{ return a->getDimensions().second < b->getDimensions().second; } :
++                +[](const Node_SP &a, const Node_SP &b)->bool{ return a->getDimensions().first < b->getDimensions().first; } ;
+     // The direction in which to separate Nodes belonging to a common rank:
+     CardinalDir intraRankSepDir = isVertical ? CardinalDir::EAST : CardinalDir::SOUTH;
+     // The direction in which to separate Nodes belonging to neighbouring ranks:
+@@ -862,8 +862,8 @@ void Tree::addBufferNodesAndConstraints(Graph &G, NodesById &bufferNodes) {
+     bool isVertical = Compass::isVerticalCard(m_growthDir);
+     // Function to compare Nodes by their transverse coordinate:
+     std::function<bool(Node_SP, Node_SP)> transCoordCmp = isVertical ?
+-                [](const Node_SP &a, const Node_SP &b)->bool{ return a->getCentre().x < b->getCentre().x; } :
+-                [](const Node_SP &a, const Node_SP &b)->bool{ return a->getCentre().y < b->getCentre().y; } ;
++                +[](const Node_SP &a, const Node_SP &b)->bool{ return a->getCentre().x < b->getCentre().x; } :
++                +[](const Node_SP &a, const Node_SP &b)->bool{ return a->getCentre().y < b->getCentre().y; } ;
+     for (auto it = std::next(m_nodesByRank.begin()); it != m_nodesByRank.end(); ++it) {
+         Nodes rank = *it;
+         std::sort(rank.begin(), rank.end(), transCoordCmp);

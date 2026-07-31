@@ -24,6 +24,7 @@ from copy import deepcopy
 
 from . import _shapes, axial, spread
 from ..graph_access import edges, nodes_by_id
+from ._avoid_binding import avoid_available
 from .params import LayoutParams
 from ..seating import reseat_all_endpoints
 
@@ -162,6 +163,17 @@ def layout(graph, params=None, stages=None):
         legal=shapes.legal if shapes is not None else None)
     reseat_all_endpoints(graph)
 
+    # Э7-b: этап роутинга — обход чужих форм libavoid. Только waypoints рёбер,
+    # узлы не двигаются; хуже входа — полный откат внутри apply_routing.
+    # Без биндинга (или routing=False) раскладка работает как раньше.
+    routing_stats = None
+    if p.routing and avoid_available():
+        from . import avoid_router
+        routing_stats = avoid_router.apply_routing(
+            graph, orig, base_v16, p,
+            legal=shapes.legal if shapes is not None else None)
+
     after = len(spread.defects(graph, nodes_by_id(graph), p.floor))
     return graph, {"defects_before": before, "defects_after": after,
-                   "axial": axial_stats, "spread": spread_stats}
+                   "axial": axial_stats, "spread": spread_stats,
+                   "routing": routing_stats}

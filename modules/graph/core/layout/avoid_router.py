@@ -1,0 +1,365 @@
+# -*- coding: utf-8 -*-
+"""avoid_router.py — этап роутинга: обход препятствий libavoid (Э7-b).
+
+Слой раздвигания оставляет транзиты: труба прошивает чужой блок, потому что
+единица его хода — узел, а не маршрут ребра (§7.1.2 плана; расстановкой это
+структурно не лечится — увод узла даёт диагональ). Этот модуль даёт рёбрам
+waypoints: ортогональный маршрут вокруг чужих форм считает vendored-биндинг
+libavoid (`vendor/adaptagrams`, загрузчик `_avoid_binding`).
+
+Контракт:
+  * координаты УЗЛОВ не трогаются вообще — меняются только `waypoints`
+    (и посадка концов routed-рёбер тем же каноном `seating.reseat_edge`);
+  * рёбра с `_manual_route` или непустыми `waypoints` оператора — не роутятся;
+  * waypoints — [[y, x], ...], ТОЛЬКО промежуточные точки (концевые точки в
+    списке не дублируются — мина терминальной точки, T-A.5 плана);
+  * итог судит trial-and-revert: сначала на каждом ребре (диагональ или новое
+    прошивание = молчаливый fallback libavoid -> ребру оставляется прежняя
+    геометрия), затем на всём прогоне гейтом «не хуже входа» (`apply_routing`).
+
+Две ловушки разведки (обе покрыты tests/test_avoid_router.py):
+  1. SWIG-GC: питоньи прокси владеют C++-объектами; пины/шейпы/коннекторы
+     обязаны жить в python-ссылках до конца извлечения маршрутов, иначе gc
+     молча удаляет их из роутера посреди транзакции (список `keep`).
+  2. Молчаливый fallback: при недостижимом пине libavoid не падает, а рисует
+     маршрут «как получится» сквозь препятствие (проверено живым тестом:
+     утопленный конец даёт прямую с изломом СКВОЗЬ бокс). Детект — по
+     прошиванию форм, не по числу изломов.
+
+Чистый модуль: без Celery/БД, тестируется на синтетике.
+"""
+from __future__ import annotations
+
+import logging
+from copy import deepcopy
+
+from . import _gate, spread
+from ._avoid_binding import avoid_available, load  # noqa: F401 (re-export)
+from .params import LayoutParams
+from ..graph_access import edge_ends, edge_polyline, edges, is_connector, \
+    nodes_by_id
+from ..pretransform import FIXED_SIZES
+from ..seating import _anchor_rect, reseat_edge
+
+log = logging.getLogger(__name__)
+
+SIDE_EPS = 1.5      # px: конец «на грани» формы — как SIDE_EPS в _gate
+ORTHO_TOL = 1.5     # px: сегмент маршрута ортогонален — как _gate.STRAIGHT_TOL
+PIN_TOL = 0.5       # px: маршрут обязан начинаться/кончаться в пине
+PIERCE_SHRINK = 2.0  # px: усадка формы при детекте прошивания — как
+                     # spread.box_on_magi_drawn (сторож мерит как судья)
+
+
+def _polygon_pts(node):
+    """Точки полигонного препятствия [(x, y), ...] или None.
+
+    Настоящий контур — только у полигонных узлов БЕЗ скина: те же ветки, что
+    в `seating.node_anchor` (скин из FIXED_SIZES рисуется прямоугольником, и
+    препятствие обязано совпадать с тем, что видит глаз).
+    """
+    seg = node.get("segmentation")
+    if not (seg and isinstance(seg, list) and len(seg) >= 6):
+        return None
+    if node.get("class_name") in FIXED_SIZES or node.get("_axis"):
+        return None
+    return [(float(seg[i]), float(seg[i + 1])) for i in range(0, len(seg), 2)]
+
+
+def _obstacle(node):
+    """(pts, bbox) препятствия узла или None: контур либо прямоугольник bbox."""
+    bb = node.get("bbox")
+    if not bb or len(bb) != 4:
+        return None
+    poly = _polygon_pts(node)
+    if poly:
+        xs = [p[0] for p in poly]
+        ys = [p[1] for p in poly]
+        return poly, (min(xs), min(ys), max(xs), max(ys))
+    x1, y1, x2, y2 = (float(v) for v in bb)
+    if x2 - x1 <= 0 or y2 - y1 <= 0:
+        return None
+    return [(x1, y1), (x2, y1), (x2, y2), (x1, y2)], (x1, y1, x2, y2)
+
+
+def _conn_dirs(ag, px, py, rect, eps=SIDE_EPS):
+    """ConnDirFlags по грани ПОСАДКИ, на которой лежит пин (угол — обе).
+
+    rect — прямоугольник канона посадки (`seating._anchor_rect`: у скина
+    content-rect, он УЖЕ bbox-препятствия), не сам bbox: конец сажается на
+    его грань, и выход трубы обязан идти от неё. Точка не на гранях
+    (контур внутри bbox) — ConnDirAll: направление там диктует форма.
+    """
+    x1, y1, x2, y2 = rect
+    dirs = 0
+    if abs(px - x1) <= eps:
+        dirs |= ag.ConnDirLeft
+    if abs(px - x2) <= eps:
+        dirs |= ag.ConnDirRight
+    if abs(py - y1) <= eps:
+        dirs |= ag.ConnDirUp
+    if abs(py - y2) <= eps:
+        dirs |= ag.ConnDirDown
+    return dirs if dirs else ag.ConnDirAll
+
+
+def _shape_geoms(graph, byid):
+    """{node_id: shapely-форма с усадкой} — детектор прошивания.
+
+    Геометрия та же, что уходит препятствием в роутер: контур у полигонных
+    без скина, иначе bbox; усадка PIERCE_SHRINK, как у судьи
+    `spread.box_on_magi_drawn`. Схлопнувшиеся от усадки формы выбрасываются —
+    их не прошить.
+    """
+    from shapely.geometry import Polygon as ShpPolygon
+
+    out = {}
+    for n in graph.get("nodes", []):
+        if is_connector(n):
+            continue
+        ob = _obstacle(n)
+        if ob is None:
+            continue
+        try:
+            shp = ShpPolygon(ob[0]).buffer(0).buffer(-PIERCE_SHRINK)
+        except Exception:  # noqa: BLE001 — кривой контур не валит роутинг
+            continue
+        if not shp.is_empty:
+            out[n["id"]] = shp
+    return out
+
+
+def _pierced(geoms, polyline, exclude):
+    """Множество узлов, чью усаженную форму прошивает полилиния [(x, y),...]."""
+    from shapely.geometry import LineString
+
+    if len(polyline) < 2:
+        return set()
+    ls = LineString(polyline)
+    return {nid for nid, shp in geoms.items()
+            if nid not in exclude and ls.intersects(shp)}
+
+
+def _simplify(pts, tol=1e-6):
+    """Убрать коллинеарные и совпадающие точки ортогональной полилинии."""
+    out = [pts[0]]
+    for p in pts[1:]:
+        if abs(p[0] - out[-1][0]) <= tol and abs(p[1] - out[-1][1]) <= tol:
+            continue
+        if len(out) >= 2:
+            a, b = out[-2], out[-1]
+            if (abs(a[0] - b[0]) <= tol and abs(b[0] - p[0]) <= tol) or \
+                    (abs(a[1] - b[1]) <= tol and abs(b[1] - p[1]) <= tol):
+                out[-1] = p
+                continue
+        out.append(p)
+    return out
+
+
+def _ortho(pts, tol=ORTHO_TOL):
+    return all(min(abs(pts[i][0] - pts[i - 1][0]),
+                   abs(pts[i][1] - pts[i - 1][1])) <= tol
+               for i in range(1, len(pts)))
+
+
+def route_graph(graph, params=None):
+    """Ортогональные маршруты рёбер вокруг чужих форм.
+
+    -> {edge_id: [[y, x], ...]} — только рёбра, чей маршрут принят и
+    отличается от прямой (пустой словарь = менять нечего). Координаты узлов
+    и сами рёбра graph НЕ мутируются — применяет вызывающий
+    (`apply_routing`).
+
+    Пины — из канона посадки: конец уже посажен `seating` (source/target_point
+    на грани/контуре), пин ставится ровно в эту точку (absolute-offset от
+    угла формы), ConnDir — по грани. Коннектор — точечный ConnEnd в центроиде.
+    """
+    ag = load()
+    p = params or LayoutParams()
+    byid = nodes_by_id(graph)
+
+    router = ag.Router(ag.OrthogonalRouting)
+    router.setRoutingParameter(ag.shapeBufferDistance, float(p.route_buffer))
+    router.setRoutingParameter(ag.idealNudgingDistance, float(p.route_nudge))
+
+    # SWIG-GC (ловушка 1): все прокси живут здесь до конца извлечения
+    keep = [router]
+    shape_refs = {}     # node_id -> (ShapeRef, (bx1, by1), bbox)
+    for i, n in enumerate(graph.get("nodes", [])):
+        if is_connector(n):
+            continue
+        ob = _obstacle(n)
+        if ob is None:
+            continue
+        pts, bb = ob
+        poly = ag.Polygon(len(pts))
+        for j, (x, y) in enumerate(pts):
+            poly.setPoint(j, ag.Point(x, y))
+        ref = ag.ShapeRef(router, poly, i + 1)
+        keep += [poly, ref]
+        shape_refs[n["id"]] = (ref, (bb[0], bb[1]), bb)
+
+    conns = []          # (edge_id, edge, ConnRef)
+    pin_class = 100
+    for e in edges(graph):
+        eid = e.get("id")
+        # неприкосновенность: ручной маршрут и waypoints оператора
+        if eid is None or e.get("_manual_route") or (e.get("waypoints") or []):
+            continue
+        sp, tp = e.get("source_point"), e.get("target_point")
+        if not sp or not tp:
+            continue
+        s, t = edge_ends(e)
+        ends = []
+        for nid, pt in ((s, sp), (t, tp)):
+            node = byid.get(nid)
+            if node is None:
+                break
+            x, y = float(pt[1]), float(pt[0])          # [y, x] -> (x, y)
+            if is_connector(node) or nid not in shape_refs:
+                ends.append(ag.ConnEnd(ag.Point(x, y), ag.ConnDirAll))
+            else:
+                ref, (bx1, by1), bb = shape_refs[nid]
+                pin_class += 1
+                seat_rect = _anchor_rect(node) or bb
+                pin = ag.ShapeConnectionPin(
+                    ref, pin_class, x - bx1, y - by1, False, 0.0,
+                    _conn_dirs(ag, x, y, seat_rect))
+                keep.append(pin)
+                ends.append(ag.ConnEnd(ref, pin_class))
+        if len(ends) != 2:
+            continue
+        conn = ag.ConnRef(router, ends[0], ends[1])
+        keep.append(conn)
+        conns.append((eid, e, conn))
+
+    if not conns:
+        return {}
+    router.processTransaction()
+
+    geoms = _shape_geoms(graph, byid)
+    out = {}
+    for eid, e, conn in conns:
+        r = conn.displayRoute()
+        pts = [(r.ps[i].x, r.ps[i].y) for i in range(r.size())]
+        if len(pts) < 2:
+            continue
+        pts = _simplify(pts)
+        sp, tp = e["source_point"], e["target_point"]
+        # маршрут обязан начинаться и кончаться в пинах (= посаженных концах)
+        if abs(pts[0][0] - sp[1]) > PIN_TOL or abs(pts[0][1] - sp[0]) > PIN_TOL \
+                or abs(pts[-1][0] - tp[1]) > PIN_TOL \
+                or abs(pts[-1][1] - tp[0]) > PIN_TOL:
+            log.debug("роутинг %s: маршрут ушёл от посаженного конца — пропуск",
+                      eid)
+            continue
+        # ловушка 2: молчаливый fallback — диагональ или НОВОЕ прошивание
+        if not _ortho(pts):
+            log.debug("роутинг %s: неортогональный маршрут (fallback) — пропуск",
+                      eid)
+            continue
+        exclude = set(edge_ends(e))
+        new_hit = _pierced(geoms, pts, exclude)
+        old_hit = _pierced(geoms, edge_polyline(e), exclude)
+        if new_hit - old_hit:
+            log.debug("роутинг %s: маршрут прошивает %s (недостижимый пин, "
+                      "fallback) — пропуск", eid, sorted(new_hit - old_hit))
+            continue
+        mid = pts[1:-1]                                # без концевых (T-A.5)
+        if not mid:
+            continue                                   # прямая — менять нечего
+        out[eid] = [[float(y), float(x)] for x, y in mid]
+    del keep
+    return out
+
+
+# ───────────────────────── применение с гейтом ─────────────────────────
+
+def _snapshot(e):
+    return (deepcopy(e.get("source_point")), deepcopy(e.get("target_point")),
+            deepcopy(e.get("waypoints")))
+
+
+def _end_sides(byid, e):
+    """{node_id: множество сторон} блочных концов ребра — судья `_gate`."""
+    out = {}
+    for nid, x, y in _gate._block_endpoints(e):
+        n = byid.get(nid)
+        if n is not None and not is_connector(n) and n.get("bbox"):
+            out[nid] = _gate._side_set(x, y, n["bbox"])
+    return out
+
+
+def _restore(e, snap):
+    e["source_point"], e["target_point"], e["waypoints"] = deepcopy(snap[0]), \
+        deepcopy(snap[1]), deepcopy(snap[2])
+
+
+def apply_routing(graph, orig, base_v16, params=None, legal=None):
+    """Роутинг + посадка + гейт «не хуже входа»; хуже — полный откат.
+
+    graph мутируется на месте. -> статистика прогона (dict), в т.ч.
+    `reverted` и причина. Судья тот же, что у приёмки: `_gate.verify`
+    (диагонали/прямизна/стороны/наложения/бокс-на-магистрали), плюс
+    `spread.defects` не хуже входа и `spread.box_on_magi_drawn` — упасть
+    или остаться (ради него роутинг и затевался).
+    """
+    p = params or LayoutParams()
+    byid = nodes_by_id(graph)
+
+    pre_gate = _gate.verify(graph, orig, base_v16, legal)
+    pre_magi = len(spread.box_on_magi_drawn(graph, byid))
+    pre_defects = len(spread.defects(graph, byid, p.floor))
+
+    routed = route_graph(graph, p)
+    stats = {"routed": len(routed), "reverted": False, "reasons": []}
+    if not routed:
+        return stats
+
+    saved = {}
+    for e in edges(graph):
+        eid = e.get("id")
+        if eid not in routed:
+            continue
+        saved[eid] = (e, _snapshot(e))
+        pre_sides = _end_sides(byid, e)
+        e["waypoints"] = deepcopy(routed[eid])
+        # пере-посадка концов по осям подводящих сегментов — тем же каноном
+        reseat_edge(byid, e)
+        # посадка не имеет права ни скосить подводящий сегмент, ни увести
+        # конец на другую грань (пин с ConnDirAll может выйти не той
+        # стороной — судья `_side_changed` такое режет, откатываем адресно)
+        post_sides = _end_sides(byid, e)
+        side_ok = all(post_sides.get(nid, s) & s for nid, s in
+                      pre_sides.items())
+        if not _ortho(edge_polyline(e)) or not side_ok:
+            _restore(e, saved.pop(eid)[1])
+            stats["routed"] -= 1
+
+    post_gate = _gate.verify(graph, orig, base_v16, legal)
+    post_magi = len(spread.box_on_magi_drawn(graph, byid))
+    post_defects = len(spread.defects(graph, byid, p.floor))
+
+    reasons = [k for k in ("new_diagonals", "straight_broken", "side_changed",
+                           "overlaps", "box_on_magistral", "order_broken")
+               if post_gate[k] > pre_gate[k]]
+    if post_gate["connectivity_changed"] and not pre_gate["connectivity_changed"]:
+        reasons.append("connectivity")
+    if post_defects > pre_defects:
+        reasons.append("defects")
+    if post_magi > pre_magi:
+        reasons.append("box_on_magi_drawn")
+
+    if reasons:
+        for e, snap in saved.values():
+            _restore(e, snap)
+        log.warning("роутинг откатен целиком: хуже входа по %s "
+                    "(magi %d -> %d, дефекты %d -> %d)",
+                    ", ".join(reasons), pre_magi, post_magi,
+                    pre_defects, post_defects)
+        stats.update(reverted=True, reasons=reasons)
+        return stats
+
+    stats.update(magi_before=pre_magi, magi_after=post_magi)
+    log.info("роутинг: %d рёбер получили обход, бокс-на-магистрали %d -> %d",
+             stats["routed"], pre_magi, post_magi)
+    return stats

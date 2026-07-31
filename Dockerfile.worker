@@ -71,6 +71,17 @@ RUN pip install --no-cache-dir ensemble-boxes==1.0.9 numba==0.60.0 llvmlite==0.4
 # слоем — у lxml есть manylinux-wheel, граф зависимостей не раздувается.
 RUN pip install --no-cache-dir lxml
 
+# ─── Э7-b: сборка libavoid-биндинга (vendor/adaptagrams) ───
+# Отдельным RUN до COPY кода: слой кешируется, пока не меняются скрипты
+# сборки. Клона master нет — build_linux.sh собирает ФИКСИРОВАННЫЙ коммит
+# (см. vendor/adaptagrams/README.md) с наложением micropatches.diff.
+# git и swig нужны только этому слою.
+RUN apt-get update && apt-get install -y --no-install-recommends git swig \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+COPY vendor/adaptagrams/build/ /opt/adaptagrams-build/
+RUN bash /opt/adaptagrams-build/build_linux.sh /opt/adaptagrams-dist
+
 # Копируем worker
 COPY worker/ /app/worker/
 
@@ -79,6 +90,15 @@ COPY modules/ /app/modules/
 
 # Копируем инструменты (стандартизация FXML 1920x1080 + skin_geometry.json)
 COPY tools/ /app/tools/
+
+# Э7-b: биндинг libavoid в место, где его ждёт загрузчик
+# (modules/graph/core/layout/_avoid_binding.py -> /app/vendor/adaptagrams/linux).
+# Win-бинарь из git в образ не попадает — только linux-сборка слоя выше.
+COPY vendor/adaptagrams/README.md vendor/adaptagrams/LICENSE /app/vendor/adaptagrams/
+RUN mkdir -p /app/vendor/adaptagrams/linux \
+    && cp /opt/adaptagrams-dist/_adaptagrams.so \
+          /opt/adaptagrams-dist/adaptagrams.py \
+          /app/vendor/adaptagrams/linux/
 
 # Добавляем модули в PYTHONPATH
 ENV PYTHONPATH="/app:/app/modules"
