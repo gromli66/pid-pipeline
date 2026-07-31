@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
-"""T-C (Э0) — интерактивный drag в AdvancedGraphEditor против seating-контракта.
+"""T-C (Э0/Э3) — интерактивный drag в AdvancedGraphEditor против seating-контракта.
 
-План: docs/planning/EDITOR_AFTER_LAYOUT_PLAN.md §4 T-C (пп. 1, 2, 4, 5).
+План: docs/planning/EDITOR_AFTER_LAYOUT_PLAN.md §4 T-C (пп. 1, 2, 4, 5) +
+Э3a (§7): семантика adjusting=End, честный предпросмотр, подписи-якоря,
+«экран == файл» (H6).
 Вызываются те же внутренние методы, что дёргает mouse-механика редактора:
 start_drag_node / drag_node_to / end_drag_node
 (advanced_graph_editor.py:3464/3474/3496 и mode_handlers/advanced_handlers.py:89-103).
@@ -12,10 +14,6 @@ start_drag_node / drag_node_to / end_drag_node
 
 Координаты двойственны (CODING_GUIDE §6): centroid / source_point /
 target_point / waypoints = [y, x]; bbox / segmentation = [x, y].
-
-Известные нарушения оформлены @pytest.mark.xfail(strict=True): починка
-(Э1/Э3) сломает xfail и заставит снять маркер. Числа в reason замерены
-фактически (probe 2026-07-30, до правок).
 """
 import copy
 import json
@@ -157,11 +155,11 @@ def test_drag_node_far_end_untouched(qapp, tmp_path):
     """Семантика adjusting=End (§2 п.4 плана): при сдвиге узла A конец ребра
     у нетронутого узла B не меняется (метрика far_end_moved == 0, §3.2).
 
-    Э1: xfail снят — drag по-прежнему пересчитывает ОБА конца (семантика
-    adjusting=End — Э3), но пересчёт идёт каноном `seating.reseat_edge`,
-    а канон на каноничном входе ИДЕМПОТЕНТЕН: конец у нетронутого box_b
-    попадает в ту же точку [235,400] и waypoints не рождаются. До Э1
-    distribute_connection_points уводил его на 35px (середина грани)."""
+    Э3: drag пересаживает ТОЛЬКО ближний конец (канон `seating.node_anchor`
+    к дальнему концу/первому waypoint'у) — дальний конец не трогается по
+    построению. Здесь сдвиг малый (вдоль оси), дальний конец совпадал и при
+    старой механике (канон идемпотентен); жёсткий случай — перпендикулярный
+    drag в test_drag_perpendicular_far_end_bitexact."""
     g = _graph_two_boxes()
     _assert_canonical(g)
     ed = _editor(qapp, tmp_path, g)
@@ -225,6 +223,126 @@ def test_drag_connector_end_stays_at_centroid(qapp, tmp_path):
         f"target_point={e['target_point']}, расстояние {d:.2f}px")
 
 
+# ── Э3.1: adjusting=End — перпендикулярный drag не двигает дальний конец ─
+
+def test_drag_perpendicular_far_end_bitexact(qapp, tmp_path):
+    """Drag узла A перпендикулярно оси прямого ребра A—B. Старая механика
+    (reseat_edge целиком на drag-пути) выводила H-lock из НОВОЙ геометрии и
+    пересаживала ОБА конца: конец у нетронутого box_b уезжал на новую общую
+    ось (замер этой фикстуры: [235,400] -> [310,400], 75px). При adjusting=End
+    конец у B байт-в-байт прежний; ближний конец сажается каноном
+    `node_anchor` к дальнему концу (ось y=235 вне нового Y-диапазона узла
+    [310,390] -> грань к соседу, поперечная координата зажата в рамку)."""
+    g = _graph_two_boxes()
+    _assert_canonical(g)
+    ed = _editor(qapp, tmp_path, g)
+    e = ed.model.find_edge_data(ed.model.edge_key("box_a", "box_b"))
+    tp_before = json.dumps(e["target_point"])
+
+    _drag(ed, "box_a", 140.0, 350.0)   # вниз на 150px, ось сломана
+
+    assert json.dumps(e["target_point"]) == tp_before, (
+        f"far_end_moved: {tp_before} -> {e['target_point']}")
+    assert e["source_point"] == pytest.approx([310.0, 180.0])
+    assert e["waypoints"] == [], "drag не должен рожать waypoints"
+
+
+def test_drag_keeps_waypoints_intact(qapp, tmp_path):
+    """Э3: у ребра с waypoint'ом drag узла не трогает ни промежуточные точки,
+    ни дальний конец; ближний конец сажается к ПЕРВОМУ waypoint'у (не к
+    центроиду соседа). Старая механика стирала waypoints и строила маршрут
+    заново."""
+    g = _graph_two_boxes()
+    g["links"][0]["waypoints"] = [[235.0, 300.0]]
+    _assert_canonical(g)
+    ed = _editor(qapp, tmp_path, g)
+    e = ed.model.find_edge_data(ed.model.edge_key("box_a", "box_b"))
+
+    _drag(ed, "box_a", 140.0, 350.0)
+
+    assert e["waypoints"] == [[235.0, 300.0]], "waypoints тронуты"
+    assert e["target_point"] == [235.0, 400.0], "дальний конец тронут"
+    assert e["source_point"] == pytest.approx([310.0, 180.0])
+
+
+# ── Э3.2: честный предпросмотр — до отпускания == после ──────────────────
+
+def _edge_proj(e):
+    return json.dumps({"sp": e["source_point"], "tp": e["target_point"],
+                       "wps": e["waypoints"]}, sort_keys=True)
+
+
+def test_drag_preview_equals_result(qapp, tmp_path):
+    """Решение заказчика (§8.3): «что видишь при перетаскивании, то и
+    получишь после отпускания». Концы и waypoints после drag_node_to
+    (ДО end_drag_node) байт-в-байт равны состоянию после end_drag_node."""
+    g = _graph_two_boxes()
+    _assert_canonical(g)
+    ed = _editor(qapp, tmp_path, g)
+    e = ed.model.find_edge_data(ed.model.edge_key("box_a", "box_b"))
+
+    ed.start_drag_node("box_a")
+    ed.drag_node_to(140.0, 350.0)      # жёсткий случай: ось ломается
+    preview = _edge_proj(e)
+    ed.end_drag_node()
+
+    assert _edge_proj(e) == preview, "отпускание изменило то, что показывал drag"
+
+
+# ── Э3.3: подписи — привязанный блок едет за узлом, непривязанный стоит ──
+
+def _graph_with_blocks():
+    g = _graph_two_boxes()
+    g["text_blocks"] = [
+        {"id": "tb_bound", "bbox": [120.0, 130.0, 160.0, 150.0],
+         "text": "10LAB10", "source": "manual"},
+        {"id": "tb_free", "bbox": [500.0, 60.0, 540.0, 80.0],
+         "text": "прочее", "source": "manual"},
+    ]
+    # Привязка БЕЗ side: производной позиции (_bound_block_bbox) нет —
+    # следование обязан дать сам drag (side-привязки следуют производной
+    # позицией и без него).
+    g["bindings"] = [{"block_id": "tb_bound", "node_id": "box_a",
+                      "kind": "node", "text": "10LAB10"}]
+    return g
+
+
+def test_drag_bound_label_rides_unbound_stays(qapp, tmp_path):
+    """Решение заказчика (§8.3): ПРИВЯЗАННЫЙ текст-блок едет за узлом на ту
+    же дельту; непривязанный стоит."""
+    g = _graph_with_blocks()
+    _assert_canonical(g)
+    ed = _editor(qapp, tmp_path, g)
+
+    _drag(ed, "box_a", 150.0, 200.0)      # дельта (+10, 0)
+
+    assert ed.model.find_text_block("tb_bound")["bbox"] == \
+        [130.0, 130.0, 170.0, 150.0], "привязанный блок не поехал за узлом"
+    assert ed.model.find_text_block("tb_free")["bbox"] == \
+        [500.0, 60.0, 540.0, 80.0], "непривязанный блок сдвинулся"
+
+
+def test_drag_labels_undo_restores_both(qapp, tmp_path):
+    """Undo после drag возвращает оба блока (и привязанный, и непривязанный)
+    побайтово; redo — обратно."""
+    g = _graph_with_blocks()
+    ed = _editor(qapp, tmp_path, g)
+
+    def blocks_state():
+        return json.dumps([ed.model.find_text_block("tb_bound")["bbox"],
+                           ed.model.find_text_block("tb_free")["bbox"]])
+
+    s0 = blocks_state()
+    _drag(ed, "box_a", 150.0, 200.0)
+    s1 = blocks_state()
+    assert s1 != s0, "drag обязан был сдвинуть привязанный блок (иначе тест пуст)"
+
+    ed.undo()
+    assert blocks_state() == s0, "undo не вернул текст-блоки"
+    ed.redo()
+    assert blocks_state() == s1, "redo не вернул пост-drag состояние блоков"
+
+
 # ── T-C.4: undo/redo побайтово ───────────────────────────────────────────
 
 def _state(ed, node_id, edge_key):
@@ -245,9 +363,7 @@ def _state(ed, node_id, edge_key):
 
 def test_drag_undo_restores_bytewise(qapp, tmp_path):
     """Drag -> Ctrl+Z: центроид, bbox, концы и waypoints вернулись побайтово
-    (json-снимок; образец строгости — test_square_size_ops T9).
-    Drag здесь и двигает оба конца, и рождает waypoints — undo обязан
-    вернуть всё."""
+    (json-снимок; образец строгости — test_square_size_ops T9)."""
     g = _graph_two_boxes()
     ed = _editor(qapp, tmp_path, g)
     key = ed.model.edge_key("box_a", "box_b")
@@ -302,17 +418,13 @@ def test_screen_equals_file_end_on_contour(qapp, tmp_path):
     assert _dist(vtp, e["target_point"]) <= 0.5
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "H6 (экран != файл): конец на bbox-грани [340,400] рисуется лучом из "
-    "центроида в вершину контура [300,400] — расхождение 40.00px; файл "
-    "содержит одно, оператор видит другое. Э1 это НЕ закрыл: инструменты "
-    "больше не сажают на bbox-грань, но уже сохранённый некононичный конец "
-    "при загрузке отрисовывается доводкой _contour_endpoint по-старому "
-    "(чинится Э3 «экран == итог» + метрика screen_vs_file §3.2)"))
 def test_screen_equals_file_end_on_bbox_face(qapp, tmp_path):
-    """Конец, пересаженный редактором на bbox-грань (так делают инструменты
-    1-4 из §1 плана), при нарисованном контуре уезжает: _contour_endpoint
-    (advanced_graph_editor.py:326-355) доводит его лучом из центроида."""
+    """H6 (Э3): конец, лежащий на канонической границе СВОЕГО узла
+    (здесь — bbox-грань [340,400]), рисуется КАК ЕСТЬ — «экран == файл».
+    До Э3 _contour_endpoint доводил его лучом из центроида в вершину контура
+    [300,400] (расхождение 40.00px): файл содержал одно, оператор видел
+    другое. Доводка лучом остаётся только для по-настоящему неканоничных
+    концов (старые файлы, конец вне всякой канонической границы)."""
     # [340, 400] — правая грань bbox; контур (ромб) в этой точке на x=360.
     ed = _editor(qapp, tmp_path, _graph_poly([340.0, 400.0]), canvas=True)
     key = ed.model.edge_key("poly", "conn")

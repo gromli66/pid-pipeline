@@ -57,7 +57,7 @@ class DragNodeCommand(Command):
 
     def __init__(self, model: GraphDataModel, editor, node_id: str,
                  old_centroid: list, old_bbox: list, old_segmentation: list,
-                 old_edge_points: dict):
+                 old_edge_points: dict, old_block_bboxes: dict | None = None):
         self._model = model
         self._editor = editor
         self._node_id = node_id
@@ -65,11 +65,14 @@ class DragNodeCommand(Command):
         self._old_bbox = old_bbox
         self._old_seg = old_segmentation
         self._old_edge_points = old_edge_points
+        # Э3: привязанные текст-блоки едут за узлом — undo возвращает и их
+        self._old_block_bboxes = old_block_bboxes or {}
         # new state captured at finalize
         self._new_centroid: list | None = None
         self._new_bbox: list | None = None
         self._new_seg: list | None = None
         self._new_edge_points: dict | None = None
+        self._new_block_bboxes: dict | None = None
 
     def capture_new_state(self):
         """Вызвать после завершения drag для сохранения нового состояния."""
@@ -88,18 +91,28 @@ class DragNodeCommand(Command):
                     'target_point': (edge_data.get('target_point') or []).copy(),
                     'waypoints': [wp.copy() for wp in edge_data.get('waypoints', [])],
                 }
+        # Текст-блоки — те же id, что сняты на старте drag (привязка блока
+        # во время drag измениться не может)
+        self._new_block_bboxes = {}
+        for bid in self._old_block_bboxes:
+            blk = self._model.find_text_block(bid)
+            if blk and blk.get('bbox'):
+                self._new_block_bboxes[bid] = list(blk['bbox'])
 
     def execute(self):
         # execute используется только при redo
-        self._apply_state(self._new_centroid, self._new_bbox, self._new_seg, self._new_edge_points)
+        self._apply_state(self._new_centroid, self._new_bbox, self._new_seg,
+                          self._new_edge_points, self._new_block_bboxes)
 
     def undo(self):
-        self._apply_state(self._old_centroid, self._old_bbox, self._old_seg, self._old_edge_points)
+        self._apply_state(self._old_centroid, self._old_bbox, self._old_seg,
+                          self._old_edge_points, self._old_block_bboxes)
 
     def redo(self):
-        self._apply_state(self._new_centroid, self._new_bbox, self._new_seg, self._new_edge_points)
+        self._apply_state(self._new_centroid, self._new_bbox, self._new_seg,
+                          self._new_edge_points, self._new_block_bboxes)
 
-    def _apply_state(self, centroid, bbox, seg, edge_points):
+    def _apply_state(self, centroid, bbox, seg, edge_points, block_bboxes=None):
         node = self._model.nodes.get(self._node_id)
         if not node:
             return
@@ -120,6 +133,12 @@ class DragNodeCommand(Command):
                         edge_data['target_point'] = points['target_point'].copy()
                     if 'waypoints' in points:
                         edge_data['waypoints'] = [wp.copy() for wp in points['waypoints']]
+
+        if block_bboxes:
+            for bid, bb in block_bboxes.items():
+                blk = self._model.find_text_block(bid)
+                if blk is not None:
+                    blk['bbox'] = list(bb)
 
         self._editor._redraw_all()
 

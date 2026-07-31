@@ -478,8 +478,9 @@ class OcrLayerMixin:
         if getattr(self, "display_regime", "base") != "ocr":
             return
         for b in self.model.bindings:
-            if not b.get("side"):
-                continue
+            # Привязки без side тоже перерисовываем: с Э3 их bbox едет за
+            # узлом при drag (_shift_bound_blocks), а не только производная
+            # позиция side-привязок.
             hit = b.get("node_id") == node_id
             if not hit:
                 ek = b.get("edge_key")

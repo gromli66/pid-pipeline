@@ -10,7 +10,10 @@ ALLOWLIST, и для них тест УТВЕРЖДАЕТ расхождение
 
 Реализации в матрице:
   1. seating.reseat_edge                  — канон (строка-эталон, всегда 0);
-  2. AdvancedGraphEditor._recalculate_edge — drag-пересчёт;
+  2. AdvancedGraphEditor._recalculate_edge — полный пересчёт ребра
+     (L-route/Цикл стороны/optimize; drag после Э3a идёт через
+     _reseat_moved_end — тот делегирует в те же функции канона, его
+     семантику «только ближний конец» держат тесты T-C);
   3. AdvancedGraphEditor.optimize_edge     — «оптимизация» ребра;
   4. autofix_chains.auto_fix_graph         — «автовыравнивание» (двигает узлы;
      канон для него считается на ЕГО ЖЕ выходном состоянии узлов);
@@ -237,7 +240,7 @@ def results(qapp, tmp_path_factory):
     seating.reseat_all_endpoints(st)
     out["seating"] = _diverge(st)
 
-    # 2. _recalculate_edge (drag-пересчёт) — мутирует рёбра модели
+    # 2. _recalculate_edge (полный пересчёт ребра) — мутирует рёбра модели
     ed = _editor(tmp_path_factory.mktemp("recalc"), fixture)
     for e in list(ed.edges_data):
         ed._recalculate_edge(e)

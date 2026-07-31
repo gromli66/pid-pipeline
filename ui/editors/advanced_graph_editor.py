@@ -39,7 +39,7 @@ from ui.editors.commands.advanced_commands import (
     AutoLRouteCommand, AutoFixCommand, SetEdgeStyleCommand,
 )
 from ui.editors.graph_geometry import (
-    bbox_exit_side, bbox_side_midpoint, closest_bbox_side,
+    bbox_exit_side, closest_bbox_side,
     project_point_to_bbox_border, project_point_to_polygon_border,
     get_node_geometry, compute_edge_perpendicularity,
     node_orientation_by_edges,
@@ -173,9 +173,13 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         self.drag_start_bbox: list = []
         self.drag_start_segmentation: list = []
         self.drag_start_edge_points: dict = {}
+        # Э3: bbox привязанных текст-блоков на старте drag — блоки едут за
+        # узлом, undo обязан вернуть и их.
+        self.drag_start_block_bboxes: dict = {}
         self._batch_drag: bool = False
         self._batch_internal_edges: list = []
         self._batch_boundary_edges: list = []
+        self._batch_bound_blocks: list = []
         self._drag_prev_x: float = 0
         self._drag_prev_y: float = 0
 
@@ -323,17 +327,21 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
     def _contour_endpoint(self, node_id: str, point, toward):
         """Конец ребра на границе НАРИСОВАННОГО контура (только отрисовка).
 
-        Если конец сидит на границе фикс-бокса (так уходит в FXML), а на экране
-        нарисован контур (скины выключены), труба обязана доходить до него, а
-        не теряться внутри фигуры — тогда ведём луч от центроида к следующей
-        точке пути, ребро остаётся коллинеарным самому себе.
+        Э3/H6 «экран == файл» (решение заказчика, повышенный приоритет):
+        конец, лежащий на КАНОНИЧЕСКОЙ границе своего узла — сегменте контура,
+        bbox-грани или границе content-rect скина (tol 0.5px) — рисуется КАК
+        ЕСТЬ: что в файле, то и на экране. Доводка лучом из центроида остаётся
+        только для по-настоящему неканоничных концов (старые файлы: конец
+        внутри формы / в стороне от всех границ) — иначе труба терялась бы
+        внутри фигуры.
 
-        НО если конец УЖЕ на контуре — не трогаем. Посадка (`seating`) сажает
-        его туда сама и по оси прямизны, а повторная доводка лучом из центроида
-        сбивала ортогональную трубу в диагональ: на боевом c2f79462 в файле
-        было 1 косое ребро из 130, а на экране — вся звезда из центра
-        деаэратора (13 рёбер, конец каждого лежит на контуре с точностью
-        0.000 px).
+        Конец на контуре не трогать критично вдвойне: посадка (`seating`)
+        сажает его туда по оси прямизны, а повторная доводка лучом из
+        центроида сбивала ортогональную трубу в диагональ (боевой c2f79462:
+        в файле 1 косое ребро из 130, на экране — звезда из центра деаэратора,
+        13 рёбер с концами на контуре с точностью 0.000 px). Тот же принцип
+        для bbox-грани/content-rect: до Э3 конец [340,400] на грани рисовался
+        в вершине контура [300,400] — расхождение 40px (xfail H6).
         """
         node = self.nodes.get(node_id)
         if not node or not point or not toward:
@@ -343,13 +351,33 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         c = node.get('centroid')
         if not c:
             return point
-        from modules.graph.core.pretransform import (point_on_polygon,
+        from modules.graph.core.pretransform import (_skin_content_rect,
+                                                     point_on_polygon,
                                                      project_ray_to_polygon)
         seg = node.get('segmentation')
-        if point_on_polygon(seg, point[1], point[0]):
+        px, py = point[1], point[0]                    # [y, x] -> (x, y)
+        if point_on_polygon(seg, px, py):
+            return point
+        bb = node.get('bbox')
+        if bb and len(bb) == 4 and self._on_rect_border(bb, px, py):
+            return point
+        cr = _skin_content_rect(node)
+        if cr and self._on_rect_border(cr, px, py):
             return point
         r = project_ray_to_polygon(seg, c[1], c[0], toward[1], toward[0])
         return [r[1], r[0]] if r else point
+
+    @staticmethod
+    def _on_rect_border(rect, x: float, y: float, tol: float = 0.5) -> bool:
+        """Точка лежит на периметре прямоугольника (x1, y1, x2, y2), tol px.
+
+        Допуск тот же, что у канона (point_on_polygon / seat_violations §3.2)."""
+        x1, y1, x2, y2 = rect
+        in_x = x1 - tol <= x <= x2 + tol
+        in_y = y1 - tol <= y <= y2 + tol
+        on_v = in_y and (abs(x - x1) <= tol or abs(x - x2) <= tol)
+        on_h = in_x and (abs(y - y1) <= tol or abs(y - y2) <= tol)
+        return on_v or on_h
 
     def _visual_edge_ends(self, edge_key: tuple, edge_data: dict):
         """Концы ребра для отрисовки: к границе той формы, что сейчас на экране."""
@@ -963,6 +991,85 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
             edge_data[point_key] = [py, px]
             edge_data[side_key] = closest_bbox_side(self._get_node_bbox(node_id), px, py)
 
+    def _reseat_moved_end(self, edge_data: dict, moved_node_id: str):
+        """Э3 (семантика GoJS adjusting=End): пересадить ТОЛЬКО конец ребра
+        у сдвинутого узла; дальний конец и промежуточные waypoints
+        неприкосновенны (§2 п.4 плана, метрика far_end_moved §3.2).
+
+        Ближний конец сажается каноном `seating.node_anchor` (сторож == судья,
+        не дубль-геометрия):
+          * toward — первый/последний waypoint ребра, если есть, иначе
+            СУЩЕСТВУЮЩИЙ конец соседа (source/target_point из данных,
+            НЕ его центроид);
+          * lock — замок оси почти-осевого концевого сегмента
+            (`seating._seg_lock`, как в reseat_edge для рёбер с waypoints):
+            прямой подход остаётся на своей оси, пока форма узла её накрывает.
+        Один и тот же расчёт работает и на каждом кадре протяжки, и на
+        отпускании — предпросмотр честный ПО ПОСТРОЕНИЮ (решение заказчика:
+        «что видишь при перетаскивании, то и получишь»); расчёт идемпотентен.
+        reseat_edge целиком здесь звать нельзя: он выводит ось из НОВОЙ
+        геометрии и пересаживает оба конца (дальний уезжал в 25/36 прогонов
+        interactive_bench — замер Э0).
+        """
+        from modules.graph.core import seating
+
+        node = self.nodes.get(moved_node_id)
+        if node is None:
+            return
+        src_id, tgt_id = edge_data['source'], edge_data['target']
+        wps = edge_data.get('waypoints') or []
+        if src_id == moved_node_id:
+            point_key, far_key = 'source_point', 'target_point'
+            ref = wps[0] if wps else edge_data.get(far_key)
+        else:
+            point_key, far_key = 'target_point', 'source_point'
+            ref = wps[-1] if wps else edge_data.get(far_key)
+        if not ref:
+            return
+        ref_x, ref_y = ref[1], ref[0]                  # [y, x] -> (x, y)
+        cur = edge_data.get(point_key)
+        lock = seating._seg_lock((cur[1], cur[0]), (ref_x, ref_y)) if cur else None
+        # Станция Э10 (_poly_side_*/_poly_frac_*): судья reseat_edge сажает
+        # такие концы на станционный порт — drag обязан так же (сторож==судья).
+        station = seating._poly_even_seat(
+            node, edge_data, 's' if point_key == 'source_point' else 't',
+            (ref_x, ref_y))
+        ax, ay = station if station else seating.node_anchor(node, ref_x, ref_y, lock)
+        edge_data[point_key] = [ay, ax]
+
+        edge_key = self.model.edge_key(src_id, tgt_id)
+        self._update_edge_path(edge_key)
+        if not wps:
+            sp, tp = edge_data['source_point'], edge_data['target_point']
+            self.edge_perp_scores[edge_key] = compute_edge_perpendicularity(
+                (sp[1], sp[0]), (tp[1], tp[0]),
+                self._node_geometry(self.nodes[src_id]),
+                self._node_geometry(self.nodes[tgt_id]))
+        else:
+            self.edge_perp_scores[edge_key] = {'is_good': True, 'score': 1.0,
+                                               'source_angle': 0}
+
+    def _shift_bound_blocks(self, node_id: str, dx: float, dy: float):
+        """Э3: текст-блоки, ПРИВЯЗАННЫЕ к узлу, едут за ним на ту же дельту
+        (решение заказчика §8.3: привязанная подпись — якорь узла,
+        непривязанная стоит). Для side-привязок совпадает с производной
+        позицией (_bound_block_bbox от новой геометрии цели); для привязок
+        без side — даёт само следование."""
+        if not dx and not dy:
+            return
+        seen_blk = set()   # дубль-привязка в файле не должна двигать блок дважды
+        for b in self.model.bindings:
+            if b.get("node_id") != node_id:
+                continue
+            blk_id = b.get("block_id")
+            if blk_id in seen_blk:
+                continue
+            seen_blk.add(blk_id)
+            blk = self.model.find_text_block(blk_id)
+            bb = blk.get("bbox") if blk else None
+            if bb and len(bb) == 4:
+                blk["bbox"] = [bb[0] + dx, bb[1] + dy, bb[2] + dx, bb[3] + dy]
+
     # =================================================================
     # Multi-select
     # =================================================================
@@ -1524,6 +1631,18 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                     self._batch_internal_edges.append(e)
                 else:
                     self._batch_boundary_edges.append(e)
+
+            # Э3: блоки, привязанные к узлам выделения, едут вместе с группой
+            # (undo покрыт snapshot'ом BatchDragCommand — он включает text_blocks)
+            self._batch_bound_blocks = []
+            seen_blk = set()
+            for b in self.model.bindings:
+                bid = b.get("block_id")
+                if b.get("node_id") in sel and bid and bid not in seen_blk:
+                    blk = self.model.find_text_block(bid)
+                    if blk and blk.get("bbox"):
+                        seen_blk.add(bid)
+                        self._batch_bound_blocks.append(blk)
         else:
             self.drag_start_edge_points = {}
             for key in self.model.get_connected_edges(node_id):
@@ -1532,12 +1651,20 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                     self.drag_start_edge_points[key] = {
                         'source_point': (edge_data.get('source_point') or []).copy(),
                         'target_point': (edge_data.get('target_point') or []).copy(),
-                        # Бэкап waypoints обязателен: при drag рёбра живо
-                        # пересчитываются (_recalculate_edge мутирует waypoints
-                        # мимо undo) — без него Ctrl+Z возвращал узел, но
-                        # оставлял рёбрам новые изломы (диагональные зигзаги).
+                        # Бэкап waypoints: пересадка конца waypoints не трогает
+                        # (adjusting=End), но ручные рёбра перепроецируются
+                        # мимо undo — DragNodeCommand возвращает всё скопом.
                         'waypoints': [wp.copy() for wp in edge_data.get('waypoints', [])],
                     }
+            # Э3: бэкап bbox привязанных текст-блоков — они едут за узлом,
+            # undo обязан вернуть и их (тест T-C: undo возвращает оба).
+            self.drag_start_block_bboxes = {}
+            for b in self.model.bindings:
+                if b.get("node_id") != node_id:
+                    continue
+                blk = self.model.find_text_block(b.get("block_id"))
+                if blk and blk.get("bbox"):
+                    self.drag_start_block_bboxes[b["block_id"]] = list(blk["bbox"])
 
     def drag_node_to(self, x: float, y: float):
         """Переместить узел/группу."""
@@ -1558,12 +1685,15 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         self._update_selection_visuals()
 
     def _batch_move_fast(self, dx: float, dy: float):
-        """Быстрое перемещение группы узлов — без routing.
+        """Перемещение группы узлов на кадре протяжки.
 
-        Стратегия для рёбер:
-        - Internal (оба конца в выделении): сдвигаем source_point/target_point/waypoints на dx,dy
-        - Boundary (один конец в выделении): простой пересчёт connection point (bbox midpoint),
-          без distribute_connection_points и без route_edge_v2.
+        Стратегия для рёбер (Э3, adjusting=End):
+        - Internal (оба конца в выделении): оба конца «ближние» — жёсткий
+          сдвиг source_point/target_point/waypoints на dx,dy (каноничная
+          посадка сохраняется трансляцией);
+        - Boundary (один конец в выделении): пересаживается ТОЛЬКО конец у
+          узла из выделения — ТОЙ ЖЕ функцией, что и на отпускании
+          (_reseat_moved_end): предпросмотр честный по построению.
         """
         sel = self.selected_nodes
 
@@ -1605,6 +1735,13 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
             if self.show_skins and nid in self._skin_items:
                 self._update_node_skin(nid)
 
+        # Э3: привязанные к выделению текст-блоки едут на ту же дельту
+        # (precomputed в start_drag_node; по блоку ровно одна привязка)
+        for blk in self._batch_bound_blocks:
+            bb = blk.get("bbox")
+            if bb and len(bb) == 4:
+                blk["bbox"] = [bb[0] + dx, bb[1] + dy, bb[2] + dx, bb[3] + dy]
+
         # Pass 2: обновить рёбра (precomputed в start_drag_node)
         for e in self._batch_internal_edges:
             # Internal edge: shift everything
@@ -1621,46 +1758,21 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
             self._update_edge_path(edge_key)
 
         for e in self._batch_boundary_edges:
-            # Boundary edge: lightweight recalc
-            self._recalculate_edge_fast(e)
-            edge_key = self.model.edge_key(e['source'], e['target'])
-            self._update_edge_path(edge_key)
+            # Э3: тот же расчёт, что на отпускании, — честный предпросмотр
+            # (прежний fast-midpoint стирал waypoints и «перепрыгивал» грань
+            # на отпускании — H7). Расчёт O(1) на ребро: node_anchor одного
+            # узла, без routing — отдельный fast-путь не нужен.
+            if e.get('_manual_route'):
+                self._recalculate_edge(e)   # ручной: только удержание на границе
+            else:
+                near = e['source'] if e['source'] in sel else e['target']
+                self._reseat_moved_end(e, near)
 
-        # Pass 3: привязанные текст-блоки следуют за группой (после рёбер —
-        # midpoint'ы edge-привязок уже актуальны; no-op вне состояния 'ocr')
+        # Pass 3: перерисовать привязанные текст-блоки (данные уже сдвинуты
+        # выше; no-op вне состояния 'ocr')
         if hasattr(self, "_refresh_ocr_layer_for_node"):
             for nid in sel:
                 self._refresh_ocr_layer_for_node(nid)
-
-    def _recalculate_edge_fast(self, edge_data: dict):
-        """Быстрый пересчёт ребра — без routing, без канона.
-
-        Только ПРЕДПРОСМОТР во время batch-drag: connection points = bbox side
-        midpoint, waypoints очищаются (рёбра рисуются прямыми). На отпускании
-        (_batch_recalculate_boundary_edges) концы приводятся каноном посадки
-        через _recalculate_edge (Э1); честный предпросмотр — Э3.
-        """
-        src_id, tgt_id = edge_data['source'], edge_data['target']
-        src = self.nodes.get(src_id)
-        tgt = self.nodes.get(tgt_id)
-        if not src or not tgt:
-            return
-
-        src_cx, src_cy = src['centroid'][1], src['centroid'][0]
-        tgt_cx, tgt_cy = tgt['centroid'][1], tgt['centroid'][0]
-
-        src_bbox = self._get_node_bbox(src_id)
-        tgt_bbox = self._get_node_bbox(tgt_id)
-
-        src_side = bbox_exit_side(src_bbox, src_cx, src_cy, tgt_cx, tgt_cy)
-        tgt_side = bbox_exit_side(tgt_bbox, tgt_cx, tgt_cy, src_cx, src_cy)
-
-        sx, sy = bbox_side_midpoint(src_bbox, src_side)
-        tx, ty = bbox_side_midpoint(tgt_bbox, tgt_side)
-
-        edge_data['source_point'] = [sy, sx]
-        edge_data['target_point'] = [ty, tx]
-        edge_data['waypoints'] = []
 
     def end_drag_node(self):
         """Завершить перетаскивание."""
@@ -1680,6 +1792,7 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                 self.model, self, node_id,
                 self.drag_start_centroid, self.drag_start_bbox,
                 self.drag_start_segmentation, self.drag_start_edge_points,
+                self.drag_start_block_bboxes,
             )
             cmd.capture_new_state()
             self.undo_mgr.push_executed(cmd)
@@ -1688,21 +1801,31 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         self._batch_drag = False
         self._batch_internal_edges = []
         self._batch_boundary_edges = []
+        self._batch_bound_blocks = []
         self.drag_start_centroid = None
         self.drag_start_bbox = []
         self.drag_start_segmentation = []
         self.drag_start_edge_points = {}
+        self.drag_start_block_bboxes = {}
 
     def _batch_recalculate_boundary_edges(self):
-        """Полный пересчёт boundary edges после завершения batch drag."""
+        """Отпускание batch-drag: ТО ЖЕ правило, что на протяжке (Э3,
+        adjusting=End) — пересаживается только конец у узла из выделения,
+        той же функцией (_reseat_moved_end идемпотентна: предпросмотр == итог).
+        Internal-рёбра уехали жёстким сдвигом и каноничны трансляцией."""
+        sel = self.selected_nodes
         for e in self._batch_boundary_edges:
-            self._recalculate_edge(e, keep_sides=False)
+            if e.get('_manual_route'):
+                self._recalculate_edge(e)
+                continue
+            near = e['source'] if e['source'] in sel else e['target']
+            self._reseat_moved_end(e, near)
 
     def _move_single_node(self, node_id: str, x: float, y: float):
-        """Переместить один узел и пересчитать рёбра.
-
-        Из graph_editor.py:3650-3710.
-        """
+        """Переместить один узел; у инцидентных рёбер пересадить ТОЛЬКО
+        ближний конец (Э3, adjusting=End — _reseat_moved_end). Вызывается на
+        каждом кадре протяжки; end_drag_node геометрию больше не меняет —
+        предпросмотр честный по построению."""
         node_data = self.nodes.get(node_id)
         if not node_data:
             return
@@ -1741,7 +1864,11 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
             r = self.EQUIPMENT_MARKER_RADIUS if node_type == 'equipment' else self.CONNECTOR_DRAW_RADIUS
             self.node_items[node_id].setRect(x - r, y - r, r * 2, r * 2)
 
-        # Пересчитать рёбра — двухпроходный
+        # Э3: привязанные текст-блоки едут за узлом на ту же дельту
+        # (непривязанные стоят; undo — через DragNodeCommand)
+        self._shift_bound_blocks(node_id, dx, dy)
+
+        # Рёбра: обновить кэши сторон + пересадить только ближний конец
         affected = [e for e in self.edges_data if e['source'] == node_id or e['target'] == node_id]
 
         for e in affected:
@@ -1757,7 +1884,14 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
             e['_tgt_side'] = bbox_exit_side(t_bbox, t_cx, t_cy, s_cx, s_cy)
 
         for e in affected:
-            self._recalculate_edge(e, moving_node_id=node_id, keep_sides=True)
+            if e.get('_manual_route'):
+                # ручной маршрут: только удержание точек на границе
+                # (ветка _manual_route внутри _recalculate_edge, как раньше)
+                self._recalculate_edge(e)
+            else:
+                # Э3 (adjusting=End): дальний конец и waypoints неприкосновенны;
+                # reseat_edge целиком на drag-пути больше не зовётся.
+                self._reseat_moved_end(e, node_id)
 
         # Скин следует за боксом при drag (bbox в модели уже обновлён выше)
         if self.show_skins and node_id in self._skin_items:
