@@ -27,7 +27,7 @@ from ui.editors.graph_data import GraphDataModel
 from ui.editors.undo_manager import UndoManager
 from ui.editors.mode_handlers.base_handler import ModeHandler
 from ui.editors.graph_geometry import (
-    bbox_exit_side, bbox_side_midpoint, boundary_projection, boundary_mark_points,
+    boundary_projection, boundary_mark_points,
 )
 
 logger = logging.getLogger(__name__)
@@ -1170,37 +1170,29 @@ class BaseGraphEditor(QGraphicsView):
     # =================================================================
 
     def get_connection_point(self, node_id: str, target_x: float, target_y: float) -> tuple[float, float]:
-        """Connection point on node boundary toward target.
+        """Точка подключения на узле, обращённая к (target_x, target_y).
 
-        For polygon nodes: prefer orthogonal (H/V ray), fallback nearest boundary.
-        For bbox-only / connector nodes: projection of the target onto the chosen
-        face when the target is within the face's span, midpoint otherwise.
+        Э1: посадка канонична — `modules/graph/core/seating` (тот же модуль,
+        что сажает выход раскладки): коннектор — жёстко центроид (без ободка
+        виртуального bbox), FIXED_SIZES-скин — граница `_skin_content_rect`,
+        полигон без скина — контур лучом вдоль оси; скин ПРИОРИТЕТНЕЕ полигона
+        (см. предупреждение в advanced_graph_editor._node_geometry — раньше
+        было наоборот). Замок общей оси выводится как в `reseat_edge`:
+        цель трактуется точечным партнёром (коннектором) в (target_x, target_y).
         """
+        from modules.graph.core import seating
+
         node = self.nodes[node_id]
-        seg = node.get('segmentation')
-
-        if seg and isinstance(seg, list) and len(seg) >= 6:
-            from ui.editors.autofix_chains import _polygon_connection_point
-            poly_pts = [(seg[i], seg[i + 1]) for i in range(0, len(seg), 2)]
-            bbox = node.get('bbox', [0, 0, 0, 0])
-            return _polygon_connection_point(target_x, target_y, poly_pts, bbox)
-
-        bbox = self._get_node_bbox(node_id)
-        cx, cy = node['centroid'][1], node['centroid'][0]
-        side = bbox_exit_side(bbox, cx, cy, target_x, target_y)
-        # Ортогональная посадка: если партнёр стоит в створе выбранной стороны,
-        # конец садится на его проекцию — труба идёт строго по оси. Середина
-        # стороны давала ВЕЕР: все рёбра, входящие с одной стороны, получали
-        # одну и ту же точку независимо от того, где партнёр (крупный блок с
-        # несколькими подводками — все линии сходились в одну точку и шли косо).
-        # Вне створа ортогональной трубы не существует — там прежняя середина.
-        x1, y1, x2, y2 = bbox
-        if side in ('left', 'right'):
-            if y1 <= target_y <= y2:
-                return (x1 if side == 'left' else x2, target_y)
-        elif x1 <= target_x <= x2:
-            return (target_x, y1 if side == 'top' else y2)
-        return bbox_side_midpoint(bbox, side)
+        byid = {
+            "__self__": node,
+            "__toward__": {"id": "__toward__", "type": "connector",
+                           "centroid": [float(target_y), float(target_x)]},
+        }
+        probe = {"source": "__self__", "target": "__toward__",
+                 "source_point": None, "target_point": None, "waypoints": []}
+        seating.reseat_edge(byid, probe)
+        sp = probe["source_point"]                    # [y, x]
+        return (sp[1], sp[0])
 
     def _closest_point_on_polygon(self, polygon: list, cx: float, cy: float,
                                    px: float, py: float) -> tuple[float, float]:

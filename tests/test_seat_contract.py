@@ -81,47 +81,16 @@ IMPLS = (
     "fxml_endpoints",
 )
 
-# ── ALLOWLIST известных расхождений (Э1 сжигает до пустого) ──────────────
+# ── ALLOWLIST известных расхождений ──────────────────────────────────────
 # ключ: (реализация, случай) -> причина. px — замер на этой фикстуре.
-# Для записей отсюда тест УТВЕРЖДАЕТ dist > TOL: починка реализации в Э1
+# Для записей отсюда тест УТВЕРЖДАЕТ dist > TOL: починка реализации
 # уронит тест и заставит удалить запись.
+#
+# Э1 (2026-07-31): все 12 записей СОЖЖЕНЫ — редакторские инструменты
+# (_recalculate_edge, optimize_edge, auto_fix_graph, get_connection_point)
+# переведены на канон seating.reseat_edge/node_anchor, замер по каждой
+# записи стал 0.00px. Добавлять сюда только НОВЫЕ известные расхождения.
 ALLOWLIST = {
-    ("recalculate_edge", "connector"):
-        "коннектор получает виртуальный bbox r=CONNECTOR_MARKER_RADIUS (4.0 в "
-        "canvas-режиме) -> конец на ободке, канон — жёстко центроид; 4.0px",
-    ("recalculate_edge", "skin"):
-        "скин сажается на полный bbox (midpoint стороны), канон — граница "
-        "_skin_content_rect (letterbox); 8.5px",
-    ("recalculate_edge", "skin_poly"):
-        "то же, что skin: _get_node_bbox не знает ни content-rect, ни "
-        "segmentation; 8.5px",
-    ("recalculate_edge", "polygon"):
-        "полигон сажается на midpoint стороны bbox (distribute_connection_"
-        "points), канон — луч вдоль lock-оси в контур; 35.36px",
-    ("recalculate_edge", "bbox"):
-        "distribute_connection_points даёт (i+1)/(n+1) по стороне (midpoint "
-        "при одном ребре), канон — замок на ось центроида коннектора; 20.0px",
-    ("optimize_edge", "skin"):
-        "connect_point_bbox сажает на полный bbox, канон — граница "
-        "_skin_content_rect; 8.5px",
-    ("optimize_edge", "skin_poly"):
-        "connect_point_polygon: полигон приоритетнее скина, канон для "
-        "FIXED_SIZES — content-rect, не контур; 4.5px",
-    ("auto_fix_graph", "skin"):
-        "_v_edge_y/_h_edge_x сажают на грань полного bbox, канон — граница "
-        "_skin_content_rect; 8.5px",
-    ("auto_fix_graph", "skin_poly"):
-        "_polygon_v_boundary: полигон приоритетнее скина, канон для "
-        "FIXED_SIZES — content-rect; 4.5px",
-    ("get_connection_point", "connector"):
-        "виртуальный bbox коннектора r=4.0 (canvas) -> конец на ободке, "
-        "канон — центроид; 4.0px",
-    ("get_connection_point", "skin"):
-        "bbox-ветка не знает _skin_content_rect; 8.5px",
-    ("get_connection_point", "skin_poly"):
-        "полигонная ветка приоритетнее скина (предупреждение "
-        "advanced_graph_editor:295-309), канон для FIXED_SIZES — "
-        "content-rect; 4.5px",
     # fxml_endpoints: расхождений НЕТ — на каноничном входе get_line_endpoints
     # воспроизводит канон (equipment: сохранённые sp/tp; connector: центроид ==
     # канон). Его особенность «коннектору принудительно центроид, сохранённый

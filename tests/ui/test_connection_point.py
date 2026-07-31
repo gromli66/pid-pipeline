@@ -1,13 +1,13 @@
 """T3 (П2) — ортогональная посадка конца трубы на bbox-узле.
 
-Фиксирует поведение коммита 2dda92a: если партнёр стоит В СТВОРЕ выбранной
-стороны, конец садится на его проекцию (труба идёт строго по оси); вне створа
-ортогональной трубы не существует — там прежняя середина стороны. До этого
-середина давала ВЕЕР: все рёбра, входящие с одной стороны, получали одну точку.
-
-Оговорка: 2dda92a в собственном теле признаёт, что делался под неподтверждённый
-диагноз и проверен только синтетикой — T3 фиксирует именно синтетическое
-поведение, это осознанно.
+Э1 (2026-07-31): get_connection_point переведён на канон посадки
+`modules/graph/core/seating.node_anchor` — ожидания обновлены под канон:
+  • партнёр в створе грани → конец на его проекции (как и раньше, 2dda92a);
+  • партнёр ВНЕ створа → проекция КЛАМПИТСЯ в грань (угол бокса), а не
+    прежняя середина стороны;
+  • конец у коннектора — жёстко центроид (ободок виртуального bbox
+    r=CONNECTOR_MARKER_RADIUS из посадки убран);
+  • скин (FIXED_SIZES) приоритетнее контура.
 
 Оба пути SimpleGraphEditor покрыты, они асимметричны:
   • add_edge — цепочка (точка на цели считается от центроида источника, потом
@@ -77,18 +77,22 @@ def test_t3_partner_in_span_gives_orthogonal_projection(qapp, tmp_path):
     assert ed.get_connection_point("box", 500.0, 180.0) == (250.0, 180.0)
 
 
-def test_t3_partner_out_of_span_falls_back_to_midpoint(qapp, tmp_path):
-    """Партнёр справа, но ВЫШЕ бокса — ортогональной трубы нет, середина грани."""
+def test_t3_partner_out_of_span_clamps_to_face(qapp, tmp_path):
+    """Партнёр справа, но ВЫШЕ бокса — ортогональной трубы нет.
+
+    Э1: канон (node_anchor) клампит проекцию партнёра в грань (угол бокса),
+    а не сажает на прежнюю середину стороны."""
     ed = _editor(qapp, tmp_path, _graph([50.0, 500.0]))
-    assert ed.get_connection_point("box", 500.0, 50.0) == (250.0, 200.0)
+    assert ed.get_connection_point("box", 500.0, 50.0) == (250.0, 150.0)
 
 
 def test_t3_vertical_span_works_the_same_way(qapp, tmp_path):
     """Ось перепутать нельзя: снизу и в створе → проекция по x."""
     ed = _editor(qapp, tmp_path, _graph([380.0, 170.0]))
     assert ed.get_connection_point("box", 170.0, 380.0) == (170.0, 250.0)
-    # снизу (dy доминирует), но левее бокса — створа нет, середина нижней грани
-    assert ed.get_connection_point("box", 100.0, 500.0) == (200.0, 250.0)
+    # снизу (dy доминирует), но левее бокса — створа нет: Э1 канон клампит
+    # проекцию в нижнюю грань (угол), не середина
+    assert ed.get_connection_point("box", 100.0, 500.0) == (150.0, 250.0)
 
 
 def test_t3_fan_is_gone(qapp, tmp_path):
@@ -109,16 +113,17 @@ def test_t3_add_edge_chain(qapp, tmp_path):
 
     # источник (box): партнёр-точка на коннекторе в створе правой грани
     assert edge["source_point"] == [180.0, 250.0]     # [y, x]
-    # цель (conn) — виртуальный бокс радиуса CONNECTOR_MARKER_RADIUS
-    r = ed.CONNECTOR_MARKER_RADIUS
-    assert edge["target_point"] == [180.0, 500.0 - r]
+    # цель (conn) — Э1: канон, конец коннектора жёстко в центроиде
+    # (раньше — ободок виртуального бокса r=CONNECTOR_MARKER_RADIUS)
+    assert edge["target_point"] == [180.0, 500.0]
 
 
 def test_t3_add_edge_out_of_span(qapp, tmp_path):
     ed = _editor(qapp, tmp_path, _graph([50.0, 500.0]))
     assert ed.add_edge("box", "conn")
     edge = ed.model.find_edge_data(ed.model.edge_key("box", "conn"))
-    assert edge["source_point"] == [200.0, 250.0]     # середина правой грани
+    # Э1: канон клампит проекцию в правую грань (угол), не середина
+    assert edge["source_point"] == [150.0, 250.0]
 
 
 # ── путь 2: _on_node_resized (оба конца по центроидам) ───────────────────
@@ -135,23 +140,29 @@ def test_t3_resize_recomputes_both_ends_from_centroids(qapp, tmp_path):
 
     # партнёр (центроид коннектора, y=180) по-прежнему в створе → проекция
     assert edge["source_point"] == [180.0, 250.0]
-    r = ed.CONNECTOR_MARKER_RADIUS
-    # обратный конец считается от ЦЕНТРОИДА бокса, а он уехал на y=225
-    assert edge["target_point"] == [180.0, 500.0 - r]
+    # обратный конец — Э1: канон, центроид коннектора (без ободка r)
+    assert edge["target_point"] == [180.0, 500.0]
 
 
-def test_t3_resize_out_of_span_gives_midpoint(qapp, tmp_path):
-    """Ужать бокс так, чтобы партнёр вышел из створа → середина грани."""
+def test_t3_resize_out_of_span_clamps_to_face(qapp, tmp_path):
+    """Ужать бокс так, чтобы партнёр вышел из створа.
+
+    Э1: канон клампит проекцию партнёра (y=180) в грань — угол y=200,
+    не прежняя середина правой грани."""
     ed = _editor(qapp, tmp_path, _graph([180.0, 500.0]))
     assert ed.add_edge("box", "conn")
     ed._on_node_resized("box", [150.0, 200.0, 250.0, 300.0])   # створ 200..300
     edge = ed.model.find_edge_data(ed.model.edge_key("box", "conn"))
-    assert edge["source_point"] == [250.0, 250.0]              # середина правой
+    assert edge["source_point"] == [200.0, 250.0]
 
 
 def test_t3_polygon_node_uses_polygon_path(qapp, tmp_path):
-    """У узла с контуром работает полигонная ветка, а не bbox-ветка."""
+    """У узла с контуром работает полигонная ветка, а не bbox-ветка.
+
+    Э1: у канона скин ПРИОРИТЕТНЕЕ контура, поэтому полигонную ветку
+    проверяем на узле без скина (class_name вне FIXED_SIZES)."""
     g = _graph([200.0, 500.0])
+    g["nodes"][0]["class_name"] = "unknow"
     g["nodes"][0]["segmentation"] = [150.0, 150.0, 250.0, 150.0,
                                      250.0, 250.0, 150.0, 250.0]
     ed = _editor(qapp, tmp_path, g)

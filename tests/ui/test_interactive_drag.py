@@ -153,13 +153,15 @@ def _dist(a, b):
 
 # ── T-C.1: drag узла — дальний конец неприкосновенен ─────────────────────
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Э3 adjusting=End: drag box_a на 10px вправо переписывает ОБА конца через "
-    "distribute_connection_points — конец у нетронутого box_b уезжает на 35.0px "
-    "([235,400] -> [270,400], с оси канона на середину грани) и рождает 2 waypoints"))
 def test_drag_node_far_end_untouched(qapp, tmp_path):
     """Семантика adjusting=End (§2 п.4 плана): при сдвиге узла A конец ребра
-    у нетронутого узла B не меняется (метрика far_end_moved == 0, §3.2)."""
+    у нетронутого узла B не меняется (метрика far_end_moved == 0, §3.2).
+
+    Э1: xfail снят — drag по-прежнему пересчитывает ОБА конца (семантика
+    adjusting=End — Э3), но пересчёт идёт каноном `seating.reseat_edge`,
+    а канон на каноничном входе ИДЕМПОТЕНТЕН: конец у нетронутого box_b
+    попадает в ту же точку [235,400] и waypoints не рождаются. До Э1
+    distribute_connection_points уводил его на 35px (середина грани)."""
     g = _graph_two_boxes()
     _assert_canonical(g)
     ed = _editor(qapp, tmp_path, g)
@@ -202,14 +204,13 @@ def test_drag_node_leaves_nonincident_edges_alone(qapp, tmp_path):
 
 # ── T-C.2: drag коннектора — конец в центроиде ───────────────────────────
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Э1: после drag коннектора конец сидит на ободке виртуального bbox "
-    "r=CONNECTOR_MARKER_RADIUS, а не в центроиде: замер 8.00px (centroid "
-    "[200,320], target_point [200,312]; в canvas-режиме константа была бы 4.0)"))
 def test_drag_connector_end_stays_at_centroid(qapp, tmp_path):
     """Канон (seating.node_anchor): connector-конец == центроид, жёстко.
-    _get_node_bbox (base_graph_editor.py:1040-1051) даёт коннектору
-    виртуальный bbox r=8 — конец садится на его ободок."""
+
+    Э1: xfail снят — посадка в _recalculate_edge идёт каноном, виртуальный
+    bbox r=CONNECTOR_MARKER_RADIUS из ПОСАДКИ убран (до Э1 конец садился
+    на его ободок, замер 8.00px). Сам виртуальный bbox остаётся в
+    hit-тестах/routing — это не посадка."""
     g = _graph_box_conn()
     _assert_canonical(g)
     ed = _editor(qapp, tmp_path, g)
@@ -304,8 +305,10 @@ def test_screen_equals_file_end_on_contour(qapp, tmp_path):
 @pytest.mark.xfail(strict=True, reason=(
     "H6 (экран != файл): конец на bbox-грани [340,400] рисуется лучом из "
     "центроида в вершину контура [300,400] — расхождение 40.00px; файл "
-    "содержит одно, оператор видит другое (чинится Э1/Э3 + метрика "
-    "screen_vs_file §3.2)"))
+    "содержит одно, оператор видит другое. Э1 это НЕ закрыл: инструменты "
+    "больше не сажают на bbox-грань, но уже сохранённый некононичный конец "
+    "при загрузке отрисовывается доводкой _contour_endpoint по-старому "
+    "(чинится Э3 «экран == итог» + метрика screen_vs_file §3.2)"))
 def test_screen_equals_file_end_on_bbox_face(qapp, tmp_path):
     """Конец, пересаженный редактором на bbox-грань (так делают инструменты
     1-4 из §1 плана), при нарисованном контуре уезжает: _contour_endpoint

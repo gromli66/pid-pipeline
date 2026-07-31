@@ -44,10 +44,9 @@ from ui.editors.graph_geometry import (
     get_node_geometry, compute_edge_perpendicularity,
     connect_bbox_bbox, connect_bbox_polygon, connect_polygon_polygon,
     connect_point_bbox, connect_point_polygon,
-    global_axis_perpendicularity,
     node_orientation_by_edges,
 )
-from ui.editors.edge_routing import distribute_connection_points, route_edge as route_edge_v2, segment_intersects_bbox
+from ui.editors.edge_routing import route_edge as route_edge_v2, segment_intersects_bbox
 from ui.editors.autofix_chains import auto_fix_graph
 from ui.editors.residual_layer_mixin import ResidualLayerMixin
 from ui.editors.ocr_layer_mixin import (
@@ -750,6 +749,13 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         if not edge_data:
             return False
 
+        # Ручную посадку оператора инструменты не пересаживают (инвариант
+        # плана EDITOR_AFTER_LAYOUT_PLAN, H4).
+        if edge_data.get('_manual_route'):
+            self.update_status(
+                f"Ребро {node_a} — {node_b}: ручной маршрут, посадка не пересчитывается")
+            return False
+
         original_source_id = edge_data['source']
         original_target_id = edge_data['target']
 
@@ -757,66 +763,21 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         old_tp = edge_data.get('target_point', []).copy() if edge_data.get('target_point') else None
         old_wp = [wp.copy() for wp in edge_data.get('waypoints', [])]
 
-        # Определяем текущую ось
-        required_axis = None
-        if old_sp and old_tp:
-            old_dx = old_tp[1] - old_sp[1]
-            old_dy = old_tp[0] - old_sp[0]
-            _, required_axis = global_axis_perpendicularity(old_dx, old_dy)
+        # Э1: ось выравнивания и концы — от канона посадки: `reseat_edge` сам
+        # выводит замок H/V из реальной геометрии пары (НЕ из старого
+        # направления ребра) и сажает концы канонично (коннектор = центроид,
+        # FIXED_SIZES-скин = граница content-rect, полигон = контур).
+        # Probe без waypoints — оптимизация, как и раньше, стирает маршрут
+        # (OptimizeEdgeCommand.execute ставит waypoints=[]).
+        from modules.graph.core import seating
 
-        src = self.nodes[original_source_id]
-        tgt = self.nodes[original_target_id]
-        src_cx, src_cy = src['centroid'][1], src['centroid'][0]
-        tgt_cx, tgt_cy = tgt['centroid'][1], tgt['centroid'][0]
-
-        # Вычисляем новые точки с учётом required_axis (как в оригинале)
-        src_bbox = src.get('bbox')
-        tgt_bbox = tgt.get('bbox')
-        src_poly = src.get('segmentation')
-        tgt_poly = tgt.get('segmentation')
-
-        src_has_bbox = src_bbox and len(src_bbox) == 4
-        tgt_has_bbox = tgt_bbox and len(tgt_bbox) == 4
-        src_has_poly = src_poly and isinstance(src_poly, list) and len(src_poly) >= 6
-        tgt_has_poly = tgt_poly and isinstance(tgt_poly, list) and len(tgt_poly) >= 6
-
-        src_type = src.get('type', 'connector')
-        tgt_type = tgt.get('type', 'connector')
-        src_is_point = src_type == 'connector' and not src_has_bbox and not src_has_poly
-        tgt_is_point = tgt_type == 'connector' and not tgt_has_bbox and not tgt_has_poly
-
-        src_x, src_y, tgt_x, tgt_y = None, None, None, None
-
-        if src_is_point and tgt_is_point:
-            src_x, src_y = src_cx, src_cy
-            tgt_x, tgt_y = tgt_cx, tgt_cy
-        elif src_is_point:
-            if tgt_has_poly:
-                (src_x, src_y), (tgt_x, tgt_y), _ = connect_point_polygon((src_cx, src_cy), tgt_poly, required_axis)
-            elif tgt_has_bbox:
-                (src_x, src_y), (tgt_x, tgt_y), _ = connect_point_bbox((src_cx, src_cy), tgt_bbox, required_axis)
-        elif tgt_is_point:
-            if src_has_poly:
-                (tgt_x, tgt_y), (src_x, src_y), _ = connect_point_polygon((tgt_cx, tgt_cy), src_poly, required_axis)
-            elif src_has_bbox:
-                (tgt_x, tgt_y), (src_x, src_y), _ = connect_point_bbox((tgt_cx, tgt_cy), src_bbox, required_axis)
-        elif src_has_bbox and tgt_has_bbox and not src_has_poly and not tgt_has_poly:
-            (src_x, src_y), (tgt_x, tgt_y), _ = connect_bbox_bbox(src_bbox, tgt_bbox, required_axis)
-        elif src_has_bbox and tgt_has_poly:
-            (src_x, src_y), (tgt_x, tgt_y), _ = connect_bbox_polygon(src_bbox, tgt_poly, required_axis)
-        elif src_has_poly and tgt_has_bbox:
-            (tgt_x, tgt_y), (src_x, src_y), _ = connect_bbox_polygon(tgt_bbox, src_poly, required_axis)
-        elif src_has_poly and tgt_has_poly:
-            (src_x, src_y), (tgt_x, tgt_y), _ = connect_polygon_polygon(src_poly, tgt_poly, required_axis)
-        elif src_has_bbox and tgt_has_bbox:
-            (src_x, src_y), (tgt_x, tgt_y), _ = connect_bbox_bbox(src_bbox, tgt_bbox, required_axis)
-
-        if src_x is None:
-            src_x, src_y = self.get_connection_point(original_source_id, tgt_cx, tgt_cy)
-            tgt_x, tgt_y = self.get_connection_point(original_target_id, src_cx, src_cy)
-
-        new_sp = [src_y, src_x]
-        new_tp = [tgt_y, tgt_x]
+        probe = {'source': original_source_id, 'target': original_target_id,
+                 'source_point': None, 'target_point': None, 'waypoints': []}
+        seating.reseat_edge(self.nodes, probe)
+        new_sp = probe['source_point']
+        new_tp = probe['target_point']
+        src_x, src_y = new_sp[1], new_sp[0]
+        tgt_x, tgt_y = new_tp[1], new_tp[0]
 
         cmd = OptimizeEdgeCommand(
             self.model, self,
@@ -930,7 +891,9 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                           keep_sides: bool = False):
         """Пересчитать connection points и waypoints для ребра.
 
-        Полная логика из graph_editor.py:2497-2595.
+        Посадка концов — канон `modules/graph/core/seating` (Э1); маршрут
+        (решение о waypoints + route_edge_v2) — прежняя логика из
+        graph_editor.py:2497-2595.
         """
         # Ручной режим: точки прикрепления заданы пользователем вручную.
         # Не пересчитываем маршрут к ортогональности — только удерживаем
@@ -962,15 +925,19 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         edge_data['_src_side'] = src_side
         edge_data['_tgt_side'] = tgt_side
 
-        src_dist = distribute_connection_points(src_id, src_side, src_bbox, self.edges_data, self.nodes)
-        tgt_dist = distribute_connection_points(tgt_id, tgt_side, tgt_bbox, self.edges_data, self.nodes)
+        # Э1: посадка концов — канон `seating.reseat_edge` (коннектор = жёстко
+        # центроид без виртуального bbox r=CONNECTOR_MARKER_RADIUS, FIXED_SIZES-
+        # скин = граница content-rect, полигон = контур, прямые связи — замок
+        # общей оси). Виртуальный bbox коннектора остаётся ниже только в
+        # routing (обход препятствий) и в стороне выхода — это маршрут и
+        # визуал, не посадка. Маршрут инструмент, как и раньше, строит заново.
+        from modules.graph.core import seating
 
-        edge_id = edge_data.get('id', '')
-        sx, sy = src_dist.get(edge_id, bbox_side_midpoint(src_bbox, src_side))
-        tx, ty = tgt_dist.get(edge_id, bbox_side_midpoint(tgt_bbox, tgt_side))
-
-        edge_data['source_point'] = [sy, sx]
-        edge_data['target_point'] = [ty, tx]
+        edge_data['waypoints'] = []
+        seating.reseat_edge(self.nodes, edge_data)
+        sp, tp = edge_data['source_point'], edge_data['target_point']
+        sx, sy = sp[1], sp[0]
+        tx, ty = tp[1], tp[0]
 
         src_exit = 'H' if src_side in ('left', 'right') else 'V'
         tgt_exit = 'H' if tgt_side in ('left', 'right') else 'V'
@@ -1708,10 +1675,12 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                 self._refresh_ocr_layer_for_node(nid)
 
     def _recalculate_edge_fast(self, edge_data: dict):
-        """Быстрый пересчёт ребра — без routing, без distribute.
+        """Быстрый пересчёт ребра — без routing, без канона.
 
-        Для drag: пересчитывает только connection points (bbox side midpoint).
-        Waypoints очищаются (рёбра рисуются прямыми).
+        Только ПРЕДПРОСМОТР во время batch-drag: connection points = bbox side
+        midpoint, waypoints очищаются (рёбра рисуются прямыми). На отпускании
+        (_batch_recalculate_boundary_edges) концы приводятся каноном посадки
+        через _recalculate_edge (Э1); честный предпросмотр — Э3.
         """
         src_id, tgt_id = edge_data['source'], edge_data['target']
         src = self.nodes.get(src_id)

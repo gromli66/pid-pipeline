@@ -32,7 +32,6 @@ from __future__ import annotations
 import math
 from copy import deepcopy
 from collections import defaultdict
-from typing import Optional
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -214,131 +213,6 @@ def _build_chains(
 
 def _clamp(target: float, orig: float, max_shift: float) -> float:
     return max(orig - max_shift, min(orig + max_shift, target))
-
-
-# ═══════════════════════════════════════════════════════════════
-# Polygon geometry helpers
-# ═══════════════════════════════════════════════════════════════
-
-def _get_poly(node: dict) -> Optional[list]:
-    """Extract polygon as [(x,y), ...] pairs, or None."""
-    seg = node.get('segmentation')
-    if seg and isinstance(seg, list) and len(seg) >= 6:
-        return [(seg[i], seg[i + 1]) for i in range(0, len(seg), 2)]
-    return None
-
-
-def _h_ray_intersections(y: float, poly_pts: list) -> list:
-    """All x-coordinates where horizontal line y=const crosses polygon edges."""
-    xs = []
-    n = len(poly_pts)
-    for i in range(n):
-        x1, y1 = poly_pts[i]
-        x2, y2 = poly_pts[(i + 1) % n]
-        if y1 == y2:
-            continue
-        if (y1 <= y < y2) or (y2 <= y < y1):
-            t = (y - y1) / (y2 - y1)
-            xs.append(x1 + t * (x2 - x1))
-    return xs
-
-
-def _v_ray_intersections(x: float, poly_pts: list) -> list:
-    """All y-coordinates where vertical line x=const crosses polygon edges."""
-    ys = []
-    n = len(poly_pts)
-    for i in range(n):
-        x1, y1 = poly_pts[i]
-        x2, y2 = poly_pts[(i + 1) % n]
-        if x1 == x2:
-            continue
-        if (x1 <= x < x2) or (x2 <= x < x1):
-            t = (x - x1) / (x2 - x1)
-            ys.append(y1 + t * (y2 - y1))
-    return ys
-
-
-def _closest_point_on_segment(px, py, x1, y1, x2, y2):
-    """Closest point on line segment (x1,y1)-(x2,y2) to point (px,py)."""
-    dx, dy = x2 - x1, y2 - y1
-    len_sq = dx * dx + dy * dy
-    if len_sq < 1e-12:
-        return x1, y1
-    t = max(0.0, min(1.0, ((px - x1) * dx + (py - y1) * dy) / len_sq))
-    return x1 + t * dx, y1 + t * dy
-
-
-def _nearest_point_on_polygon(px: float, py: float, poly_pts: list):
-    """Closest point on polygon boundary to (px, py). Returns (x, y)."""
-    best_dist_sq = float('inf')
-    best_pt = (px, py)
-    n = len(poly_pts)
-    for i in range(n):
-        x1, y1 = poly_pts[i]
-        x2, y2 = poly_pts[(i + 1) % n]
-        cx, cy = _closest_point_on_segment(px, py, x1, y1, x2, y2)
-        d = (cx - px) ** 2 + (cy - py) ** 2
-        if d < best_dist_sq:
-            best_dist_sq = d
-            best_pt = (cx, cy)
-    return best_pt
-
-
-def _polygon_h_boundary(y: float, poly_pts: list, toward_x: float):
-    """X on polygon boundary at horizontal y, on the side facing toward_x.
-
-    Returns x-coordinate or None if ray misses polygon.
-    """
-    xs = _h_ray_intersections(y, poly_pts)
-    if not xs:
-        return None
-    # Pick boundary on the side of toward_x:
-    # toward_x > polygon center → rightmost intersection
-    # toward_x < polygon center → leftmost intersection
-    cx = sum(p[0] for p in poly_pts) / len(poly_pts)
-    if toward_x >= cx:
-        return max(xs)
-    return min(xs)
-
-
-def _polygon_v_boundary(x: float, poly_pts: list, toward_y: float):
-    """Y on polygon boundary at vertical x, on the side facing toward_y.
-
-    Returns y-coordinate or None if ray misses polygon.
-    """
-    ys = _v_ray_intersections(x, poly_pts)
-    if not ys:
-        return None
-    cy = sum(p[1] for p in poly_pts) / len(poly_pts)
-    if toward_y >= cy:
-        return max(ys)
-    return min(ys)
-
-
-def _polygon_connection_point(
-    other_x: float, other_y: float, poly_pts: list, bbox: list,
-) -> tuple:
-    """Best connection point on polygon boundary toward (other_x, other_y).
-
-    Strategy:
-    1. H-ray at y=other_y → x on polygon boundary (perfect H edge)
-    2. V-ray at x=other_x → y on polygon boundary (perfect V edge)
-    3. Pick whichever gives shorter distance
-    4. If both miss → nearest point on polygon boundary (slightly diagonal)
-    """
-    h_x = _polygon_h_boundary(other_y, poly_pts, other_x)
-    v_y = _polygon_v_boundary(other_x, poly_pts, other_y)
-
-    h_dist = abs(h_x - other_x) if h_x is not None else float('inf')
-    v_dist = abs(v_y - other_y) if v_y is not None else float('inf')
-
-    if h_dist <= v_dist and h_x is not None:
-        return (h_x, other_y)
-    if v_y is not None:
-        return (other_x, v_y)
-
-    # Both rays miss → nearest point on boundary
-    return _nearest_point_on_polygon(other_x, other_y, poly_pts)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -540,221 +414,39 @@ def auto_fix_graph(
                 # No break — continue checking remaining equipment bboxes
                 # with updated cx/cy position
 
-    # ─── Update edge endpoints ─────────────────────────────────
-    # For each edge, compute source and target connection points.
-    #
-    # Straight edges (after alignment, ddy or ddx ≤ STRAIGHT_TOL):
-    #   Both endpoints share a common Y (H) or X (V), ensuring
-    #   a perfectly straight line without waypoints.
-    #   Common coordinate: connector centroid wins (avoids mid_x/mid_y
-    #   which places the point far from connector for large equipment).
-    #
-    # Non-straight edges (diagonal, couldn't align):
-    #   Each endpoint computed independently:
-    #   - Connector (no bbox): point = centroid
-    #   - Equipment (bbox): project the OTHER node's position
-    #     onto the nearest visible face of the bbox.
-    #   These edges stay as straight diagonal lines (no waypoints).
+    # ─── Update edge endpoints — Э1: канон посадки ─────────────
+    # Старый блок переписывал концы у ВСЕХ рёбер собственными правилами
+    # (грань полного bbox, полигон приоритетнее скина — против канона).
+    # Теперь: пересаживаются ТОЛЬКО рёбра, затронутые сдвигом узлов, и
+    # только каноном `modules/graph/core/seating.reseat_edge` — тем же
+    # модулем, что сажает выход раскладки. Нетронутые рёбра сохраняют
+    # входную посадку (инвариант «не больше входа»), рёбра с ручным
+    # маршрутом (_manual_route) неприкосновенны (инвариант плана, H4).
+    # Waypoints затронутых рёбер стираются ДО пересадки — это прежняя
+    # семантика выпрямления (иначе после сдвига узлов остаётся устаревший
+    # зигзаг с диагональным хвостом), а канон затем сажает концы на общую
+    # ось уже прямого ребра.
+    from modules.graph.core.seating import reseat_edge
 
-    def _project_to_bbox_face(px: float, py: float, bbox: list) -> tuple:
-        """Find the best connection point on bbox face for point (px, py)."""
-        x1, y1, x2, y2 = bbox
-
-        x_inside = x1 <= px <= x2
-        y_inside = y1 <= py <= y2
-
-        if x_inside and not y_inside:
-            return (px, y1) if py < y1 else (px, y2)
-
-        if y_inside and not x_inside:
-            return (x1, py) if px < x1 else (x2, py)
-
-        if not x_inside and not y_inside:
-            clamped_x = max(x1, min(x2, px))
-            clamped_y = max(y1, min(y2, py))
-            face_y = y1 if py < y1 else y2
-            face_x = x1 if px < x1 else x2
-            h_face_off = abs(px - clamped_x)
-            v_face_off = abs(py - clamped_y)
-            if h_face_off <= v_face_off:
-                return (clamped_x, face_y)
-            else:
-                return (face_x, clamped_y)
-
-        # Inside bbox — nearest face
-        dists = [
-            (px - x1, (x1, py)),     # left
-            (x2 - px, (x2, py)),     # right
-            (py - y1, (px, y1)),     # top
-            (y2 - py, (px, y2)),     # bottom
-        ]
-        return min(dists, key=lambda d: d[0])[1]
-
-    def _node_endpoint(node: dict, other_x: float, other_y: float) -> tuple:
-        """Connection point on node toward (other_x, other_y).
-
-        Connector (no bbox) → centroid.
-        Equipment with polygon → polygon boundary point.
-        Equipment bbox only → project onto bbox face.
-        """
-        bbox = node.get('bbox')
-        if not bbox or len(bbox) != 4:
-            return (node['centroid'][1], node['centroid'][0])
-        poly = _get_poly(node)
-        if poly:
-            return _polygon_connection_point(other_x, other_y, poly, bbox)
-        return _project_to_bbox_face(other_x, other_y, bbox)
-
-    def _h_edge_x(node: dict, toward_x: float, common_y: float) -> float:
-        """X-coordinate for H-straight edge endpoint on node at y=common_y.
-
-        Polygon → H-ray intersection on boundary.
-        Bbox only → left/right face.
-        No bbox → centroid x.
-        """
-        bbox = node.get('bbox')
-        if not bbox or len(bbox) != 4:
-            return _cx(node)
-        poly = _get_poly(node)
-        if poly:
-            bx = _polygon_h_boundary(common_y, poly, toward_x)
-            if bx is not None:
-                return bx
-            # H-ray misses polygon → nearest boundary point, take x
-            pt = _nearest_point_on_polygon(toward_x, common_y, poly)
-            return pt[0]
-        # Bbox fallback
-        ncx = _cx(node)
-        return bbox[2] if toward_x > ncx else bbox[0]
-
-    def _v_edge_y(node: dict, toward_y: float, common_x: float) -> float:
-        """Y-coordinate for V-straight edge endpoint on node at x=common_x.
-
-        Polygon → V-ray intersection on boundary.
-        Bbox only → top/bottom face.
-        No bbox → centroid y.
-        """
-        bbox = node.get('bbox')
-        if not bbox or len(bbox) != 4:
-            return _cy(node)
-        poly = _get_poly(node)
-        if poly:
-            by = _polygon_v_boundary(common_x, poly, toward_y)
-            if by is not None:
-                return by
-            pt = _nearest_point_on_polygon(common_x, toward_y, poly)
-            return pt[1]
-        ncy = _cy(node)
-        return bbox[3] if toward_y > ncy else bbox[1]
+    moved_ids = set()
+    for nid, n in nodes.items():
+        ox, oy = orig_pos[nid]
+        if math.hypot(_cx(n) - ox, _cy(n) - oy) > 0.5:
+            moved_ids.add(nid)
 
     for e in edges_data:
-        src = nodes.get(e['source'])
-        tgt = nodes.get(e['target'])
-        if not src or not tgt:
+        if e.get('_manual_route'):
             continue
-
-        sx, sy = _cx(src), _cy(src)
-        tx, ty = _cx(tgt), _cy(tgt)
-        src_bbox = src.get('bbox') if src.get('bbox') and len(
-            src.get('bbox', [])) == 4 else None
-        tgt_bbox = tgt.get('bbox') if tgt.get('bbox') and len(
-            tgt.get('bbox', [])) == 4 else None
-
-        ddx_abs = abs(sx - tx)
-        ddy_abs = abs(sy - ty)
-
-        if ddy_abs <= STRAIGHT_TOL:
-            # ── Horizontal straight edge ──────────────────
-            if not src_bbox and not tgt_bbox:
-                common_y = (sy + ty) / 2
-            elif not src_bbox:
-                common_y = sy
-            elif not tgt_bbox:
-                common_y = ty
-            else:
-                common_y = (sy + ty) / 2
-
-            sp_x = _h_edge_x(src, tx, common_y) if src_bbox else sx
-            tp_x = _h_edge_x(tgt, sx, common_y) if tgt_bbox else tx
-
-            e['source_point'] = [common_y, sp_x]
-            e['target_point'] = [common_y, tp_x]
-            e['waypoints'] = []
+        if e['source'] not in moved_ids and e['target'] not in moved_ids:
+            continue
+        if e['source'] not in nodes or e['target'] not in nodes:
+            continue                      # висячее ребро — как и раньше, мимо
+        e['waypoints'] = []
+        reseat_edge(nodes, e)
+        sp, tp = e.get('source_point'), e.get('target_point')
+        if sp and tp and (abs(sp[0] - tp[0]) <= STRAIGHT_TOL
+                          or abs(sp[1] - tp[1]) <= STRAIGHT_TOL):
             stats['edges_straightened'] += 1
-
-        elif ddx_abs <= STRAIGHT_TOL:
-            # ── Vertical straight edge ────────────────────
-            if not src_bbox and not tgt_bbox:
-                common_x = (sx + tx) / 2
-            elif not src_bbox:
-                common_x = sx
-            elif not tgt_bbox:
-                common_x = tx
-            else:
-                common_x = (sx + tx) / 2
-
-            sp_y = _v_edge_y(src, ty, common_x) if src_bbox else sy
-            tp_y = _v_edge_y(tgt, sy, common_x) if tgt_bbox else ty
-
-            e['source_point'] = [sp_y, common_x]
-            e['target_point'] = [tp_y, common_x]
-            e['waypoints'] = []
-            stats['edges_straightened'] += 1
-
-        else:
-            # ── Non-straight edge (diagonal / couldn't align) ─
-            if not src_bbox or not tgt_bbox:
-                src_pt = _node_endpoint(src, tx, ty)
-                tgt_pt = _node_endpoint(tgt, sx, sy)
-                e['source_point'] = [src_pt[1], src_pt[0]]
-                e['target_point'] = [tgt_pt[1], tgt_pt[0]]
-            else:
-                # eq↔eq → try perpendicular via bbox overlap
-                x_overlap_start = max(src_bbox[0], tgt_bbox[0])
-                x_overlap_end = min(src_bbox[2], tgt_bbox[2])
-                y_overlap_start = max(src_bbox[1], tgt_bbox[1])
-                y_overlap_end = min(src_bbox[3], tgt_bbox[3])
-
-                x_overlap = x_overlap_end - x_overlap_start
-                y_overlap = y_overlap_end - y_overlap_start
-
-                if x_overlap > 2 and y_overlap <= 0:
-                    # Vertical connection through X-overlap
-                    conn_x = (x_overlap_start + x_overlap_end) / 2
-                    if sy < ty:
-                        sp_y = _v_edge_y(src, ty, conn_x)
-                        tp_y = _v_edge_y(tgt, sy, conn_x)
-                    else:
-                        sp_y = _v_edge_y(src, ty, conn_x)
-                        tp_y = _v_edge_y(tgt, sy, conn_x)
-                    e['source_point'] = [sp_y, conn_x]
-                    e['target_point'] = [tp_y, conn_x]
-
-                elif y_overlap > 2 and x_overlap <= 0:
-                    # Horizontal connection through Y-overlap
-                    conn_y = (y_overlap_start + y_overlap_end) / 2
-                    if sx < tx:
-                        sp_x = _h_edge_x(src, tx, conn_y)
-                        tp_x = _h_edge_x(tgt, sx, conn_y)
-                    else:
-                        sp_x = _h_edge_x(src, tx, conn_y)
-                        tp_x = _h_edge_x(tgt, sx, conn_y)
-                    e['source_point'] = [conn_y, sp_x]
-                    e['target_point'] = [conn_y, tp_x]
-
-                else:
-                    # No clean overlap → projection fallback
-                    src_pt = _node_endpoint(src, tx, ty)
-                    tgt_pt = _node_endpoint(tgt, sx, sy)
-                    e['source_point'] = [src_pt[1], src_pt[0]]
-                    e['target_point'] = [tgt_pt[1], tgt_pt[0]]
-
-            # Долг O6: маршрут (waypoints/path) обнуляем ТОЛЬКО когда связь получилась
-            # ортогональной. Иначе (диагональ) сохраняем исходный маршрут — не рвём
-            # routing, не режем лист диагональю через полсхемы.
-            sp, tp = e['source_point'], e['target_point']
-            if abs(sp[0] - tp[0]) < 1.0 or abs(sp[1] - tp[1]) < 1.0:
-                e['waypoints'] = []
 
     # ─── Final statistics ──────────────────────────────────────
     total_shift = 0.0
