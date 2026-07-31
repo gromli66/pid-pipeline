@@ -396,71 +396,13 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
             return True
         return not self._node_has_skin(node)
 
-    def _contour_endpoint(self, node_id: str, point, toward):
-        """Конец ребра на границе НАРИСОВАННОГО контура (только отрисовка).
-
-        Э3/H6 «экран == файл» (решение заказчика, повышенный приоритет):
-        конец, лежащий на КАНОНИЧЕСКОЙ границе своего узла — сегменте контура,
-        bbox-грани или границе content-rect скина (tol 0.5px) — рисуется КАК
-        ЕСТЬ: что в файле, то и на экране. Доводка лучом из центроида остаётся
-        только для по-настоящему неканоничных концов (старые файлы: конец
-        внутри формы / в стороне от всех границ) — иначе труба терялась бы
-        внутри фигуры.
-
-        Конец на контуре не трогать критично вдвойне: посадка (`seating`)
-        сажает его туда по оси прямизны, а повторная доводка лучом из
-        центроида сбивала ортогональную трубу в диагональ (боевой c2f79462:
-        в файле 1 косое ребро из 130, на экране — звезда из центра деаэратора,
-        13 рёбер с концами на контуре с точностью 0.000 px). Тот же принцип
-        для bbox-грани/content-rect: до Э3 конец [340,400] на грани рисовался
-        в вершине контура [300,400] — расхождение 40px (xfail H6).
-        """
-        node = self.nodes.get(node_id)
-        if not node or not point or not toward:
-            return point
-        if not self._node_has_polygon(node):
-            return point           # контур не рисуется → конец на боксе, как в FXML
-        c = node.get('centroid')
-        if not c:
-            return point
-        from modules.graph.core.pretransform import (_skin_content_rect,
-                                                     point_on_polygon,
-                                                     project_ray_to_polygon)
-        seg = node.get('segmentation')
-        px, py = point[1], point[0]                    # [y, x] -> (x, y)
-        if point_on_polygon(seg, px, py):
-            return point
-        bb = node.get('bbox')
-        if bb and len(bb) == 4 and self._on_rect_border(bb, px, py):
-            return point
-        cr = _skin_content_rect(node)
-        if cr and self._on_rect_border(cr, px, py):
-            return point
-        r = project_ray_to_polygon(seg, c[1], c[0], toward[1], toward[0])
-        return [r[1], r[0]] if r else point
-
-    @staticmethod
-    def _on_rect_border(rect, x: float, y: float, tol: float = 0.5) -> bool:
-        """Точка лежит на периметре прямоугольника (x1, y1, x2, y2), tol px.
-
-        Допуск тот же, что у канона (point_on_polygon / seat_violations §3.2)."""
-        x1, y1, x2, y2 = rect
-        in_x = x1 - tol <= x <= x2 + tol
-        in_y = y1 - tol <= y <= y2 + tol
-        on_v = in_y and (abs(x - x1) <= tol or abs(x - x2) <= tol)
-        on_h = in_x and (abs(y - y1) <= tol or abs(y - y2) <= tol)
-        return on_v or on_h
-
-    def _visual_edge_ends(self, edge_key: tuple, edge_data: dict):
-        """Концы ребра для отрисовки: к границе той формы, что сейчас на экране."""
-        sp = edge_data.get('source_point')
-        tp = edge_data.get('target_point')
-        if not self._canvas_mode:
-            return sp, tp
-        src, tgt = edge_data.get('source'), edge_data.get('target')
-        wps = edge_data.get('waypoints') or []
-        return (self._contour_endpoint(src, sp, wps[0] if wps else tp),
-                self._contour_endpoint(tgt, tp, wps[-1] if wps else sp))
+    # Э1 пересборки «экран == данные»: отрисовочная доводка лучом
+    # (_contour_endpoint) удалена. Полилиния рисуется строго
+    # sp + waypoints + tp (база _visual_edge_ends). Неканоничные концы
+    # старых файлов материализуются В ДАННЫЕ один раз при открытии холста
+    # (_materialize_ray_ends в base_graph_tab) — доводка была ещё и
+    # display-зависимой (_node_has_polygon смотрел на show_skins): картинка
+    # менялась от настройки отображения при неизменном файле.
 
     def _get_equipment_brush(self, node: dict) -> QBrush:
         """Заливка equipment — нейтральная во всех состояниях.

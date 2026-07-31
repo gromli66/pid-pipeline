@@ -173,6 +173,65 @@ def _migrate_stub_end(e, end_key, node, byid, snap=8.0) -> bool:
     return True
 
 
+def _materialize_ray_ends(canvas: dict, byid: dict) -> int:
+    """Э1 «экран == данные»: неканоничный конец контурного узла — В ДАННЫЕ.
+
+    До Э1 конец, лежащий не на канонической границе своего узла (внутри
+    формы / в стороне — старые файлы, как правило `_manual_route`),
+    дорисовывался на экране лучом из центроида (`_contour_endpoint`),
+    причём в зависимости от show_skins: файл один, картинок две. Доводка
+    удалена; её результат материализуется здесь один раз и честно —
+    двигается только сам конец, waypoints оператора нетронуты.
+
+    Канонической границей считается та же тройка, что у доводки:
+    контур (point_on_polygon), грань bbox, граница content-rect скина.
+    Узлы рамочной посадки (скин/_axis/без контура) не трогаются — их
+    неканон чинит канон `seat_edge_endpoints` (кроме manual, где решает
+    оператор)."""
+    from modules.graph.core.edit_checks import on_rect_border
+    from modules.graph.core.pretransform import (FIXED_SIZES,
+                                                 _skin_content_rect,
+                                                 point_on_polygon,
+                                                 project_ray_to_polygon)
+
+    edges_list = (canvas.get("links") if "links" in canvas
+                  else canvas.get("edges")) or []
+    moved = 0
+    for e in edges_list:
+        wps = e.get("waypoints") or []
+        for end_key, node_key, alt_key, toward in (
+                ("source_point", "source", "from",
+                 wps[0] if wps else e.get("target_point")),
+                ("target_point", "target", "to",
+                 wps[-1] if wps else e.get("source_point"))):
+            p = e.get(end_key)
+            node = byid.get(e.get(node_key) or e.get(alt_key))
+            if p is None or node is None or toward is None:
+                continue
+            seg = node.get("segmentation")
+            if not seg or not isinstance(seg, list) or len(seg) < 6 \
+                    or node.get("class_name") in FIXED_SIZES \
+                    or node.get("_axis"):
+                continue
+            c = node.get("centroid")
+            if not c:
+                continue
+            px, py = float(p[1]), float(p[0])
+            if point_on_polygon(seg, px, py):
+                continue
+            bb = node.get("bbox")
+            if bb and len(bb) == 4 and on_rect_border(bb, px, py):
+                continue
+            cr = _skin_content_rect(node)
+            if cr and on_rect_border(cr, px, py):
+                continue
+            r = project_ray_to_polygon(seg, c[1], c[0], toward[1], toward[0])
+            if r:
+                e[end_key] = [r[1], r[0]]
+                moved += 1
+    return moved
+
+
 def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
     """Страховка §8.3.1 EDITOR_AFTER_LAYOUT_PLAN (решение заказчика: чинить
     при открытии): пересадить концы рёбер холста по канону `seating`.
@@ -274,6 +333,7 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
                                             else (p[1], p[0]), 8.0)
             e[end_key] = [py, px]
         moved += (e.get("source_point") != sp0) + (e.get("target_point") != tp0)
+    moved += _materialize_ray_ends(canvas, byid)
     if not moved:
         return False
     Path(canvas_path).write_text(json.dumps(canvas, ensure_ascii=False),

@@ -160,3 +160,43 @@ def test_manual_route_preserved_among_reseated_edges(tmp_path):
     assert g2["links"][0]["source_point"] == [100.0, 120.0]
     # Обычное — конец у коннектора пересажен в центроид.
     assert g2["links"][1]["target_point"] == [300.0, 300.0]
+
+
+def test_manual_ray_end_is_materialized_into_data(tmp_path):
+    """Э1 «экран == данные»: конец _manual_route ВНУТРИ контура — то, что
+    отрисовочная доводка показывала лучом из центроида, — при открытии
+    один раз пишется в данные (конец на контур, waypoints оператора целы)."""
+    from ui.tabs.base_graph_tab import _reseat_canvas_endpoints
+
+    g = {
+        "directed": False,
+        "multigraph": False,
+        "graph": {"image_size": [1080, 1920]},
+        "nodes": [
+            {"id": "p", "type": "equipment", "class_name": "unknow",
+             "centroid": [100.0, 100.0], "bbox": [80, 80, 120, 120],
+             "segmentation": [80, 80, 120, 80, 120, 120, 80, 120]},
+            {"id": "b", "type": "connector", "class_name": "connector",
+             "centroid": [100.0, 300.0], "bbox": None},
+        ],
+        "links": [{"id": "e1", "source": "p", "target": "b",
+                   "source_point": [100.0, 110.0],
+                   "target_point": [100.0, 300.0],
+                   "waypoints": [[100.0, 200.0]],
+                   "_manual_route": True}],
+        "text_blocks": [],
+        "bindings": [],
+    }
+    path = tmp_path / "graph_canvas.json"
+    path.write_text(json.dumps(g), encoding="utf-8")
+
+    assert _reseat_canvas_endpoints(path)
+    g2 = json.loads(path.read_text(encoding="utf-8"))
+    e = g2["links"][0]
+    assert e["source_point"] == [100.0, 120.0]      # на контуре, по лучу к wp
+    assert e["waypoints"] == [[100.0, 200.0]]       # маршрут оператора цел
+    assert e["target_point"] == [100.0, 300.0]
+
+    before = path.read_text(encoding="utf-8")
+    assert not _reseat_canvas_endpoints(path)        # идемпотентно
+    assert path.read_text(encoding="utf-8") == before

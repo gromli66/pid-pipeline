@@ -149,6 +149,18 @@ def _dist_to_contour(px: float, py: float, pts: list) -> float:
     return best
 
 
+def on_rect_border(rect, x: float, y: float, tol: float = 0.5) -> bool:
+    """Точка лежит на периметре прямоугольника (x1, y1, x2, y2), tol px.
+
+    Допуск тот же, что у канона (point_on_polygon / seat_violations §3.2)."""
+    x1, y1, x2, y2 = rect
+    in_x = x1 - tol <= x <= x2 + tol
+    in_y = y1 - tol <= y <= y2 + tol
+    on_v = in_y and (abs(x - x1) <= tol or abs(x - x2) <= tol)
+    on_h = in_x and (abs(y - y1) <= tol or abs(y - y2) <= tol)
+    return on_v or on_h
+
+
 # ------------------------------------------------------------ конец в углу
 
 def corner_ends(graph, tol: float = CORNER_TOL) -> list[dict]:
