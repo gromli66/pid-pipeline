@@ -108,55 +108,13 @@ def _node_poly_contour(node: dict) -> list | None:
     return None
 
 
-def _pt_in_polygon(px: float, py: float, pts: list) -> bool:
-    """Ray-casting: точка (px, py) внутри полигона [(x, y), ...]."""
-    inside = False
-    j = len(pts) - 1
-    for i in range(len(pts)):
-        xi, yi = pts[i]
-        xj, yj = pts[j]
-        if (yi > py) != (yj > py) and \
-                px < (xj - xi) * (py - yi) / (yj - yi) + xi:
-            inside = not inside
-        j = i
-    return inside
-
-
-def _seg_pierces_polygon(ax: float, ay: float,
-                         bx: float, by: float, seg: list) -> bool:
-    """Сегмент (ax,ay)-(bx,by) прошивает РЕАЛЬНЫЙ контур (плоский [x,y,...])?
-
-    Прошивание = строгое пересечение с ребром контура ИЛИ середина сегмента
-    внутри полигона (сегмент целиком в нутре). Касание контура (скользящий
-    коллинеарный сегмент, конец на контуре) прошиванием не считается — как
-    касание кромки bbox в _seg_conflicts_bbox. Проход над ПУСТЫМ углом
-    габарита невыпуклого контура легален — решение проекта: раскладка тоже
-    считает наложения по реальной форме, не по bbox. Чистый python: shapely
-    в UI запрещён (см. modules/graph/core/seating.py, requirements/ui.txt)."""
-    pts = list(zip(seg[0::2], seg[1::2]))
-    if len(pts) < 3:
-        return False
-    xs = [p[0] for p in pts]
-    ys = [p[1] for p in pts]
-    if max(ax, bx) < min(xs) or min(ax, bx) > max(xs) \
-            or max(ay, by) < min(ys) or min(ay, by) > max(ys):
-        return False
-
-    def cross(ox, oy, px, py, qx, qy):
-        return (px - ox) * (qy - oy) - (py - oy) * (qx - ox)
-
-    n = len(pts)
-    for i in range(n):
-        cx1, cy1 = pts[i]
-        cx2, cy2 = pts[(i + 1) % n]
-        d1 = cross(ax, ay, bx, by, cx1, cy1)
-        d2 = cross(ax, ay, bx, by, cx2, cy2)
-        d3 = cross(cx1, cy1, cx2, cy2, ax, ay)
-        d4 = cross(cx1, cy1, cx2, cy2, bx, by)
-        if ((d1 > 0 and d2 < 0) or (d1 < 0 and d2 > 0)) \
-                and ((d3 > 0 and d4 < 0) or (d3 < 0 and d4 > 0)):
-            return True
-    return _pt_in_polygon((ax + bx) / 2.0, (ay + by) / 2.0, pts)
+# Э0 пересборки: полигонные предикаты уехали в канон судьи
+# modules/graph/core/edit_checks.py (правило «сторож == судья»).
+# Здесь остаются алиасы — их импортируют тесты и внутренние вызовы.
+from modules.graph.core.edit_checks import (  # noqa: E402
+    pt_in_polygon as _pt_in_polygon,
+    seg_pierces_polygon as _seg_pierces_polygon,
+)
 
 
 class EditEdgeDashHandler(ModeHandler):
