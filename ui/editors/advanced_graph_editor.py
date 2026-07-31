@@ -1029,6 +1029,14 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         ref_x, ref_y = ref[1], ref[0]                  # [y, x] -> (x, y)
         cur = edge_data.get(point_key)
         lock = seating._seg_lock((cur[1], cur[0]), (ref_x, ref_y)) if cur else None
+        if lock is None and not wps:
+            # Слабина прямизны по ДАЛЬНЕМУ КОНЦУ (Э3): почти-соосная пара
+            # даёт прямую трубу с концом на грани, дальний конец не тронут —
+            # без этого конец садился лучом в угол при малом расхождении осей.
+            far_node = self.nodes.get(tgt_id if src_id == moved_node_id
+                                      else src_id)
+            if far_node is not None:
+                lock = seating.straight_slack_lock(node, far_node, ref_x, ref_y)
         # Станция Э10 (_poly_side_*/_poly_frac_*): судья reseat_edge сажает
         # такие концы на станционный порт — drag обязан так же (сторож==судья).
         station = seating._poly_even_seat(

@@ -263,6 +263,40 @@ def _seg_lock(endpoint_xy, ref_xy, tol=1.0):
     return None
 
 
+def straight_slack_lock(src, tgt, anchor_x, anchor_y, straight_tol=STRAIGHT_TOL):
+    """Замок прямизны для посадки ОДНОГО конца при неподвижном втором
+    (drag adjusting=End, Э3): условия слабины — те же, что в `reseat_edge`
+    для рёбер без waypoints, но ось проходит через ЯКОРЬ (неподвижный
+    дальний конец), а не через середину пары. Дальний конец не двигается,
+    ближний садится на его ось: почти-соосная пара даёт строго прямую
+    трубу с концом на грани (не лучом в угол). -> ('H', y)|('V', x)|None.
+
+    `reseat_edge` сознательно НЕ переведён на этот хелпер: его ось — mid
+    пары (обоюдная пересадка), и любая правка меняет бит-эталон корпуса.
+    """
+    scx, scy = node_cxy(src)
+    tcx, tcy = node_cxy(tgt)
+    sy1, sy2, sx1, sx2 = _axis_range(src)
+    ty1, ty2, tx1, tx2 = _axis_range(tgt)
+    ylo, yhi = max(sy1, ty1), min(sy2, ty2)
+    xlo, xhi = max(sx1, tx1), min(sx2, tx2)
+    h = (ylo - yhi <= straight_tol and abs(scy - tcy) <=
+         (sy2 - sy1) / 2 + (ty2 - ty1) / 2 + straight_tol)
+    v = (xlo - xhi <= straight_tol and abs(scx - tcx) <=
+         (sx2 - sx1) / 2 + (tx2 - tx1) / 2 + straight_tol)
+    if h and v:
+        # как в Э2: при двух достижимых осях — доминирующее направление
+        if abs(tcx - scx) >= abs(tcy - scy):
+            v = False
+        else:
+            h = False
+    if h:
+        return ("H", anchor_y)
+    if v:
+        return ("V", anchor_x)
+    return None
+
+
 def reseat_all_endpoints(graph, straight_tol=STRAIGHT_TOL):
     byid = nodes_by_id(graph)
     for e in edges(graph):

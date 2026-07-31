@@ -402,6 +402,43 @@ def test_visual_ends_are_what_is_drawn(qapp, tmp_path):
     assert (last.x, last.y) == pytest.approx((vtp[1], vtp[0]))
 
 
+def test_drag_almost_coaxial_pair_stays_straight_on_far_axis(qapp, tmp_path):
+    """Слабина прямизны по ДАЛЬНЕМУ КОНЦУ (Э3): бокс сдвинут на 20px по Y
+    относительно соседа, диапазоны рамок ещё пересекаются — ближний конец
+    обязан сесть на ось неподвижного дальнего конца (труба строго
+    горизонтальна, вход на грани, не лучом в угол), дальний конец
+    байт-в-байт."""
+    graph = {
+        "directed": False, "multigraph": False,
+        "graph": {"image_size": [1080, 1920]},
+        "nodes": [
+            {"id": "a", "type": "equipment", "class_name": "unknow",
+             "centroid": [200.0, 130.0], "bbox": [100, 170, 160, 230],
+             "degree": 1},
+            {"id": "b", "type": "equipment", "class_name": "unknow",
+             "centroid": [200.0, 430.0], "bbox": [400, 170, 460, 230],
+             "degree": 1},
+        ],
+        "links": [{"id": "e1", "source": "a", "target": "b",
+                   "source_point": [200.0, 160.0],
+                   "target_point": [200.0, 400.0], "waypoints": []}],
+        "text_blocks": [], "bindings": [],
+    }
+    ed = _editor(qapp, tmp_path, graph)
+    key = ed.model.edge_key("a", "b")
+    far_before = list(ed.model.find_edge_data(key)["target_point"])
+
+    # сдвиг бокса a вверх на 20px: пара уже НЕ соосна по центроидам,
+    # но в слабине прямизны (полувысоты 30+30 + tol 3 >= 20)
+    _drag(ed, "a", 130.0, 180.0)
+
+    e = ed.model.find_edge_data(key)
+    assert e["target_point"] == far_before          # дальний конец не тронут
+    # ближний конец: на оси дальнего конца (y=200) и на грани бокса (x=160)
+    assert e["source_point"][0] == pytest.approx(200.0, abs=0.5)
+    assert e["source_point"][1] == pytest.approx(160.0, abs=0.5)
+
+
 def test_screen_equals_file_end_on_contour(qapp, tmp_path):
     """Конец, посаженный НА контур (канон), рисуется как есть — доводка
     _contour_endpoint не трогает точки на контуре (tol 0.5px)."""
