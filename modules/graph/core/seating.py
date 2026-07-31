@@ -189,16 +189,32 @@ def reseat_edge(byid, e, straight_tol=STRAIGHT_TOL):
         # H-прямая: диапазоны Y пересекаются (с допуском)
         ylo, yhi = max(sy1, ty1), min(sy2, ty2)
         xlo, xhi = max(sx1, tx1), min(sx2, tx2)
+        h_lock = v_lock = None
         if ylo - yhi <= straight_tol and abs(scy - tcy) <= \
                 (sy2 - sy1) / 2 + (ty2 - ty1) / 2 + straight_tol:
             y = _pick_axis_coord(src, tgt, ylo, yhi, axis="H")
             if y is not None:
-                s_lock = t_lock = ("H", y)
-        if s_lock is None and xlo - xhi <= straight_tol and abs(scx - tcx) <= \
+                h_lock = ("H", y)
+        if xlo - xhi <= straight_tol and abs(scx - tcx) <= \
                 (sx2 - sx1) / 2 + (tx2 - tx1) / 2 + straight_tol:
             x = _pick_axis_coord(src, tgt, xlo, xhi, axis="V")
             if x is not None:
-                s_lock = t_lock = ("V", x)
+                v_lock = ("V", x)
+        # Э2: ось — от реальной геометрии связи, не от порядка веток.
+        # Прежний код брал H всегда, когда H достижима; у коннектора
+        # диапазон вырожден в точку, и когда его координата попадала в
+        # окно рамки соседа, V-ветка была недостижима — конец садился на
+        # боковую грань при вертикальной связи (паттерн «зазор форм 0.00,
+        # нарисовано 10.50», §15 стенда). Правило сужено до корня бага:
+        # геометрия решает только в парах С КОННЕКТОРОМ; у пары блоков
+        # оба диапазона широкие, прежний H-приоритет там осмыслен, а его
+        # смена двигает оси решателя по всему корпусу (замер: 610→22
+        # против 610→16, дефекты +3 на 51b и a6d — не-Парето).
+        if h_lock and v_lock and (is_connector(src) or is_connector(tgt)) \
+                and abs(tcy - scy) > abs(tcx - scx):
+            s_lock = t_lock = v_lock
+        else:
+            s_lock = t_lock = h_lock or v_lock
     else:
         # конец сажаем на ось первого/последнего сегмента, если он H/V
         sp = e.get("source_point")
