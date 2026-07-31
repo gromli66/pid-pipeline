@@ -1887,49 +1887,15 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
 
     def _seat_end_ported(self, node, other_node, edge_data, role,
                          cur, ref_x, ref_y, try_slack):
-        """Этап A (портовая модель): единая посадка конца в drag-путях.
+        """Делегат движка (Э2a): вся посадка — `edit_engine.seat_end`.
 
-        Порядок (спека заказчика, §2.1/§6.1 плана):
-          1. станция Э10 (`_poly_even_seat`) — канон, приоритетнее всего;
-          2. ЭФФЕКТИВНЫЙ замок прямизны: ось подводящего сегмента
-             (`_seg_lock`), иначе слабина по дальнему якорю
-             (`straight_slack_lock`, только try_slack). Замок берётся,
-             только если форма реально накрыла ось
-             (`port_model.lock_respected`) — «прямая, как сейчас»;
-             неэффективный замок раньше молча превращался в ray-посадку
-             (кламп в угол) — источник «конец гуляет по периметру»;
-          3. порт с гистерезисом (`port_model.choose_port`): конец сидит в
-             порту (центр грани / прямой участок контура / центроид
-             коннектора / ручной порт) и НЕ ползёт при смене направления
-             на соседа; смена — только с изнанки (обобщение side-flip)
-             или при радикальном выигрыше маршрута.
+        Логика (станция Э10 → эффективный замок → порт с гистерезисом)
+        перенесена без изменений; см. докстринг движка."""
+        from modules.graph.core import edit_engine
 
-        cur — текущий конец [y, x] (гистерезис «остаться на своём порту»),
-        role — 's'|'t' для станции Э10. Возвращает (x, y).
-        """
-        from modules.graph.core import seating
-        from ui.editors import port_model
-
-        station = seating._poly_even_seat(node, edge_data, role,
-                                          (ref_x, ref_y))
-        if station:
-            return station
-        lock = None
-        if cur:
-            lock = seating._seg_lock((cur[1], cur[0]), (ref_x, ref_y))
-            if lock and not port_model.lock_respected(
-                    seating.node_anchor(node, ref_x, ref_y, lock), lock):
-                lock = None
-        if lock is None and try_slack and other_node is not None:
-            lock = seating.straight_slack_lock(node, other_node, ref_x, ref_y)
-            if lock and not port_model.lock_respected(
-                    seating.node_anchor(node, ref_x, ref_y, lock), lock):
-                lock = None
-        if lock:
-            return seating.node_anchor(node, ref_x, ref_y, lock)
-        return port_model.choose_port(
-            node, (cur[1], cur[0]) if cur else None, (ref_x, ref_y),
-            float(self.snap_threshold))
+        return edit_engine.seat_end(node, other_node, edge_data, role,
+                                    cur, ref_x, ref_y, try_slack,
+                                    float(self.snap_threshold))
 
     @staticmethod
     def _end_pierces_own_node(node, end_yx, adj_yx):
