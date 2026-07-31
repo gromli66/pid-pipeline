@@ -110,7 +110,7 @@ def _contour_seated(node) -> bool:
     return edit_checks._contour_seated(node)
 
 
-def _poly_adjust(node, node_edges, edge_data, px, py, ref_x, ref_y):
+def _poly_adjust(node, node_edges, edge_data, role, px, py, ref_x, ref_y):
     """Решение заказчика 2026-08-01: посадка на контур «как получились», НО
     (а) не ближе VERTEX_MARGIN к вершине участка; (б) несколько труб в один
     прямой участок распределяются вдоль него (шаг min(SLOT_PITCH,
@@ -118,7 +118,17 @@ def _poly_adjust(node, node_edges, edge_data, px, py, ref_x, ref_y):
 
     Членство и порядок — как у рамочных слотов (`_slot_seat`): авто-рёбра
     узла с концами на ТОМ ЖЕ участке, порядок по проекции дальних
-    ориентиров на направление участка, тай-брейк id."""
+    ориентиров на направление участка, тай-брейк id. Позиция, занятая
+    концом соседа (< 2px), не выдаётся — берётся свободная (репро
+    graph_edited0598: оба конца в одном слоте из-за разных снимков
+    членства по кадрам жеста).
+
+    ПОБОЧНЫЙ ЭФФЕКТ (единственные ворота геометрии — право движка):
+    если у ребра есть waypoints и сдвиг конца вдоль участка перекосил бы
+    перпендикулярный подводящий стаб, СМЕЖНОЕ колено сдвигается на ту же
+    дельту — ортогональность стаба сохраняется (репро graph_edited0598:
+    диагональные хвостики 18px). Неперпендикулярный стаб — распределение
+    пропускается (перекос хуже скопления)."""
     seg = node.get("segmentation")
     if not seg:
         return px, py
@@ -163,17 +173,52 @@ def _poly_adjust(node, node_edges, edge_data, px, py, ref_x, ref_y):
                 continue
             entries.append((_t_of(float(refp[1]), float(refp[0])),
                             str(e.get("id")), False))
+        wps = edge_data.get("waypoints") or []
+        adj = None
+        if wps:
+            adj = wps[0] if role == "s" else wps[-1]
+            stub_dot = abs((float(adj[1]) - px) * dx
+                           + (float(adj[0]) - py) * dy) / length
+            if stub_dot > 1.0:
+                return px, py       # стаб не перпендикулярен — не косить
+
+        def _place(s):
+            s = min(max(s, 0.0), length)
+            nx2, ny2 = ax + (s / length) * dx, ay + (s / length) * dy
+            if adj is not None:
+                # колено едет вдоль участка вместе с концом — стаб прям
+                adj[1] = float(adj[1]) + (nx2 - px)
+                adj[0] = float(adj[0]) + (ny2 - py)
+            return nx2, ny2
+
         if not entries:
             m = min(VERTEX_MARGIN, length / 2.0)
-            s = min(max(t * length, m), length - m)
-            return ax + (s / length) * dx, ay + (s / length) * dy
+            return _place(min(max(t * length, m), length - m))
         entries.append((_t_of(ref_x, ref_y), str(edge_data.get("id")), True))
         entries.sort(key=lambda r: (r[0], r[1]))
         idx = next(i for i, r in enumerate(entries) if r[2])
         k = len(entries)
         pitch = min(port_model.SLOT_PITCH, length / (k + 1))
-        s = length / 2.0 + (idx - (k - 1) / 2.0) * pitch
-        return ax + (s / length) * dx, ay + (s / length) * dy
+        slots = [length / 2.0 + (j - (k - 1) / 2.0) * pitch for j in range(k)]
+        # позиции, занятые концами соседей (< 2px), не выдаются
+        taken = []
+        for e in node_edges or []:
+            if e is edge_data:
+                continue
+            for pk in ("source_point", "target_point"):
+                p2 = e.get(pk)
+                if p2 is None:
+                    continue
+                ex, ey = float(p2[1]), float(p2[0])
+                tt = ((ex - ax) * dx + (ey - ay) * dy) / (length * length)
+                if -0.01 <= tt <= 1.01 and math.hypot(
+                        ex - (ax + tt * dx), ey - (ay + tt * dy)) <= 0.75:
+                    taken.append(tt * length)
+        order = sorted(range(k), key=lambda j: (abs(j - idx), j))
+        for j in order:
+            if all(abs(slots[j] - s2) >= 2.0 for s2 in taken):
+                return _place(slots[j])
+        return _place(slots[idx])
     return px, py
 
 
@@ -238,6 +283,6 @@ def seat_end(node, other_node, edge_data, role, cur, ref_x, ref_y,
     if _contour_seated(node):
         # решение 2026-08-01: отступ от вершин контура + распределение
         # нескольких труб по прямому участку («не в одну точку»)
-        return _poly_adjust(node, node_edges, edge_data, pt[0], pt[1],
+        return _poly_adjust(node, node_edges, edge_data, role, pt[0], pt[1],
                             ref_x, ref_y)
     return pt

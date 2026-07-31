@@ -162,3 +162,47 @@ def test_poly_two_edges_one_run_distributed():
                                   snap_threshold=12, node_edges=edges)
     assert x1 == x2 == 60.0
     assert (y1, y2) == (21.0, 39.0)           # 30 ± 18/2, порядок по ref
+
+
+def test_poly_adjust_moves_adjacent_waypoint_with_end():
+    # репро graph_edited0598 (хвостики 18px): сдвиг конца вдоль участка
+    # обязан утащить смежное колено — подводящий стаб остаётся прямым
+    n = _poly_node()
+    e = {"id": "e", "source": "p", "target": "c",
+         "source_point": [2.0, 60.0], "target_point": [2.0, 200.0],
+         "waypoints": [[2.0, 100.0]]}
+    x, y = edit_engine.seat_end(n, None, e, "s", e["source_point"],
+                                100.0, 2.0, try_slack=False,
+                                snap_threshold=12, node_edges=[e])
+    assert (x, y) == (60.0, 6.0)              # отступ от вершины
+    assert e["waypoints"][0] == [6.0, 100.0]  # колено уехало вместе с концом
+
+
+def test_poly_adjust_skips_distribution_for_skewed_stub():
+    # стаб не перпендикулярен участку — не косить: посадка «как получились»
+    n = _poly_node()
+    e = {"id": "e", "source": "p", "target": "c",
+         "source_point": [2.0, 60.0], "target_point": [2.0, 200.0],
+         "waypoints": [[40.0, 100.0]]}       # стаб (60,2)->(100,40) косой
+    x, y = edit_engine.seat_end(n, None, e, "s", e["source_point"],
+                                100.0, 40.0, try_slack=False,
+                                snap_threshold=12, node_edges=[e])
+    assert e["waypoints"][0] == [40.0, 100.0]  # колено не тронуто
+
+
+def test_poly_slot_collision_takes_free_slot():
+    # репро graph_edited0598 (оба конца в одном слоте): позиция, занятая
+    # соседом, не выдаётся — берётся свободный слот
+    n = _poly_node()
+    sib = {"id": "e1", "source": "p", "target": "c1",
+           "source_point": [21.0, 60.0], "target_point": [21.0, 120.0],
+           "waypoints": []}
+    e = {"id": "e2", "source": "p", "target": "c2",
+         "source_point": [30.0, 60.0], "target_point": [10.0, 120.0],
+         "waypoints": []}
+    x, y = edit_engine.seat_end(n, None, e, "s", e["source_point"],
+                                120.0, 10.0, try_slack=False,
+                                snap_threshold=12, node_edges=[sib, e])
+    assert x == 60.0
+    assert abs(y - 21.0) >= 2.0               # чужой слот не занят
+    assert y == 39.0                          # взят свободный
