@@ -81,9 +81,15 @@ class DragNodeCommand(Command):
             self._new_centroid = node['centroid'].copy()
             self._new_bbox = (node.get('bbox') or []).copy()
             self._new_seg = (node.get('segmentation') or []).copy()
-        # Edge points — текущее состояние всех связанных рёбер
+        # Edge points — текущее состояние всех связанных рёбер ПЛЮС
+        # «уступивших» неинцидентных (Дефект 2: их пре-жестовое состояние
+        # редактор дописывает в drag_start_edge_points при первом касании —
+        # undo обязан вернуть и их побайтово)
         self._new_edge_points = {}
-        for key in self._model.get_connected_edges(self._node_id):
+        keys = list(self._old_edge_points)
+        keys += [k for k in self._model.get_connected_edges(self._node_id)
+                 if k not in self._old_edge_points]
+        for key in keys:
             edge_data = self._model.find_edge_data(key)
             if edge_data:
                 self._new_edge_points[key] = {
