@@ -262,7 +262,10 @@ def test_drag_perpendicular_far_end_bitexact(qapp, tmp_path):
 
     Э6/Э7-a: увод оси (75px) больше порога snap_threshold — ребро получает
     ортогональный маршрут (до подключения роутера тут утверждалось
-    waypoints == [] — drag оставлял косую диагональ)."""
+    waypoints == [] — drag оставлял косую диагональ).
+
+    Этап A: порт — конец без эффективного замка прямизны садится в ПОРТ
+    (центр правой грани, y=350), а не ray-клампом в угол ([310,180])."""
     g = _graph_two_boxes()
     _assert_canonical(g)
     ed = _editor(qapp, tmp_path, g)
@@ -273,7 +276,7 @@ def test_drag_perpendicular_far_end_bitexact(qapp, tmp_path):
 
     assert json.dumps(e["target_point"]) == tp_before, (
         f"far_end_moved: {tp_before} -> {e['target_point']}")
-    assert e["source_point"] == pytest.approx([310.0, 180.0])
+    assert e["source_point"] == pytest.approx([350.0, 180.0])
     assert e["waypoints"], "увод 75px > порога — маршрут обязан родиться (Э7-a)"
     _assert_orthogonal(_full_path_xy(e))
 
@@ -282,7 +285,11 @@ def test_drag_keeps_waypoints_intact(qapp, tmp_path):
     """Э3: у ребра с waypoint'ом drag узла не трогает ни промежуточные точки,
     ни дальний конец; ближний конец сажается к ПЕРВОМУ waypoint'у (не к
     центроиду соседа). Старая механика стирала waypoints и строила маршрут
-    заново."""
+    заново.
+
+    Этап A: порт — ось waypoint'а (y=235) больше не накрыта рамкой узла,
+    конец садится в порт (центр правой грани, y=350) вместо ray-клампа в
+    угол ([310,180])."""
     g = _graph_two_boxes()
     g["links"][0]["waypoints"] = [[235.0, 300.0]]
     _assert_canonical(g)
@@ -293,7 +300,7 @@ def test_drag_keeps_waypoints_intact(qapp, tmp_path):
 
     assert e["waypoints"] == [[235.0, 300.0]], "waypoints тронуты"
     assert e["target_point"] == [235.0, 400.0], "дальний конец тронут"
-    assert e["source_point"] == pytest.approx([310.0, 180.0])
+    assert e["source_point"] == pytest.approx([350.0, 180.0])
 
 
 # ── Э3.2: честный предпросмотр — до отпускания == после ──────────────────
@@ -881,11 +888,13 @@ def test_drag_route_preview_equals_result(qapp, tmp_path):
     assert _edge_proj(e) == preview, "отпускание изменило показанный маршрут"
 
 
-def test_drag_small_offaxis_no_microknee(qapp, tmp_path):
-    """Гистерезис (Э6/H7): увод оси МЕНЬШЕ порога snap_threshold — waypoints
-    НЕ рождаются. Здесь слабина прямизны уже мертва (перекрытие диапазонов
-    сломано на 6px > tol 3), но расхождение осей 6px < порога 20 — остаётся
-    честная лёгкая диагональ, а не дрожащее микро-колено."""
+def test_drag_small_offaxis_seats_on_port(qapp, tmp_path):
+    """Этап A: порт. Раньше при мёртвой слабине конец полз к кромке грани
+    (ray-кламп: [206,160]) и остаток расхождения 6px < порога 20 оставлял
+    «честную лёгкую диагональ». С портовой моделью точка входа ФИКСИРОВАНА
+    в центре грани (y=246) — расхождение осей равно уводу (46 >= 20), и
+    вместо диагонали рождается ортогональный маршрут. Дальний конец
+    (коннектор) байт-в-байт."""
     g = _graph_box_conn()
     _assert_canonical(g)
     ed = _editor(qapp, tmp_path, g)
@@ -893,11 +902,13 @@ def test_drag_small_offaxis_no_microknee(qapp, tmp_path):
     # порог фикстуры: медианная ширина бокса 80 -> grid 40 -> snap 20
     assert ed.snap_threshold == 20
 
-    _drag(ed, "box", 120.0, 246.0)   # вниз на 46px: слабина (до 43px) мертва
+    _drag(ed, "box", 120.0, 246.0)   # вниз на 46px: слабина (до 40px) мертва
 
-    assert e["waypoints"] == [], "почти-прямое ребро не должно рожать колени"
     assert e["target_point"] == [200.0, 300.0], "конец у коннектора тронут"
-    assert e["source_point"] == pytest.approx([206.0, 160.0])
+    assert e["source_point"] == pytest.approx([246.0, 160.0]), \
+        "конец обязан сидеть в порту (центр правой грани)"
+    assert e["waypoints"], "вход фиксирован на порту — маршрут обязан родиться"
+    _assert_orthogonal(_full_path_xy(e))
 
 
 def test_drag_undo_after_route_restores_bytewise(qapp, tmp_path):
@@ -1030,8 +1041,13 @@ def test_drag_hysteresis_no_flicker(qapp, tmp_path):
     «родился/умер» на соседних кадрах); гаснет только ниже 10.
 
     Фикстура box+conn: при y бокса > 240 конн-ось y=200 ниже Y-диапазона
-    бокса — конец прижат к его нижней кромке, div = y - 240 (замер
-    test_drag_small_offaxis_no_microknee: y=246 -> div 6)."""
+    бокса.
+
+    Этап A: порт — конец сидит в центре грани, div равен уводу центра с
+    оси (y - 200), а не прижатию к кромке: на y=260.5 div 60.5, маршрут
+    жив во всей полосе колебаний. Гашение — когда оживает слабина
+    прямизны (грань снова накрывает ось конна: y <= 240.5) и конец
+    возвращается на прямую."""
     g = _graph_box_conn()
     _assert_canonical(g)
     ed = _editor(qapp, tmp_path, g)
@@ -1039,17 +1055,19 @@ def test_drag_hysteresis_no_flicker(qapp, tmp_path):
     assert ed.snap_threshold == 20
 
     ed.start_drag_node("box")
-    ed.drag_node_to(120.0, 260.5)      # div 20.5 >= 20 — маршрут родился
-    assert e["waypoints"], "маршрут обязан родиться (div 20.5)"
+    ed.drag_node_to(120.0, 260.5)      # div 60.5 >= 20 — маршрут родился
+    assert e["waypoints"], "маршрут обязан родиться (div 60.5)"
     shape = len(e["waypoints"])
     for fy in (259.5, 260.5, 259.5, 260.5):
-        ed.drag_node_to(120.0, fy)     # div 19.5/20.5 — полоса гистерезиса
+        ed.drag_node_to(120.0, fy)     # колебание ±1px — порт и маршрут стоят
         assert e["waypoints"], f"маршрут мигнул (умер) на y={fy}"
         assert len(e["waypoints"]) == shape, f"форма изменилась на y={fy}"
         _assert_orthogonal(_full_path_xy(e))
-    ed.drag_node_to(120.0, 245.0)      # div 5 < 10 — гашение
+    ed.drag_node_to(120.0, 240.0)      # слабина ожила — прямая, гашение
     assert e["waypoints"] == [], "ниже порога гашения маршрут обязан погаснуть"
     assert "_auto_route" not in e
+    assert e["source_point"] == pytest.approx([200.0, 160.0]), \
+        "слабина прямизны обязана вернуть конец на ось конна"
     ed.end_drag_node()
 
 

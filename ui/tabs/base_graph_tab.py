@@ -127,10 +127,18 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
     Ручная посадка оператора (`_manual_route`) неприкосновенна (инвариант
     плана, приёмка T-D.3): канон вернул бы такой конец на луч — концы и
     waypoints этих рёбер восстанавливаются после прогона.
+
+    Этап A (портовая модель, `ui/editors/port_model.py`): конец, сидевший на
+    ПОРТУ своего узла (ручном из node['_ports'] или каталожном кандидате),
+    каноном не срывается — иначе ray-посадка возвращала бы «гуляние по
+    периметру» при каждом открытии. Исключение — прямизна: если канон
+    посадил конец СТРОГОЙ прямой к его ref (соосная пара/слабина), прямая
+    важнее порта — «как сейчас».
     """
     from copy import deepcopy
 
     from modules.graph.core.pretransform import seat_edge_endpoints
+    from ui.editors import port_model
 
     try:
         canvas = json.loads(Path(canvas_path).read_text(encoding="utf-8"))
@@ -139,6 +147,15 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
         return False
     edges_list = (canvas.get("links") if "links" in canvas
                   else canvas.get("edges")) or []
+    byid = {n.get("id"): n for n in canvas.get("nodes") or []}
+
+    def _end_ref(e, end_key):
+        """Ref конца ПОСЛЕ канона: смежный waypoint, иначе другой конец."""
+        wps = e.get("waypoints") or []
+        if end_key == "source_point":
+            return wps[0] if wps else e.get("target_point")
+        return wps[-1] if wps else e.get("source_point")
+
     snap = [deepcopy((e.get("source_point"), e.get("target_point"),
                       e.get("waypoints"))) for e in edges_list]
     seat_edge_endpoints(canvas)
@@ -151,8 +168,22 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
                 e.pop("waypoints", None)
             else:
                 e["waypoints"] = wp0
-        else:
-            moved += (e.get("source_point") != sp0) + (e.get("target_point") != tp0)
+            continue
+        for end_key, node_key, alt_key, orig in (
+                ("source_point", "source", "from", sp0),
+                ("target_point", "target", "to", tp0)):
+            new = e.get(end_key)
+            if orig is None or new == orig:
+                continue
+            node = byid.get(e.get(node_key) or e.get(alt_key))
+            if node is None or not port_model.is_on_port(node, orig[1], orig[0]):
+                continue
+            ref = _end_ref(e, end_key)
+            if ref and (abs(new[0] - ref[0]) <= 0.5
+                        or abs(new[1] - ref[1]) <= 0.5):
+                continue        # канон дал строгую прямую — прямизна важнее
+            e[end_key] = orig   # конец остаётся в своём порту
+        moved += (e.get("source_point") != sp0) + (e.get("target_point") != tp0)
     if not moved:
         return False
     Path(canvas_path).write_text(json.dumps(canvas, ensure_ascii=False),

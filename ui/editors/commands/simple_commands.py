@@ -300,11 +300,18 @@ class AddEquipmentNodeCommand(Command):
 
 
 class ResizeNodeCommand(Command):
-    """Изменение размера bbox узла."""
+    """Изменение размера bbox узла.
+
+    Этап A: ручные порты (`node['_ports']`) масштабируются вместе с рамкой
+    (`port_model.rescale_manual_ports` в `_on_node_resized`) — undo обязан
+    вернуть и их, иначе после отката порт остаётся отмасштабированным при
+    старой рамке и вылетает за границу узла.
+    """
 
     def __init__(self, model: GraphDataModel, editor, node_id: str,
                  old_bbox: list, old_centroid: list, old_area: float,
-                 new_bbox: list, new_centroid: list, new_area: float):
+                 new_bbox: list, new_centroid: list, new_area: float,
+                 old_ports: list | None = None, new_ports: list | None = None):
         self._model = model
         self._editor = editor
         self._node_id = node_id
@@ -314,6 +321,17 @@ class ResizeNodeCommand(Command):
         self._new_bbox = new_bbox
         self._new_centroid = new_centroid
         self._new_area = new_area
+        self._old_ports = old_ports
+        self._new_ports = new_ports
+
+    def _apply_ports(self, ports):
+        node = self._model.nodes.get(self._node_id)
+        if node is None:
+            return
+        if ports is None:
+            node.pop('_ports', None)
+        else:
+            node['_ports'] = [dict(p) for p in ports]
 
     def execute(self):
         self._model.update_node(self._node_id, {
@@ -321,6 +339,7 @@ class ResizeNodeCommand(Command):
             'centroid': self._new_centroid,
             'area': self._new_area,
         })
+        self._apply_ports(self._new_ports)
         self._editor._redraw_all()
 
     def undo(self):
@@ -329,6 +348,7 @@ class ResizeNodeCommand(Command):
             'centroid': self._old_centroid,
             'area': self._old_area,
         })
+        self._apply_ports(self._old_ports)
         self._editor._redraw_all()
 
     @property

@@ -297,6 +297,10 @@ class SimpleGraphEditor(BaseGraphEditor):
         self._resize_start_bbox = bbox.copy()
         self._resize_start_centroid = node['centroid'].copy()
         self._resize_start_area = node.get('area', 0)
+        # Этап A: ручные порты масштабируются вместе с рамкой — undo обязан
+        # вернуть и их (скептик: после undo порт вылетал за границу узла).
+        self._resize_start_ports = ([dict(p) for p in node['_ports']]
+                                    if node.get('_ports') else None)
 
         self._resize_overlay = ResizableNodeOverlay(
             scene=self.scene,
@@ -314,11 +318,19 @@ class SimpleGraphEditor(BaseGraphEditor):
         if not node:
             return
 
+        old_bbox = list(node.get('bbox') or [])
         # Обновляем данные
         node['bbox'] = new_bbox.copy()
         x1, y1, x2, y2 = new_bbox
         node['centroid'] = [(y1 + y2) / 2, (x1 + x2) / 2]
         node['area'] = (x2 - x1) * (y2 - y1)
+
+        # Этап A (портовая модель): ручные порты — локальные смещения от
+        # центроида; при resize масштабируются вместе с рамкой (перепроекция
+        # на границу).
+        if node.get('_ports') and len(old_bbox) == 4:
+            from ui.editors import port_model
+            port_model.rescale_manual_ports(node, old_bbox, new_bbox)
 
         # Обновляем bbox rect если есть
         if node_id in self.bbox_items:
@@ -366,6 +378,8 @@ class SimpleGraphEditor(BaseGraphEditor):
 
         # Только если реально изменилось
         if new_bbox != self._resize_start_bbox:
+            new_ports = ([dict(p) for p in node['_ports']]
+                         if node.get('_ports') else None)
             cmd = ResizeNodeCommand(
                 self.model, self, node_id,
                 old_bbox=self._resize_start_bbox,
@@ -374,6 +388,8 @@ class SimpleGraphEditor(BaseGraphEditor):
                 new_bbox=new_bbox,
                 new_centroid=new_centroid,
                 new_area=new_area,
+                old_ports=getattr(self, '_resize_start_ports', None),
+                new_ports=new_ports,
             )
             self.undo_mgr.push_executed(cmd)
             self.update_status(f"Resize: {node_id} → {int(new_bbox[2]-new_bbox[0])}×{int(new_bbox[3]-new_bbox[1])}")
@@ -382,6 +398,8 @@ class SimpleGraphEditor(BaseGraphEditor):
         self._resize_start_bbox = new_bbox
         self._resize_start_centroid = new_centroid
         self._resize_start_area = new_area
+        self._resize_start_ports = ([dict(p) for p in node['_ports']]
+                                    if node.get('_ports') else None)
 
     def _stop_resize(self):
         """Убрать resize handles и вернуться в предыдущий режим."""

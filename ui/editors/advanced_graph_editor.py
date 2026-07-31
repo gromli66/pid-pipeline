@@ -266,6 +266,11 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         self._endpoint_markers: dict[tuple, list] = {}
         self._dragging_endpoint: tuple | None = None
         self._dragging_ep_start_side: str | None = None
+        # Этап A (портовая модель): маркеры портов на время drag конца ребра
+        # + «конец сейчас прилип к порту» (на отпускании в свободном месте
+        # границы рождается постоянный ручной порт узла).
+        self._port_markers: list = []
+        self._ep_on_port: bool = False
 
         # ── Drag ──
         self.dragging_node: str | None = None
@@ -619,6 +624,7 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         self._pending_waypoints.clear()
         self._rubber_band = None
         self._rb_active = False
+        self._port_markers.clear()
         self._dragging_endpoint = None
         self.dragging_waypoint = None
         self._auto_fix_result = None
@@ -1815,14 +1821,15 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         у сдвинутого узла; дальний конец и промежуточные waypoints
         неприкосновенны (§2 п.4 плана, метрика far_end_moved §3.2).
 
-        Ближний конец сажается каноном `seating.node_anchor` (сторож == судья,
-        не дубль-геометрия):
+        Ближний конец сажается единой посадкой `_seat_end_ported`
+        (этап A — портовая модель):
           * toward — первый/последний waypoint ребра, если есть, иначе
             СУЩЕСТВУЮЩИЙ конец соседа (source/target_point из данных,
             НЕ его центроид);
-          * lock — замок оси почти-осевого концевого сегмента
-            (`seating._seg_lock`, как в reseat_edge для рёбер с waypoints):
-            прямой подход остаётся на своей оси, пока форма узла её накрывает.
+          * замок оси почти-осевого концевого сегмента (`seating._seg_lock`)
+            и слабина прямизны берутся, только если форма реально накрывает
+            ось; иначе конец сидит В ПОРТУ (`port_model.choose_port`), а не
+            ползёт ray-посадкой по периметру.
         Один и тот же расчёт работает и на каждом кадре протяжки, и на
         отпускании — предпросмотр честный ПО ПОСТРОЕНИЮ (решение заказчика:
         «что видишь при перетаскивании, то и получишь»); расчёт идемпотентен.
@@ -1846,8 +1853,6 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         попытка не повторяется до такого же сдвига (_routing_failed_nearby)
         — кадр не жжёт полный роутинг впустую.
         """
-        from modules.graph.core import seating
-
         node = self.nodes.get(moved_node_id)
         if node is None:
             return
@@ -1882,21 +1887,16 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
             return
         ref_x, ref_y = ref[1], ref[0]                  # [y, x] -> (x, y)
         cur = edge_data.get(point_key)
-        lock = seating._seg_lock((cur[1], cur[0]), (ref_x, ref_y)) if cur else None
-        if lock is None and not wps:
-            # Слабина прямизны по ДАЛЬНЕМУ КОНЦУ (Э3): почти-соосная пара
-            # даёт прямую трубу с концом на грани, дальний конец не тронут —
-            # без этого конец садился лучом в угол при малом расхождении осей.
-            far_node = self.nodes.get(tgt_id if src_id == moved_node_id
-                                      else src_id)
-            if far_node is not None:
-                lock = seating.straight_slack_lock(node, far_node, ref_x, ref_y)
-        # Станция Э10 (_poly_side_*/_poly_frac_*): судья reseat_edge сажает
-        # такие концы на станционный порт — drag обязан так же (сторож==судья).
-        station = seating._poly_even_seat(
-            node, edge_data, 's' if point_key == 'source_point' else 't',
-            (ref_x, ref_y))
-        ax, ay = station if station else seating.node_anchor(node, ref_x, ref_y, lock)
+        # Этап A (портовая модель): станция Э10 → эффективный замок прямизны
+        # (ось сегмента / слабина по дальнему якорю — только для рёбер без
+        # waypoints, как раньше) → порт с гистерезисом. Конец больше не
+        # ползёт по периметру ray-посадкой (жалоба §2 п.2-3 плана).
+        far_node = self.nodes.get(tgt_id if src_id == moved_node_id
+                                  else src_id)
+        ax, ay = self._seat_end_ported(
+            node, far_node, edge_data,
+            's' if point_key == 'source_point' else 't',
+            cur, ref_x, ref_y, try_slack=not wps)
         edge_data[point_key] = [ay, ax]
 
         # Side-flip дальнего конца (скрины заказчика 2026-07-31): adjusting=End
@@ -1907,8 +1907,6 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         # грань. Блок стоит ДО роутинга: маршрут ниже строится уже от
         # правильной грани В ЭТОМ ЖЕ кадре (иначе на отпускании оставалась
         # диагональ сквозь чужие блоки — второй скрин).
-        far_id = tgt_id if src_id == moved_node_id else src_id
-        far_node = self.nodes.get(far_id)
         fp = edge_data.get(far_key)
         if (far_node is not None and fp is not None
                 and not edge_data.get('_manual_route')):
@@ -1917,15 +1915,12 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                        if wps_now else edge_data[point_key])
             if self._end_pierces_own_node(far_node, fp, far_adj):
                 fa_x, fa_y = far_adj[1], far_adj[0]
-                flock = seating._seg_lock((fp[1], fp[0]), (fa_x, fa_y))
-                if flock is None:
-                    flock = seating.straight_slack_lock(far_node, node,
-                                                        fa_x, fa_y)
-                fstation = seating._poly_even_seat(
-                    far_node, edge_data,
-                    's' if far_key == 'source_point' else 't', (fa_x, fa_y))
-                fx, fy = fstation if fstation else seating.node_anchor(
-                    far_node, fa_x, fa_y, flock)
+                # Этап A: изнанка — обязательная смена порта; choose_port
+                # внутри исключает изнаночные порты и сажает на обращённый.
+                fx, fy = self._seat_end_ported(
+                    far_node, node, edge_data,
+                    's' if far_key == 'source_point' else 't',
+                    fp, fa_x, fa_y, try_slack=True)
                 edge_data[far_key] = [fy, fx]
                 if routable:
                     # авто-маршрут строился от старой грани — сброс; роутинг
@@ -1941,18 +1936,11 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                 if not (edge_data.get('waypoints') or []):
                     # досадить ближний конец по новой грани дальнего
                     nref = edge_data[far_key]
-                    nlock = seating._seg_lock(
-                        (edge_data[point_key][1], edge_data[point_key][0]),
-                        (nref[1], nref[0]))
-                    if nlock is None:
-                        nlock = seating.straight_slack_lock(
-                            node, far_node, nref[1], nref[0])
-                    nstation = seating._poly_even_seat(
-                        node, edge_data,
+                    ax, ay = self._seat_end_ported(
+                        node, far_node, edge_data,
                         's' if point_key == 'source_point' else 't',
-                        (nref[1], nref[0]))
-                    ax, ay = nstation if nstation else seating.node_anchor(
-                        node, nref[1], nref[0], nlock)
+                        edge_data[point_key], nref[1], nref[0],
+                        try_slack=True)
                     edge_data[point_key] = [ay, ax]
 
         if routable and not reuse and not skip_route \
@@ -1967,14 +1955,12 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                 self._drag_route_ctx['fail_anchor'].pop(edge_key, None)
             new_wps = edge_data['waypoints']
             ref2 = new_wps[0] if point_key == 'source_point' else new_wps[-1]
-            ref2_x, ref2_y = ref2[1], ref2[0]
-            cur2 = edge_data[point_key]
-            lock2 = seating._seg_lock((cur2[1], cur2[0]), (ref2_x, ref2_y))
-            station2 = seating._poly_even_seat(
-                node, edge_data, 's' if point_key == 'source_point' else 't',
-                (ref2_x, ref2_y))
-            ax, ay = station2 if station2 else seating.node_anchor(
-                node, ref2_x, ref2_y, lock2)
+            # подводящий стаб ортогонален и начат в посаженном конце —
+            # seg_lock внутри держит конец на порту (идемпотентно)
+            ax, ay = self._seat_end_ported(
+                node, None, edge_data,
+                's' if point_key == 'source_point' else 't',
+                edge_data[point_key], ref2[1], ref2[0], try_slack=False)
             edge_data[point_key] = [ay, ax]
         elif routable and not reuse:
             # Э7-c: маршрут погашен (гистерезис: div < порога) — ребро
@@ -1998,6 +1984,52 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         else:
             self.edge_perp_scores[edge_key] = {'is_good': True, 'score': 1.0,
                                                'source_angle': 0}
+
+    def _seat_end_ported(self, node, other_node, edge_data, role,
+                         cur, ref_x, ref_y, try_slack):
+        """Этап A (портовая модель): единая посадка конца в drag-путях.
+
+        Порядок (спека заказчика, §2.1/§6.1 плана):
+          1. станция Э10 (`_poly_even_seat`) — канон, приоритетнее всего;
+          2. ЭФФЕКТИВНЫЙ замок прямизны: ось подводящего сегмента
+             (`_seg_lock`), иначе слабина по дальнему якорю
+             (`straight_slack_lock`, только try_slack). Замок берётся,
+             только если форма реально накрыла ось
+             (`port_model.lock_respected`) — «прямая, как сейчас»;
+             неэффективный замок раньше молча превращался в ray-посадку
+             (кламп в угол) — источник «конец гуляет по периметру»;
+          3. порт с гистерезисом (`port_model.choose_port`): конец сидит в
+             порту (центр грани / прямой участок контура / центроид
+             коннектора / ручной порт) и НЕ ползёт при смене направления
+             на соседа; смена — только с изнанки (обобщение side-flip)
+             или при радикальном выигрыше маршрута.
+
+        cur — текущий конец [y, x] (гистерезис «остаться на своём порту»),
+        role — 's'|'t' для станции Э10. Возвращает (x, y).
+        """
+        from modules.graph.core import seating
+        from ui.editors import port_model
+
+        station = seating._poly_even_seat(node, edge_data, role,
+                                          (ref_x, ref_y))
+        if station:
+            return station
+        lock = None
+        if cur:
+            lock = seating._seg_lock((cur[1], cur[0]), (ref_x, ref_y))
+            if lock and not port_model.lock_respected(
+                    seating.node_anchor(node, ref_x, ref_y, lock), lock):
+                lock = None
+        if lock is None and try_slack and other_node is not None:
+            lock = seating.straight_slack_lock(node, other_node, ref_x, ref_y)
+            if lock and not port_model.lock_respected(
+                    seating.node_anchor(node, ref_x, ref_y, lock), lock):
+                lock = None
+        if lock:
+            return seating.node_anchor(node, ref_x, ref_y, lock)
+        return port_model.choose_port(
+            node, (cur[1], cur[0]) if cur else None, (ref_x, ref_y),
+            float(self.snap_threshold))
 
     @staticmethod
     def _end_pierces_own_node(node, end_yx, adj_yx):
@@ -2765,6 +2797,13 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
             # кадр), иначе Гаусс-Зейдель по свежим путям соседей двигал
             # маршрут и конец после отпускания (32/46 расхождений в репро).
             if e.get('_manual_route'):
+                # Этап A: пришпиленный конец едет с узлом выделения (порт —
+                # локальная точка узла); дальше удержание на границе.
+                near = e['source'] if e['source'] in sel else e['target']
+                pk = 'source_point' if e['source'] == near else 'target_point'
+                pt = e.get(pk)
+                if pt:
+                    e[pk] = [pt[0] + dy, pt[1] + dx]
                 self._recalculate_edge(e)   # ручной: только удержание на границе
             else:
                 near = e['source'] if e['source'] in sel else e['target']
@@ -2884,8 +2923,15 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
 
         for e in affected:
             if e.get('_manual_route'):
-                # ручной маршрут: только удержание точек на границе
-                # (ветка _manual_route внутри _recalculate_edge, как раньше)
+                # Этап A: пришпиленный конец (ручной порт/ручная посадка) —
+                # локальная точка узла, едет с ним на дельту жеста; затем
+                # удержание на границе (ветка _manual_route внутри
+                # _recalculate_edge — для чистой трансляции это no-op).
+                pk = ('source_point' if e['source'] == node_id
+                      else 'target_point')
+                pt = e.get(pk)
+                if pt:
+                    e[pk] = [pt[0] + dy, pt[1] + dx]
                 self._recalculate_edge(e)
             else:
                 # Э3 (adjusting=End): дальний конец и waypoints неприкосновенны;
@@ -3114,6 +3160,32 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         if self._current_mode == "edit_waypoint":
             self._show_endpoint_markers()
 
+    # ── Port markers (этап A) ──
+
+    def _show_port_markers(self, node_id: str):
+        """Маленькие маркеры портов узла на время drag конца ребра:
+        голубые — кандидаты (производные), оранжевые — ручные."""
+        self._hide_port_markers()
+        from ui.editors import port_model
+        node = self.nodes.get(node_id)
+        if not node:
+            return
+        r = 3.0
+        for px, py, _nx, _ny, manual in port_model.all_ports(node):
+            color = QColor(255, 152, 0) if manual else QColor(0, 188, 212)
+            m = QGraphicsEllipseItem(px - r, py - r, r * 2, r * 2)
+            m.setPen(QPen(color, 1.5))
+            m.setBrush(QBrush(QColor(color.red(), color.green(),
+                                     color.blue(), 110)))
+            m.setZValue(9)
+            self.scene.addItem(m)
+            self._port_markers.append(m)
+
+    def _hide_port_markers(self):
+        for m in self._port_markers:
+            self.scene.removeItem(m)
+        self._port_markers.clear()
+
     def _find_endpoint_at(self, x, y, threshold=12.0):
         best = None
         best_dist = threshold
@@ -3147,6 +3219,11 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                                else 'target_point') or [0.0, 0.0]
             self._ep_drag_origin = (float(pt[1]), float(pt[0]))
             self._ep_drag_armed = False
+            # Этап A: показать порты узла (кандидаты + ручные) — конец
+            # будет липнуть к ним при протяжке.
+            self._ep_on_port = False
+            self._show_port_markers(edge_data['source'] if endpoint == 'source'
+                                    else edge_data['target'])
             snap_cmd = AutoFixCommand(self.model, self._redraw_all)
             snap_cmd.description = "Перемещение endpoint"
             snap_cmd.execute()
@@ -3187,6 +3264,15 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
 
         node_id = edge_data['source'] if endpoint == 'source' else edge_data['target']
         px, py = self._project_to_node_border(node_id, x, y)
+        # Этап A: конец липнет к портам (кандидаты + существующие ручные);
+        # мимо портов — свободное скольжение по границе, отпускание там
+        # создаст постоянный ручной порт (_end_endpoint_drag).
+        from ui.editors import port_model
+        snap_p = port_model.nearest_port(self.nodes.get(node_id) or {},
+                                         x, y, float(self.snap_threshold))
+        if snap_p is not None:
+            px, py = snap_p[0], snap_p[1]
+        self._ep_on_port = snap_p is not None
 
         point_key = 'source_point' if endpoint == 'source' else 'target_point'
         side_key = '_src_side' if endpoint == 'source' else '_tgt_side'
@@ -3204,6 +3290,24 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         self._refresh_endpoint_markers()
 
     def _end_endpoint_drag(self):
+        # Этап A: отпускание конца в СВОБОДНОМ месте границы (не на порту)
+        # рождает постоянный ручной порт узла — локальное смещение от
+        # центроида в node['_ports']. Undo побайтово: создание порта попадает
+        # в снапшот _ep_snap_cmd (модель целиком, включая nodes).
+        if self._dragging_endpoint and getattr(self, '_ep_drag_armed', False) \
+                and not self._ep_on_port:
+            edge_key, endpoint = self._dragging_endpoint
+            edge_data = self.model.find_edge_data(edge_key)
+            if edge_data:
+                from ui.editors import port_model
+                node_id = (edge_data['source'] if endpoint == 'source'
+                           else edge_data['target'])
+                node = self.nodes.get(node_id)
+                pt = edge_data.get('source_point' if endpoint == 'source'
+                                   else 'target_point')
+                if node is not None and pt:
+                    port_model.add_manual_port(node, pt[1], pt[0])
+        self._hide_port_markers()
         if hasattr(self, '_ep_snap_cmd') and self._ep_snap_cmd:
             self._ep_snap_cmd.finalize()
             self.undo_mgr.push_executed(self._ep_snap_cmd)
