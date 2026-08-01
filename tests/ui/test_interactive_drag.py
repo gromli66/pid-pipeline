@@ -1264,3 +1264,26 @@ def test_size_panel_rescales_manual_ports(qapp, tmp_path):
 
     ed._resize_node_poly(node, 2.0)
     assert node["_ports"] == [{"dx": 80.0, "dy": 0.0}]
+
+
+def test_yielded_route_does_not_dance_near_box(qapp, tmp_path):
+    """2026-08-01 («пляска чужих труб»): уступленный обход НЕ
+    перестраивается, пока бокс ёрзает рядом без нового наезда — форма
+    байт-в-байт; гаснет в прямую только при уводе бокса."""
+    g = _graph_pipe_free_box()
+    ed = _editor(qapp, tmp_path, g)
+    e = ed.model.find_edge_data(ed.model.edge_key("top", "bot"))
+
+    _drag(ed, "side", 322.0, 200.0)          # наезд — обход родился
+    assert e.get("waypoints")
+    wps1 = [w.copy() for w in e["waypoints"]]
+
+    for fx in (330.0, 338.0):                # ёрзание: бокс всё ещё накрывает
+        _drag(ed, "side", fx, 200.0)
+        assert e["waypoints"] == wps1, f"обход перестроился на x={fx}"
+
+    _drag(ed, "side", 344.0, 200.0)          # грань 304 > оси 300: выпустил
+    assert e["waypoints"] == [], \
+        "гашение обязано случиться, когда бокс выпустил линию"
+    assert "_auto_route" not in e
+    assert e["source_point"] == [120.0, 300.0]
