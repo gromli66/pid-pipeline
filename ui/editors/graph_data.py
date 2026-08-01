@@ -11,6 +11,31 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Optional
 
+_EDITOR_COMMIT: Optional[str] = None
+
+
+def _editor_commit() -> str:
+    """Исполняемый git-коммит (кэш процесса) — провенанс сейвов."""
+    global _EDITOR_COMMIT
+    if _EDITOR_COMMIT is None:
+        _EDITOR_COMMIT = "unknown"
+        try:
+            import subprocess
+            r = subprocess.run(
+                ["git", "log", "-1", "--format=%h"],
+                cwd=Path(__file__).resolve().parents[2],
+                capture_output=True, text=True, timeout=3)
+            if r.returncode == 0 and r.stdout.strip():
+                _EDITOR_COMMIT = r.stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return _EDITOR_COMMIT
+
+
+# резолв ПРИ ИМПОРТЕ (== старту приложения): коммит в сейве обязан
+# соответствовать загруженному коду, а не HEAD на момент сейва
+_editor_commit()
+
 
 class GraphDataModel:
     """Модель данных графа P&ID. Без Qt-зависимостей.
@@ -150,6 +175,10 @@ class GraphDataModel:
 
         stats = self.compute_statistics()
         graph_meta['num_isolated_nodes'] = stats['isolated']
+        # Провенанс (2026-08-01, после серии «результата нет» из-за клиента
+        # со старым кодом): каждый сейв несёт исполняемый коммит — спор
+        # «какой код это писал» решается взглядом на файл, не верой.
+        graph_meta['_editor_commit'] = _editor_commit()
 
         try:
             with open(path, 'w', encoding='utf-8') as f:
