@@ -1275,8 +1275,13 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                             or min(ay, by) > bb[3] + c):
                         from modules.graph.core import edit_checks as _ec
                         border = _ec._node_border(node)
-                        if border and _ec._hug_runs(ax, ay, bx, by, border,
-                                                    c):
+                        # порог судьи: пробег >= OVERLAP_MIN; короткий
+                        # перпендикулярный ПОДХОД к контуру (последние
+                        # ~клиренс px перед посадкой) — легален, иначе
+                        # валидатор браковал каждый заход в свой узел
+                        if border and any(
+                                r[1] >= _ec.OVERLAP_MIN for r in
+                                _ec._hug_runs(ax, ay, bx, by, border, c)):
                             return True
                 continue
             bb = self._get_node_bbox(nid)
@@ -1935,12 +1940,6 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         # проваливался — не повторять попытку на каждом кадре
         skip_route = (routable and not route_alive
                       and self._routing_failed_nearby(edge_key, moved_node_id))
-        # «не хуже входа» уровня лестницы: живой маршрут запоминается —
-        # отказ перестройки не смеет ронять ребро в диагональ (репро
-        # wiggle-прогона: строгая браковка убивала хорошие маршруты 7->13)
-        prev_route = [w.copy() for w in edge_data.get('waypoints') or []] \
-            if route_alive else None
-        flipped = False
         if route_alive and not reuse:
             # авто-маршрут прошлого кадра протяжки: перестраивается с нуля
             # от текущей геометрии (waypoints оператора сюда не попадают —
@@ -2033,30 +2032,14 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                 edge_data[point_key], ref2[1], ref2[0], try_slack=False)
             edge_data[point_key] = [ay, ax]
         elif routable and not reuse:
-            sp2 = edge_data.get('source_point')
-            tp2 = edge_data.get('target_point')
-            straight = bool(sp2 and tp2 and min(
-                abs(tp2[1] - sp2[1]), abs(tp2[0] - sp2[0])) <= 0.5)
-            if prev_route and not straight and not flipped \
-                    and not (edge_data.get('waypoints') or []):
-                # лестница отказала, но у ребра БЫЛ маршрут — восстановить
-                # его честнее диагонали («не хуже входа»); стаб дотягивает
-                # движок (порт/слот + сдвиг смежного колена)
-                edge_data['waypoints'] = [w.copy() for w in prev_route]
-                edge_data['_auto_route'] = True
-                refr = edge_data['waypoints'][0] \
-                    if point_key == 'source_point' \
-                    else edge_data['waypoints'][-1]
-                ax, ay = self._seat_end_ported(
-                    node, None, edge_data,
-                    's' if point_key == 'source_point' else 't',
-                    edge_data[point_key], refr[1], refr[0], try_slack=False)
-                edge_data[point_key] = [ay, ax]
-                edge_data.pop('_route_defect', None)
-            else:
-                # Э7-c: маршрут погашен (строгая соосность) — ребро
-                # снова прямое, авто-флаг снимается вместе с waypoints.
-                edge_data.pop('_auto_route', None)
+            # Э7-c: маршрут погашен (строгая соосность) либо лестница
+            # отказала — ребро прямое, пометку ставит обёртка лестницы.
+            # ВОССТАНОВЛЕНИЕ старого маршрута ОТВЕРГНУТО ДВАЖДЫ (2026-08-01):
+            # старые колени + едущий порт = косой стаб 15-30px и «зигзаг
+            # прибит гвоздями» (репро заказчика). Правка-предшественник
+            # не удалила блок (replace без assert смолчал) — ложь в
+            # сообщении e3b3493, исправлено здесь.
+            edge_data.pop('_auto_route', None)
             if self._drag_route_ctx is not None:
                 self._drag_route_ctx['route_anchor'].pop(edge_key, None)
                 if not skip_route and self._drag_route_ctx['bounded']:

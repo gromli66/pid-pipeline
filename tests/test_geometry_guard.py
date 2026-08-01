@@ -29,9 +29,9 @@ GUARD = re.compile(
     r"|\"target_point\"|point_key|end_key|far_key|pk)\s*\]\s*=[^=]")
 
 EXPECTED = {
-    # 14 = делегаты движка + side-flip + batch-трансляции + endpoint-drag
+    # 13 = делегаты движка + side-flip + batch-трансляции + endpoint-drag
     # + откат гейта «не хуже входа» при разводе толщиной (2026-08-01)
-    "ui/editors/advanced_graph_editor.py": 14,
+    "ui/editors/advanced_graph_editor.py": 13,
     "ui/editors/commands/advanced_commands.py": 6,
     "ui/editors/contour_editor.py": 2,
     "ui/editors/simple_graph_editor.py": 4,
