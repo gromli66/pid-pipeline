@@ -206,3 +206,15 @@ def test_poly_slot_collision_takes_free_slot():
     assert x == 60.0
     assert abs(y - 21.0) >= 2.0               # чужой слот не занят
     assert y == 39.0                          # взят свободный
+
+
+def test_skin_seats_on_bbox_frame():
+    # решение 2026-08-01 «символ тянется на рамку»: конец скин-узла — на
+    # рамке bbox, не на letterbox-прямоугольнике серверного канона
+    from modules.graph.core.pretransform import FIXED_SIZES
+    cls = sorted(FIXED_SIZES)[0]
+    n = {"id": "s", "type": "equipment", "class_name": cls,
+         "centroid": [21.5, 140.0], "bbox": [0, 0, 280, 43]}
+    x, y = edit_engine.seat_end(n, None, {"id": "e"}, "s", None, 400.0, 21.5,
+                                try_slack=False, snap_threshold=12)
+    assert (x, y) == (280.0, 21.5)

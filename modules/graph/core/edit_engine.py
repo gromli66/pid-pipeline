@@ -45,6 +45,13 @@ def _rect_seated(node) -> bool:
     return edit_checks._rect_seated(node)
 
 
+def _seat_rect(node):
+    """Редакторская рамка посадки — bbox, скины включительно
+    («символ тянется на рамку», 2026-08-01; сторож == судья)."""
+    from . import edit_checks
+    return edit_checks.seat_rect(node)
+
+
 def _port_side(rect, px, py, tol=1.5):
     """Грань рамки, на которой лежит точка: 'L'|'R'|'T'|'B'|None."""
     x1, y1, x2, y2 = rect
@@ -68,7 +75,7 @@ def _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y):
     waypoint, иначе противоположный конец) на ось грани: при drag узла
     дальние концы неподвижны — порядок стабилен по построению, слоты не
     мерцают. Тай-брейк — id ребра. Возвращает (x, y)."""
-    rect = seating._anchor_rect(node)
+    rect = _seat_rect(node)
     nid = node.get("id")
     horiz = side in ("T", "B")
 
@@ -101,7 +108,7 @@ def _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y):
         entries.append((proj, str(e.get("id")), False))
     entries.sort(key=lambda t: (t[0], t[1]))
     idx = next(i for i, t in enumerate(entries) if t[2])
-    slots = port_model.side_slots(node, side, len(entries))
+    slots = port_model.side_slots(node, side, len(entries), rect=rect)
     return slots[idx][0], slots[idx][1]
 
 
@@ -255,7 +262,7 @@ def seat_end(node, other_node, edge_data, role, cur, ref_x, ref_y,
     if _rect_seated(node):
         p = port_model.choose_port_entry(
             node, (cur[1], cur[0]) if cur else None, (ref_x, ref_y),
-            float(snap_threshold))
+            float(snap_threshold), rect=_seat_rect(node))
         if p[4]:                                   # ручной порт свят
             return p[0], p[1]
         side = _NORMAL_SIDE.get((p[2], p[3]))

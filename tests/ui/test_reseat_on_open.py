@@ -200,3 +200,41 @@ def test_manual_ray_end_is_materialized_into_data(tmp_path):
     before = path.read_text(encoding="utf-8")
     assert not _reseat_canvas_endpoints(path)        # идемпотентно
     assert path.read_text(encoding="utf-8") == before
+
+
+def test_skin_end_lifted_to_bbox_on_open(tmp_path):
+    """«Символ тянется на рамку» (2026-08-01): конец на letterbox-грани
+    серверного канона при открытии поднимается на рамку bbox вдоль стаба;
+    идемпотентно."""
+    from modules.graph.core.pretransform import (_CLASS_SKIN, _SKIN_ASPECT,
+                                                 FIXED_SIZES,
+                                                 _skin_content_rect)
+    from ui.tabs.base_graph_tab import _reseat_canvas_endpoints
+
+    cls = next(c for c in sorted(FIXED_SIZES)
+               if _SKIN_ASPECT.get(_CLASS_SKIN.get(c, "")))
+    node = {"id": "s", "type": "equipment", "class_name": cls,
+            "centroid": [21.5, 140.0], "bbox": [0.0, 0.0, 280.0, 43.0]}
+    cr = _skin_content_rect(node)
+    assert cr is not None and abs(cr[0] - 0.0) > 1.0, \
+        "нужен класс с letterbox-полями по X для этой фикстуры"
+
+    g = {
+        "directed": False, "multigraph": False,
+        "graph": {"image_size": [1080, 1920]},
+        "nodes": [node,
+                  {"id": "b", "type": "connector", "class_name": "connector",
+                   "centroid": [21.5, -100.0], "bbox": None}],
+        "links": [{"id": "e1", "source": "s", "target": "b",
+                   "source_point": [21.5, cr[0]],
+                   "target_point": [21.5, -100.0], "waypoints": []}],
+        "text_blocks": [], "bindings": [],
+    }
+    path = tmp_path / "graph_canvas.json"
+    path.write_text(json.dumps(g), encoding="utf-8")
+
+    assert _reseat_canvas_endpoints(path)
+    g2 = json.loads(path.read_text(encoding="utf-8"))
+    e = g2["links"][0]
+    assert e["source_point"] == [21.5, 0.0]      # рамка bbox, тангенс цел
+    assert not _reseat_canvas_endpoints(path)    # идемпотентно

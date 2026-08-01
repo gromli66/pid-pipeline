@@ -232,6 +232,65 @@ def _materialize_ray_ends(canvas: dict, byid: dict) -> int:
     return moved
 
 
+def _lift_skin_ends_to_bbox(canvas: dict, byid: dict) -> int:
+    """«Символ тянется на рамку» (решение 2026-08-01): конец скин-узла,
+    сидящий на letterbox-грани СЕРВЕРНОГО канона (_skin_content_rect),
+    поднимается наружу вдоль нормали грани на рамку bbox — редакторский
+    контракт. Тангенс сохраняется (слоты целы); сдвиг идёт вдоль
+    подводящего стаба, ортогональность цела по построению. Пропуск:
+    _manual_route; грань letterbox == грани bbox; смежное колено ближе
+    рамки (лифт перепрыгнул бы колено)."""
+    from modules.graph.core.pretransform import FIXED_SIZES, _skin_content_rect
+
+    edges_list = (canvas.get("links") if "links" in canvas
+                  else canvas.get("edges")) or []
+    moved = 0
+    for e in edges_list:
+        if e.get("_manual_route"):
+            continue
+        wps = e.get("waypoints") or []
+        for end_key, node_key, alt_key, adj in (
+                ("source_point", "source", "from",
+                 wps[0] if wps else e.get("target_point")),
+                ("target_point", "target", "to",
+                 wps[-1] if wps else e.get("source_point"))):
+            p = e.get(end_key)
+            node = byid.get(e.get(node_key) or e.get(alt_key))
+            if p is None or node is None \
+                    or node.get("class_name") not in FIXED_SIZES:
+                continue
+            cr = _skin_content_rect(node)
+            bb = node.get("bbox")
+            if cr is None or not bb or len(bb) != 4:
+                continue
+            x, y = float(p[1]), float(p[0])
+            cx1, cy1, cx2, cy2 = cr
+            bx1, by1, bx2, by2 = (float(v) for v in bb)
+            # (грань letterbox, координата рамки, ось 'x'|'y', знак наружу)
+            faces = ((cx1, bx1, "x", -1), (cx2, bx2, "x", 1),
+                     (cy1, by1, "y", -1), (cy2, by2, "y", 1))
+            for cface, bface, axis, sign in faces:
+                if abs(cface - bface) <= 0.75:
+                    continue                    # letterbox == рамка
+                val = x if axis == "x" else y
+                tang_ok = (cy1 - 0.75 <= y <= cy2 + 0.75) if axis == "x" \
+                    else (cx1 - 0.75 <= x <= cx2 + 0.75)
+                if abs(val - cface) > 0.75 or not tang_ok:
+                    continue
+                if adj is not None:
+                    av = float(adj[1]) if axis == "x" else float(adj[0])
+                    # колено/дальний конец ближе рамки — лифт перепрыгнул бы
+                    if sign > 0 and av < bface or sign < 0 and av > bface:
+                        break
+                if axis == "x":
+                    e[end_key] = [y, bface]
+                else:
+                    e[end_key] = [bface, x]
+                moved += 1
+                break
+    return moved
+
+
 def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
     """Страховка §8.3.1 EDITOR_AFTER_LAYOUT_PLAN (решение заказчика: чинить
     при открытии): пересадить концы рёбер холста по канону `seating`.
@@ -332,8 +391,14 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
                                             (ref[1], ref[0]) if ref
                                             else (p[1], p[0]), 8.0)
             e[end_key] = [py, px]
-        moved += (e.get("source_point") != sp0) + (e.get("target_point") != tp0)
-    moved += _materialize_ray_ends(canvas, byid)
+        del sp0, tp0
+    _materialize_ray_ends(canvas, byid)
+    _lift_skin_ends_to_bbox(canvas, byid)
+    # идемпотентность: канон и редакторские доводки (лифт скинов) могут
+    # взаимно компенсироваться — считаем итог против файла, не по ходу
+    moved = sum(
+        (e.get("source_point") != s0) + (e.get("target_point") != t0)
+        for e, (s0, t0, _w0) in zip(edges_list, snap))
     if not moved:
         return False
     Path(canvas_path).write_text(json.dumps(canvas, ensure_ascii=False),

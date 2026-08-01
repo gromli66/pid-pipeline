@@ -15,6 +15,22 @@
   "side": 31,
   "manual": 0
  },
+ "graph_edited0598.json": {
+  "diag": 4,
+  "near_ortho": 0,
+  "max_dev": 56.69,
+  "along_own": 2,
+  "along_foreign": 2,
+  "through": 3,
+  "corner": 4,
+  "corner_near": 6,
+  "conn_off": 0,
+  "poly_off": 0,
+  "adrift": 0,
+  "midpoint": 63,
+  "side": 28,
+  "manual": 0
+ },
  "graph_edited70827.json": {
   "diag": 1,
   "near_ortho": 0,
@@ -77,6 +93,22 @@
   "adrift": 0,
   "midpoint": 59,
   "side": 31,
+  "manual": 0
+ },
+ "graph_edited_3edge.json": {
+  "diag": 6,
+  "near_ortho": 0,
+  "max_dev": 158.9,
+  "along_own": 7,
+  "along_foreign": 5,
+  "through": 6,
+  "corner": 2,
+  "corner_near": 3,
+  "conn_off": 0,
+  "poly_off": 0,
+  "adrift": 4,
+  "midpoint": 65,
+  "side": 28,
   "manual": 0
  },
  "graph_edited_after.json": {

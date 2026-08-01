@@ -33,7 +33,7 @@ EXPECTED = {
     "ui/editors/commands/advanced_commands.py": 6,
     "ui/editors/contour_editor.py": 2,
     "ui/editors/simple_graph_editor.py": 4,
-    "ui/tabs/base_graph_tab.py": 6,
+    "ui/tabs/base_graph_tab.py": 8,
 }
 
 

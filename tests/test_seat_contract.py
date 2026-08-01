@@ -113,6 +113,19 @@ ALLOWLIST = {
         "А->В: порт (середина грани) вместо канонного слака, 20.00px",
     ("optimize_edge", "bbox"):
         "А->В: порт (середина грани) вместо канонного слака, 20.00px",
+    #
+    # «Символ тянется на рамку» (2026-08-01, репро graph_edited_3edge):
+    # редактор сажает скины на РАМКУ bbox (скин рисуется растянутым, как
+    # контрол FXML), серверный канон — letterbox _skin_content_rect.
+    # Замер фикстуры: 8.50px (половина letterbox-поля).
+    ("recalculate_edge", "skin"): "скин на рамке bbox vs letterbox, 8.50px",
+    ("optimize_edge", "skin"): "скин на рамке bbox vs letterbox, 8.50px",
+    ("add_edge", "skin"): "скин на рамке bbox vs letterbox, 8.50px",
+    ("recalculate_edge", "skin_poly"):
+        "скин на рамке bbox vs letterbox, 8.50px",
+    ("optimize_edge", "skin_poly"):
+        "скин на рамке bbox vs letterbox, 8.50px",
+    ("add_edge", "skin_poly"): "скин на рамке bbox vs letterbox, 8.50px",
 }
 
 

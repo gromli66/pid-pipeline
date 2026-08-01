@@ -139,11 +139,13 @@ def _poly_ports(seg):
 
 # ────────────────────────── порты узла ──────────────────────────
 
-def candidate_ports(node):
+def candidate_ports(node, rect=None):
     """Производные порты-кандидаты [(x, y, nx, ny, manual=False), ...].
 
     (nx, ny) — наружная нормаль грани/участка; (0, 0) — точечный порт
-    (коннектор/фолбэк на центроид)."""
+    (коннектор/фолбэк на центроид). rect — переопределение рамки посадки
+    (редактор с 2026-08-01 передаёт bbox: «символ тянется на рамку»);
+    None — серверный канон `seating._anchor_rect` (бит-эталон)."""
     from modules.graph.core import seating
     from modules.graph.core.graph_access import is_connector
 
@@ -155,7 +157,8 @@ def candidate_ports(node):
         ports = _poly_ports(seg)
         if ports:
             return ports
-    rect = seating._anchor_rect(node)
+    if rect is None:
+        rect = seating._anchor_rect(node)
     if rect is not None:
         x1, y1, x2, y2 = rect
         cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
@@ -183,8 +186,8 @@ def manual_ports(node):
     return out
 
 
-def all_ports(node):
-    return manual_ports(node) + candidate_ports(node)
+def all_ports(node, rect=None):
+    return manual_ports(node) + candidate_ports(node, rect)
 
 
 def add_manual_port(node, x, y):
@@ -213,17 +216,19 @@ def rescale_manual_ports(node, old_bbox, new_bbox):
         p["dy"] = float(p.get("dy", 0.0)) * sy
 
 
-def side_slots(node, side, k):
+def side_slots(node, side, k, rect=None):
     """k слотов на грани рамки посадки, симметрично вокруг середины (Э2b).
 
     Решение заказчика 2026-07-31: одна труба в грань — ровно середина
     (k=1 бит-равен candidate_ports), несколько — равномерные слоты вокруг
     середины, шаг min(SLOT_PITCH, длина_грани/(k+1)) — крайние слоты не
     доходят до углов по построению. side из {'L','R','T','B'}; порядок —
-    по возрастанию координаты вдоль грани. [(x, y, nx, ny, False), ...]."""
+    по возрастанию координаты вдоль грани. rect — переопределение рамки
+    (редактор: bbox). [(x, y, nx, ny, False), ...]."""
     from modules.graph.core import seating
 
-    rect = seating._anchor_rect(node)
+    if rect is None:
+        rect = seating._anchor_rect(node)
     if rect is None or k < 1:
         return []
     x1, y1, x2, y2 = rect
@@ -308,12 +313,13 @@ def choose_port(node, cur_xy, ref_xy, snap_threshold):
     return p[0], p[1]
 
 
-def choose_port_entry(node, cur_xy, ref_xy, snap_threshold):
+def choose_port_entry(node, cur_xy, ref_xy, snap_threshold, rect=None):
     """То же, что choose_port, но возвращает ПОЛНЫЙ кортеж кандидата
     (x, y, nx, ny, manual) — движку редактора (Э2b) нужны нормаль (сторона
-    грани) и признак ручного порта. Поведение выбора бит-идентично."""
+    грани) и признак ручного порта. Поведение выбора бит-идентично;
+    rect — переопределение рамки посадки (редактор: bbox)."""
     rx, ry = ref_xy
-    ports = all_ports(node)
+    ports = all_ports(node, rect)
     if not ports:
         cx, cy = _node_cxy(node)
         return (cx, cy, 0.0, 0.0, False)

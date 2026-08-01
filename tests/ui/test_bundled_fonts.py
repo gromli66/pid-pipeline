@@ -18,21 +18,36 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtWidgets import QApplication
-from PySide6.QtGui import QTextLayout, QImage, QPainter, QColor
+from PySide6.QtGui import QTextLayout, QImage, QPainter, QColor, QFontDatabase
 
 EMOJI = "Noto Color Emoji"
 GENERIC = {"", "sans serif", "sans-serif", "serif", "monospace", "system"}
 
 
+# застабить тяжёлый ui.windows.main_window, чтобы импортировать только функцию шрифтов
+if "ui.windows.main_window" not in sys.modules:
+    _stub = types.ModuleType("ui.windows.main_window")
+    _stub.MainWindow = object
+    sys.modules["ui.windows.main_window"] = _stub
+
+
 @pytest.fixture(scope="module")
 def loaded_app():
-    # застабить тяжёлый ui.windows.main_window, чтобы импортировать только функцию шрифтов
-    if "ui.windows.main_window" not in sys.modules:
-        stub = types.ModuleType("ui.windows.main_window")
-        stub.MainWindow = object
-        sys.modules["ui.windows.main_window"] = stub
     app = QApplication.instance() or QApplication(sys.argv)
     app.setStyle("Fusion")
+    # Плагин offscreen отдаёт системные шрифты только там, где под ним есть
+    # бэкенд БД шрифтов (Linux/fontconfig). На Windows БД пуста: после загрузки
+    # бандла Noto Color Emoji остаётся ЕДИНСТВЕННЫМ шрифтом процесса, и любой
+    # символ — включая цифры — может отрисоваться только им. Контракт
+    # «примари конкретный, цифры не у эмодзи» в таком окружении невыполним
+    # ни при какой реализации, поэтому не проверяем его, а не ослабляем.
+    if not QFontDatabase.families():
+        pytest.skip(
+            f"Qt-плагин {app.platformName()!r} не отдаёт ни одного системного "
+            "шрифта (QFontDatabase.families() пуст) — контракт примари/фолбэка "
+            "непроверяем. Значим на Linux/Astra/CI; на Windows запускать так: "
+            "QT_QPA_PLATFORM=windows"
+        )
     from ui.main import _load_bundled_fonts
 
     _load_bundled_fonts(app)
@@ -67,6 +82,25 @@ def test_primary_is_concrete_not_generic(loaded_app):
 def test_digits_not_captured_by_emoji(loaded_app, ch):
     fam = _char_family(loaded_app, ch)
     assert fam != EMOJI, f"цифра {ch!r} улетела в эмодзи-шрифт ({fam})"
+
+
+def test_bundled_font_never_becomes_primary():
+    """Гард: эмодзи-шрифт из бандла не должен занять примари-слот.
+
+    Единственная проверка модуля, значимая и без системных шрифтов: там
+    зарегистрированный бандл — единственный кандидат, и QFontInfo резолвит
+    примари прямо в него. Контракт: либо примари — конкретное чужое семейство,
+    либо шрифт приложения не тронут вовсе (лучше тофу, чем поехавшие цифры).
+    """
+    app = QApplication.instance() or QApplication(sys.argv)
+    from ui.main import _load_bundled_fonts
+
+    before = _families(app)
+    _load_bundled_fonts(app)
+    after = _families(app)
+    assert after == before or (after[0] != EMOJI and after[0].lower() not in GENERIC), (
+        f"примари уехал в бандл/дженерик: было {before!r}, стало {after!r}"
+    )
 
 
 def test_dump_pngs_for_eyeball(loaded_app):

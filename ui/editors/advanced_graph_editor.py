@@ -1975,7 +1975,10 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         if seg and isinstance(seg, list) and len(seg) >= 6 \
                 and node.get('class_name') not in seating.FIXED_SIZES:
             return False
-        rect = seating._anchor_rect(node)
+        # рамка редактора (bbox, «символ тянется на рамку» 2026-08-01):
+        # прошивание полей letterbox — тоже изнанка, символ там нарисован
+        from modules.graph.core.edit_checks import seat_rect
+        rect = seat_rect(node)
         if rect is None:
             return False
         x1, y1, x2, y2 = rect
@@ -3869,13 +3872,17 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
 
     def _fit_pixmap(self, item: QGraphicsPixmapItem, pm: QPixmap,
                     x1: float, y1: float, w: float, h: float):
-        """Вписать пиксмап в bbox (с сохранением пропорций, по центру)."""
+        """Растянуть пиксмап на ВЕСЬ bbox (решение заказчика 2026-08-01
+        «символ тянется на рамку» — как контрол в FXML/SceneBuilder;
+        letterbox давал трубы «внутри бокса» при непропорциональном
+        resize, репро graph_edited_3edge)."""
         pw, ph = pm.width(), pm.height()
         if pw <= 0 or ph <= 0 or w <= 0 or h <= 0:
             return
-        s = min(w / pw, h / ph)
-        item.setScale(s)
-        item.setPos(x1 + (w - pw * s) / 2.0, y1 + (h - ph * s) / 2.0)
+        t = QTransform()
+        t.scale(w / pw, h / ph)
+        item.setTransform(t)
+        item.setPos(x1, y1)
 
     def _node_orientation(self, node_id):
         """Ориентация узла для скина/размера — по рёбрам (Часть 1).

@@ -10,8 +10,9 @@
 импорт, не копия. Чистый stdlib: shapely/numpy в requirements/ui.txt нет.
 
 Две системы отсчёта — сознательно:
-  * посадочные проверки (corner_ends, end_classes) меряют по рамке ПОСАДКИ
-    `seating._anchor_rect` (куда канон садит концы);
+  * посадочные проверки (corner_ends, end_classes) меряют по РЕДАКТОРСКОЙ
+    рамке посадки `seat_rect` (bbox, скины включительно — «символ тянется
+    на рамку», 2026-08-01);
   * препятственные (through_box, along_border) — по ВИЗУАЛЬНОЙ форме:
     реальный контур, где он есть (segmentation, класс вне FIXED_SIZES),
     иначе bbox. Урок node_28: ложный гигант `unknow` 616x374 по bbox даёт
@@ -26,7 +27,7 @@ from __future__ import annotations
 
 from .graph_access import edge_ends, edge_polyline, edges, is_connector, \
     node_cxy, nodes_by_id
-from .seating import FIXED_SIZES, _anchor_rect
+from .seating import FIXED_SIZES
 from . import ports as port_model
 
 # Пороги — согласованы с существующими судьями:
@@ -120,13 +121,30 @@ def _contour_seated(node) -> bool:
                 and not node.get("_axis"))
 
 
+def seat_rect(node):
+    """РЕДАКТОРСКАЯ рамка посадки: весь bbox, включая скины.
+
+    Решение заказчика 2026-08-01 («символ тянется на рамку», репро
+    graph_edited_3edge): скин рисуется растянутым на bbox, как контрол в
+    FXML/SceneBuilder, и конец трубы сидит на рамке. Letterbox-канон
+    (`seating._anchor_rect` -> _skin_content_rect) остаётся СЕРВЕРНЫМ
+    (бит-эталон раскладки); перевод сервера — отдельный этап с
+    пере-EXPECT. Возвращает (x1, y1, x2, y2) или None."""
+    if node is None:
+        return None
+    bb = node.get("bbox")
+    if not bb or len(bb) != 4:
+        return None
+    return tuple(float(v) for v in bb)
+
+
 def _rect_seated(node) -> bool:
-    """Конец узла сидит на рамке `_anchor_rect`, а не на контуре."""
+    """Конец узла сидит на рамке посадки, а не на контуре."""
     if node is None or is_connector(node):
         return False
     if _contour_seated(node):
         return False
-    return _anchor_rect(node) is not None
+    return seat_rect(node) is not None
 
 
 def _dist_to_contour(px: float, py: float, pts: list) -> float:
@@ -166,7 +184,8 @@ def on_rect_border(rect, x: float, y: float, tol: float = 0.5) -> bool:
 def corner_ends(graph, tol: float = CORNER_TOL) -> list[dict]:
     """Концы рёбер в углах рамки посадки.
 
-    Угол — обе координаты конца на границах `seating._anchor_rect` (tol px).
+    Угол — обе координаты конца на границах `seat_rect` (tol px; с
+    2026-08-01 рамка редактора = bbox, скины включительно).
     Полигонные узлы без скина не меряются: их конец сидит на контуре,
     у контура нет «угла рамки». (Логика == tools/corner_probe.corner_ends.)"""
     byid = nodes_by_id(graph)
@@ -178,7 +197,7 @@ def corner_ends(graph, tol: float = CORNER_TOL) -> list[dict]:
             node = byid.get(nid)
             if p is None or not _rect_seated(node):
                 continue
-            x1, y1, x2, y2 = _anchor_rect(node)
+            x1, y1, x2, y2 = seat_rect(node)
             x, y = float(p[1]), float(p[0])
             dc = max(min(abs(x - x1), abs(x - x2)),
                      min(abs(y - y1), abs(y - y2)))
@@ -461,7 +480,7 @@ def end_classes(graph, mid_tol: float = MID_TOL,
                 d = _dist_to_contour(x, y, cont) if cont else float("inf")
                 res["poly_ok" if d <= port_tol else "poly_off"].append(item)
                 continue
-            rect = _anchor_rect(node)
+            rect = seat_rect(node)
             if rect is None:
                 continue
             x1, y1, x2, y2 = rect
