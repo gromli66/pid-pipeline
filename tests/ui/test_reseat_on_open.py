@@ -130,8 +130,9 @@ def test_wp_end_migration_blocked_by_foreign_box(tmp_path):
     wall = {"id": "w", "type": "equipment", "class_name": "unknow",
             "centroid": [100.0, 160.0], "bbox": [140.0, 90.0, 180.0, 110.0]}
     p = _stub_canvas(tmp_path, extra_nodes=[wall])
-    assert not _reseat_canvas_endpoints(p), \
-        "миграция сквозь чужую рамку обязана быть отброшена (файл не переписан)"
+    # файл может переписаться легитимно (подпись _auto_route у зигзага,
+    # 2026-08-01) — судим ГЕОМЕТРИЮ: конец и колени не сдвинулись
+    _reseat_canvas_endpoints(p)
     g = json.loads(p.read_text(encoding="utf-8"))
     e = g["links"][0]
     assert e["source_point"] == [115.0, 120.0]
@@ -238,3 +239,40 @@ def test_skin_end_lifted_to_bbox_on_open(tmp_path):
     e = g2["links"][0]
     assert e["source_point"] == [21.5, 0.0]      # рамка bbox, тангенс цел
     assert not _reseat_canvas_endpoints(path)    # идемпотентно
+
+
+def test_unsigned_zigzag_gets_auto_flag_on_open(tmp_path):
+    """«Зигзаг прибит гвоздями» (2026-08-01): маршрут без подписи (сервер
+    старых эпох не ставил _auto_route) при открытии подписывается как
+    авто — drag снова ведёт его; _manual_route не трогается."""
+    from ui.tabs.base_graph_tab import _reseat_canvas_endpoints
+
+    g = {
+        "directed": False, "multigraph": False,
+        "graph": {"image_size": [1080, 1920]},
+        "nodes": [
+            {"id": "a", "type": "equipment", "class_name": "unknow",
+             "centroid": [100.0, 100.0], "bbox": [80, 80, 120, 120]},
+            {"id": "b", "type": "connector", "class_name": "connector",
+             "centroid": [200.0, 300.0], "bbox": None},
+        ],
+        "links": [
+            {"id": "e1", "source": "a", "target": "b",
+             "source_point": [100.0, 120.0], "target_point": [200.0, 300.0],
+             "waypoints": [[100.0, 300.0]]},
+            {"id": "e2", "source": "a", "target": "b",
+             "source_point": [100.0, 120.0], "target_point": [200.0, 300.0],
+             "waypoints": [[200.0, 120.0]], "_manual_route": True},
+        ],
+        "text_blocks": [], "bindings": [],
+    }
+    path = tmp_path / "graph_canvas.json"
+    path.write_text(json.dumps(g), encoding="utf-8")
+
+    assert _reseat_canvas_endpoints(path)
+    g2 = json.loads(path.read_text(encoding="utf-8"))
+    e1 = next(e for e in g2["links"] if e["id"] == "e1")
+    e2 = next(e for e in g2["links"] if e["id"] == "e2")
+    assert e1.get("_auto_route") is True      # безфлаговый подписан
+    assert "_auto_route" not in e2            # ручной не тронут
+    assert not _reseat_canvas_endpoints(path)  # идемпотентно

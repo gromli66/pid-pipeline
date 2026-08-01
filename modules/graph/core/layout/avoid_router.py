@@ -386,7 +386,7 @@ def _route_pass(graph, byid, geoms, edge_list, p, force_ports):
 
 def _snapshot(e):
     return (deepcopy(e.get("source_point")), deepcopy(e.get("target_point")),
-            deepcopy(e.get("waypoints")))
+            deepcopy(e.get("waypoints")), bool(e.get("_auto_route")))
 
 
 def _end_sides(byid, e):
@@ -402,6 +402,10 @@ def _end_sides(byid, e):
 def _restore(e, snap):
     e["source_point"], e["target_point"], e["waypoints"] = deepcopy(snap[0]), \
         deepcopy(snap[1]), deepcopy(snap[2])
+    if snap[3]:
+        e["_auto_route"] = True
+    else:
+        e.pop("_auto_route", None)
 
 
 def apply_routing(graph, orig, base_v16, params=None, legal=None):
@@ -439,6 +443,13 @@ def apply_routing(graph, orig, base_v16, params=None, legal=None):
             e["source_point"] = deepcopy(ends_new[eid][0])
             e["target_point"] = deepcopy(ends_new[eid][1])
         e["waypoints"] = deepcopy(routed.get(eid, []))
+        # подпись авто-маршрута (2026-08-01, репро «зигзаг прибит гвоздями»):
+        # без флага редактор классифицирует серверный обход как РУЧНОЙ
+        # маршрут оператора и не ведёт его при drag. Не в sha-проекции.
+        if e["waypoints"]:
+            e["_auto_route"] = True
+        else:
+            e.pop("_auto_route", None)
         # пере-посадка концов по осям подводящих сегментов — тем же каноном:
         # порт задаёт координату вдоль грани (замок оси стаба), стаб к нему
         # перпендикулярен (ConnDir пина) — канон воспроизводит порт. У

@@ -454,11 +454,22 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
     _materialize_ray_ends(canvas, byid)
     _lift_skin_ends_to_bbox(canvas, byid)
     _spread_stacked_ends(canvas, byid)
+    # 2026-08-01 («зигзаг прибит гвоздями»): маршруты без подписи — от
+    # сервера старых эпох (avoid_router не ставил _auto_route) — редактор
+    # считал их ручными и не вёл при drag. Подписываем как авто; ручные
+    # (_manual_route) не трогаются. Флаг не в sha-проекции.
+    flagged = 0
+    for e in edges_list:
+        if (e.get("waypoints") or []) and not e.get("_auto_route") \
+                and not e.get("_manual_route"):
+            e["_auto_route"] = True
+            flagged += 1
     # идемпотентность: канон и редакторские доводки (лифт скинов) могут
     # взаимно компенсироваться — считаем итог против файла, не по ходу
     moved = sum(
         (e.get("source_point") != s0) + (e.get("target_point") != t0)
         for e, (s0, t0, _w0) in zip(edges_list, snap))
+    moved += flagged
     if not moved:
         return False
     Path(canvas_path).write_text(json.dumps(canvas, ensure_ascii=False),
