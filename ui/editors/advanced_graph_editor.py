@@ -1293,6 +1293,23 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         return False
 
     @classmethod
+    def _seg_pierces_shape(cls, ax: float, ay: float,
+                           bx: float, by: float, shape) -> bool:
+        """ТОЛЬКО прошивание нутра формы, без прижатия-hug.
+
+        Решение заказчика 2026-08-01 («почему раздвигаются чужие рёбра»):
+        уступание срабатывает, лишь когда таскаемый бокс РЕАЛЬНО накрыл
+        трубу — простое сближение ближе клиренса чужие трубы не дёргает
+        (класс «вдоль» лечится системно в Э3, а не перекладкой на лету)."""
+        kind, geom = shape
+        if kind == 'poly':
+            return _seg_pierces_polygon(ax, ay, bx, by, geom)
+        x1, y1, x2, y2 = geom
+        ix1, iy1, ix2, iy2 = x1 + 0.75, y1 + 0.75, x2 - 0.75, y2 - 0.75
+        return ix1 < ix2 and iy1 < iy2 and segment_intersects_bbox(
+            ax, ay, bx, by, (ix1, iy1, ix2, iy2))
+
+    @classmethod
     def _seg_conflicts_shape(cls, ax: float, ay: float,
                              bx: float, by: float, shape) -> bool:
         """Конфликт сегмента с ФОРМОЙ чужого узла: ('rect', bbox) |
@@ -1640,8 +1657,10 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                 if pbb is None or pbb[0] > ux2 or pbb[2] < ux1 \
                         or pbb[1] > uy2 or pbb[3] < uy1:
                     continue
+                # 2026-08-01: триггер уступания — только РЕАЛЬНОЕ прошивание
+                # нутра (не прижатие): сближение чужие трубы не дёргает
                 if not any(
-                        self._seg_conflicts_shape(a[0], a[1], b[0], b[1], sh)
+                        self._seg_pierces_shape(a[0], a[1], b[0], b[1], sh)
                         for sh in shapes
                         for a, b in zip(pts, pts[1:])):
                     continue

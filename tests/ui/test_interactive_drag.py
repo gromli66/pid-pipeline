@@ -606,11 +606,11 @@ def _yield_state(ed, e):
 
 
 def test_free_box_shoved_at_pipe_side_pipe_yields_and_returns(qapp, tmp_path):
-    """Кейс заказчика (edge_75/node_81): прямая труба, чужой бокс надвигается
-    до зазора ~2px СБОКУ (не пересекая) — труба-НЕинцидентное ребро рождает
-    обход с зазором >= клиренса; увод бокса — труба снова прямая без
-    waypoints и _auto_route; undo возвращает всё побайтово (вместе с
-    уступившим ребром)."""
+    """Переобъявлено 2026-08-01 («почему раздвигаются чужие рёбра»): чужая
+    труба уступает, только когда бокс РЕАЛЬНО её накрыл (прошивание
+    нутра); сближение до 2px чужие трубы больше не дёргает — класс
+    «вдоль» лечит Э3, не перекладка на лету. Увод бокса — труба снова
+    прямая; undo побайтово (вместе с уступившим ребром)."""
     g = _graph_pipe_free_box()
     _assert_canonical(g)
     ed = _editor(qapp, tmp_path, g)
@@ -618,11 +618,16 @@ def test_free_box_shoved_at_pipe_side_pipe_yields_and_returns(qapp, tmp_path):
     e = ed.model.find_edge_data(key)
     s0 = _yield_state(ed, e)
 
-    # бокс side (80x80) к трубе: левая грань на x=302, труба x=300 -> зазор
-    # 2px, перекрытие вдоль грани 80px > порога 8 — конфликт-«прижатие»
+    # фаза 1: сближение (левая грань x=302, труба x=300, зазор 2px) —
+    # чужая труба стоит как стояла
     _drag(ed, "side", 342.0, 200.0)
+    assert e["waypoints"] == [], "сближение не должно дёргать чужую трубу"
+    assert e["source_point"] == [120.0, 300.0]
 
-    assert e.get("waypoints"), "труба не уступила надвинутому боксу"
+    # фаза 2: бокс НАКРЫЛ трубу (левая грань x=282 < 300) — уступает
+    _drag(ed, "side", 322.0, 200.0)
+
+    assert e.get("waypoints"), "труба не уступила накрывшему боксу"
     assert e.get("_auto_route") is True
     # концы НЕ пересаживались: узлы трубы не двигались
     assert e["source_point"] == [120.0, 300.0]
@@ -709,7 +714,7 @@ def test_yielding_edge_preview_equals_result(qapp, tmp_path):
     e = ed.model.find_edge_data(ed.model.edge_key("top", "bot"))
 
     ed.start_drag_node("side")
-    ed.drag_node_to(342.0, 200.0)
+    ed.drag_node_to(322.0, 200.0)      # накрыл трубу (триггер 2026-08-01)
     assert e.get("waypoints"), "обход обязан быть уже на кадре протяжки"
     preview = _edge_proj(e)
     ed.end_drag_node()
@@ -733,7 +738,7 @@ def test_batch_drag_with_yielding_edge(qapp, tmp_path):
 
     ed.selected_nodes = {"side", "buddy"}
     ed.start_drag_node("side")
-    ed.drag_node_to(342.0, 200.0)     # side к трубе (зазор 2px), buddy рядом
+    ed.drag_node_to(322.0, 200.0)     # side НАКРЫЛ трубу, buddy рядом
     assert e.get("waypoints"), "труба не уступила надвинутой группе"
     preview = _edge_proj(e)
     ed.end_drag_node()
