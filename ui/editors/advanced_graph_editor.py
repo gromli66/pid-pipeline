@@ -252,6 +252,10 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         # рёбер собираются один раз в start_drag_node; двигающиеся узлы и
         # инцидентные им рёбра читаются свежими на каждом кадре).
         self._drag_route_ctx: dict | None = None
+        # Э3-амнистия: база «что труба уже пересекала» закрепляется на
+        # ВХОДЕ жеста (кэш edge_key -> set узлов); плавающая база по
+        # текущему кадру легализовала лишние боксы (репро 222222)
+        self._amnesty_cache: dict = {}
         self._drag_prev_x: float = 0
         self._drag_prev_y: float = 0
 
@@ -1069,19 +1073,40 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
            подсветка очагов видят её как несведённый маршрут, а не норму.
         """
         if self._route_orthogonal_main(edge_data, alive):
-            edge_data.pop('_route_defect', None)
-            return True
+            # финальный валидатор ПОВЕРХ главного роутера (репро 222222,
+            # решение «страшно, когда труба легла на бокс»): BOUNDED-кап
+            # препятствий (14 ближайших) позволял главному легально
+            # прошивать далёкие боксы — принятый маршрут обязан пройти
+            # тот же суд, что и фолбэки (прошивание+hug, амнистия базы)
+            amn = self._amnesty_ids(edge_data)
+            pts = [(p[1], p[0]) for p in
+                   [edge_data['source_point']]
+                   + list(edge_data.get('waypoints') or [])
+                   + [edge_data['target_point']]]
+            if not any(self._fb_seg_bad(a, b, edge_data, amn)
+                       for a, b in zip(pts, pts[1:])):
+                edge_data.pop('_route_defect', None)
+                return True
+            edge_data['waypoints'] = []
+            edge_data.pop('_auto_route', None)
         if self._route_fallback_lz(edge_data) \
                 or self._route_fallback_z(edge_data):
             edge_data.pop('_route_defect', None)
             return True
         sp = edge_data.get('source_point')
         tp = edge_data.get('target_point')
-        if sp and tp and not (edge_data.get('waypoints') or []) \
-                and min(abs(tp[1] - sp[1]), abs(tp[0] - sp[0])) > 0.5:
-            edge_data['_route_defect'] = True
-        else:
-            edge_data.pop('_route_defect', None)
+        if sp and tp and not (edge_data.get('waypoints') or []):
+            sx2, sy2 = sp[1], sp[0]
+            tx2, ty2 = tp[1], tp[0]
+            diag = min(abs(tx2 - sx2), abs(ty2 - sy2)) > 0.5
+            # строго-прямая, прошившая бокс (скольжение конца), при
+            # отказе лестницы — тоже несведённый маршрут (репро edge_192)
+            conflict = not diag and self._straight_conflicts_obstacle(
+                edge_data, sx2, sy2, tx2, ty2)
+            if diag or conflict:
+                edge_data['_route_defect'] = True
+                return False
+        edge_data.pop('_route_defect', None)
         return False
 
     def _route_fallback_lz(self, edge_data: dict) -> bool:
@@ -1099,10 +1124,10 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         tx, ty = tp[1], tp[0]
         if min(abs(tx - sx), abs(ty - sy)) <= 0.5:
             return False                     # почти прямая — не наш случай
-        own = self._amnesty_ids(edge_data)
+        amn = self._amnesty_ids(edge_data)
         for wx, wy in ((tx, sy), (sx, ty)):
             pts = ((sx, sy), (wx, wy), (tx, ty))
-            if any(self._lz_seg_pierces(a, b, own)
+            if any(self._fb_seg_bad(a, b, edge_data, amn)
                    for a, b in zip(pts, pts[1:])):
                 continue
             edge_data['waypoints'] = [[wy, wx]]
@@ -1126,19 +1151,24 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         tx, ty = tp[1], tp[0]
         if min(abs(tx - sx), abs(ty - sy)) <= 0.5:
             return False
-        own = self._amnesty_ids(edge_data)
+        amn = self._amnesty_ids(edge_data)
         lox, hix = min(sx, tx) - 40.0, max(sx, tx) + 40.0
         loy, hiy = min(sy, ty) - 40.0, max(sy, ty) + 40.0
         xs, ys = {(sx + tx) / 2.0}, {(sy + ty) / 2.0}
+        # оси-кандидаты отступают от кромок на клиренс + полтолщину чернил
+        # (раньше +/-3px — hug-браковка отбивала бы всех кандидатов)
+        off = self.ROUTE_CLEARANCE \
+            + float(edge_data.get('render_width') or 2.0) / 2.0 + 0.5
+        own_ends = {edge_data.get('source'), edge_data.get('target')}
         for nid, node in self.nodes.items():
-            if nid in own:
+            if nid in amn[0] or nid in own_ends:
                 continue
             bb = self._get_node_bbox(nid)
             if not bb or bb[2] < lox or bb[0] > hix \
                     or bb[3] < loy or bb[1] > hiy:
                 continue
-            xs.update((bb[0] - 3.0, bb[2] + 3.0))
-            ys.update((bb[1] - 3.0, bb[3] + 3.0))
+            xs.update((bb[0] - off, bb[2] + off))
+            ys.update((bb[1] - off, bb[3] + off))
         cx_mid, cy_mid = (sx + tx) / 2.0, (sy + ty) / 2.0
         xs = sorted((x for x in xs if lox <= x <= hix),
                     key=lambda v: abs(v - cx_mid))[:24]
@@ -1146,14 +1176,14 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                     key=lambda v: abs(v - cy_mid))[:24]
         for xm in xs:                                # H-V-H
             pts = ((sx, sy), (xm, sy), (xm, ty), (tx, ty))
-            if not any(self._lz_seg_pierces(a, b, own)
+            if not any(self._fb_seg_bad(a, b, edge_data, amn)
                        for a, b in zip(pts, pts[1:])):
                 edge_data['waypoints'] = [[sy, xm], [ty, xm]]
                 edge_data['_auto_route'] = True
                 return True
         for ym in ys:                                # V-H-V
             pts = ((sx, sy), (sx, ym), (tx, ym), (tx, ty))
-            if not any(self._lz_seg_pierces(a, b, own)
+            if not any(self._fb_seg_bad(a, b, edge_data, amn)
                        for a, b in zip(pts, pts[1:])):
                 edge_data['waypoints'] = [[ym, sx], [ym, tx]]
                 edge_data['_auto_route'] = True
@@ -1161,62 +1191,109 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         return False
 
     def _amnesty_ids(self, edge_data: dict) -> set:
-        """Узлы, которые фолбэкам МОЖНО пересекать: свои концевые + те, чьё
-        нутро ТЕКУЩАЯ полилиния ребра уже прошивает (правило «не хуже
-        входа», репро graph_edited971: грань node_95 целиком накрыта
-        чужим гигантом node_94 — без амнистии лестница браковала всё,
-        гейт откатывал, и толстые трубы не разъезжались, хотя труба
-        и так живёт внутри node_94)."""
-        own = {edge_data.get('source'), edge_data.get('target')}
-        sp = edge_data.get('source_point')
-        tp = edge_data.get('target_point')
-        if not sp or not tp:
-            return own
-        pts = [(p[1], p[0]) for p in
-               [sp] + list(edge_data.get('waypoints') or []) + [tp]]
-        amn = set(own)
-        for nid, node in self.nodes.items():
-            if nid in own:
-                continue
-            seg = _node_poly_contour(node)
-            if seg is not None:
-                if any(_seg_pierces_polygon(a[0], a[1], b[0], b[1], seg)
-                       for a, b in zip(pts, pts[1:])):
-                    amn.add(nid)
-                continue
-            bb = self._get_node_bbox(nid)
-            if not bb:
-                continue
-            x1, y1, x2, y2 = bb
-            ix1, iy1, ix2, iy2 = x1 + 0.75, y1 + 0.75, x2 - 0.75, y2 - 0.75
-            if ix1 < ix2 and iy1 < iy2 and any(
-                    segment_intersects_bbox(a[0], a[1], b[0], b[1],
-                                            (ix1, iy1, ix2, iy2))
-                    for a, b in zip(pts, pts[1:])):
-                amn.add(nid)
+        """Узлы, чьё нутро фолбэкам МОЖНО пересекать: те, что БАЗОВАЯ
+        полилиния ребра уже прошивала (правило «не хуже входа», репро
+        graph_edited971: грань node_95 накрыта чужим гигантом node_94 —
+        труба и так живёт внутри него). БЕЗ концевых узлов — их судит
+        отдельная логика (hug своей грани запрещён).
+
+        База = полилиния на ВХОДЕ ЖЕСТА (бэкап drag_start_edge_points /
+        снимок _reseat_after_resize), кэш на жест: плавающая база по
+        текущему кадру легализовала боксы, которых исходная труба не
+        касалась (репро 222222 — «труба легла на неподвижный бокс»)."""
+        key = self.model.edge_key(edge_data.get('source'),
+                                  edge_data.get('target'))
+        if key in self._amnesty_cache:
+            return self._amnesty_cache[key]
+        base = self.drag_start_edge_points.get(key) \
+            if not self._batch_drag else None
+        src_geom = base if base else edge_data
+        sp = src_geom.get('source_point')
+        tp = src_geom.get('target_point')
+        amn = set()
+        if sp and tp:
+            # СТОРОЖ == СУДЬЯ (главное метаправило; амнистия со своим
+            # предикатом (усадка 0.75 без полов) легализовала касания,
+            # которых судья на входе не видел — маршруты «не хуже входа»
+            # оказывались ХУЖЕ по судье): базу меряют те же
+            # edit_checks.through_box/along_border на входной полилинии
+            from modules.graph.core import edit_checks as _ec
+            probe = {"id": "__amn__",
+                     "source": edge_data.get('source'),
+                     "target": edge_data.get('target'),
+                     "source_point": sp, "target_point": tp,
+                     "waypoints": list(src_geom.get('waypoints') or [])}
+            mini = {"nodes": list(self.nodes.values()), "links": [probe]}
+            thru = {i["node"] for i in _ec.through_box(mini)}
+            along = {i["node"] for i in _ec.along_border(mini)}
+            # амнистия РАЗДЕЛЬНАЯ: «вдоль» на входе НЕ разрешает «сквозь»
+            # на выходе (репро manual_4/node_70: зазор 2.4px на входе
+            # превращался в прошивание — это ухудшение класса)
+            amn = (thru, along | thru)
+        else:
+            amn = (set(), set())
+        self._amnesty_cache[key] = amn
         return amn
 
-    def _lz_seg_pierces(self, a, b, own_ids) -> bool:
-        """Сегмент фолбэка прошивает нутро чужого узла? Контурные узлы —
-        по реальному контуру (ловушка node_28: bbox-гигант дал бы 15
-        фантомов), прочие — по bbox с усадкой 0.75."""
+    def _fb_seg_bad(self, a, b, edge_data, amn) -> bool:
+        """Сегмент фолбэка недопустим (решение заказчика 2026-08-01
+        «не страшно, когда бокс наехал на трубу; страшно, когда ТРУБА
+        легла на бокс»):
+          * прошивание нутра неамнистированного узла (амнистия — только
+            то, что БАЗОВАЯ полилиния уже прошивала);
+          * прижатие-hug вдоль грани прямоугольного узла ближе клиренса,
+            ВКЛЮЧАЯ свой бокс (репро edge_145: Г-колено ложилось на свою
+            грань с зазором 0). Перпендикулярный стаб от порта hug не
+            триггерит (перекрытие вдоль грани нулевое).
+        Амнистированные пропускаются целиком (труба живёт внутри них);
+        контуры — прошивание по реальной форме, hug по контуру не судим
+        (ложняки над карманами)."""
         ax, ay = a
         bx, by = b
+        amn_thru, amn_hug = amn
+        own = {edge_data.get('source'), edge_data.get('target')}
         for nid, node in self.nodes.items():
-            if nid in own_ids:
-                continue
+            if nid in amn_thru:
+                continue                     # труба живёт внутри — не судимо
             seg = _node_poly_contour(node)
             if seg is not None:
-                if _seg_pierces_polygon(ax, ay, bx, by, seg):
+                if nid not in own \
+                        and _seg_pierces_polygon(ax, ay, bx, by, seg):
                     return True
+                # прижатие к КОНТУРУ — и к СВОЕМУ тоже (класс «вдоль своей
+                # границы», edge_75/107/109 у node_28); перпендикулярный
+                # стаб от точки посадки даёт короткий пробег ниже порога
+                # судьи и не триггерит. Дёшево: bbox-претест, потом замер
+                # по форме тем же сэмплером, что у судьи.
+                if nid in amn_hug:
+                    continue
+                bb = node.get('bbox')
+                if bb and len(bb) == 4:
+                    c = self.ROUTE_CLEARANCE
+                    if not (max(ax, bx) < bb[0] - c or min(ax, bx) > bb[2] + c
+                            or max(ay, by) < bb[1] - c
+                            or min(ay, by) > bb[3] + c):
+                        from modules.graph.core import edit_checks as _ec
+                        border = _ec._node_border(node)
+                        if border and _ec._hug_runs(ax, ay, bx, by, border,
+                                                    c):
+                            return True
                 continue
             bb = self._get_node_bbox(nid)
             if not bb:
                 continue
-            x1, y1, x2, y2 = bb
-            ix1, iy1, ix2, iy2 = x1 + 0.75, y1 + 0.75, x2 - 0.75, y2 - 0.75
-            if ix1 < ix2 and iy1 < iy2 and segment_intersects_bbox(
-                    ax, ay, bx, by, (ix1, iy1, ix2, iy2)):
+            if nid in own:
+                if self._seg_hugs_bbox(ax, ay, bx, by, bb):
+                    return True
+                continue
+            if segment_intersects_bbox(
+                    ax, ay, bx, by,
+                    (bb[0] + 0.75, bb[1] + 0.75, bb[2] - 0.75, bb[3] - 0.75)) \
+                    and bb[0] + 0.75 < bb[2] - 0.75 \
+                    and bb[1] + 0.75 < bb[3] - 0.75:
+                return True                  # прошивание — амнистии нет
+            if nid not in amn_hug \
+                    and self._seg_hugs_bbox(ax, ay, bx, by, bb):
                 return True
         return False
 
@@ -1442,6 +1519,14 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         if ix1 < ix2 and iy1 < iy2 and segment_intersects_bbox(
                 ax, ay, bx, by, (ix1, iy1, ix2, iy2)):
             return True
+        return cls._seg_hugs_bbox(ax, ay, bx, by, bbox)
+
+    @classmethod
+    def _seg_hugs_bbox(cls, ax: float, ay: float,
+                       bx: float, by: float, bbox) -> bool:
+        """Только прижатие-hug (без прошивания): осевой сегмент идёт ближе
+        ROUTE_CLEARANCE к грани с перекрытием вдоль неё > порога."""
+        x1, y1, x2, y2 = bbox
         c = cls.ROUTE_CLEARANCE
         m = cls.ROUTE_HUG_OVERLAP_MIN
         if abs(ax - bx) <= 0.5:                  # V-сегмент у вертикальной грани
@@ -1850,6 +1935,12 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         # проваливался — не повторять попытку на каждом кадре
         skip_route = (routable and not route_alive
                       and self._routing_failed_nearby(edge_key, moved_node_id))
+        # «не хуже входа» уровня лестницы: живой маршрут запоминается —
+        # отказ перестройки не смеет ронять ребро в диагональ (репро
+        # wiggle-прогона: строгая браковка убивала хорошие маршруты 7->13)
+        prev_route = [w.copy() for w in edge_data.get('waypoints') or []] \
+            if route_alive else None
+        flipped = False
         if route_alive and not reuse:
             # авто-маршрут прошлого кадра протяжки: перестраивается с нуля
             # от текущей геометрии (waypoints оператора сюда не попадают —
@@ -1942,9 +2033,30 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                 edge_data[point_key], ref2[1], ref2[0], try_slack=False)
             edge_data[point_key] = [ay, ax]
         elif routable and not reuse:
-            # Э7-c: маршрут погашен (гистерезис: div < порога) — ребро
-            # снова прямое, авто-флаг снимается вместе с waypoints.
-            edge_data.pop('_auto_route', None)
+            sp2 = edge_data.get('source_point')
+            tp2 = edge_data.get('target_point')
+            straight = bool(sp2 and tp2 and min(
+                abs(tp2[1] - sp2[1]), abs(tp2[0] - sp2[0])) <= 0.5)
+            if prev_route and not straight and not flipped \
+                    and not (edge_data.get('waypoints') or []):
+                # лестница отказала, но у ребра БЫЛ маршрут — восстановить
+                # его честнее диагонали («не хуже входа»); стаб дотягивает
+                # движок (порт/слот + сдвиг смежного колена)
+                edge_data['waypoints'] = [w.copy() for w in prev_route]
+                edge_data['_auto_route'] = True
+                refr = edge_data['waypoints'][0] \
+                    if point_key == 'source_point' \
+                    else edge_data['waypoints'][-1]
+                ax, ay = self._seat_end_ported(
+                    node, None, edge_data,
+                    's' if point_key == 'source_point' else 't',
+                    edge_data[point_key], refr[1], refr[0], try_slack=False)
+                edge_data[point_key] = [ay, ax]
+                edge_data.pop('_route_defect', None)
+            else:
+                # Э7-c: маршрут погашен (строгая соосность) — ребро
+                # снова прямое, авто-флаг снимается вместе с waypoints.
+                edge_data.pop('_auto_route', None)
             if self._drag_route_ctx is not None:
                 self._drag_route_ctx['route_anchor'].pop(edge_key, None)
                 if not skip_route and self._drag_route_ctx['bounded']:
@@ -2012,6 +2124,7 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         prev_ctx = self._drag_route_ctx
         self._drag_routable_edges = auto_keys
         self._drag_route_ctx = self._build_drag_route_ctx({node_id})
+        self._amnesty_cache = {}
         try:
             for edge in self.edges_data:
                 if node_id not in (edge.get('source'), edge.get('target')):
@@ -2052,6 +2165,7 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         finally:
             self._drag_routable_edges = prev_routable
             self._drag_route_ctx = prev_ctx
+            self._amnesty_cache = {}
 
     @staticmethod
     def _edge_is_ortho(edge_data: dict, tol: float = 1.0) -> bool:
@@ -2688,6 +2802,7 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
 
         self._batch_drag = (node_id in self.selected_nodes and len(self.selected_nodes) > 1)
         self._drag_routable_edges = set()
+        self._amnesty_cache = {}
 
         if self._batch_drag:
             self._batch_snap_cmd = BatchDragCommand(self.model, self._redraw_all)
@@ -2923,6 +3038,7 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         self._batch_boundary_edges = []
         self._batch_bound_blocks = []
         self._drag_routable_edges = set()
+        self._amnesty_cache = {}
         self._drag_route_ctx = None
         self.drag_start_centroid = None
         self.drag_start_bbox = []
