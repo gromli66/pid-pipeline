@@ -1099,7 +1099,7 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         tx, ty = tp[1], tp[0]
         if min(abs(tx - sx), abs(ty - sy)) <= 0.5:
             return False                     # почти прямая — не наш случай
-        own = {edge_data.get('source'), edge_data.get('target')}
+        own = self._amnesty_ids(edge_data)
         for wx, wy in ((tx, sy), (sx, ty)):
             pts = ((sx, sy), (wx, wy), (tx, ty))
             if any(self._lz_seg_pierces(a, b, own)
@@ -1126,7 +1126,7 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         tx, ty = tp[1], tp[0]
         if min(abs(tx - sx), abs(ty - sy)) <= 0.5:
             return False
-        own = {edge_data.get('source'), edge_data.get('target')}
+        own = self._amnesty_ids(edge_data)
         lox, hix = min(sx, tx) - 40.0, max(sx, tx) + 40.0
         loy, hiy = min(sy, ty) - 40.0, max(sy, ty) + 40.0
         xs, ys = {(sx + tx) / 2.0}, {(sy + ty) / 2.0}
@@ -1159,6 +1159,42 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                 edge_data['_auto_route'] = True
                 return True
         return False
+
+    def _amnesty_ids(self, edge_data: dict) -> set:
+        """Узлы, которые фолбэкам МОЖНО пересекать: свои концевые + те, чьё
+        нутро ТЕКУЩАЯ полилиния ребра уже прошивает (правило «не хуже
+        входа», репро graph_edited971: грань node_95 целиком накрыта
+        чужим гигантом node_94 — без амнистии лестница браковала всё,
+        гейт откатывал, и толстые трубы не разъезжались, хотя труба
+        и так живёт внутри node_94)."""
+        own = {edge_data.get('source'), edge_data.get('target')}
+        sp = edge_data.get('source_point')
+        tp = edge_data.get('target_point')
+        if not sp or not tp:
+            return own
+        pts = [(p[1], p[0]) for p in
+               [sp] + list(edge_data.get('waypoints') or []) + [tp]]
+        amn = set(own)
+        for nid, node in self.nodes.items():
+            if nid in own:
+                continue
+            seg = _node_poly_contour(node)
+            if seg is not None:
+                if any(_seg_pierces_polygon(a[0], a[1], b[0], b[1], seg)
+                       for a, b in zip(pts, pts[1:])):
+                    amn.add(nid)
+                continue
+            bb = self._get_node_bbox(nid)
+            if not bb:
+                continue
+            x1, y1, x2, y2 = bb
+            ix1, iy1, ix2, iy2 = x1 + 0.75, y1 + 0.75, x2 - 0.75, y2 - 0.75
+            if ix1 < ix2 and iy1 < iy2 and any(
+                    segment_intersects_bbox(a[0], a[1], b[0], b[1],
+                                            (ix1, iy1, ix2, iy2))
+                    for a, b in zip(pts, pts[1:])):
+                amn.add(nid)
+        return amn
 
     def _lz_seg_pierces(self, a, b, own_ids) -> bool:
         """Сегмент фолбэка прошивает нутро чужого узла? Контурные узлы —

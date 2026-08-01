@@ -1132,17 +1132,27 @@ def test_route_ladder_marks_defect_when_no_way(qapp, tmp_path):
     ed = _editor(qapp, tmp_path, g)
     e = ed.model.find_edge_data(ed.model.edge_key("ca", "cb"))
     orig = age.route_edge_v2
+    lz, z = ed._route_fallback_lz, ed._route_fallback_z
     try:
-        age.route_edge_v2 = lambda **kw: []          # главный отказал
+        # ступень 3 (пометка): главный и оба фолбэка отказали
+        age.route_edge_v2 = lambda **kw: []
+        ed._route_fallback_lz = lambda edge: False
+        ed._route_fallback_z = lambda edge: False
         assert ed._route_orthogonal(e) is False
         assert e["waypoints"] == []                  # диагональ осталась
         assert e.get("_route_defect") is True        # но помечена
 
-        age.route_edge_v2 = orig                     # роутер ожил
-        if ed._route_orthogonal(e):
-            assert "_route_defect" not in e          # успех снял пометку
+        # амнистия «не хуже входа» (репро graph_edited971): стена УЖЕ
+        # прошита прямой — фолбэкам можно пересекать её же, но не новое;
+        # Г-колено строится, ортогонально, пометка снята
+        ed._route_fallback_lz, ed._route_fallback_z = lz, z
+        assert ed._route_orthogonal(e) is True
+        assert e["waypoints"], "амнистированная стена не должна блокировать"
+        _assert_orthogonal(_full_path_xy(e))
+        assert "_route_defect" not in e
     finally:
         age.route_edge_v2 = orig
+        ed._route_fallback_lz, ed._route_fallback_z = lz, z
 
 
 # ── Э2d: resize через движок ─────────────────────────────────────────────
