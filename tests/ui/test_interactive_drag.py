@@ -648,11 +648,13 @@ def test_free_box_shoved_at_pipe_side_pipe_yields_and_returns(qapp, tmp_path):
     assert e["source_point"] == [120.0, 300.0]
     assert e["target_point"] == [290.0, 300.0]
 
-    # undo обоих жестов — побайтово, включая уступившее ребро
+    # undo всех трёх жестов — побайтово, включая уступившее ребро
     ed.undo()
     assert _yield_state(ed, e) == s1, "undo увода не вернул состояние с обходом"
-    ed.undo()
+    ed.undo()          # откат наезда (фаза 2)
+    ed.undo()          # откат сближения (фаза 1)
     assert _yield_state(ed, e) == s0, "undo не вернул исходное состояние"
+    ed.redo()
     ed.redo()
     assert _yield_state(ed, e) == s1, "redo не вернул состояние с обходом"
 
