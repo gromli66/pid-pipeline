@@ -66,29 +66,35 @@ def _port_side(rect, px, py, tol=1.5):
     return None
 
 
-def _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y):
-    """Слот на грани side для edge_data среди рёбер узла на той же грани.
+def _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y,
+               snap_threshold):
+    """Слот на грани side для edge_data среди рёбер узла ТОЙ ЖЕ грани.
 
-    Членство: авто-рёбра узла, чей текущий конец лежит на грани
-    (`_manual_route` не участвуют — их концы там, где поставил оператор).
+    Членство (фикс 2026-08-01, репро заказчика «из одного порта из
+    центра» и «наслаиваются при resize»): сторона соседа определяется
+    ТЕМ ЖЕ судьёй порта, что сажает (`choose_port_entry` по его
+    ориентиру), а не положением его текущего конца — при drag/resize
+    концы соседей ещё на СТАРОЙ рамке, и проверка «конец на грани»
+    теряла их всех (k=1 => все в середину). `_manual_route` не участвуют.
+
     Порядок слотов — по проекции ДАЛЬНЕГО ориентира ребра (смежный
     waypoint, иначе противоположный конец) на ось грани: при drag узла
     дальние концы неподвижны — порядок стабилен по построению, слоты не
-    мерцают. Тай-брейк — id ребра. Возвращает (x, y)."""
+    мерцают. Тай-брейк — id ребра. Слот, занятый концом соседа (<2px,
+    полусостояния кадра), не выдаётся — берётся свободный.
+    Возвращает (x, y)."""
     rect = _seat_rect(node)
     nid = node.get("id")
     horiz = side in ("T", "B")
 
-    def _proj_ref(e, end_key):
+    def _ref_of(e, end_key):
         wps = e.get("waypoints") or []
-        refp = (wps[0] if end_key == "source_point" else wps[-1]) if wps \
+        return (wps[0] if end_key == "source_point" else wps[-1]) if wps \
             else e.get("target_point" if end_key == "source_point"
                        else "source_point")
-        if refp is None:
-            return None
-        return float(refp[1]) if horiz else float(refp[0])
 
     entries = [(ref_x if horiz else ref_y, str(edge_data.get("id")), True)]
+    taken = []
     for e in node_edges or []:
         if e is edge_data or e.get("_manual_route"):
             continue
@@ -98,17 +104,32 @@ def _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y):
             end_key = "target_point"
         else:
             continue
+        refp = _ref_of(e, end_key)
+        if refp is None:
+            continue
         p = e.get(end_key)
-        if p is None \
-                or _port_side(rect, float(p[1]), float(p[0])) != side:
+        cur_sib = (float(p[1]), float(p[0])) if p else None
+        ps = port_model.choose_port_entry(
+            node, cur_sib, (float(refp[1]), float(refp[0])),
+            float(snap_threshold), rect=rect)
+        if p is not None and _port_side(rect, float(p[1]),
+                                        float(p[0])) == side:
+            taken.append(float(p[1]) if horiz else float(p[0]))
+        if ps[4]:
+            continue                       # сосед на ручном порту
+        if _NORMAL_SIDE.get((ps[2], ps[3])) != side:
             continue
-        proj = _proj_ref(e, end_key)
-        if proj is None:
-            continue
-        entries.append((proj, str(e.get("id")), False))
+        entries.append((float(refp[1]) if horiz else float(refp[0]),
+                        str(e.get("id")), False))
     entries.sort(key=lambda t: (t[0], t[1]))
     idx = next(i for i, t in enumerate(entries) if t[2])
-    slots = port_model.side_slots(node, side, len(entries), rect=rect)
+    k = len(entries)
+    slots = port_model.side_slots(node, side, k, rect=rect)
+    coords = [s[1 if not horiz else 0] for s in slots]
+    order = sorted(range(k), key=lambda j: (abs(j - idx), j))
+    for j in order:
+        if all(abs(coords[j] - t) >= 2.0 for t in taken):
+            return slots[j][0], slots[j][1]
     return slots[idx][0], slots[idx][1]
 
 
@@ -268,7 +289,8 @@ def seat_end(node, other_node, edge_data, role, cur, ref_x, ref_y,
         side = _NORMAL_SIDE.get((p[2], p[3]))
         if side is None:                           # точечный фолбэк
             return p[0], p[1]
-        return _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y)
+        return _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y,
+                          snap_threshold)
 
     lock = None
     if cur:

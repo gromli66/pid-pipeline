@@ -218,3 +218,50 @@ def test_skin_seats_on_bbox_frame():
     x, y = edit_engine.seat_end(n, None, {"id": "e"}, "s", None, 400.0, 21.5,
                                 try_slack=False, snap_threshold=12)
     assert (x, y) == (280.0, 21.5)
+
+
+def test_two_edges_same_side_opposite_directions_slotted():
+    # репро заказчика 2026-08-01: цели в РАЗНЫЕ стороны — раньше оба конца
+    # сливались в середину; сторона соседа теперь судится его ориентиром
+    node = _box("a", 0, 0, 40, 40)
+    e1 = {"id": "e1", "source": "a", "target": "c1",
+          "source_point": [20.0, 40.0], "target_point": [-40.0, 100.0],
+          "waypoints": []}
+    e2 = {"id": "e2", "source": "a", "target": "c2",
+          "source_point": [20.0, 40.0], "target_point": [80.0, 100.0],
+          "waypoints": []}
+    edges = [e1, e2]
+    x1, y1 = edit_engine.seat_end(node, None, e1, "s", e1["source_point"],
+                                  100.0, -40.0, try_slack=False,
+                                  snap_threshold=12, node_edges=edges)
+    e1["source_point"] = [y1, x1]
+    x2, y2 = edit_engine.seat_end(node, None, e2, "s", e2["source_point"],
+                                  100.0, 80.0, try_slack=False,
+                                  snap_threshold=12, node_edges=edges)
+    assert x1 == x2 == 40.0
+    assert y1 < 20.0 < y2                     # разведены, не в одну точку
+    assert abs(y1 - y2) >= 2.0
+
+
+def test_slots_survive_frame_change():
+    # репро «наслаиваются при resize»: рамка выросла, концы соседей ещё на
+    # СТАРОЙ рамке — членство по ориентирам всё равно видит обоих (k=2)
+    node = _box("a", 0, 0, 40, 40)
+    e1 = {"id": "e1", "source": "a", "target": "c1",
+          "source_point": [20.0, 40.0], "target_point": [15.0, 140.0],
+          "waypoints": []}
+    e2 = {"id": "e2", "source": "a", "target": "c2",
+          "source_point": [20.0, 40.0], "target_point": [25.0, 140.0],
+          "waypoints": []}
+    node["bbox"] = [0, 0, 80, 60]             # resize: старые концы вне рамки
+    edges = [e1, e2]
+    x1, y1 = edit_engine.seat_end(node, None, e1, "s", e1["source_point"],
+                                  140.0, 15.0, try_slack=False,
+                                  snap_threshold=12, node_edges=edges)
+    e1["source_point"] = [y1, x1]
+    x2, y2 = edit_engine.seat_end(node, None, e2, "s", e2["source_point"],
+                                  140.0, 25.0, try_slack=False,
+                                  snap_threshold=12, node_edges=edges)
+    assert x1 == x2 == 80.0                   # новая грань
+    assert abs(y1 - y2) >= 2.0                # НЕ наслоились
+    assert y1 < 30.0 < y2                     # симметрично вокруг середины
