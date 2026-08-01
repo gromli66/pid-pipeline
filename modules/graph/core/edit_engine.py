@@ -239,9 +239,13 @@ def _poly_adjust(node, node_edges, edge_data, role, px, py, ref_x, ref_y):
         adj = None
         if wps:
             adj = wps[0] if role == "s" else wps[-1]
+            stub_len = math.hypot(float(adj[1]) - px, float(adj[0]) - py)
             stub_dot = abs((float(adj[1]) - px) * dx
                            + (float(adj[0]) - py) * dy) / length
-            if stub_dot > 1.0:
+            # УГОЛ, не пиксели (репро 971/node_108: участок наклонён на
+            # 0.37°, длинный вертикальный стаб давал проекцию >1px и
+            # распределение молча пропускалось — |cos| судит честно)
+            if stub_len > 1e-9 and stub_dot / stub_len > 0.1:
                 return px, py       # стаб не перпендикулярен — не косить
 
         def _place(s):

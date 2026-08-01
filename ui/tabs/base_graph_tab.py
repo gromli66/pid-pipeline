@@ -291,6 +291,65 @@ def _lift_skin_ends_to_bbox(canvas: dict, byid: dict) -> int:
     return moved
 
 
+def _spread_stacked_ends(canvas: dict, byid: dict) -> int:
+    """Развод СТОПОК при открытии (репро graph_edited971: три трубы w=14
+    в одной точке — след толщины, применённой кодом до амнистии/членства):
+    несколько АВТО-концов одного узла, слипшихся в точку (<2px),
+    пересаживаются движком (слоты/участки, шаг по чернилам). Гейт «не
+    хуже входа»: роутера при открытии нет, поэтому ребро, которое
+    пересадка сделала бы косым, откатывается (дочинит жест/кисть).
+    _manual_route и коннекторы (порт-точка) не трогаются."""
+    from modules.graph.core import edit_engine
+    from modules.graph.core.graph_access import is_connector
+
+    edges_list = (canvas.get("links") if "links" in canvas
+                  else canvas.get("edges")) or []
+    ends_by_node = {}
+    for e in edges_list:
+        if e.get("_manual_route"):
+            continue
+        for role, end_key, node_key, alt_key in (
+                ("s", "source_point", "source", "from"),
+                ("t", "target_point", "target", "to")):
+            nid = e.get(node_key) or e.get(alt_key)
+            p = e.get(end_key)
+            node = byid.get(nid)
+            if p is None or node is None or is_connector(node):
+                continue
+            ends_by_node.setdefault(nid, []).append((e, role, end_key, p))
+    moved = 0
+    for nid, ends in ends_by_node.items():
+        stacked = [
+            (e, role, end_key, p) for e, role, end_key, p in ends
+            if sum(1 for e2, _r2, _k2, p2 in ends
+                   if e2 is not e and abs(p[0] - p2[0]) < 2.0
+                   and abs(p[1] - p2[1]) < 2.0) > 0]
+        if len(stacked) < 2:
+            continue
+        node = byid[nid]
+        node_edges = [it[0] for it in ends]
+        for e, role, end_key, p in stacked:
+            wps = e.get("waypoints") or []
+            ref = (wps[0] if role == "s" else wps[-1]) if wps \
+                else e.get("target_point" if role == "s" else "source_point")
+            if not ref:
+                continue
+            bak = (list(p), [list(w) for w in wps])
+            x, y = edit_engine.seat_end(
+                node, None, e, role, p, float(ref[1]), float(ref[0]),
+                try_slack=False, snap_threshold=8.0, node_edges=node_edges)
+            e[end_key] = [y, x]
+            pts = [e["source_point"]] + list(e.get("waypoints") or []) \
+                + [e["target_point"]]
+            if any(min(abs(b[1] - a[1]), abs(b[0] - a[0])) > 1.0
+                   for a, b in zip(pts, pts[1:])):
+                e[end_key] = bak[0]              # косая хуже стопки — откат
+                e["waypoints"] = bak[1]
+            elif e[end_key] != bak[0]:
+                moved += 1
+    return moved
+
+
 def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
     """Страховка §8.3.1 EDITOR_AFTER_LAYOUT_PLAN (решение заказчика: чинить
     при открытии): пересадить концы рёбер холста по канону `seating`.
@@ -394,6 +453,7 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
         del sp0, tp0
     _materialize_ray_ends(canvas, byid)
     _lift_skin_ends_to_bbox(canvas, byid)
+    _spread_stacked_ends(canvas, byid)
     # идемпотентность: канон и редакторские доводки (лифт скинов) могут
     # взаимно компенсироваться — считаем итог против файла, не по ходу
     moved = sum(
