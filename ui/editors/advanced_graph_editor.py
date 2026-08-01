@@ -1984,11 +1984,49 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                     self._reproject_manual_endpoints(edge)
                     self._update_edge_path(
                         self.model.edge_key(edge['source'], edge['target']))
-                else:
-                    self._reseat_moved_end(edge, node_id)
+                    continue
+                # ГЕЙТ «не хуже входа» (репро заказчика 2026-08-01:
+                # утолщение разводило слоты, а при отказе роутера труба
+                # становилась косой): ортогональное ребро НЕ ИМЕЕТ ПРАВА
+                # стать диагональю от развода. Лестница не нашла колено —
+                # полный откат ребра в прежний слот (нахлёст чернил
+                # честнее косой; его разведёт доводка сдвигом узла).
+                was_ortho = self._edge_is_ortho(edge)
+                bak = (list(edge.get('source_point') or []),
+                       list(edge.get('target_point') or []),
+                       [list(w) for w in edge.get('waypoints') or []],
+                       bool(edge.get('_auto_route')),
+                       bool(edge.get('_route_defect')))
+                self._reseat_moved_end(edge, node_id)
+                if was_ortho and not self._edge_is_ortho(edge):
+                    sp0, tp0, wp0, auto0, defect0 = bak
+                    edge['source_point'] = sp0
+                    edge['target_point'] = tp0
+                    edge['waypoints'] = wp0
+                    if auto0:
+                        edge['_auto_route'] = True
+                    else:
+                        edge.pop('_auto_route', None)
+                    if defect0:
+                        edge['_route_defect'] = True
+                    else:
+                        edge.pop('_route_defect', None)
+                    self._update_edge_path(
+                        self.model.edge_key(edge['source'], edge['target']))
         finally:
             self._drag_routable_edges = prev_routable
             self._drag_route_ctx = prev_ctx
+
+    @staticmethod
+    def _edge_is_ortho(edge_data: dict, tol: float = 1.0) -> bool:
+        """Все сегменты полилинии осевые (H/V) в пределах tol."""
+        sp = edge_data.get('source_point')
+        tp = edge_data.get('target_point')
+        if not sp or not tp:
+            return True
+        pts = [sp] + list(edge_data.get('waypoints') or []) + [tp]
+        return all(min(abs(b[1] - a[1]), abs(b[0] - a[0])) <= tol
+                   for a, b in zip(pts, pts[1:]))
 
     def _engine_finish_ends(self, edge_data: dict):
         """Э2c: довести ОБА конца ребра до контракта движка после канонной

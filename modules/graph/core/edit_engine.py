@@ -53,7 +53,13 @@ def _ink_pitch(widths, length, k) -> float:
     min(SLOT_PITCH, length/(k+1))."""
     top = sorted(widths, reverse=True)[:2]
     need = (sum(top) / 2.0 if len(top) == 2 else top[0]) + INK_GAP
-    return min(length / (k + 1), max(port_model.SLOT_PITCH, need))
+    base = min(port_model.SLOT_PITCH, length / (k + 1))
+    if need <= base:
+        return base                          # тонкие линии — бит-в-бит
+    # чернилам тесно в «третях» грани: разрешаем шире, но крайние слоты
+    # держат отступ 6px от углов (VERTEX_MARGIN)
+    pitch_max = max(base, (length - 2 * VERTEX_MARGIN) / max(k - 1, 1))
+    return min(need, pitch_max)
 
 
 _NORMAL_SIDE = {(1.0, 0.0): "R", (-1.0, 0.0): "L",

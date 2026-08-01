@@ -1221,3 +1221,71 @@ def test_batch_drag_foreign_pipe_untouchable(qapp, tmp_path):
     assert _edge_bytes(e) == before, "batch тронул чужую трубу на кадре"
     ed.end_drag_node()
     assert _edge_bytes(e) == before, "отпускание batch тронуло чужую трубу"
+
+
+def _graph_two_straight_pipes():
+    """Бокс с двумя строго горизонтальными трубами одной грани (слоты
+    pitch=18: y 11.05/28.95 при рамке 0..40) к двум коннекторам."""
+    nodes = [
+        {"id": "a", "type": "equipment", "centroid": [20.0, 20.0],
+         "bbox": [0.0, 0.0, 40.0, 40.0], "segmentation": None,
+         "class_id": 99, "class_name": "unknow", "degree": 2},
+        {"id": "c1", "type": "connector", "centroid": [13.333333333333332, 200.0],
+         "bbox": None, "class_name": "connector", "degree": 1},
+        {"id": "c2", "type": "connector", "centroid": [26.666666666666668, 200.0],
+         "bbox": None, "class_name": "connector", "degree": 1},
+    ]
+    links = [
+        {"id": "e1", "source": "a", "target": "c1",
+         "source_point": [13.333333333333332, 40.0], "target_point": [13.333333333333332, 200.0],
+         "waypoints": []},
+        {"id": "e2", "source": "a", "target": "c2",
+         "source_point": [26.666666666666668, 40.0], "target_point": [26.666666666666668, 200.0],
+         "waypoints": []},
+    ]
+    return _wrap(nodes, links)
+
+
+def test_width_change_gate_reverts_instead_of_diagonal(qapp, tmp_path):
+    """Гейт «не хуже входа» при разводе толщиной (репро заказчика:
+    «утолщаю — разъезжаются, но одно ребро становится диагональным»):
+    вся лестница маршрутов отказала => ребро НЕ смеет стать косым —
+    полный откат в прежний слот (нахлёст чернил честнее косой)."""
+    g = _graph_two_straight_pipes()
+    ed = _editor(qapp, tmp_path, g)
+    e1 = ed.model.find_edge_data(ed.model.edge_key("a", "c1"))
+    e2 = ed.model.find_edge_data(ed.model.edge_key("a", "c2"))
+    sp1, sp2 = list(e1["source_point"]), list(e2["source_point"])
+
+    ed.set_edge_brush_size(16)
+    orig = ed._route_orthogonal
+    ed._route_orthogonal = lambda e, alive=False: False   # лестница мертва
+    try:
+        ed.apply_edge_style_at(ed.model.edge_key("a", "c1"), "size")
+        ed.apply_edge_style_at(ed.model.edge_key("a", "c2"), "size")
+    finally:
+        ed._route_orthogonal = orig
+
+    assert e1["render_width"] == 16 and e2["render_width"] == 16
+    assert ed._edge_is_ortho(e1) and ed._edge_is_ortho(e2), \
+        "ортогональное ребро стало косым от развода толщиной"
+    assert e1["source_point"] == sp1 and e2["source_point"] == sp2, \
+        "при мёртвой лестнице ребро обязано остаться в прежнем слоте"
+
+
+def test_width_change_spreads_with_bends_stays_ortho(qapp, tmp_path):
+    """Позитив: канал есть — утолщение разводит слоты (шаг по чернилам),
+    увод оси закрывается коленом, ВСЕ сегменты ортогональны."""
+    g = _graph_two_straight_pipes()
+    ed = _editor(qapp, tmp_path, g)
+    e1 = ed.model.find_edge_data(ed.model.edge_key("a", "c1"))
+    e2 = ed.model.find_edge_data(ed.model.edge_key("a", "c2"))
+
+    ed.set_edge_brush_size(16)
+    ed.apply_edge_style_at(ed.model.edge_key("a", "c1"), "size")
+    ed.apply_edge_style_at(ed.model.edge_key("a", "c2"), "size")
+
+    y1, y2 = e1["source_point"][0], e2["source_point"][0]
+    assert abs(y2 - y1) >= 20.0 - 1e-6, "слоты обязаны разойтись по чернилам"
+    _assert_orthogonal(_full_path_xy(e1))
+    _assert_orthogonal(_full_path_xy(e2))
