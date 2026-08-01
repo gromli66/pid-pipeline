@@ -256,6 +256,9 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         # ВХОДЕ жеста (кэш edge_key -> set узлов); плавающая база по
         # текущему кадру легализовала лишние боксы (репро 222222)
         self._amnesty_cache: dict = {}
+        # Этап B: оконная libavoid-сессия жеста (edit_avoid.AvoidDragSession)
+        # или None — тогда кадры роутит самописная лестница (запасной путь).
+        self._avoid_session = None
         self._drag_prev_x: float = 0
         self._drag_prev_y: float = 0
 
@@ -1885,10 +1888,168 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         dy = fy - min(max(fy, bbox[1]), bbox[3])
         return min(abs(dx), abs(dy)) >= self.snap_threshold / 2.0
 
-    def _reseat_moved_end(self, edge_data: dict, moved_node_id: str):
+    # ── Этап B: оконная libavoid-сессия drag ─────────────────────────
+    # Кадр жеста = посадка концов движком (как раньше) -> moveShape +
+    # одна processTransaction по окну -> приёмка маршрутов live-рёбер.
+    # Чужие рёбра стоят в сессии ФИКСАМИ (байт-в-байт, контракт
+    # 2026-08-01), _manual_route неприкосновенен. Любой сбой сессии =
+    # жест доезжает на самописной лестнице (запасной путь по заданию).
+
+    def _build_avoid_session(self, moving_ids: set):
+        """Сессия жеста или None (нет биндинга / нет routable-рёбер /
+        сбой сборки — лестница работает как прежде).
+
+        virtual_boxes: судья _fb_seg_bad судит коннекторы их виртуальным
+        боксом (_get_node_bbox) — роутер обязан видеть те же фигуры,
+        иначе его маршрут через стык труб систематически бракуется и
+        жест молча вырождается в лестницу (сторож == судья)."""
+        if not self._drag_routable_edges:
+            return None
+        try:
+            from modules.graph.core import edit_avoid
+            vboxes = {}
+            for nid, n in self.nodes.items():
+                bb = n.get('bbox')
+                if not bb or len(bb) != 4:
+                    vb = self._get_node_bbox(nid)
+                    if vb and len(vb) == 4:
+                        vboxes[nid] = tuple(float(v) for v in vb)
+            return edit_avoid.AvoidDragSession.build(
+                self.nodes, self.edges_data, moving_ids,
+                set(self._drag_routable_edges), self.model.edge_key,
+                virtual_boxes=vboxes)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "edit_avoid: сессия жеста не собралась — drag на лестнице",
+                exc_info=True)
+            return None
+
+    def _close_avoid_session(self):
+        ses = self._avoid_session
+        self._avoid_session = None
+        if ses is not None:
+            ses.close()
+
+    def _avoid_route_frame(self, moving_ids: set, pending: list):
+        """Кадр сессии: синхронизация геометрии + транзакция + приёмка.
+
+        pending — [(edge_key, edge_data, alive, near_id)], live-рёбра
+        кадра после посадки (defer_route). Приёмка per-ребро: концы в
+        пинах и ортогональность — сторожа сессии (молчаливый fallback
+        libavoid при недостижимом пине), прошивание/hug — ТОТ ЖЕ судья
+        _fb_seg_bad с амнистией входа, что у лестницы (сторож == судья).
+        Забракованное ребро на этом кадре роутит лестница — с негативным
+        кэшем fail_anchor (BOUNDED), чтобы стабильная браковка не жгла
+        полную лестницу поверх транзакции на каждом кадре."""
+        ses = self._avoid_session
+        routes = None
+        if ses is not None:
+            from modules.graph.core.edit_avoid import StaleModelError
+            try:
+                if ses.needs_rebuild(self.nodes):
+                    # капнутое окно уехало / бюджет пинов — пересборка
+                    # (редко: полный прогрев, зато роутер снова видит
+                    # все фигуры рядом и свежие пины)
+                    self._close_avoid_session()
+                    ses = self._avoid_session = \
+                        self._build_avoid_session(moving_ids)
+                if ses is not None:
+                    routes = ses.route_frame(self.nodes, self.edges_data)
+            except StaleModelError:
+                # undo/redo/delete снапшотом под жестом: штатная
+                # деградация, не сбой — жест доезжает на лестнице
+                import logging
+                logging.getLogger(__name__).info(
+                    "edit_avoid: модель пересобрана под жестом — сессия "
+                    "закрыта, кадры ведёт лестница")
+                self._close_avoid_session()
+                routes = None
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "edit_avoid: кадр сессии упал — жест доезжает на "
+                    "лестнице", exc_info=True)
+                self._close_avoid_session()
+                routes = None
+        ctx = self._drag_route_ctx
+        for edge_key, edge_data, alive, near_id in pending:
+            ok = False
+            if routes is not None:
+                r = routes.get(edge_key)
+                if r is not None and r['ends_ok'] and r['ortho']:
+                    ok = self._avoid_apply_route(edge_data, r['pts'])
+            if ok:
+                if ctx is not None:
+                    ctx['fail_anchor'].pop(edge_key, None)
+            else:
+                # запасной путь: лестница для ЭТОГО ребра на ЭТОМ кадре
+                # (пометку _route_defect при полном отказе ставит она);
+                # бухгалтерия негативного кэша — как у прямого пути
+                skip = self._routing_failed_nearby(edge_key, near_id)
+                routed = (not skip) and self._route_orthogonal(
+                    edge_data, alive=alive)
+                if routed:
+                    if ctx is not None:
+                        ctx['fail_anchor'].pop(edge_key, None)
+                elif not skip and ctx is not None and ctx['bounded']:
+                    node_now = self.nodes.get(near_id)
+                    if node_now is not None:
+                        ctx['fail_anchor'][edge_key] = (
+                            node_now['centroid'][1], node_now['centroid'][0])
+                if not (edge_data.get('waypoints') or []):
+                    # паритет гашения с прямым путём (:2155-2163): маршрута
+                    # нет — флаг _auto_route не живёт (иначе сирота уезжал
+                    # в сейв и redo — репро скептика ревью)
+                    edge_data.pop('_auto_route', None)
+            self._refresh_edge_decor(edge_key, edge_data)
+
+    def _avoid_apply_route(self, edge_data: dict, pts: list) -> bool:
+        """Приёмка маршрута сессии тем же судом, что у лестницы
+        (финальный валидатор _route_orthogonal): прошивание/hug с
+        амнистией входа жеста. Успех пишет waypoints + _auto_route и
+        кэши сторон (паритет с _route_orthogonal_main); прямая — паритет
+        гашения (флаг на прямом ребре не живёт)."""
+        amn = self._amnesty_ids(edge_data)
+        if any(self._fb_seg_bad(a, b, edge_data, amn)
+               for a, b in zip(pts, pts[1:])):
+            return False
+        mid = pts[1:-1]
+        if not mid:
+            edge_data['waypoints'] = []
+            edge_data.pop('_auto_route', None)
+            edge_data.pop('_route_defect', None)
+            return True
+        edge_data['waypoints'] = [[y, x] for x, y in mid]
+        edge_data['_auto_route'] = True
+        # Кэши сторон — от РЕАЛЬНЫХ стабов маршрута (первый/последний
+        # сегмент), не от соосности концов: маршрут «из боковой грани и
+        # обратно» у соосной пары писал бы ложные bottom/top (репро
+        # скептика ревью). Семантика прежняя: грань, из которой выходит
+        # стаб; у цели — грань, в которую он входит.
+        sdx, sdy = mid[0][0] - pts[0][0], mid[0][1] - pts[0][1]
+        tdx, tdy = pts[-1][0] - mid[-1][0], pts[-1][1] - mid[-1][1]
+        edge_data['_src_side'] = (
+            ('right' if sdx > 0 else 'left') if abs(sdx) > abs(sdy)
+            else ('bottom' if sdy > 0 else 'top'))
+        edge_data['_tgt_side'] = (
+            ('left' if tdx > 0 else 'right') if abs(tdx) > abs(tdy)
+            else ('top' if tdy > 0 else 'bottom'))
+        edge_data.pop('_route_defect', None)
+        return True
+
+    def _reseat_moved_end(self, edge_data: dict, moved_node_id: str,
+                          defer_route: bool = False):
         """Э3 (семантика GoJS adjusting=End): пересадить ТОЛЬКО конец ребра
         у сдвинутого узла; дальний конец и промежуточные waypoints
         неприкосновенны (§2 п.4 плана, метрика far_end_moved §3.2).
+
+        Этап B (defer_route=True): маршрут кадра строит оконная
+        libavoid-сессия ПОСЛЕ посадки всех ближних концов
+        (_avoid_route_frame) — здесь только посадка и side-flip; кэши
+        reuse/fail не участвуют (сессия перекладывает live-рёбра каждый
+        кадр целиком), обновление пути/перпендикулярности делает приёмка
+        маршрута.
 
         Ближний конец сажается единой посадкой `_seat_end_ported`
         (этап A — портовая модель):
@@ -1934,11 +2095,11 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         # Э7-перф (BOUNDED): живой маршрут переиспользуется, пока узел не
         # уехал от позиции последнего роутинга — ребро на этом кадре
         # ведётся как обычное с waypoints (конец по подводящему сегменту).
-        reuse = route_alive and self._can_reuse_route(
+        reuse = (not defer_route) and route_alive and self._can_reuse_route(
             edge_data, edge_key, moved_node_id)
         # негативный кэш (BOUNDED): рядом с этой позицией роутинг уже
         # проваливался — не повторять попытку на каждом кадре
-        skip_route = (routable and not route_alive
+        skip_route = ((not defer_route) and routable and not route_alive
                       and self._routing_failed_nearby(edge_key, moved_node_id))
         if route_alive and not reuse:
             # авто-маршрут прошлого кадра протяжки: перестраивается с нуля
@@ -2012,6 +2173,12 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                         try_slack=True)
                     edge_data[point_key] = [ay, ax]
 
+        if defer_route:
+            # Этап B: посадка сделана, маршрут этого кадра построит
+            # оконная libavoid-сессия (_avoid_route_frame) одной
+            # транзакцией по всем live-рёбрам жеста.
+            return
+
         if routable and not reuse and not skip_route \
                 and self._route_orthogonal(edge_data, alive=route_alive):
             # Э6/Э7-a: увод больше слабины и порога — ортогональный маршрут;
@@ -2048,6 +2215,13 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                     self._drag_route_ctx['fail_anchor'][edge_key] = (
                         node_now['centroid'][1], node_now['centroid'][0])
 
+        self._refresh_edge_decor(edge_key, edge_data)
+
+    def _refresh_edge_decor(self, edge_key: tuple, edge_data: dict):
+        """Хвост кадра ребра: перерисовка пути + перпендикулярность.
+        Зовут _reseat_moved_end (лестница) и приёмка маршрута сессии
+        (_avoid_route_frame) — Этап B."""
+        src_id, tgt_id = edge_data['source'], edge_data['target']
         self._update_edge_path(edge_key)
         if not edge_data.get('waypoints'):
             sp, tp = edge_data['source_point'], edge_data['target_point']
@@ -2867,8 +3041,15 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         # Строится всегда: даже без routable-инцидентных рёбер кадру нужны
         # «уступающие» кандидаты (Дефект 2) — бокс без труб, надвинутый на
         # чужую авто-трубу, обязан её раздвигать.
-        self._drag_route_ctx = self._build_drag_route_ctx(
-            set(self.selected_nodes) if self._batch_drag else {node_id})
+        moving_ids = set(self.selected_nodes) if self._batch_drag \
+            else {node_id}
+        self._drag_route_ctx = self._build_drag_route_ctx(moving_ids)
+        # Этап B: оконная libavoid-сессия жеста — live-рёбра перекладывает
+        # роутер с клиренсом и нуджингом на каждом кадре; None (нет
+        # биндинга/сбой сборки) = кадры роутит лестница, как раньше.
+        # Закрыть возможную прошлую (защита «залипшего» drag без release).
+        self._close_avoid_session()
+        self._avoid_session = self._build_avoid_session(moving_ids)
 
     def drag_node_to(self, x: float, y: float):
         """Переместить узел/группу."""
@@ -2961,6 +3142,7 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
             edge_key = self.model.edge_key(e['source'], e['target'])
             self._update_edge_path(edge_key)
 
+        pending = []
         for e in self._batch_boundary_edges:
             # Э3/H7: единственный расчёт boundary-ребра — здесь, на кадре;
             # отпускание НИЧЕГО не пересчитывает (итог жеста = последний
@@ -2977,7 +3159,19 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                 self._recalculate_edge(e)   # ручной: только удержание на границе
             else:
                 near = e['source'] if e['source'] in sel else e['target']
-                self._reseat_moved_end(e, near)
+                key = self.model.edge_key(e['source'], e['target'])
+                if self._avoid_session is not None \
+                        and key in self._drag_routable_edges:
+                    # Этап B: маршрут кадра строит сессия одной транзакцией
+                    alive = bool(e.get('waypoints'))
+                    self._reseat_moved_end(e, near, defer_route=True)
+                    pending.append((key, e, alive, near))
+                else:
+                    self._reseat_moved_end(e, near)
+        if self._avoid_session is not None:
+            # internal-рёбра и ручные фиксы уже сдвинуты выше — сессия
+            # дотащит их фиксированные маршруты до роутера на этом кадре
+            self._avoid_route_frame(set(sel), pending)
 
         # Дефект 2: НЕинцидентные авто-трубы уступают надвинутой группе
         # (паритет с одиночным drag; undo — snapshot BatchDragCommand)
@@ -2994,40 +3188,44 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
             return
         node_id = self.dragging_node
 
-        if self._batch_drag:
-            # H7-паритет (Гаусс-Зейдель): boundary-рёбра НЕ пересчитываются
-            # на отпускании. Каждый кадр протяжки уже посадил концы и маршруты
-            # той же _reseat_moved_end; повторный прогон здесь скорил бы
-            # маршруты против СВЕЖИХ путей соседних рёбер (кадры скорили
-            # против прошлого кадра) — маршрут и даже посаженный конец
-            # прыгали на отпускании (32/46 расхождений в репро).
-            # Итог жеста = ровно состояние последнего кадра протяжки.
-            self._batch_snap_cmd.finalize()
-            self.undo_mgr.push_executed(self._batch_snap_cmd)
-            self._batch_snap_cmd = None
-        else:
-            cmd = DragNodeCommand(
-                self.model, self, node_id,
-                self.drag_start_centroid, self.drag_start_bbox,
-                self.drag_start_segmentation, self.drag_start_edge_points,
-                self.drag_start_block_bboxes,
-            )
-            cmd.capture_new_state()
-            self.undo_mgr.push_executed(cmd)
-
-        self.dragging_node = None
-        self._batch_drag = False
-        self._batch_internal_edges = []
-        self._batch_boundary_edges = []
-        self._batch_bound_blocks = []
-        self._drag_routable_edges = set()
-        self._amnesty_cache = {}
-        self._drag_route_ctx = None
-        self.drag_start_centroid = None
-        self.drag_start_bbox = []
-        self.drag_start_segmentation = []
-        self.drag_start_edge_points = {}
-        self.drag_start_block_bboxes = {}
+        try:
+            if self._batch_drag:
+                # H7-паритет (Гаусс-Зейдель): boundary-рёбра НЕ пересчитываются
+                # на отпускании. Каждый кадр протяжки уже посадил концы и маршруты
+                # той же _reseat_moved_end; повторный прогон здесь скорил бы
+                # маршруты против СВЕЖИХ путей соседних рёбер (кадры скорили
+                # против прошлого кадра) — маршрут и даже посаженный конец
+                # прыгали на отпускании (32/46 расхождений в репро).
+                # Итог жеста = ровно состояние последнего кадра протяжки.
+                self._batch_snap_cmd.finalize()
+                self.undo_mgr.push_executed(self._batch_snap_cmd)
+                self._batch_snap_cmd = None
+            else:
+                cmd = DragNodeCommand(
+                    self.model, self, node_id,
+                    self.drag_start_centroid, self.drag_start_bbox,
+                    self.drag_start_segmentation, self.drag_start_edge_points,
+                    self.drag_start_block_bboxes,
+                )
+                cmd.capture_new_state()
+                self.undo_mgr.push_executed(cmd)
+        finally:
+            # состояние жеста чистится даже при сбое undo-снапшота —
+            # иначе Router-сессия и dragging_node переживали бы жест
+            self.dragging_node = None
+            self._batch_drag = False
+            self._batch_internal_edges = []
+            self._batch_boundary_edges = []
+            self._batch_bound_blocks = []
+            self._drag_routable_edges = set()
+            self._amnesty_cache = {}
+            self._drag_route_ctx = None
+            self._close_avoid_session()   # Этап B: Router-сессия живёт жест
+            self.drag_start_centroid = None
+            self.drag_start_bbox = []
+            self.drag_start_segmentation = []
+            self.drag_start_edge_points = {}
+            self.drag_start_block_bboxes = {}
 
     def _move_single_node(self, node_id: str, x: float, y: float):
         """Переместить один узел; у инцидентных рёбер пересадить ТОЛЬКО
@@ -3091,6 +3289,7 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
             e['_src_side'] = bbox_exit_side(s_bbox, s_cx, s_cy, t_cx, t_cy)
             e['_tgt_side'] = bbox_exit_side(t_bbox, t_cx, t_cy, s_cx, s_cy)
 
+        pending = []
         for e in affected:
             if e.get('_manual_route'):
                 # Этап A: пришпиленный конец (ручной порт/ручная посадка) —
@@ -3106,7 +3305,21 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
             else:
                 # Э3 (adjusting=End): дальний конец и waypoints неприкосновенны;
                 # reseat_edge целиком на drag-пути больше не зовётся.
-                self._reseat_moved_end(e, node_id)
+                key = self.model.edge_key(e['source'], e['target'])
+                if self._avoid_session is not None \
+                        and key in self._drag_routable_edges:
+                    # Этап B: маршрут кадра строит сессия одной
+                    # транзакцией ниже; alive — для гистерезиса лестницы
+                    # при пер-рёберном отказе приёмки
+                    alive = bool(e.get('waypoints'))
+                    self._reseat_moved_end(e, node_id, defer_route=True)
+                    pending.append((key, e, alive, node_id))
+                else:
+                    self._reseat_moved_end(e, node_id)
+        if self._avoid_session is not None:
+            # и с пустым pending: фиксы ручных/операторских рёбер узла
+            # обязаны доехать до роутера (нуджинг соседей по ним)
+            self._avoid_route_frame({node_id}, pending)
 
         # Дефект 2: НЕинцидентные авто-трубы уступают надвинутому боксу
         # (и гаснут обратно в прямую при уводе) — на каждом кадре.

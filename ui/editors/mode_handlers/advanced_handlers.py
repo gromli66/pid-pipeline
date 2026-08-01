@@ -103,6 +103,14 @@ class DragNodeHandler(ModeHandler):
             ed.end_drag_node()
         return True
 
+    def on_exit(self, ed):
+        # Esc/смена режима посреди протяжки: жест обязан завершиться штатно
+        # (undo-снапшот + закрытие libavoid-сессии Этапа B) — иначе сессия
+        # переживает жест и воскресает при возврате в режим, а узел
+        # прыгает под курсор при простом наведении.
+        if getattr(ed, "dragging_node", None):
+            ed.end_drag_node()
+
 
 class MultiSelectHandler(ModeHandler):
     """Режим множественного выделения: клик toggle / rubber band."""
