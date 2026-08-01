@@ -1084,15 +1084,63 @@ def test_route_through_poly_contour_still_rejected(qapp, tmp_path):
     clean = [[300.0, 700.0]]
     try:
         age.route_edge_v2 = lambda **kw: [list(w) for w in piercing]
-        assert ed._route_orthogonal(e) is False, \
+        # ступень 1: главный роутер бракует прошивание реального контура
+        assert ed._route_orthogonal_main(e) is False, \
             "маршрут сквозь реальный контур обязан браковаться"
         assert e["waypoints"] == [], "бракованный маршрут попал в данные"
         assert "_auto_route" not in e
+
+        # Э3-лестница: отказ главного НЕ оставляет диагональ — L-фолбэк
+        # находит чистое колено по карману (контур запрещён и фолбэку,
+        # кандидат сквозь колонну отброшен)
+        assert ed._route_orthogonal(e) is True
+        assert e["waypoints"] == clean
+        assert e.get("_auto_route") is True
+        assert "_route_defect" not in e
+        e["waypoints"] = []
+        e.pop("_auto_route", None)
 
         age.route_edge_v2 = lambda **kw: [list(w) for w in clean]
         assert ed._route_orthogonal(e) is True, \
             "маршрут над пустым углом bbox (мимо фигуры) обязан приниматься"
         assert e["waypoints"] == clean
+    finally:
+        age.route_edge_v2 = orig
+
+
+def test_route_ladder_marks_defect_when_no_way(qapp, tmp_path):
+    """Э3, ступень 3: главный роутер отказал, оба L-колена прошивают чужие
+    боксы — диагональ остаётся, но помечается _route_defect (не в sha);
+    успешный маршрут потом снимает пометку."""
+    import ui.editors.advanced_graph_editor as age
+
+    nodes = [
+        {"id": "ca", "type": "connector", "centroid": [100.0, 100.0],
+         "bbox": None, "class_name": "connector", "degree": 1},
+        {"id": "cb", "type": "connector", "centroid": [300.0, 300.0],
+         "bbox": None, "class_name": "connector", "degree": 1},
+        # сплошная стена поперёк коридора (+40px запас перебора Z):
+        # ни один H/V-сегмент между ca и cb её не минует
+        {"id": "wall", "type": "equipment", "centroid": [200.0, 200.0],
+         "bbox": [40.0, 140.0, 360.0, 260.0], "segmentation": None,
+         "class_id": 99, "class_name": "unknow", "degree": 0},
+    ]
+    links = [{"id": "e1", "source": "ca", "target": "cb",
+              "source_point": [100.0, 100.0], "target_point": [300.0, 300.0],
+              "waypoints": []}]
+    g = _wrap(nodes, links)
+    ed = _editor(qapp, tmp_path, g)
+    e = ed.model.find_edge_data(ed.model.edge_key("ca", "cb"))
+    orig = age.route_edge_v2
+    try:
+        age.route_edge_v2 = lambda **kw: []          # главный отказал
+        assert ed._route_orthogonal(e) is False
+        assert e["waypoints"] == []                  # диагональ осталась
+        assert e.get("_route_defect") is True        # но помечена
+
+        age.route_edge_v2 = orig                     # роутер ожил
+        if ed._route_orthogonal(e):
+            assert "_route_defect" not in e          # успех снял пометку
     finally:
         age.route_edge_v2 = orig
 

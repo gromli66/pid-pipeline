@@ -1057,6 +1057,134 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         return closest_bbox_side(bbox, px, py)
 
     def _route_orthogonal(self, edge_data: dict, alive: bool = False) -> bool:
+        """Э3: лестница маршрутов для НЕпрямого ребра.
+
+        1. Основной роутер (_route_orthogonal_main: route_edge_v2 с
+           клиренсом, браковкой прошиваний и полигонных контуров);
+        2. отказ → голый L/Z-фолбэк (_route_fallback_lz): два колена-
+           кандидата, пересечение ТРУБ легально (мост), боксов/контуров —
+           нет; без клиренса — колено впритык лучше диагонали;
+        3. совсем некуда → честная диагональ, но ПОМЕЧЕННАЯ
+           (_route_defect=True — не в sha, FXML игнорирует): судья и
+           подсветка очагов видят её как несведённый маршрут, а не норму.
+        """
+        if self._route_orthogonal_main(edge_data, alive):
+            edge_data.pop('_route_defect', None)
+            return True
+        if self._route_fallback_lz(edge_data) \
+                or self._route_fallback_z(edge_data):
+            edge_data.pop('_route_defect', None)
+            return True
+        sp = edge_data.get('source_point')
+        tp = edge_data.get('target_point')
+        if sp and tp and not (edge_data.get('waypoints') or []) \
+                and min(abs(tp[1] - sp[1]), abs(tp[0] - sp[0])) > 0.5:
+            edge_data['_route_defect'] = True
+        else:
+            edge_data.pop('_route_defect', None)
+        return False
+
+    def _route_fallback_lz(self, edge_data: dict) -> bool:
+        """Ступень 2 лестницы Э3: голый L-обход, когда основной роутер
+        отказал (репро заказчика edge_145/87537 и graph_edited_line:
+        отказ оставлял косую через боксы). Два кандидата-колена
+        (H-V и V-H); сегменты не смеют прошивать НУТРО чужих боксов и
+        реальных контуров (пересечение труб — мост, П5). Клиренса нет
+        сознательно: фолбэк честнее диагонали, красоту наведёт доводка."""
+        sp = edge_data.get('source_point')
+        tp = edge_data.get('target_point')
+        if not sp or not tp:
+            return False
+        sx, sy = sp[1], sp[0]
+        tx, ty = tp[1], tp[0]
+        if min(abs(tx - sx), abs(ty - sy)) <= 0.5:
+            return False                     # почти прямая — не наш случай
+        own = {edge_data.get('source'), edge_data.get('target')}
+        for wx, wy in ((tx, sy), (sx, ty)):
+            pts = ((sx, sy), (wx, wy), (tx, ty))
+            if any(self._lz_seg_pierces(a, b, own)
+                   for a, b in zip(pts, pts[1:])):
+                continue
+            edge_data['waypoints'] = [[wy, wx]]
+            edge_data['_auto_route'] = True
+            return True
+        return False
+
+    def _route_fallback_z(self, edge_data: dict) -> bool:
+        """Ступень 2b лестницы Э3: голый Z-обход (два колена), когда и
+        главный роутер, и L-колено отказали (замер на graph_edited_line:
+        в плотных местах оба Г-кандидата прошивают соседей — 8 из 9
+        диагоналей оставались). Промежуточная ось перебирается по
+        серединам и КРОМКАМ мешающих боксов коридора (+/-3px); первый
+        кандидат, чьи три сегмента не прошивают чужое нутро, побеждает.
+        Пересечение труб легально (мост), клиренса нет — фолбэк."""
+        sp = edge_data.get('source_point')
+        tp = edge_data.get('target_point')
+        if not sp or not tp:
+            return False
+        sx, sy = sp[1], sp[0]
+        tx, ty = tp[1], tp[0]
+        if min(abs(tx - sx), abs(ty - sy)) <= 0.5:
+            return False
+        own = {edge_data.get('source'), edge_data.get('target')}
+        lox, hix = min(sx, tx) - 40.0, max(sx, tx) + 40.0
+        loy, hiy = min(sy, ty) - 40.0, max(sy, ty) + 40.0
+        xs, ys = {(sx + tx) / 2.0}, {(sy + ty) / 2.0}
+        for nid, node in self.nodes.items():
+            if nid in own:
+                continue
+            bb = self._get_node_bbox(nid)
+            if not bb or bb[2] < lox or bb[0] > hix \
+                    or bb[3] < loy or bb[1] > hiy:
+                continue
+            xs.update((bb[0] - 3.0, bb[2] + 3.0))
+            ys.update((bb[1] - 3.0, bb[3] + 3.0))
+        cx_mid, cy_mid = (sx + tx) / 2.0, (sy + ty) / 2.0
+        xs = sorted((x for x in xs if lox <= x <= hix),
+                    key=lambda v: abs(v - cx_mid))[:24]
+        ys = sorted((y for y in ys if loy <= y <= hiy),
+                    key=lambda v: abs(v - cy_mid))[:24]
+        for xm in xs:                                # H-V-H
+            pts = ((sx, sy), (xm, sy), (xm, ty), (tx, ty))
+            if not any(self._lz_seg_pierces(a, b, own)
+                       for a, b in zip(pts, pts[1:])):
+                edge_data['waypoints'] = [[sy, xm], [ty, xm]]
+                edge_data['_auto_route'] = True
+                return True
+        for ym in ys:                                # V-H-V
+            pts = ((sx, sy), (sx, ym), (tx, ym), (tx, ty))
+            if not any(self._lz_seg_pierces(a, b, own)
+                       for a, b in zip(pts, pts[1:])):
+                edge_data['waypoints'] = [[ym, sx], [ym, tx]]
+                edge_data['_auto_route'] = True
+                return True
+        return False
+
+    def _lz_seg_pierces(self, a, b, own_ids) -> bool:
+        """Сегмент фолбэка прошивает нутро чужого узла? Контурные узлы —
+        по реальному контуру (ловушка node_28: bbox-гигант дал бы 15
+        фантомов), прочие — по bbox с усадкой 0.75."""
+        ax, ay = a
+        bx, by = b
+        for nid, node in self.nodes.items():
+            if nid in own_ids:
+                continue
+            seg = _node_poly_contour(node)
+            if seg is not None:
+                if _seg_pierces_polygon(ax, ay, bx, by, seg):
+                    return True
+                continue
+            bb = self._get_node_bbox(nid)
+            if not bb:
+                continue
+            x1, y1, x2, y2 = bb
+            ix1, iy1, ix2, iy2 = x1 + 0.75, y1 + 0.75, x2 - 0.75, y2 - 0.75
+            if ix1 < ix2 and iy1 < iy2 and segment_intersects_bbox(
+                    ax, ay, bx, by, (ix1, iy1, ix2, iy2)):
+                return True
+        return False
+
+    def _route_orthogonal_main(self, edge_data: dict, alive: bool = False) -> bool:
         """Э6/Э7-a-лайт: ортогональный маршрут для НЕпрямого ребра.
 
         Требование заказчика (2026-07-31): при переносе узла и создании
