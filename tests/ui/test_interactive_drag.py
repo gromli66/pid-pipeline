@@ -595,70 +595,6 @@ def _graph_pipe_free_box(side_cx=500.0, side_cy=200.0, extra_nodes=()):
     return _wrap(nodes, links)
 
 
-def _yield_state(ed, e):
-    """Проекция состояния кейса заказчика: бокс side + уступающее ребро."""
-    n = ed.nodes["side"]
-    return json.dumps({
-        "centroid": n["centroid"], "bbox": n.get("bbox"),
-        "sp": e["source_point"], "tp": e["target_point"],
-        "wps": e["waypoints"], "auto": bool(e.get("_auto_route")),
-    }, sort_keys=True)
-
-
-def test_free_box_shoved_at_pipe_side_pipe_yields_and_returns(qapp, tmp_path):
-    """Переобъявлено 2026-08-01 («почему раздвигаются чужие рёбра»): чужая
-    труба уступает, только когда бокс РЕАЛЬНО её накрыл (прошивание
-    нутра); сближение до 2px чужие трубы больше не дёргает — класс
-    «вдоль» лечит Э3, не перекладка на лету. Увод бокса — труба снова
-    прямая; undo побайтово (вместе с уступившим ребром)."""
-    g = _graph_pipe_free_box()
-    _assert_canonical(g)
-    ed = _editor(qapp, tmp_path, g)
-    key = ed.model.edge_key("top", "bot")
-    e = ed.model.find_edge_data(key)
-    s0 = _yield_state(ed, e)
-
-    # фаза 1: сближение (левая грань x=302, труба x=300, зазор 2px) —
-    # чужая труба стоит как стояла
-    _drag(ed, "side", 342.0, 200.0)
-    assert e["waypoints"] == [], "сближение не должно дёргать чужую трубу"
-    assert e["source_point"] == [120.0, 300.0]
-
-    # фаза 2: бокс НАКРЫЛ трубу (левая грань x=282 < 300) — уступает
-    _drag(ed, "side", 322.0, 200.0)
-
-    assert e.get("waypoints"), "труба не уступила накрывшему боксу"
-    assert e.get("_auto_route") is True
-    # концы НЕ пересаживались: узлы трубы не двигались
-    assert e["source_point"] == [120.0, 300.0]
-    assert e["target_point"] == [290.0, 300.0]
-    pts = _full_path_xy(e)
-    _assert_orthogonal(pts)
-    side_bb = ed.nodes["side"]["bbox"]
-    for a, b in zip(pts, pts[1:]):
-        assert not _seg_crosses_bbox(a, b, side_bb), \
-            f"сегмент {a}->{b} прошивает надвинутый бокс"
-    _hug_gap_ok(pts, side_bb)
-    s1 = _yield_state(ed, e)
-
-    # увод бокса — конфликт исчез, труба гаснет обратно в прямую
-    _drag(ed, "side", 500.0, 200.0)
-    assert e["waypoints"] == [], "обход не погас после увода бокса"
-    assert "_auto_route" not in e
-    assert e["source_point"] == [120.0, 300.0]
-    assert e["target_point"] == [290.0, 300.0]
-
-    # undo всех трёх жестов — побайтово, включая уступившее ребро
-    ed.undo()
-    assert _yield_state(ed, e) == s1, "undo увода не вернул состояние с обходом"
-    ed.undo()          # откат наезда (фаза 2)
-    ed.undo()          # откат сближения (фаза 1)
-    assert _yield_state(ed, e) == s0, "undo не вернул исходное состояние"
-    ed.redo()
-    ed.redo()
-    assert _yield_state(ed, e) == s1, "redo не вернул состояние с обходом"
-
-
 def test_incident_drag_puts_pipe_along_foreign_face_births_route(qapp, tmp_path):
     """Инцидентный вариант: drag узла ставит его трубу вдоль чужой грани с
     зазором 2px (перекрытие 80px > порога) — обход рождается, хотя нутро
@@ -686,79 +622,6 @@ def test_incident_drag_puts_pipe_along_foreign_face_births_route(qapp, tmp_path)
         assert not _seg_crosses_bbox(a, b, mid_bb), \
             f"сегмент {a}->{b} прошивает чужой бокс"
     _hug_gap_ok(pts, mid_bb)
-
-
-def test_corner_touch_below_overlap_threshold_no_route(qapp, tmp_path):
-    """Уголковое касание: бокс надвинут с тем же зазором 2px, но перекрытие
-    вдоль грани всего 6px < порога 8 — обход НЕ рождается (иначе плотные
-    гребёнки взрывались бы коленями)."""
-    g = _graph_pipe_free_box()
-    ed = _editor(qapp, tmp_path, g)
-    key = ed.model.edge_key("top", "bot")
-    e = ed.model.find_edge_data(key)
-
-    # side к нижнему краю трубы: правая грань x=298 (зазор 2), y-диапазон
-    # [284,364] перекрывает пробег трубы [120,290] лишь на 6px
-    _drag(ed, "side", 258.0, 324.0)
-
-    assert e["waypoints"] == [], "уголковое касание родило обход"
-    assert "_auto_route" not in e
-    assert e["source_point"] == [120.0, 300.0]
-    assert e["target_point"] == [290.0, 300.0]
-
-
-def test_yielding_edge_preview_equals_result(qapp, tmp_path):
-    """Паритет кадр == отпускание для уступившего ребра: обход виден уже на
-    кадре протяжки и байт-в-байт равен итогу после end_drag_node
-    (отпускание ничего не пересчитывает)."""
-    g = _graph_pipe_free_box()
-    ed = _editor(qapp, tmp_path, g)
-    e = ed.model.find_edge_data(ed.model.edge_key("top", "bot"))
-
-    ed.start_drag_node("side")
-    ed.drag_node_to(322.0, 200.0)      # накрыл трубу (триггер 2026-08-01)
-    assert e.get("waypoints"), "обход обязан быть уже на кадре протяжки"
-    preview = _edge_proj(e)
-    ed.end_drag_node()
-
-    assert _edge_proj(e) == preview, \
-        "отпускание изменило показанный обход уступившего ребра"
-
-
-def test_batch_drag_with_yielding_edge(qapp, tmp_path):
-    """Batch-drag с уступившим ребром: группа (side+buddy) надвигается на
-    чужую трубу — труба уступает на кадре, паритет кадр == отпускание,
-    undo (snapshot BatchDragCommand) возвращает всё побайтово."""
-    buddy = {"id": "buddy", "type": "equipment", "centroid": [350.0, 500.0],
-             "bbox": [460.0, 310.0, 540.0, 390.0], "segmentation": None,
-             "class_id": 99, "class_name": "unknow", "degree": 0}
-    g = _graph_pipe_free_box(extra_nodes=[buddy])
-    ed = _editor(qapp, tmp_path, g)
-    key = ed.model.edge_key("top", "bot")
-    e = ed.model.find_edge_data(key)
-    s0 = _yield_state(ed, e)
-
-    ed.selected_nodes = {"side", "buddy"}
-    ed.start_drag_node("side")
-    ed.drag_node_to(322.0, 200.0)     # side НАКРЫЛ трубу, buddy рядом
-    assert e.get("waypoints"), "труба не уступила надвинутой группе"
-    preview = _edge_proj(e)
-    ed.end_drag_node()
-    assert _edge_proj(e) == preview, "отпускание batch изменило обход"
-
-    pts = _full_path_xy(e)
-    _assert_orthogonal(pts)
-    _hug_gap_ok(pts, ed.nodes["side"]["bbox"])
-    s1 = _yield_state(ed, e)
-    assert s1 != s0
-
-    # snapshot-restore подменяет словари модели — ребро берём заново
-    ed.undo()
-    e = ed.model.find_edge_data(key)
-    assert _yield_state(ed, e) == s0, "undo batch не вернул уступившее ребро"
-    ed.redo()
-    e = ed.model.find_edge_data(key)
-    assert _yield_state(ed, e) == s1, "redo batch не вернул обход"
 
 
 def test_drag_offaxis_seats_on_port_with_honest_bend(qapp, tmp_path):
@@ -1266,24 +1129,47 @@ def test_size_panel_rescales_manual_ports(qapp, tmp_path):
     assert node["_ports"] == [{"dx": 80.0, "dy": 0.0}]
 
 
-def test_yielded_route_does_not_dance_near_box(qapp, tmp_path):
-    """2026-08-01 («пляска чужих труб»): уступленный обход НЕ
-    перестраивается, пока бокс ёрзает рядом без нового наезда — форма
-    байт-в-байт; гаснет в прямую только при уводе бокса."""
+# ── 2026-08-01: чужие рёбра при drag НЕПРИКОСНОВЕННЫ (уступание удалено) ──
+
+def _edge_bytes(e):
+    return json.dumps({"sp": e.get("source_point"), "tp": e.get("target_point"),
+                       "wps": e.get("waypoints"), "auto": e.get("_auto_route")},
+                      sort_keys=True)
+
+
+def test_foreign_pipe_is_untouchable_under_drag(qapp, tmp_path):
+    """Решение заказчика (третья итерация «ребро убегает от бокса»):
+    drag трогает ТОЛЬКО рёбра таскаемого узла. Чужая труба байт-в-байт
+    при сближении, наезде и уводе; наложение — честный дефект (судья:
+    «сквозь узел»), лечат доводка (Э4) или оператор."""
     g = _graph_pipe_free_box()
+    _assert_canonical(g)
     ed = _editor(qapp, tmp_path, g)
     e = ed.model.find_edge_data(ed.model.edge_key("top", "bot"))
+    before = _edge_bytes(e)
 
-    _drag(ed, "side", 322.0, 200.0)          # наезд — обход родился
-    assert e.get("waypoints")
-    wps1 = [w.copy() for w in e["waypoints"]]
-
-    for fx in (330.0, 338.0):                # ёрзание: бокс всё ещё накрывает
+    for fx in (342.0, 322.0, 300.0, 338.0, 500.0):   # сближение/наезд/увод
         _drag(ed, "side", fx, 200.0)
-        assert e["waypoints"] == wps1, f"обход перестроился на x={fx}"
+        assert _edge_bytes(e) == before, f"чужая труба шевельнулась на x={fx}"
 
-    _drag(ed, "side", 344.0, 200.0)          # грань 304 > оси 300: выпустил
-    assert e["waypoints"] == [], \
-        "гашение обязано случиться, когда бокс выпустил линию"
-    assert "_auto_route" not in e
-    assert e["source_point"] == [120.0, 300.0]
+    ed.undo()
+    e = ed.model.find_edge_data(ed.model.edge_key("top", "bot"))
+    assert _edge_bytes(e) == before
+
+
+def test_batch_drag_foreign_pipe_untouchable(qapp, tmp_path):
+    """Batch-вариант: группа наезжает на чужую трубу — труба байт-в-байт."""
+    buddy = {"id": "buddy", "type": "equipment", "centroid": [350.0, 500.0],
+             "bbox": [460.0, 310.0, 540.0, 390.0], "segmentation": None,
+             "class_id": 99, "class_name": "unknow", "degree": 0}
+    g = _graph_pipe_free_box(extra_nodes=[buddy])
+    ed = _editor(qapp, tmp_path, g)
+    e = ed.model.find_edge_data(ed.model.edge_key("top", "bot"))
+    before = _edge_bytes(e)
+
+    ed.selected_nodes = {"side", "buddy"}
+    ed.start_drag_node("side")
+    ed.drag_node_to(322.0, 200.0)
+    assert _edge_bytes(e) == before, "batch тронул чужую трубу на кадре"
+    ed.end_drag_node()
+    assert _edge_bytes(e) == before, "отпускание batch тронуло чужую трубу"

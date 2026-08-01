@@ -1293,23 +1293,6 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         return False
 
     @classmethod
-    def _seg_pierces_shape(cls, ax: float, ay: float,
-                           bx: float, by: float, shape) -> bool:
-        """ТОЛЬКО прошивание нутра формы, без прижатия-hug.
-
-        Решение заказчика 2026-08-01 («почему раздвигаются чужие рёбра»):
-        уступание срабатывает, лишь когда таскаемый бокс РЕАЛЬНО накрыл
-        трубу — простое сближение ближе клиренса чужие трубы не дёргает
-        (класс «вдоль» лечится системно в Э3, а не перекладкой на лету)."""
-        kind, geom = shape
-        if kind == 'poly':
-            return _seg_pierces_polygon(ax, ay, bx, by, geom)
-        x1, y1, x2, y2 = geom
-        ix1, iy1, ix2, iy2 = x1 + 0.75, y1 + 0.75, x2 - 0.75, y2 - 0.75
-        return ix1 < ix2 and iy1 < iy2 and segment_intersects_bbox(
-            ax, ay, bx, by, (ix1, iy1, ix2, iy2))
-
-    @classmethod
     def _seg_conflicts_shape(cls, ax: float, ay: float,
                              bx: float, by: float, shape) -> bool:
         """Конфликт сегмента с ФОРМОЙ чужого узла: ('rect', bbox) |
@@ -1552,15 +1535,12 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         {edge_key: (cx, cy)} — позиция узла на момент последнего роутинга
         ребра (переиспользование маршрута, _can_reuse_route).
 
-        yield: [(edge_key, idx paths)] — НЕинцидентные «уступающие»
-        кандидаты (авто-роутимые: без waypoints оператора и _manual_route;
-        с _auto_route — тоже): чужая авто-труба, на которую надвинули
-        таскаемый бокс, перекладывается на кадре
-        (_yield_conflicted_edges). yield_routed — кто из них уже
-        переложен ЭТИМ жестом; сюда же сеются кандидаты с живым
-        авто-маршрутом, чья прямая конфликтует со СТАРТОВЫМ bbox
-        таскаемого узла: их маршрут рождён прижатием этого бокса в
-        прошлом жесте — увод бокса обязан гасить его в прямую.
+        Уступания чужих рёбер НЕТ (решение заказчика 2026-08-01, третья
+        итерация жалобы «ребро убегает от бокса»): drag трогает ТОЛЬКО
+        рёбра таскаемых узлов. Бокс, положенный на чужую трубу, честно
+        оставляет наложение — судья видит его классом «сквозь узел»,
+        лечат доводка (Э4) или оператор. История: уступание вводилось
+        по скрину 2026-07-31 (8088c3e), отменено целиком.
         """
         node_entries, poly_entries = [], []
         for nid, node in self.nodes.items():
@@ -1571,176 +1551,18 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                 node_entries.append(
                     (nid, None if nid in moving_ids
                      else self._get_node_bbox(nid)))
-        moving_shapes = []
-        for nid in moving_ids:
-            node = self.nodes.get(nid) or {}
-            seg = _node_poly_contour(node)
-            if seg is not None:
-                moving_shapes.append(('poly', seg))
-                continue
-            bb = self._get_node_bbox(nid)
-            if bb:
-                moving_shapes.append(('rect', bb))
         path_entries = []
-        yield_cand = []
-        yield_routed = set()
         for e in self.edges_data:
             if e['source'] in moving_ids or e['target'] in moving_ids:
                 path_entries.append((e, None, None))
                 continue
             pts = _edge_path_pts(e)
             path_entries.append((e, pts, _pts_bbox(pts) if pts else None))
-            if pts is None or e.get('_manual_route') or (
-                    e.get('waypoints') and not e.get('_auto_route')):
-                continue                     # маршрут оператора — табу
-            key = self.model.edge_key(e['source'], e['target'])
-            yield_cand.append((key, len(path_entries) - 1))
-            if e.get('waypoints'):
-                sp, tp = e['source_point'], e['target_point']
-                if any(self._seg_conflicts_shape(sp[1], sp[0], tp[1], tp[0],
-                                                 sh) for sh in moving_shapes):
-                    yield_routed.add(key)
         bounded = (len(self.nodes) - 2 > self.ROUTE_EXACT_MAX_OBS
                    or len(path_entries) > self.ROUTE_EXACT_MAX_PATHS + 1)
         return {'nodes': node_entries, 'polys': poly_entries,
                 'paths': path_entries,
-                'bounded': bounded, 'route_anchor': {}, 'fail_anchor': {},
-                'yield': yield_cand, 'yield_routed': yield_routed}
-
-    def _yield_conflicted_edges(self, moved_ids: set):
-        """Дефект 2 (жалоба заказчика): чужая авто-труба УСТУПАЕТ
-        надвинутому боксу.
-
-        На каждом кадре drag (и одиночного, и batch) дополнительно
-        обрабатываются НЕинцидентные «уступающие» рёбра — кандидаты из
-        кэша жеста (ctx['yield']): авто-роутимые, чей ТЕКУЩИЙ путь
-        РЕАЛЬНО ПРОШИТ (_seg_pierces_shape, 2026-08-01: прижатие-hug из
-        триггера исключено — сближение чужих не дёргает) НОВОЙ формой
-        таскаемого узла. Уже переложенные этим жестом / засеянные на
-        старте (yield_routed) НЕ перестраиваются каждый кадр: перероут —
-        только при новом прошивании, гашение в прямую — когда пара
-        соосна и прямая ничего не прошивает (возврат при уводе бокса);
-        иначе форма СТОИТ. Отбор дёшев: bbox-претест по кэшу жеста.
-
-        Перероут — честный _route_orthogonal (его же гистерезис
-        рождения/гашения); концы НЕ пересаживаются — узлы этих рёбер не
-        двигались, концы каноничны (route_edge_v2 концов не двигает).
-        Конфликт при недостижимом обходе честно остаётся — прямая, без
-        лога. Отпускание ничего не пересчитывает — паритет
-        кадр == отпускание по построению. Undo: пре-жестовое состояние
-        уступившего ребра бэкапится при первом касании в
-        drag_start_edge_points (DragNodeCommand вернёт всё побайтово);
-        batch покрыт snapshot'ом BatchDragCommand.
-        """
-        ctx = self._drag_route_ctx
-        if ctx is None or not ctx['yield']:
-            return
-        boxes, shapes = [], []
-        for nid in moved_ids:
-            bb = self._get_node_bbox(nid)
-            if not bb:
-                continue
-            boxes.append(bb)          # union-претест — по габариту (консерв.)
-            seg = _node_poly_contour(self.nodes.get(nid) or {})
-            shapes.append(('poly', seg) if seg is not None else ('rect', bb))
-        if not boxes:
-            return
-        pad = self.ROUTE_CLEARANCE + 1.0
-        ux1 = min(b[0] for b in boxes) - pad
-        uy1 = min(b[1] for b in boxes) - pad
-        ux2 = max(b[2] for b in boxes) + pad
-        uy2 = max(b[3] for b in boxes) + pad
-        routed = ctx['yield_routed']
-        for key, idx in ctx['yield']:
-            e, pts, pbb = ctx['paths'][idx]
-            if key not in routed:
-                # bbox-претест: путь далеко от таскаемых боксов — мимо
-                if pbb is None or pbb[0] > ux2 or pbb[2] < ux1 \
-                        or pbb[1] > uy2 or pbb[3] < uy1:
-                    continue
-                # 2026-08-01: триггер уступания — только РЕАЛЬНОЕ прошивание
-                # нутра (не прижатие): сближение чужие трубы не дёргает
-                if not any(
-                        self._seg_pierces_shape(a[0], a[1], b[0], b[1], sh)
-                        for sh in shapes
-                        for a, b in zip(pts, pts[1:])):
-                    continue
-            else:
-                # 2026-08-01 (жалоба «пляска чужих труб»): уже переложенное/
-                # засеянное ребро НЕ перестраивается каждый кадр. Три исхода:
-                # (а) путь прошит новой позицией бокса — полный перероут;
-                # (б) пара соосна и прямая ничего не прошивает — гашение
-                #     в прямую (возврат при уводе бокса);
-                # (в) иначе маршрут СТОИТ (форма не пляшет).
-                pierced_now = bool(pts) and any(
-                    self._seg_pierces_shape(a[0], a[1], b[0], b[1], sh)
-                    for sh in shapes
-                    for a, b in zip(pts, pts[1:]))
-                if not pierced_now:
-                    sp, tp = e.get('source_point'), e.get('target_point')
-                    if sp and tp \
-                            and min(abs(tp[1] - sp[1]),
-                                    abs(tp[0] - sp[0])) <= 0.5 \
-                            and not self._straight_pierces_any(e):
-                        self._backup_yield_edge(key, e)
-                        e['waypoints'] = []
-                        e.pop('_auto_route', None)
-                        routed.discard(key)
-                        npts = _edge_path_pts(e)
-                        ctx['paths'][idx] = (e, npts,
-                                             _pts_bbox(npts) if npts else None)
-                        self._update_edge_path(key)
-                    continue
-            self._backup_yield_edge(key, e)
-            alive = bool(e.get('waypoints'))
-            e['waypoints'] = []
-            if self._route_orthogonal(e, alive=alive):
-                routed.add(key)
-            else:
-                # гашение (конфликт исчез) или недостижимый обход —
-                # честная прямая; авто-флаг гаснет вместе с маршрутом
-                e.pop('_auto_route', None)
-                routed.discard(key)
-            npts = _edge_path_pts(e)
-            ctx['paths'][idx] = (e, npts, _pts_bbox(npts) if npts else None)
-            self._update_edge_path(key)
-
-    def _backup_yield_edge(self, key, e):
-        """Пре-жестовый бэкап уступающего ребра для DragNodeCommand
-        (batch покрыт snapshot'ом BatchDragCommand)."""
-        if not self._batch_drag and key not in self.drag_start_edge_points:
-            self.drag_start_edge_points[key] = {
-                'source_point': (e.get('source_point') or []).copy(),
-                'target_point': (e.get('target_point') or []).copy(),
-                'waypoints': [wp.copy() for wp in e.get('waypoints', [])],
-                '_auto_route': bool(e.get('_auto_route')),
-            }
-
-    def _straight_pierces_any(self, edge_data: dict) -> bool:
-        """Прямая sp->tp ребра прошивает нутро КАКОГО-ЛИБО чужого узла?
-        (piercing-only: прижатие не в счёт — гашение уступленного обхода
-        судится тем же правилом, что и его рождение, 2026-08-01).
-        Контурные узлы — по реальному контуру, прочие — по bbox."""
-        sp = edge_data.get('source_point')
-        tp = edge_data.get('target_point')
-        if not sp or not tp:
-            return False
-        ax, ay, bx, by = sp[1], sp[0], tp[1], tp[0]
-        own = {edge_data.get('source'), edge_data.get('target')}
-        for nid, node in self.nodes.items():
-            if nid in own:
-                continue
-            seg = _node_poly_contour(node)
-            if seg is not None:
-                if _seg_pierces_polygon(ax, ay, bx, by, seg):
-                    return True
-                continue
-            bb = self._get_node_bbox(nid)
-            if not bb:
-                continue
-            if self._seg_pierces_shape(ax, ay, bx, by, ('rect', bb)):
-                return True
-        return False
+                'bounded': bounded, 'route_anchor': {}, 'fail_anchor': {}}
 
     def _routing_failed_nearby(self, edge_key: tuple,
                                moved_node_id: str) -> bool:
@@ -2822,7 +2644,6 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
 
         # Дефект 2: НЕинцидентные авто-трубы уступают надвинутой группе
         # (паритет с одиночным drag; undo — snapshot BatchDragCommand)
-        self._yield_conflicted_edges(sel)
 
         # Pass 3: перерисовать привязанные текст-блоки (данные уже сдвинуты
         # выше; no-op вне состояния 'ocr')
@@ -2951,7 +2772,6 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
 
         # Дефект 2: НЕинцидентные авто-трубы уступают надвинутому боксу
         # (и гаснут обратно в прямую при уводе) — на каждом кадре.
-        self._yield_conflicted_edges({node_id})
 
         # Скин следует за боксом при drag (bbox в модели уже обновлён выше)
         if self.show_skins and node_id in self._skin_items:
