@@ -33,6 +33,27 @@ from . import ports as port_model
 from . import seating
 
 VERTEX_MARGIN = 6.0   # px: конец не ближе к вершине контура (реш. 2026-08-01)
+INK_GAP = 4.0         # px: чистый зазор между КРАЯМИ линий в слотах
+INK_DEFAULT = 2.0     # px: толщина линии без render_width
+
+
+def _ink_w(e) -> float:
+    """Толщина чернил ребра (render_width, иначе дефолт)."""
+    try:
+        return float(e.get("render_width") or INK_DEFAULT)
+    except (TypeError, ValueError):
+        return INK_DEFAULT
+
+
+def _ink_pitch(widths, length, k) -> float:
+    """Шаг слотов с учётом чернил (реш. заказчика «смена толщины =
+    пересчёт», репро 2026-08-01 «после ресайза ребра наслаиваются»):
+    зазор между краями соседних линий >= INK_GAP для двух самых толстых
+    участников. При дефолтной толщине бит-равен прежнему
+    min(SLOT_PITCH, length/(k+1))."""
+    top = sorted(widths, reverse=True)[:2]
+    need = (sum(top) / 2.0 if len(top) == 2 else top[0]) + INK_GAP
+    return min(length / (k + 1), max(port_model.SLOT_PITCH, need))
 
 
 _NORMAL_SIDE = {(1.0, 0.0): "R", (-1.0, 0.0): "L",
@@ -94,6 +115,7 @@ def _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y,
                        else "source_point")
 
     entries = [(ref_x if horiz else ref_y, str(edge_data.get("id")), True)]
+    widths = [_ink_w(edge_data)]
     taken = []
     for e in node_edges or []:
         if e is edge_data or e.get("_manual_route"):
@@ -121,10 +143,14 @@ def _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y,
             continue
         entries.append((float(refp[1]) if horiz else float(refp[0]),
                         str(e.get("id")), False))
+        widths.append(_ink_w(e))
     entries.sort(key=lambda t: (t[0], t[1]))
     idx = next(i for i, t in enumerate(entries) if t[2])
     k = len(entries)
-    slots = port_model.side_slots(node, side, k, rect=rect)
+    x1, y1, x2, y2 = rect
+    length = (x2 - x1) if horiz else (y2 - y1)
+    slots = port_model.side_slots(node, side, k, rect=rect,
+                                  pitch=_ink_pitch(widths, length, k))
     coords = [s[1 if not horiz else 0] for s in slots]
     order = sorted(range(k), key=lambda j: (abs(j - idx), j))
     for j in order:
@@ -175,6 +201,7 @@ def _poly_adjust(node, node_edges, edge_data, role, px, py, ref_x, ref_y):
             return ((rx - ax) * dx + (ry - ay) * dy) / length
 
         entries = []
+        widths = [_ink_w(edge_data)]
         for e in node_edges or []:
             if e is edge_data or e.get("_manual_route"):
                 continue
@@ -201,6 +228,7 @@ def _poly_adjust(node, node_edges, edge_data, role, px, py, ref_x, ref_y):
                 continue
             entries.append((_t_of(float(refp[1]), float(refp[0])),
                             str(e.get("id")), False))
+            widths.append(_ink_w(e))
         wps = edge_data.get("waypoints") or []
         adj = None
         if wps:
@@ -226,7 +254,7 @@ def _poly_adjust(node, node_edges, edge_data, role, px, py, ref_x, ref_y):
         entries.sort(key=lambda r: (r[0], r[1]))
         idx = next(i for i, r in enumerate(entries) if r[2])
         k = len(entries)
-        pitch = min(port_model.SLOT_PITCH, length / (k + 1))
+        pitch = _ink_pitch(widths, length, k)
         slots = [length / 2.0 + (j - (k - 1) / 2.0) * pitch for j in range(k)]
         # позиции, занятые концами соседей (< 2px), не выдаются
         taken = []

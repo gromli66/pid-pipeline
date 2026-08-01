@@ -1828,16 +1828,39 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         (порт/слот/контур); дальние концы соседей неприкосновенны (C6).
         Прежний путь переписывал ОБА конца по центроидам: терял порты,
         рушил дальние концы и косил стабы маршрутов. _manual_route —
-        перепроекция на новую границу, как в drag."""
+        перепроекция на новую границу, как в drag.
+
+        Мини-жест (репро заказчика 2026-08-01 «после resize линии
+        наслаиваются»): авто-маршруты рёбер узла ПЕРЕСТРАИВАЮТСЯ от новых
+        посадок — вне drag роутинг заперт за _drag_routable_edges, и без
+        мини-жеста концы разъезжались по слотам, а колени оставались
+        стопкой (трубы лежали друг на друге всей длиной)."""
+        auto_keys = set()
         for edge in self.edges_data:
             if node_id not in (edge.get('source'), edge.get('target')):
                 continue
             if edge.get('_manual_route'):
-                self._reproject_manual_endpoints(edge)
-                self._update_edge_path(
-                    self.model.edge_key(edge['source'], edge['target']))
-            else:
-                self._reseat_moved_end(edge, node_id)
+                continue
+            if not (edge.get('waypoints') or []) or edge.get('_auto_route'):
+                auto_keys.add(self.model.edge_key(edge['source'],
+                                                  edge['target']))
+        prev_routable = self._drag_routable_edges
+        prev_ctx = self._drag_route_ctx
+        self._drag_routable_edges = auto_keys
+        self._drag_route_ctx = self._build_drag_route_ctx({node_id})
+        try:
+            for edge in self.edges_data:
+                if node_id not in (edge.get('source'), edge.get('target')):
+                    continue
+                if edge.get('_manual_route'):
+                    self._reproject_manual_endpoints(edge)
+                    self._update_edge_path(
+                        self.model.edge_key(edge['source'], edge['target']))
+                else:
+                    self._reseat_moved_end(edge, node_id)
+        finally:
+            self._drag_routable_edges = prev_routable
+            self._drag_route_ctx = prev_ctx
 
     def _engine_finish_ends(self, edge_data: dict):
         """Э2c: довести ОБА конца ребра до контракта движка после канонной
@@ -2182,6 +2205,20 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
             else:
                 edge_data['render_width'] = int(self.edge_brush_size)
             changed += 1
+
+        if kind == "size" and changed:
+            # Решение заказчика (карточка 2026-07-31 + репро 2026-08-01
+            # «после ресайза ребра наслаиваются»): смена толщины =
+            # пересчёт — слоты держат зазор ПО ЧЕРНИЛАМ (_ink_pitch),
+            # авто-маршруты затронутых узлов перестраиваются мини-жестом.
+            nids = set()
+            for k in keys:
+                ed_ = self.model.find_edge_data(k)
+                if ed_:
+                    nids.update((ed_.get('source'), ed_.get('target')))
+            for nid in nids:
+                if nid:
+                    self._reseat_after_resize(nid)
 
         cmd.finalize()  # snapshot after
         self.undo_mgr.push_executed(cmd)

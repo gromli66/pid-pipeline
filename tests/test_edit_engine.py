@@ -265,3 +265,41 @@ def test_slots_survive_frame_change():
     assert x1 == x2 == 80.0                   # новая грань
     assert abs(y1 - y2) >= 2.0                # НЕ наслоились
     assert y1 < 30.0 < y2                     # симметрично вокруг середины
+
+
+def test_thick_edges_get_wider_slot_pitch():
+    # репро 2026-08-01 «после ресайза [толщины] ребра наслаиваются»: шаг
+    # слотов держит зазор по ЧЕРНИЛАМ — (w1+w2)/2 + 4 между осями
+    node = _box("a", 0, 0, 60, 60)
+    e1 = {"id": "e1", "source": "a", "target": "c1", "render_width": 16,
+          "source_point": [30.0, 60.0], "target_point": [25.0, 140.0],
+          "waypoints": []}
+    e2 = {"id": "e2", "source": "a", "target": "c2", "render_width": 16,
+          "source_point": [30.0, 60.0], "target_point": [35.0, 140.0],
+          "waypoints": []}
+    edges = [e1, e2]
+    x1, y1 = edit_engine.seat_end(node, None, e1, "s", e1["source_point"],
+                                  140.0, 25.0, try_slack=False,
+                                  snap_threshold=12, node_edges=edges)
+    e1["source_point"] = [y1, x1]
+    x2, y2 = edit_engine.seat_end(node, None, e2, "s", e2["source_point"],
+                                  140.0, 35.0, try_slack=False,
+                                  snap_threshold=12, node_edges=edges)
+    assert x1 == x2 == 60.0
+    assert abs(y2 - y1) == 20.0               # (16+16)/2 + 4, не 18
+    # чистый зазор между краями линий >= 4px
+    assert abs(y2 - y1) - 16.0 >= 4.0
+
+
+def test_default_width_pitch_unchanged():
+    # бит-совместимость: без render_width шаг прежний (18)
+    node, e1, e2 = _two_edge_node()
+    edges = [e1, e2]
+    x1, y1 = edit_engine.seat_end(node, None, e1, "s", e1["source_point"],
+                                  100.0, 15.0, try_slack=False,
+                                  snap_threshold=12, node_edges=edges)
+    e1["source_point"] = [y1, x1]
+    x2, y2 = edit_engine.seat_end(node, None, e2, "s", e2["source_point"],
+                                  100.0, 25.0, try_slack=False,
+                                  snap_threshold=12, node_edges=edges)
+    assert abs(abs(y2 - y1) - 40.0 / 3.0) < 1e-9   # min(18, 40/3) — как раньше

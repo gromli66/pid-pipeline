@@ -216,7 +216,7 @@ def rescale_manual_ports(node, old_bbox, new_bbox):
         p["dy"] = float(p.get("dy", 0.0)) * sy
 
 
-def side_slots(node, side, k, rect=None):
+def side_slots(node, side, k, rect=None, pitch=None):
     """k слотов на грани рамки посадки, симметрично вокруг середины (Э2b).
 
     Решение заказчика 2026-07-31: одна труба в грань — ровно середина
@@ -235,7 +235,11 @@ def side_slots(node, side, k, rect=None):
     horiz = side in ("T", "B")               # ось грани — x
     lo, hi = (x1, x2) if horiz else (y1, y2)
     center = (lo + hi) / 2.0
-    pitch = 0.0 if k == 1 else min(SLOT_PITCH, (hi - lo) / (k + 1))
+    if k == 1:
+        pitch = 0.0
+    elif pitch is None:
+        pitch = min(SLOT_PITCH, (hi - lo) / (k + 1))
+    # pitch задан вызывающим (движок: шаг «по чернилам», Э10-лайт)
     offs = [(j - (k - 1) / 2.0) * pitch for j in range(k)]
     if side == "L":
         return [(x1, center + o, -1.0, 0.0, False) for o in offs]
