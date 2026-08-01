@@ -303,3 +303,24 @@ def test_default_width_pitch_unchanged():
                                   100.0, 25.0, try_slack=False,
                                   snap_threshold=12, node_edges=edges)
     assert abs(abs(y2 - y1) - 40.0 / 3.0) < 1e-9   # min(18, 40/3) — как раньше
+
+
+def test_rect_slot_shift_moves_adjacent_waypoint():
+    # репро 2026-08-01 «диагональ при смещении толщиной»: тангенциальный
+    # сдвиг конца по грани тащит смежное колено — стаб остаётся прямым
+    node = _box("a", 0, 0, 60, 60)
+    e1 = {"id": "e1", "source": "a", "target": "c1", "render_width": 16,
+          "source_point": [23.3, 60.0], "target_point": [10.0, 200.0],
+          "waypoints": [[23.3, 120.0], [10.0, 120.0]]}
+    e2 = {"id": "e2", "source": "a", "target": "c2", "render_width": 16,
+          "source_point": [36.7, 60.0], "target_point": [50.0, 200.0],
+          "waypoints": [[36.7, 120.0], [50.0, 120.0]]}
+    edges = [e1, e2]
+    x1, y1 = edit_engine.seat_end(node, None, e1, "s", e1["source_point"],
+                                  120.0, 23.3, try_slack=False,
+                                  snap_threshold=12, node_edges=edges)
+    e1["source_point"] = [y1, x1]
+    assert (x1, y1) == (60.0, 20.0)            # чернильный слот (30-10)
+    assert e1["waypoints"][0] == [20.0, 120.0]  # колено уехало вместе
+    # стаб конец->колено строго горизонтален
+    assert abs(e1["source_point"][0] - e1["waypoints"][0][0]) < 1e-9

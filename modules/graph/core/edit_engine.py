@@ -278,6 +278,38 @@ def _poly_adjust(node, node_edges, edge_data, role, px, py, ref_x, ref_y):
     return px, py
 
 
+def _shift_rect_stub(edge_data, role, cur, side, nx_, ny_):
+    """Тангенциальный сдвиг конца ПО ТОЙ ЖЕ грани тащит СМЕЖНОЕ колено —
+    стаб остаётся перпендикулярным по построению (репро 2026-08-01:
+    смена толщины сдвигала конец в новый слот, колено стояло —
+    мини-диагональ; зеркало полигонного правила `_poly_adjust._place`).
+
+    Строго ограничен, чтобы НЕ трогать маршруты при переносе узла
+    (инвариант drag «waypoints нетронуты»): колено едет, только если
+    (а) стаб был перпендикулярен грани; (б) конец ОСТАЛСЯ на той же
+    грани (нормальная координата не изменилась — рамка не двигалась,
+    это перераспределение слотов, не жест переноса); (в) сдвиг
+    слотового масштаба (<= 2*SLOT_PITCH)."""
+    wps = edge_data.get("waypoints") or []
+    if not wps or cur is None:
+        return nx_, ny_
+    adj = wps[0] if role == "s" else wps[-1]
+    cx_, cy_ = float(cur[1]), float(cur[0])
+    if side in ("L", "R"):
+        same_face = abs(nx_ - cx_) <= 0.5          # нормаль (x) не изменилась
+        d_tang = ny_ - cy_
+        if same_face and abs(d_tang) <= 2 * port_model.SLOT_PITCH \
+                and abs(float(adj[0]) - cy_) <= 1.0:   # стаб горизонтален
+            adj[0] = float(adj[0]) + d_tang
+    else:
+        same_face = abs(ny_ - cy_) <= 0.5          # нормаль (y) не изменилась
+        d_tang = nx_ - cx_
+        if same_face and abs(d_tang) <= 2 * port_model.SLOT_PITCH \
+                and abs(float(adj[1]) - cx_) <= 1.0:   # стаб вертикален
+            adj[1] = float(adj[1]) + d_tang
+    return nx_, ny_
+
+
 def seat_end(node, other_node, edge_data, role, cur, ref_x, ref_y,
              try_slack, snap_threshold, node_edges=None):
     """Посадка конца ребра на узел — единые ворота (Э2a/Э2b).
@@ -317,8 +349,9 @@ def seat_end(node, other_node, edge_data, role, cur, ref_x, ref_y,
         side = _NORMAL_SIDE.get((p[2], p[3]))
         if side is None:                           # точечный фолбэк
             return p[0], p[1]
-        return _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y,
-                          snap_threshold)
+        sx_, sy_ = _slot_seat(node, node_edges, edge_data, side,
+                              ref_x, ref_y, snap_threshold)
+        return _shift_rect_stub(edge_data, role, cur, side, sx_, sy_)
 
     lock = None
     if cur:
