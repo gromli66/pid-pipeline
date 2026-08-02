@@ -1340,3 +1340,73 @@ def test_width_change_spreads_with_bends_stays_ortho(qapp, tmp_path):
     assert abs(y2 - y1) >= 20.0 - 1e-6, "слоты обязаны разойтись по чернилам"
     _assert_orthogonal(_full_path_xy(e1))
     _assert_orthogonal(_full_path_xy(e2))
+
+
+# =====================================================================
+# Правка вершин полигона: концы труб обязаны переехать за формой
+# =====================================================================
+
+def _poly_dist(node, x, y):
+    """Расстояние от точки до контура узла (по сегментам)."""
+    seg = node["segmentation"]
+    pts = [(seg[i], seg[i + 1]) for i in range(0, len(seg), 2)]
+    best = float("inf")
+    for (ax, ay), (bx, by) in zip(pts, pts[1:] + [pts[0]]):
+        dx, dy = bx - ax, by - ay
+        L2 = dx * dx + dy * dy
+        t = 0.0 if L2 == 0 else max(0.0, min(1.0, ((x - ax) * dx + (y - ay) * dy) / L2))
+        best = min(best, math.hypot(x - (ax + t * dx), y - (ay + t * dy)))
+    return best
+
+
+class _StubPolyOverlay:
+    """Заглушка оверлея правки вершин: отдаёт заданный контур."""
+
+    def __init__(self, seg):
+        self._seg = list(seg)
+
+    def get_polygon(self):
+        return list(self._seg)
+
+
+def test_polygon_vertex_edit_reseats_ends(qapp, tmp_path):
+    """Репро заказчика (graph_edited_size.json, 2026-08-02): «изменил размеры
+    полигона — рёбра висят».
+
+    Правка вершин меняет форму, рамку и центроид узла. Концы его труб обязаны
+    переехать на новую границу СРАЗУ — раньше они оставались висеть в воздухе
+    у старой границы, и лечила это лишь миграция при следующем открытии
+    холста (то есть всю сессию оператор смотрел на висящие трубы)."""
+    g = _graph_poly([300.0, 200.0])          # конец на верхней вершине ромба
+    ed = _editor(qapp, tmp_path, g)
+    e = ed.model.find_edge_data(ed.model.edge_key("poly", "conn"))
+    before = list(e["source_point"])
+
+    # растягиваем ромб вширь и опускаем вниз — как перетаскивание вершин
+    wide = [340.0, 260.0, 520.0, 320.0, 340.0, 430.0, 160.0, 320.0]
+    ed._poly_edit_node = "poly"
+    ed._poly_overlay = _StubPolyOverlay(wide)
+    ed._poly_write_node()
+
+    node = ed.nodes["poly"]
+    assert node["segmentation"] == wide, "контур обязан записаться"
+    sp = e["source_point"]
+    assert sp != before, "конец обязан переехать за изменившейся формой"
+    d = _poly_dist(node, sp[1], sp[0])
+    assert d <= 1.0, f"конец висит в {d:.1f}px от контура — труба оторвалась"
+
+
+def test_polygon_vertex_edit_keeps_far_end(qapp, tmp_path):
+    """Инвариант C6 и здесь: дальний конец (у соседа) неприкосновенен —
+    правка вершин трогает только концы СВОЕГО узла."""
+    g = _graph_poly([300.0, 200.0])
+    ed = _editor(qapp, tmp_path, g)
+    e = ed.model.find_edge_data(ed.model.edge_key("poly", "conn"))
+    far0 = list(e["target_point"])
+
+    ed._poly_edit_node = "poly"
+    ed._poly_overlay = _StubPolyOverlay(
+        [340.0, 260.0, 520.0, 320.0, 340.0, 430.0, 160.0, 320.0])
+    ed._poly_write_node()
+
+    assert e["target_point"] == far0, "дальний конец обязан остаться на месте"

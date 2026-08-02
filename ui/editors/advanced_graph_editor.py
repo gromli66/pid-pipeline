@@ -5197,7 +5197,16 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         )
 
     def _poly_write_node(self):
-        """Записать полигон из оверлея в узел + пересчитать bbox/центроид/визуал."""
+        """Записать полигон из оверлея в узел + пересчитать bbox/центроид/визуал
+        + ПЕРЕСАДИТЬ КОНЦЫ ЕГО РЁБЕР.
+
+        Репро заказчика (graph_edited_size.json, 2026-08-02): «изменил размеры
+        полигона — рёбра висят». Правка вершин меняет форму, рамку И центроид
+        узла, а концы труб оставались на прежних местах — в воздухе рядом со
+        старой границей (node_102: 12.8 и 14.6 px от новой фигуры). Лечилось
+        это лишь миграцией при следующем ОТКРЫТИИ холста, то есть оператор
+        видел висящие трубы всю сессию.
+        """
         if not (self._poly_edit_node and self._poly_overlay):
             return
         seg = self._poly_overlay.get_polygon()
@@ -5212,6 +5221,12 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         node['area'] = (node['bbox'][2] - node['bbox'][0]) * \
                        (node['bbox'][3] - node['bbox'][1])
         self._refresh_node_visual(self._poly_edit_node)
+        # Тот же мини-жест, что после resize: пересаживаются ТОЛЬКО ближние
+        # концы (дальние неприкосновенны, C6), авто-маршруты перестраивает
+        # оконная libavoid-сессия, _manual_route — перепроекция на новую
+        # границу. Стоит ДО _poly_push у всех трёх вызывающих (двинул/добавил/
+        # удалил вершину) — значит пересадка попадает в тот же шаг undo.
+        self._reseat_after_resize(self._poly_edit_node)
 
     def _poly_push(self, before_snap, desc: str):
         """Зафиксировать операцию правки полигона отдельным шагом undo."""
