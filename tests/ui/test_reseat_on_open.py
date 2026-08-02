@@ -66,8 +66,12 @@ def test_broken_file_is_skipped(tmp_path):
     assert not _reseat_canvas_endpoints(p)
 
 
-def test_manual_route_endpoints_survive(tmp_path):
-    """Ручная посадка (_manual_route) неприкосновенна — T-D.3 плана."""
+def test_manual_route_migrates_to_anchor(tmp_path):
+    """ПЕРЕОБЪЯВЛЕН 2026-08-02 (решение заказчика: жест «оставить как
+    нарисовал» не нужен). Заморозка маршрута отменена, но точки оператора
+    не выбрасываются: при открытии они ПЕРЕВОДЯТСЯ В ЯКОРЯ (порты с
+    владельцем-ребром). Итог: геометрия концов та же, пометка снята,
+    маршрут снова участвует в пересчёте, второй прогон — no-op."""
     from ui.tabs.base_graph_tab import _reseat_canvas_endpoints
 
     p = _canvas(tmp_path, [100.0, 296.0])
@@ -75,9 +79,18 @@ def test_manual_route_endpoints_survive(tmp_path):
     g["links"][0]["_manual_route"] = True
     p.write_text(json.dumps(g), encoding="utf-8")
 
-    assert not _reseat_canvas_endpoints(p)   # чинить нечего: ребро ручное
+    assert _reseat_canvas_endpoints(p)        # миграция: заморозка -> якорь
     g2 = json.loads(p.read_text(encoding="utf-8"))
-    assert g2["links"][0]["target_point"] == [100.0, 296.0]
+    e = g2["links"][0]
+    assert e["source_point"] == [100.0, 120.0], \
+        "конец на БОКСЕ обязан уцелеть — его держит якорь"
+    assert e["target_point"] == [100.0, 300.0], \
+        "конец на КОННЕКТОРЕ приходит к центроиду (канон), якорить нечего"
+    assert "_manual_route" not in e, "отменённая пометка обязана уйти"
+    anchors = [pt for n in g2["nodes"] for pt in (n.get("_ports") or [])]
+    assert anchors and all(a.get("edge") for a in anchors), \
+        f"точка оператора не закреплена якорем: {anchors}"
+    assert not _reseat_canvas_endpoints(p), "миграция обязана быть идемпотентной"
 
 
 def _stub_canvas(tmp_path, extra_nodes=()):
@@ -140,7 +153,12 @@ def test_wp_end_migration_blocked_by_foreign_box(tmp_path):
 
 
 def test_manual_route_preserved_among_reseated_edges(tmp_path):
-    """Смешанный холст: обычное ребро чинится, ручное — не тронуто."""
+    """Смешанный холст: обычное ребро чинится, бывшее ручное — расфиксируется.
+
+    ПЕРЕОБЪЯВЛЕН 2026-08-02: заморозка маршрута отменена заказчиком. Конец на
+    БОКСЕ у такого ребра сохраняется якорем, а конец на КОННЕКТОРЕ приходит к
+    центроиду: у коннектора канонический конец и есть центроид, и 296 вместо
+    300 держалось только заморозкой (судья считал такой конец conn_off)."""
     from ui.tabs.base_graph_tab import _reseat_canvas_endpoints
 
     p = _canvas(tmp_path, [100.0, 296.0])
@@ -156,9 +174,11 @@ def test_manual_route_preserved_among_reseated_edges(tmp_path):
 
     assert _reseat_canvas_endpoints(p)
     g2 = json.loads(p.read_text(encoding="utf-8"))
-    # Ручное ребро — байт-в-байт как было.
-    assert g2["links"][0]["target_point"] == [100.0, 296.0]
+    # Бывшее ручное: конец на боксе удержан якорем, конец на коннекторе —
+    # приведён к канону (центроид), пометка снята.
     assert g2["links"][0]["source_point"] == [100.0, 120.0]
+    assert g2["links"][0]["target_point"] == [100.0, 300.0]
+    assert "_manual_route" not in g2["links"][0]
     # Обычное — конец у коннектора пересажен в центроид.
     assert g2["links"][1]["target_point"] == [300.0, 300.0]
 
@@ -274,5 +294,9 @@ def test_unsigned_zigzag_gets_auto_flag_on_open(tmp_path):
     e1 = next(e for e in g2["links"] if e["id"] == "e1")
     e2 = next(e for e in g2["links"] if e["id"] == "e2")
     assert e1.get("_auto_route") is True      # безфлаговый подписан
-    assert "_auto_route" not in e2            # ручной не тронут
+    # ПЕРЕОБЪЯВЛЕНО 2026-08-02: заморозка отменена, поэтому бывшее «ручное»
+    # ребро в ЭТОМ ЖЕ проходе расфиксируется и тоже получает подпись —
+    # иначе прогон не идемпотентен (второе открытие подписало бы его).
+    assert "_manual_route" not in e2
+    assert e2.get("_auto_route") is True
     assert not _reseat_canvas_endpoints(path)  # идемпотентно

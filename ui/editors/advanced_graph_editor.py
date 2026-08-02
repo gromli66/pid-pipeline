@@ -3622,6 +3622,20 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                                else 'target_point') or [0.0, 0.0]
             self._ep_drag_origin = (float(pt[1]), float(pt[0]))
             self._ep_drag_armed = False
+            # Решение заказчика 2026-08-02: «есть обработка при перетаскивании
+            # — нужно то же самое, только зафиксировать один из портов».
+            # Поэтому жест протяжки конца открывает ТОТ ЖЕ кадровый конвейер,
+            # что и перенос узла: кэш препятствий, набор ведомых рёбер и
+            # оконная libavoid-сессия. Своей самописной ветки роутинга здесь
+            # больше нет — она и рождала рассинхрон «маршрут от старых концов».
+            node_id = (edge_data['source'] if endpoint == 'source'
+                       else edge_data['target'])
+            self._ep_node_id = node_id
+            self._drag_routable_edges = {edge_key}
+            self._drag_route_ctx = self._build_drag_route_ctx({node_id})
+            self._amnesty_cache = {}
+            self._close_avoid_session()
+            self._avoid_session = self._build_avoid_session({node_id})
             # Этап A: показать порты узла (кандидаты + ручные) — конец
             # будет липнуть к ним при протяжке.
             self._ep_on_port = False
@@ -3695,10 +3709,31 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         node = self.nodes.get(node_id)
         if node is not None:
             _pm.add_manual_port(node, px, py, edge_data)
-        edge_data['waypoints'] = []
+        edge_data.pop('_manual_route', None)   # понятие отменено заказчиком
         key = self.model.edge_key(edge_data['source'], edge_data['target'])
+        if self._drag_route_ctx is None:
+            # кадровый конвейер обычно поднимает _start_endpoint_drag; если
+            # конец потянули другим путём — поднимаем лениво, иначе роутинг
+            # промолчал бы и труба осталась голой прямой
+            self._ep_node_id = node_id
+            self._drag_routable_edges = {key}
+            self._drag_route_ctx = self._build_drag_route_ctx({node_id})
+            self._amnesty_cache = {}
+            self._close_avoid_session()
+            self._avoid_session = self._build_avoid_session({node_id})
+        # ОБЫЧНЫЙ кадр, как при переносе узла: посадка концов + маршрут одной
+        # транзакцией + приёмка. Ближний конец при этом никуда не «садится» —
+        # его держит якорь (seat_end отдаёт закреплённый порт первым), то есть
+        # это ровно «то же самое, только один порт зафиксирован».
         self._reseat_far_end_after_endpoint_drag()
-        self._route_orthogonal(edge_data)
+        pending = []
+        if self._avoid_session is not None:
+            alive = bool(edge_data.get('waypoints'))
+            self._reseat_moved_end(edge_data, node_id, defer_route=True)
+            pending.append((key, edge_data, alive, node_id))
+            self._avoid_route_frame({node_id}, pending)
+        else:
+            self._reseat_moved_end(edge_data, node_id)
         self._update_edge_path(key)
         self._refresh_waypoint_markers_for_edge(key)
         self._refresh_endpoint_markers()
@@ -3766,15 +3801,16 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                                    else 'target_point')
                 if node is not None and pt:
                     port_model.add_manual_port(node, pt[1], pt[0], edge_data)
-        # финальный пересчёт: разворот дальнего конца + маршрут. Стоит ДО
-        # finalize снапшота (ниже) — иначе redo не вернёт waypoints.
-        self._reseat_far_end_after_endpoint_drag()
-        if self._dragging_endpoint:
-            fin = self.model.find_edge_data(self._dragging_endpoint[0])
-            if fin is not None:
-                self._route_orthogonal(fin)
-                self._update_edge_path(self._dragging_endpoint[0])
+        # Итог жеста = состояние последнего кадра (тот же принцип, что у
+        # переноса узла: предпросмотр честен по построению). Здесь только
+        # закрытие сессии и очистка кадрового состояния — ДО finalize
+        # снапшота, иначе redo не вернёт маршрут.
         self._hide_port_markers()
+        self._close_avoid_session()
+        self._drag_routable_edges = set()
+        self._drag_route_ctx = None
+        self._amnesty_cache = {}
+        self._ep_node_id = None
         if hasattr(self, '_ep_snap_cmd') and self._ep_snap_cmd:
             self._ep_snap_cmd.finalize()
             self.undo_mgr.push_executed(self._ep_snap_cmd)

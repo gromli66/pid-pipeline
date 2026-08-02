@@ -398,6 +398,17 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
     snap = [deepcopy((e.get("source_point"), e.get("target_point"),
                       e.get("waypoints"))) for e in edges_list]
     seat_edge_endpoints(canvas)
+    # ЯКОРЬ ВХОДА выше канона (решение заказчика 2026-08-02): канон про порты
+    # не знает и сорвал бы закреплённую оператором точку при каждом открытии.
+    # Раньше её защищал флаг _manual_route — он отменён, защита переходит к
+    # якорю (порт с владельцем-ребром в node['_ports']).
+    from ui.editors import port_model as _pm
+    for e in edges_list:
+        for end_key, node_key in (("source_point", "source"),
+                                  ("target_point", "target")):
+            pin = _pm.pinned_port(byid.get(e.get(node_key)), e)
+            if pin is not None:
+                e[end_key] = [pin[1], pin[0]]
     moved = 0
     for e, (sp0, tp0, wp0) in zip(edges_list, snap):
         if e.get("_manual_route"):
@@ -458,6 +469,46 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
     # сервера старых эпох (avoid_router не ставил _auto_route) — редактор
     # считал их ручными и не вёл при drag. Подписываем как авто; ручные
     # (_manual_route) не трогаются. Флаг не в sha-проекции.
+    # 2026-08-02, решение заказчика: жест «оставить трубу ровно как нарисовал»
+    # НЕ НУЖЕН — нужен обычный обход с зафиксированным входом. Понятие
+    # «маршрут нарисован руками» отменено, старые пометки уходят: иначе такая
+    # труба навсегда вне пересчёта, и после переезда конца на якорь у неё
+    # остаётся косой хвост от старого маршрута (репро graph_edited_fix3:
+    # стаб 6.2px и заход в чужой блок).
+    #
+    # Заморозка ПЕРЕВОДИТСЯ В ЯКОРЯ, а не выбрасывается: точки, поставленные
+    # руками, закрепляются портами-владельцами и переживают канон при каждом
+    # следующем открытии. Стоит ПОСЛЕ восстановления геометрии (выше) — там
+    # она ещё под защитой флага — и ДО подписи _auto_route, чтобы
+    # расфиксированное ребро получило подпись в ЭТОМ ЖЕ проходе (иначе второе
+    # открытие снова меняло бы файл).
+    from modules.graph.core.graph_access import is_connector
+
+    unfrozen = 0
+    for e in edges_list:
+        if not e.get("_manual_route"):
+            continue
+        for end_key, node_key in (("source_point", "source"),
+                                  ("target_point", "target")):
+            node = byid.get(e.get(node_key))
+            pt = e.get(end_key)
+            if node is None or not pt:
+                continue
+            if is_connector(node):
+                # у коннектора канонический конец — сам центроид; якорить
+                # некуда, поэтому сразу приводим к канону (иначе следующее
+                # открытие двигало бы точку и прогон не был бы идемпотентен)
+                c = node.get("centroid")
+                if c:
+                    e[end_key] = [float(c[0]), float(c[1])]
+                continue
+            _pm.add_manual_port(node, float(pt[1]), float(pt[0]), e)
+        e.pop("_manual_route", None)
+        unfrozen += 1
+    if unfrozen:
+        logger.info("reseat: заморозка снята с %d рёбер, их точки закреплены "
+                    "якорями", unfrozen)
+
     flagged = 0
     for e in edges_list:
         if (e.get("waypoints") or []) and not e.get("_auto_route") \
@@ -469,7 +520,7 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
     moved = sum(
         (e.get("source_point") != s0) + (e.get("target_point") != t0)
         for e, (s0, t0, _w0) in zip(edges_list, snap))
-    moved += flagged
+    moved += flagged + unfrozen
     if not moved:
         return False
     Path(canvas_path).write_text(json.dumps(canvas, ensure_ascii=False),
