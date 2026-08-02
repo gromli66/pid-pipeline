@@ -118,7 +118,7 @@ def test_end_kind_all_kinds():
 # ── гейт ───────────────────────────────────────────────────────────────
 
 def test_gate_rejects_side_damage():
-    base = {"diag": 3, "dev": 30.0, "near": 0, "along_own": 0,
+    base = {"diag": 3, "dev": 30.0, "steps": 2, "near": 0, "along_own": 0,
             "along_foreign": 0, "through": 0, "corner": 0, "adrift": 0,
             "conn_off": 0, "poly_off": 0, "w": 100.0, "h": 100.0}
     better = dict(base, diag=2, dev=20.0)
@@ -128,8 +128,25 @@ def test_gate_rejects_side_damage():
     assert not es.accepts(base, dict(better, along_own=1))
     assert not es.accepts(base, dict(better, w=es.CANVAS_W + 10)), \
         "выход за холст обязан отменять ход"
-    assert not es.accepts(base, dict(base, diag=3, dev=30.0)), \
-        "ход без выигрыша по ортогональности не принимается"
+    assert not es.accepts(base, dict(base)), \
+        "ход без выигрыша не принимается"
+
+
+def test_gate_sees_steps_but_diagonal_wins():
+    """Ступенька — ТРЕТИЙ приоритет: чистое её устранение принимается, но
+    ход, убравший косую ценой шажка, тоже принимается (косая заметнее).
+
+    Репро заказчика graph_edited_av: без метрики ступенек гейт не видел
+    улучшения и откатывал ход — 10 шажков пережили сглаживание."""
+    base = {"diag": 1, "dev": 10.0, "steps": 3, "near": 0, "along_own": 0,
+            "along_foreign": 0, "through": 0, "corner": 0, "adrift": 0,
+            "conn_off": 0, "poly_off": 0, "w": 100.0, "h": 100.0}
+    assert es.accepts(base, dict(base, steps=2)), \
+        "чистое устранение шажка обязано приниматься"
+    assert not es.accepts(base, dict(base, steps=4)), \
+        "рождение шажка без иного выигрыша — отказ"
+    assert es.accepts(base, dict(base, diag=0, dev=0.0, steps=4)), \
+        "снятие косой ценой шажка — принимается: косая заметнее"
 
 
 # ── главный цикл: что неприкосновенно ──────────────────────────────────
@@ -193,3 +210,70 @@ def test_idempotent():
     assert st["колено"] == st["излом"] == st["скольжение"] == 0
     assert st["коннектор"] == st["узел"] == 0
     assert g == snapshot, "повторное сглаживание изменило холст"
+
+
+def test_orthogonal_step_is_a_candidate():
+    """Репро заказчика (graph_edited_av, 2026-08-02): «не исправило
+    ступеньки». Ступенька строго ОРТОГОНАЛЬНА, и отбор «берём только косые
+    рёбра» проходил мимо неё вовсе. Ортогональное ребро с одиночным шажком
+    обязано попадать в кандидаты."""
+    a = _box("a", 100.0, 100.0)
+    c = _conn("c", 400.0, 112.0)
+    e = _edge("e1", "a", "c", (120.0, 100.0), (400.0, 112.0),
+              [(260.0, 100.0), (260.0, 112.0)])
+    g = _g([a, c], [e])
+    assert es.is_ortho(e), "фикстура обязана быть ортогональной"
+    assert es.single_step(e) is not None
+    assert es.count_steps(g) == 1
+
+    c0 = list(c["centroid"])
+    st = es.smooth(g, route_fn=None, reseat_fn=None)
+
+    assert es.count_steps(g) == 0, f"ступенька не сглажена: {st}"
+    assert es.is_ortho(e) and len(es.edge_pts(e)) == 2, \
+        f"труба обязана стать прямой: {es.edge_pts(e)}"
+    # лестница обязана взять САМОЕ ДЕШЁВОЕ лекарство: конец скользит по
+    # своей грани, оборудование и коннектор не двигаются вовсе
+    assert st["скольжение"] == 1, f"ожидалось скольжение конца: {st}"
+    assert st["коннектор"] == st["узел"] == 0
+    assert c["centroid"] == c0, "коннектор не должен был двигаться"
+    cy, cx = c["centroid"]
+    assert e["target_point"] == pytest.approx([cy, cx]), \
+        "конец коннектора обязан остаться его центроидом"
+
+
+def test_rejected_move_leaves_canvas_bit_identical():
+    """ГАРАНТИЯ отката: если ход отклонён, холст не изменился ни на бит.
+
+    Репро: на graph_edited_fix одна ветка отката не отрабатывала, и мусор
+    просачивался мимо гейта (along_foreign 0 -> 1). Держится try/finally,
+    а не дисциплиной вызовов restore по веткам."""
+    a = _box("a", 100.0, 100.0)
+    b = _box("b", 400.0, 200.0)          # расхождение много больше бюджета
+    e = _edge("e1", "a", "b", (120.0, 100.0), (380.0, 200.0))
+    g = _g([a, b], [e])
+    before = copy.deepcopy(g)
+
+    st = es.smooth(g, route_fn=None, reseat_fn=None)
+
+    assert st["отклонено"] >= 1, "фикстура обязана дать отказ"
+    assert g == before, "после отказа холст обязан быть побайтово прежним"
+
+
+def test_rejected_move_with_router_leaves_canvas_bit_identical():
+    """То же с роутером, который «строит» заведомо негодный маршрут:
+    откат обязан снять и его waypoints."""
+    a = _box("a", 100.0, 100.0)
+    b = _box("b", 400.0, 200.0)
+    e = _edge("e1", "a", "b", (120.0, 100.0), (380.0, 200.0))
+    g = _g([a, b], [e])
+    before = copy.deepcopy(g)
+
+    def bad_router(edge):
+        edge["waypoints"] = [[150.0, 250.0]]      # косая ломаная
+        edge["_auto_route"] = True
+        return True
+
+    st = es.smooth(g, route_fn=bad_router, reseat_fn=None)
+    assert st["колено"] == 0, "негодный маршрут не должен приниматься"
+    assert g == before, "после отказа холст обязан быть побайтово прежним"

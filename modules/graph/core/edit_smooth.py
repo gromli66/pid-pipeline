@@ -272,6 +272,85 @@ def snap_waypoints(e, budget=BUDGET):
     return fixed
 
 
+def step_index(e, step_max=STEP_MAX):
+    """Индекс сегмента-шажка в полилинии (между pts[i] и pts[i+1]) или None."""
+    pts = edge_pts(e)
+    if not pts or len(pts) < 4:
+        return None
+    found = None
+    for i in range(1, len(pts) - 2):
+        a, b, c, d = pts[i - 1], pts[i], pts[i + 1], pts[i + 2]
+        L = math.hypot(c[0] - b[0], c[1] - b[1])
+        if not (1e-6 < L <= step_max):
+            continue
+        horiz = (abs(a[1] - b[1]) <= ec.DIAG_TOL
+                 and abs(c[1] - d[1]) <= ec.DIAG_TOL)
+        vert = (abs(a[0] - b[0]) <= ec.DIAG_TOL
+                and abs(c[0] - d[0]) <= ec.DIAG_TOL)
+        if not (horiz or vert):
+            continue
+        if found is not None:
+            return None
+        found = i
+    return found
+
+
+def shift_run(e, side, axis, delta, idx=None):
+    """Сдвинуть УЧАСТОК маршрута со стороны side на delta вдоль axis.
+
+    idx — индекс сегмента-шажка, ВЗЯТЫЙ ДО мутаций: после сдвига конца
+    ступенька уже не распознаётся (соседний сегмент успел скоситься), и
+    поиск на месте вернул бы None — участок остался бы на старом месте.
+
+    Ключевая деталь, без которой сдвиг бессмыслен: двигая конец на величину
+    шажка, надо тащить за собой ВЕСЬ его участок (изломы до шажка), иначе
+    ступенька не исчезает, а переезжает в соседний сегмент и делает его
+    косым — гейт такой ход справедливо откатывает.
+    Возвращает True, если что-то сдвинулось."""
+    if idx is None:
+        idx = step_index(e)
+    wps = e.get("waypoints") or []
+    if idx is None or not wps:
+        return False
+    # pts[k] = wps[k-1] при 1 <= k <= len(wps); шажок между pts[idx], pts[idx+1]
+    rng = range(0, idx) if side == "s" else range(idx, len(wps))
+    moved = False
+    for k in rng:
+        w = wps[k]
+        wps[k] = [w[0] + delta, w[1]] if axis == "y" else [w[0], w[1] + delta]
+        moved = True
+    return moved
+
+
+def drop_collinear(e, tol=ec.DIAG_TOL):
+    """Убрать изломы, ставшие лишними: точка лежит на прямой между соседями.
+
+    Это и есть ЗАВЕРШЕНИЕ сдвига: подвинув конец (или узел) на величину
+    шажка, мы делаем его точки коллинеарными — но сами они остаются в
+    данных, и труба выглядит прежней ступенькой, а первый сегмент ещё и
+    косеет. Поэтому любой сдвиг обязан схлопывать то, что стало лишним.
+    Возвращает число убранных изломов."""
+    wps = e.get("waypoints") or []
+    if not wps:
+        return 0
+    removed = 0
+    i = 0
+    while i < len(wps):
+        pts = edge_pts(e)
+        if pts is None or len(pts) < 3:
+            break
+        a, b, c = pts[i], pts[i + 1], pts[i + 2]
+        # b лишняя, если a-b-c укладываются в одну ось
+        same_x = abs(a[0] - b[0]) <= tol and abs(b[0] - c[0]) <= tol
+        same_y = abs(a[1] - b[1]) <= tol and abs(b[1] - c[1]) <= tol
+        if same_x or same_y:
+            wps.pop(i)
+            removed += 1
+            continue
+        i += 1
+    return removed
+
+
 def _slide_end(graph, e, role, axis, delta):
     """Лекарство 2: сдвинуть КОНЕЦ вдоль его грани/участка на delta.
 
@@ -305,8 +384,10 @@ def _slide_end(graph, e, role, axis, delta):
         if not (lo + FACE_MARGIN <= v <= hi - FACE_MARGIN):
             return None
     else:                                   # контурный участок
-        seg = ec.poly_contour(node)
-        if not seg:
+        # poly_runs ждёт ПЛОСКИЙ список координат (как в данных узла), а
+        # ec.poly_contour отдаёт список точек — берём сырую segmentation
+        seg = node.get("segmentation")
+        if not (seg and isinstance(seg, list) and len(seg) >= 6):
             return None
         runs = port_model.poly_runs(seg)
         on = None
@@ -385,6 +466,32 @@ def _breaks_anchor(graph, node_id):
 
 
 # ── судья и гейт ───────────────────────────────────────────────────────
+def count_steps(graph, step_max=STEP_MAX):
+    """Сколько на холсте ступенек-шажков.
+
+    Судья их НЕ считает дефектом и не может: ступенька строго ортогональна
+    (H-V-H), отклонение от осей у неё ноль. Поэтому метрика своя — иначе
+    гейт не видит улучшения от их устранения и откатывает ход (репро
+    graph_edited_av: 10 ступенек пережили сглаживание нетронутыми)."""
+    n = 0
+    for e in g_edges(graph):
+        pts = edge_pts(e)
+        if not pts or len(pts) < 4:
+            continue
+        for i in range(1, len(pts) - 2):
+            a, b, c, d = pts[i - 1], pts[i], pts[i + 1], pts[i + 2]
+            L = math.hypot(c[0] - b[0], c[1] - b[1])
+            if not (1e-6 < L <= step_max):
+                continue
+            horiz = (abs(a[1] - b[1]) <= ec.DIAG_TOL
+                     and abs(c[1] - d[1]) <= ec.DIAG_TOL)
+            vert = (abs(a[0] - b[0]) <= ec.DIAG_TOL
+                    and abs(c[0] - d[0]) <= ec.DIAG_TOL)
+            if horiz or vert:
+                n += 1
+    return n
+
+
 def score(graph):
     """Метрики в порядке приоритета заказчика: ортогональность -> прочее."""
     c = ec.check_canvas(graph)["counts"]
@@ -400,6 +507,7 @@ def score(graph):
             ys += [bb[1], bb[3]]
     return {
         "diag": c["diag"], "dev": round(dev, 2),
+        "steps": count_steps(graph),
         "near": c["near_ortho"], "along_own": c["along_own"],
         "along_foreign": c["along_foreign"], "through": c["through"],
         "corner": c["corner"], "adrift": c["adrift"],
@@ -414,16 +522,24 @@ _NOT_WORSE = ("along_own", "along_foreign", "through", "corner",
 
 
 def accepts(before, after):
-    """Гейт хода: ортогональность СТРОГО лучше, остальное не хуже, холст цел."""
+    """Гейт хода: выигрыш ЛЕКСИКОГРАФИЧЕСКИ (косые -> отклонение ->
+    ступеньки), остальное не хуже, холст цел.
+
+    Ступеньки — третьим приоритетом, а НЕ в списке «не хуже»: ход, который
+    убирает косую ценой одного шажка, обязан приниматься (косая заметнее
+    ступеньки), иначе теряется главный выигрыш — обходы. Зато чистое
+    устранение шажка (косых столько же, отклонение то же) теперь принимается,
+    раньше гейт его не видел вовсе."""
     if after["w"] > CANVAS_W + 0.5 or after["h"] > CANVAS_H + 0.5:
         return False
     for k in _NOT_WORSE:
         if after[k] > before[k]:
             return False
-    if after["diag"] < before["diag"]:
-        return True
-    return (after["diag"] == before["diag"]
-            and after["dev"] < before["dev"] - 0.5)
+    if after["diag"] != before["diag"]:
+        return after["diag"] < before["diag"]
+    if abs(after["dev"] - before["dev"]) > 0.5:
+        return after["dev"] < before["dev"]
+    return after["steps"] < before["steps"]
 
 
 # ── главный цикл ───────────────────────────────────────────────────────
@@ -442,7 +558,11 @@ def smooth(graph, route_fn=None, reseat_fn=None, budget=BUDGET,
         stats["раунды"] += 1
         applied = 0
         for e in list(g_edges(graph)):
-            if is_ortho(e):
+            # Кандидат — не только КОСОЕ ребро: ступенька строго ортогональна
+            # (H-V-H), и отбор «только косые» проходил мимо неё вовсе — ровно
+            # то, на что заказчик указал по graph_edited_av («не исправило
+            # ступеньки»). Берём и ортогональные с одиночным шажком.
+            if is_ortho(e) and single_step(e) is None:
                 continue
             if _try_remedies(graph, e, stats, route_fn, reseat_fn,
                              budget, allow_node_shift, big_area):
@@ -455,8 +575,37 @@ def smooth(graph, route_fn=None, reseat_fn=None, budget=BUDGET,
 
 def _try_remedies(graph, e, stats, route_fn, reseat_fn, budget,
                   allow_node_shift, big_area):
-    """Лестница лекарств для одного ребра. True — ход принят."""
+    """Лестница лекарств для одного ребра. True — ход принят.
+
+    ГАРАНТИЯ: ход отклонён => холст не изменился ни на бит. Держится
+    try/finally, а не дисциплиной вызовов restore() по веткам: замер на
+    graph_edited_fix показал, что одна ветка отката всё-таки не отрабатывала
+    и мусор просачивался мимо гейта (along_foreign 0 -> 1)."""
     before = score(graph)
+    snap_nodes = [deepcopy(n) for n in (graph.get("nodes") or [])]
+    snap_edges = [deepcopy(dict(x)) for x in g_edges(graph)]
+
+    def restore_all():
+        for cur, old in zip(graph.get("nodes") or [], snap_nodes):
+            cur.clear()
+            cur.update(old)
+        for cur, old in zip(g_edges(graph), snap_edges):
+            cur.clear()
+            cur.update(old)
+
+    ok = False
+    try:
+        ok = _attempt(graph, e, stats, route_fn, reseat_fn, budget,
+                      allow_node_shift, big_area, before)
+        return ok
+    finally:
+        if not ok:
+            restore_all()
+
+
+def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
+             allow_node_shift, big_area, before):
+    """Собственно лестница (см. _try_remedies)."""
     # Снимок ПОЭЛЕМЕНТНЫЙ, а не подменой списков: редактор держит индекс
     # {id -> тот же самый dict}, и подмена graph['nodes'] осиротила бы его —
     # модель продолжила бы указывать на выброшенные объекты.
@@ -504,6 +653,7 @@ def _try_remedies(graph, e, stats, route_fn, reseat_fn, budget,
     if d > budget:
         stats["отклонено"] += 1
         return False        # «супер движение» — не наш случай, в очаги
+    sidx = step_index(e)    # ДО мутаций: после сдвига шажок не распознать
 
     byid = nodes_by_id(graph)
     ends = (("s", e.get("source")), ("t", e.get("target")))
@@ -519,6 +669,8 @@ def _try_remedies(graph, e, stats, route_fn, reseat_fn, budget,
                 continue
             key = "source_point" if role == "s" else "target_point"
             cur[key] = [new[1], new[0]]
+            shift_run(cur, role, axis, sign * d, sidx)  # участок едет с концом
+            drop_collinear(cur)          # схлопнуть ставший лишним шажок
             if route_fn is not None:
                 route_fn(cur)
             if accepts(before, score(graph)):
@@ -537,8 +689,11 @@ def _try_remedies(graph, e, stats, route_fn, reseat_fn, budget,
             dx, dy = (0.0, sign * d) if axis == "y" else (sign * d, 0.0)
             _shift_node(graph, nid, dx, dy)
             cur = live_edge()
-            if cur is not None and route_fn is not None:
-                route_fn(cur)
+            if cur is not None:
+                shift_run(cur, role, axis, sign * d, sidx)
+                drop_collinear(cur)      # схлопнуть ставший лишним шажок
+                if route_fn is not None:
+                    route_fn(cur)
             if reseat_fn is not None:
                 reseat_fn(nid)
             if accepts(before, score(graph)):
@@ -560,8 +715,11 @@ def _try_remedies(graph, e, stats, route_fn, reseat_fn, budget,
                 dx, dy = (0.0, sign * d) if axis == "y" else (sign * d, 0.0)
                 _shift_node(graph, nid, dx, dy)
                 cur = live_edge()
-                if cur is not None and route_fn is not None:
-                    route_fn(cur)
+                if cur is not None:
+                    shift_run(cur, role, axis, sign * d, sidx)
+                    drop_collinear(cur)  # схлопнуть ставший лишним шажок
+                    if route_fn is not None:
+                        route_fn(cur)
                 if reseat_fn is not None:
                     reseat_fn(nid)
                 if accepts(before, score(graph)):
