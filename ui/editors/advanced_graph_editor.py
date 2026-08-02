@@ -3681,14 +3681,25 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         side_key = '_src_side' if endpoint == 'source' else '_tgt_side'
 
         edge_data[point_key] = [py, px]  # формат [y, x]
-        # сторону держим в синхроне для прочей логики, но маршрут не считаем
         edge_data[side_key] = closest_bbox_side(self._get_node_bbox(node_id), px, py)
-        edge_data['waypoints'] = []          # ручной режим → прямая линия
-        edge_data['_manual_route'] = True
-
+        # Решение заказчика 2026-08-02: «нужен КЛАССИЧЕСКИЙ ОБХОД, но с
+        # ФИКСИРОВАННЫМ ВХОДОМ; даже когда двигаю вход — пересчитывать».
+        # Поэтому: (1) точка оператора немедленно становится ЯКОРЕМ ребра
+        # (порт с владельцем — переживает кадр, перенос узла и resize);
+        # (2) флаг «маршрут нарисован руками» больше НЕ ставится — он
+        # исключал трубу из всех роутингов навсегда, и она оставалась голой
+        # прямой сквозь чужие блоки (репро graph_edited_fix2: 245px через три
+        # клапана); (3) маршрут пересчитывается ПРЯМО НА КАДРЕ протяжки, так
+        # что оператор видит настоящий обход, а не прямую-обманку.
+        from ui.editors import port_model as _pm
+        node = self.nodes.get(node_id)
+        if node is not None:
+            _pm.add_manual_port(node, px, py, edge_data)
+        edge_data['waypoints'] = []
         key = self.model.edge_key(edge_data['source'], edge_data['target'])
+        self._reseat_far_end_after_endpoint_drag()
+        self._route_orthogonal(edge_data)
         self._update_edge_path(key)
-        self.edge_perp_scores[key] = {'is_good': True, 'score': 1.0, 'source_angle': 0}
         self._refresh_waypoint_markers_for_edge(key)
         self._refresh_endpoint_markers()
 
@@ -3754,8 +3765,15 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                 pt = edge_data.get('source_point' if endpoint == 'source'
                                    else 'target_point')
                 if node is not None and pt:
-                    port_model.add_manual_port(node, pt[1], pt[0])
+                    port_model.add_manual_port(node, pt[1], pt[0], edge_data)
+        # финальный пересчёт: разворот дальнего конца + маршрут. Стоит ДО
+        # finalize снапшота (ниже) — иначе redo не вернёт waypoints.
         self._reseat_far_end_after_endpoint_drag()
+        if self._dragging_endpoint:
+            fin = self.model.find_edge_data(self._dragging_endpoint[0])
+            if fin is not None:
+                self._route_orthogonal(fin)
+                self._update_edge_path(self._dragging_endpoint[0])
         self._hide_port_markers()
         if hasattr(self, '_ep_snap_cmd') and self._ep_snap_cmd:
             self._ep_snap_cmd.finalize()

@@ -206,8 +206,14 @@ def _drop_endpoint(ed, key, endpoint, x, y):
 
 
 def test_endpoint_drop_free_creates_manual_port(qapp, tmp_path):
-    """Отпускание конца в свободном месте границы создаёт постоянный порт:
-    node['_ports'] — ЛОКАЛЬНОЕ смещение от центроида."""
+    """Отпускание конца в свободном месте границы создаёт постоянный ЯКОРЬ
+    входа: node['_ports'] — ЛОКАЛЬНОЕ смещение от центроида + владелец-ребро.
+
+    ПЕРЕОБЪЯВЛЕН 2026-08-02 (решение заказчика «нужен классический обход, но
+    с фиксированным входом»): флаг _manual_route здесь больше НЕ ставится —
+    он исключал трубу из всех роутингов навсегда, и она оставалась голой
+    прямой сквозь чужие блоки. Вход держит якорь, форму трубы считает
+    роутер."""
     g = _graph_box_conn_small()
     _assert_canonical(g)
     ed = _editor(qapp, tmp_path, g)
@@ -219,14 +225,23 @@ def test_endpoint_drop_free_creates_manual_port(qapp, tmp_path):
     node = ed.model.nodes["box"]
     e = ed.model.find_edge_data(key)
     assert e["source_point"] == [225.0, 160.0]
-    assert e.get("_manual_route") is True
-    assert node.get("_ports") == [{"dx": 40.0, "dy": 25.0}], \
-        f"ручной порт не создан/не локальный: {node.get('_ports')}"
+    assert e.get("_manual_route") is None, \
+        "закрепление ВХОДА не должно замораживать МАРШРУТ"
+    ports = node.get("_ports") or []
+    assert len(ports) == 1, f"якорь не создан: {ports}"
+    assert (ports[0]["dx"], ports[0]["dy"]) == (40.0, 25.0), \
+        f"якорь не локальный: {ports[0]}"
+    assert ports[0].get("edge") == "box|conn", \
+        f"у якоря нет владельца-ребра: {ports[0]}"
 
 
-def test_endpoint_drop_on_candidate_port_snaps_without_manual(qapp, tmp_path):
-    """Конец липнет к порту-кандидату (центр грани) — ручной порт при этом
-    НЕ создаётся (это посадка на существующий порт, не свободное место)."""
+def test_endpoint_drop_on_candidate_port_snaps_to_it(qapp, tmp_path):
+    """Конец липнет к порту-кандидату (центр грани).
+
+    ПЕРЕОБЪЯВЛЕН 2026-08-02: раньше проверялось, что якорь при этом НЕ
+    создаётся. Теперь выбор оператора закрепляется ВСЕГДА — иначе его негде
+    хранить, и первый же пересчёт уводит конец обратно в середину грани
+    (замер аудита). Липкость к кандидату при этом сохраняется."""
     g = _graph_box_conn_small()
     ed = _editor(qapp, tmp_path, g)
     key = ed.model.edge_key("box", "conn")
@@ -237,8 +252,9 @@ def test_endpoint_drop_on_candidate_port_snaps_without_manual(qapp, tmp_path):
 
     e = ed.model.find_edge_data(key)
     assert e["source_point"] == [200.0, 160.0], "конец обязан прилипнуть к порту"
-    assert "_ports" not in ed.model.nodes["box"], \
-        "посадка на кандидат не должна рожать ручной порт"
+    ports = ed.model.nodes["box"].get("_ports") or []
+    assert len(ports) == 1 and ports[0].get("edge") == "box|conn", \
+        f"выбор оператора обязан закрепиться якорем: {ports}"
 
 
 def test_manual_port_rides_with_node(qapp, tmp_path):
@@ -253,8 +269,9 @@ def test_manual_port_rides_with_node(qapp, tmp_path):
     e = ed.model.find_edge_data(key)
     assert e["source_point"] == pytest.approx([245.0, 180.0]), \
         "пришпиленный конец обязан ехать с узлом (центроид + смещение порта)"
-    # смещение порта не изменилось
-    assert ed.model.nodes["box"]["_ports"] == [{"dx": 40.0, "dy": 25.0}]
+    # смещение якоря не изменилось (владелец-ребро в словаре — не помеха)
+    pt = ed.model.nodes["box"]["_ports"][0]
+    assert (pt["dx"], pt["dy"]) == (40.0, 25.0), f"якорь уехал: {pt}"
 
 
 def test_manual_port_undo_redo_bytewise(qapp, tmp_path):
@@ -293,11 +310,14 @@ def test_manual_port_survives_save_load(qapp, tmp_path):
     out = tmp_path / "saved.json"
     assert ed.model.save(str(out))
     saved = json.loads(out.read_text(encoding="utf-8"))
+    want = {"dx": 40.0, "dy": 25.0, "edge": "box|conn"}
     node = next(n for n in saved["nodes"] if n["id"] == "box")
-    assert node.get("_ports") == [{"dx": 40.0, "dy": 25.0}]
+    assert node.get("_ports") == [want], \
+        f"якорь (со владельцем) не пережил save: {node.get('_ports')}"
 
     ed2 = _editor(qapp, tmp_path, saved)
-    assert ed2.model.nodes["box"].get("_ports") == [{"dx": 40.0, "dy": 25.0}]
+    assert ed2.model.nodes["box"].get("_ports") == [want], \
+        "якорь не пережил load — вход перестанет быть фиксированным"
 
 
 def test_ports_do_not_change_projection_sha(qapp, tmp_path):
@@ -325,7 +345,9 @@ def test_manual_port_rescaled_on_resize(qapp, tmp_path):
     ed._on_node_resized("box", [80.0, 160.0, 240.0, 320.0])
 
     node = ed.model.nodes["box"]
-    assert node["_ports"] == [{"dx": 80.0, "dy": 50.0}]
+    pt = node["_ports"][0]
+    assert (pt["dx"], pt["dy"]) == (80.0, 50.0), f"якорь не отмасштабирован: {pt}"
+    assert pt.get("edge") == "box|conn", "resize потерял владельца якоря"
     # порт в абсолюте: центроид (160, 240) + (80, 50) = (240, 290) — на грани
     from ui.editors import port_model
     px, py = port_model.manual_ports(node)[0][:2]
@@ -657,3 +679,91 @@ def test_endpoint_drag_far_end_untouched_without_drag(qapp, tmp_path):
     ed._end_endpoint_drag()
 
     assert e["target_point"] == far0, "без протяжки дальний конец неприкосновенен"
+
+
+# =====================================================================
+# Фиксированный вход + обязательный обход (решение заказчика 2026-08-02)
+# =====================================================================
+
+def _graph_pipe_past_obstacles():
+    """Длинная труба снизу вверх; на прямом пути стоят два чужих блока —
+    прямая между концами обязана их резать, обойти можно только коленом."""
+    nodes = [
+        {"id": "low", "type": "equipment", "centroid": [400.0, 220.0],
+         "bbox": [200.0, 380.0, 240.0, 420.0], "segmentation": None,
+         "class_id": 99, "class_name": "unknow", "degree": 1},
+        {"id": "high", "type": "equipment", "centroid": [120.0, 220.0],
+         "bbox": [200.0, 100.0, 240.0, 140.0], "segmentation": None,
+         "class_id": 99, "class_name": "unknow", "degree": 1},
+        {"id": "block1", "type": "equipment", "centroid": [300.0, 220.0],
+         "bbox": [190.0, 280.0, 250.0, 320.0], "segmentation": None,
+         "class_id": 99, "class_name": "unknow", "degree": 0},
+        {"id": "block2", "type": "equipment", "centroid": [220.0, 220.0],
+         "bbox": [190.0, 200.0, 250.0, 240.0], "segmentation": None,
+         "class_id": 99, "class_name": "unknow", "degree": 0},
+    ]
+    links = [
+        {"id": "e1", "source": "low", "target": "high",
+         "source_point": [380.0, 220.0], "target_point": [140.0, 220.0],
+         "waypoints": []},
+    ]
+    return _wrap(nodes, links)
+
+
+def test_pinned_entry_gets_detour_not_straight_line(qapp, tmp_path):
+    """Репро заказчика (graph_edited_fix2.json): «сменил вход — диагональ
+    через чужие блоки без обхода».
+
+    Решение заказчика: вход фиксирован там, куда его поставил оператор, но
+    труба ОБЯЗАНА обойти препятствия. Раньше протяжка входа замораживала
+    маршрут (_manual_route) и оставляла голую прямую сквозь всё подряд."""
+    from ui.editors.undo_manager import SnapshotCommand
+
+    ed = _editor(qapp, tmp_path, _graph_pipe_past_obstacles())
+    key = ed.model.edge_key("low", "high")
+    e = ed.model.find_edge_data(key)
+
+    ed._dragging_endpoint = (key, "source")
+    ed._ep_drag_armed = True
+    ed._ep_on_port = False
+    ed._ep_snap_cmd = SnapshotCommand(ed.model, ed._redraw_all)
+    ed._ep_snap_cmd.execute()
+    ed._drag_endpoint_to(198.0, 400.0)         # вход на левую грань низа
+    chosen = list(e["source_point"])
+    ed._end_endpoint_drag()
+
+    assert e["source_point"] == chosen, "вход оператора обязан остаться на месте"
+    assert e.get("_manual_route") is None, "маршрут не должен замораживаться"
+    pts = [e["source_point"]] + list(e.get("waypoints") or []) + [e["target_point"]]
+    assert len(pts) > 2, "труба обязана получить обход, а не остаться прямой"
+    for a, b in zip(pts, pts[1:]):
+        assert min(abs(b[1] - a[1]), abs(b[0] - a[0])) <= 1.5, \
+            f"сегмент не ортогонален: {a} -> {b}"
+    for nid in ("block1", "block2"):
+        bb = ed.nodes[nid]["bbox"]
+        assert not any(_seg_cuts_bbox(a, b, bb) for a, b in zip(pts, pts[1:])), \
+            f"обход не обошёл {nid}"
+
+
+def test_pinned_entry_survives_neighbour_drag(qapp, tmp_path):
+    """Якорь входа — настоящий якорь: перенос СОСЕДА не сдвигает его ни на
+    пиксель (прежний ручной порт был лишь подсказкой судье и терялся на
+    уводе оси, замер аудита)."""
+    from ui.editors.undo_manager import SnapshotCommand
+
+    ed = _editor(qapp, tmp_path, _graph_pipe_past_obstacles())
+    key = ed.model.edge_key("low", "high")
+    e = ed.model.find_edge_data(key)
+    ed._dragging_endpoint = (key, "source")
+    ed._ep_drag_armed = True
+    ed._ep_on_port = False
+    ed._ep_snap_cmd = SnapshotCommand(ed.model, ed._redraw_all)
+    ed._ep_snap_cmd.execute()
+    ed._drag_endpoint_to(198.0, 400.0)
+    ed._end_endpoint_drag()
+    pinned = list(e["source_point"])
+
+    _drag(ed, "high", 300.0, 130.0)            # таскаем ДАЛЬНИЙ узел
+
+    assert e["source_point"] == pytest.approx(pinned), \
+        f"якорь входа сорвало переносом соседа: {e['source_point']} != {pinned}"

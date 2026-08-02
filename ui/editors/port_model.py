@@ -25,9 +25,11 @@ from modules.graph.core.ports import (  # noqa: F401
     all_ports,
     candidate_ports,
     choose_port,
+    edge_ref,
     is_on_port,
     lock_respected,
     manual_ports,
     nearest_port,
+    pinned_port,
     rescale_manual_ports,
 )

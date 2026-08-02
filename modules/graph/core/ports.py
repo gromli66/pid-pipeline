@@ -190,13 +190,64 @@ def all_ports(node, rect=None):
     return manual_ports(node) + candidate_ports(node, rect)
 
 
-def add_manual_port(node, x, y):
+def edge_ref(edge_data):
+    """Устойчивый идентификатор ребра для владения портом: пара узлов."""
+    if not edge_data:
+        return None
+    a, b = edge_data.get("source"), edge_data.get("target")
+    if a is None or b is None:
+        return None
+    return f"{a}|{b}" if str(a) <= str(b) else f"{b}|{a}"
+
+
+def add_manual_port(node, x, y, edge_data=None):
     """Создать постоянный ручной порт узла в точке (x, y) — хранится как
-    локальное смещение от центроида."""
+    локальное смещение от центроида.
+
+    edge_data задаёт ВЛАДЕЛЬЦА порта (решение заказчика 2026-08-02: «нужен
+    классический обход, но с фиксированным входом»). Порт владельца —
+    настоящий якорь: `pinned_port` возвращает его безусловно, минуя конкурс
+    кандидатов. Без владельца порт остаётся прежней «подсказкой судье»,
+    которую гистерезис вправе отбросить (совместимость со старыми холстами).
+
+    Повторный вызов для того же ребра ПЕРЕЗАПИСЫВАЕТ его порт, а не плодит
+    новые: оператор двигает вход много раз за жест."""
     cx, cy = _node_cxy(node)
+    ref = edge_ref(edge_data)
     entry = {"dx": float(x - cx), "dy": float(y - cy)}
+    if ref is not None:
+        entry["edge"] = ref
+        for p in node.get("_ports") or []:
+            if p.get("edge") == ref:
+                p.update(entry)
+                return p
     node.setdefault("_ports", []).append(entry)
     return entry
+
+
+def pinned_port(node, edge_data):
+    """Порт-ЯКОРЬ этого ребра (x, y, nx, ny, True) или None.
+
+    Якорь безусловен: он не участвует в конкурсе портов, не отбрасывается
+    гистерезисом при уводе оси и не теряется на контурных узлах — оператор
+    поставил вход сюда, значит вход здесь. Хранится в локальных координатах
+    от центроида, поэтому едет с узлом и переживает resize
+    (`rescale_manual_ports`)."""
+    ref = edge_ref(edge_data)
+    if ref is None or not node:
+        return None
+    cx, cy = _node_cxy(node)
+    for p in node.get("_ports") or []:
+        if p.get("edge") != ref:
+            continue
+        px = cx + float(p.get("dx", 0.0))
+        py = cy + float(p.get("dy", 0.0))
+        dx, dy = px - cx, py - cy
+        length = math.hypot(dx, dy)
+        if length <= 1e-9:
+            return (px, py, 0.0, 0.0, True)
+        return (px, py, dx / length, dy / length, True)
+    return None
 
 
 def rescale_manual_ports(node, old_bbox, new_bbox):
