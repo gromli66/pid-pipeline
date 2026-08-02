@@ -3692,6 +3692,51 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         self._refresh_waypoint_markers_for_edge(key)
         self._refresh_endpoint_markers()
 
+    def _reseat_far_end_after_endpoint_drag(self):
+        """Развернуть ДАЛЬНИЙ конец навстречу точке, которую поставил оператор.
+
+        Репро заказчика (graph_edited_fix.json, 2026-08-02): «вручную сменил
+        порт — получил диагональ через чужой блок». Механика: протяжка двигает
+        ТОЛЬКО ближний конец, а дальний остаётся на грани, которая новому
+        положению уже не смотрит. У edge_22 конец оператора сел на левую грань
+        node_19, а дальний остался на ВЕРХНЕЙ грани node_20 — прямая между
+        ними вошла в node_20 через правую грань и прошла ~24px внутри блока.
+        Судья этого не видел: through_box исключает свои же концевые узлы.
+
+        Разворот делает движок (порт/слот/контур), ориентир — точка оператора.
+        Его конец при этом неприкосновенен: пришпилил оператор — значит его
+        выбор и есть база, под которую подстраивается сосед. Это НЕ нарушение
+        C6 («дальний конец не трогать»): C6 про перенос УЗЛА, где оператор
+        ребра не касался, а здесь он пересоединил трубу руками и ждёт, что она
+        соединится осмысленно.
+        """
+        if not self._dragging_endpoint or not getattr(self, '_ep_drag_armed', False):
+            return
+        edge_key, endpoint = self._dragging_endpoint
+        edge_data = self.model.find_edge_data(edge_key)
+        if not edge_data:
+            return
+        near_key = 'source_point' if endpoint == 'source' else 'target_point'
+        far_key = 'target_point' if endpoint == 'source' else 'source_point'
+        near_pt = edge_data.get(near_key)
+        far_pt = edge_data.get(far_key)
+        if not near_pt or not far_pt:
+            return
+        far_id = (edge_data['target'] if endpoint == 'source'
+                  else edge_data['source'])
+        near_id = (edge_data['source'] if endpoint == 'source'
+                   else edge_data['target'])
+        far_node = self.nodes.get(far_id)
+        near_node = self.nodes.get(near_id)
+        if far_node is None:
+            return
+        x, y = self._seat_end_ported(
+            far_node, near_node, edge_data,
+            's' if far_key == 'source_point' else 't',
+            far_pt, near_pt[1], near_pt[0], try_slack=True)
+        edge_data[far_key] = [y, x]
+        self._update_edge_path(edge_key)
+
     def _end_endpoint_drag(self):
         # Этап A: отпускание конца в СВОБОДНОМ месте границы (не на порту)
         # рождает постоянный ручной порт узла — локальное смещение от
@@ -3710,6 +3755,7 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                                    else 'target_point')
                 if node is not None and pt:
                     port_model.add_manual_port(node, pt[1], pt[0])
+        self._reseat_far_end_after_endpoint_drag()
         self._hide_port_markers()
         if hasattr(self, '_ep_snap_cmd') and self._ep_snap_cmd:
             self._ep_snap_cmd.finalize()

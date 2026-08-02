@@ -559,3 +559,101 @@ def test_open_still_fixes_off_canon_ends(tmp_path):
     g = json.loads(p.read_text(encoding="utf-8"))
     assert g["links"][0]["target_point"] == [100.0, 300.0]
     assert g["links"][0]["source_point"] == [100.0, 120.0]
+
+
+# =====================================================================
+# Ручная смена порта: дальний конец разворачивается навстречу
+# =====================================================================
+
+def _seg_cuts_bbox(sp, tp, bbox, shrink=0.75):
+    """Отрезок [y,x]->[y,x] заходит в нутро bbox (Liang-Barsky)."""
+    x1, y1, x2, y2 = (bbox[0] + shrink, bbox[1] + shrink,
+                      bbox[2] - shrink, bbox[3] - shrink)
+    if x1 >= x2 or y1 >= y2:
+        return False
+    ax, ay, bx, by = sp[1], sp[0], tp[1], tp[0]
+    dx, dy = bx - ax, by - ay
+    t0, t1 = 0.0, 1.0
+    for p, q in ((-dx, ax - x1), (dx, x2 - ax), (-dy, ay - y1), (dy, y2 - ay)):
+        if abs(p) < 1e-12:
+            if q < 0:
+                return False
+            continue
+        t = q / p
+        if p < 0:
+            if t > t1:
+                return False
+            t0 = max(t0, t)
+        else:
+            if t < t0:
+                return False
+            t1 = min(t1, t)
+    return t0 <= t1
+
+
+def _graph_two_boxes_side_by_side():
+    """Два бокса с зазором по x; труба входит в ВЕРХНЮЮ грань правого —
+    то есть в грань, которая левому боксу не смотрит."""
+    nodes = [
+        {"id": "left", "type": "equipment", "centroid": [200.0, 120.0],
+         "bbox": [80.0, 90.0, 160.0, 150.0], "segmentation": None,
+         "class_id": 99, "class_name": "unknow", "degree": 1},
+        {"id": "right", "type": "equipment", "centroid": [200.0, 260.0],
+         "bbox": [220.0, 90.0, 300.0, 300.0], "segmentation": None,
+         "class_id": 99, "class_name": "unknow", "degree": 1},
+    ]
+    links = [
+        {"id": "e1", "source": "left", "target": "right",
+         "source_point": [120.0, 160.0],     # правая грань левого
+         "target_point": [90.0, 260.0],      # ВЕРХНЯЯ грань правого
+         "waypoints": []},
+    ]
+    return _wrap(nodes, links)
+
+
+def test_endpoint_drag_turns_far_end_to_face(qapp, tmp_path):
+    """Репро заказчика (graph_edited_fix.json, 2026-08-02): «вручную сменил
+    порт — диагональ идёт через чужой блок».
+
+    Протяжка двигает только ближний конец; если дальний остался на грани,
+    которая новому положению не смотрит, прямая между ними режет блок
+    насквозь. Судья это не ловит: through_box исключает свои концевые узлы.
+    На отпускании дальний конец обязан развернуться навстречу — а конец,
+    поставленный оператором, остаться бит-в-бит."""
+    from ui.editors.undo_manager import SnapshotCommand
+
+    ed = _editor(qapp, tmp_path, _graph_two_boxes_side_by_side())
+    key = ed.model.edge_key("left", "right")
+    e = ed.model.find_edge_data(key)
+    assert _seg_cuts_bbox(e["source_point"], e["target_point"],
+                          ed.nodes["right"]["bbox"]), \
+        "фикстура обязана воспроизводить дефект: труба режет правый бокс"
+
+    ed._dragging_endpoint = (key, "source")
+    ed._ep_drag_armed = True
+    ed._ep_on_port = False
+    ed._ep_snap_cmd = SnapshotCommand(ed.model, ed._redraw_all)
+    ed._ep_snap_cmd.execute()
+    ed._drag_endpoint_to(163.0, 140.0)       # тянем конец ниже по правой грани
+    chosen = list(e["source_point"])
+    ed._end_endpoint_drag()
+
+    assert e["source_point"] == chosen, "конец оператора обязан остаться на месте"
+    assert not _seg_cuts_bbox(e["source_point"], e["target_point"],
+                              ed.nodes["right"]["bbox"]), \
+        "труба всё ещё режет блок — дальний конец не развернулся"
+
+
+def test_endpoint_drag_far_end_untouched_without_drag(qapp, tmp_path):
+    """Разворот — только по факту жеста: простой клик по концу (без протяжки,
+    _ep_drag_armed=False) дальний конец не трогает."""
+    ed = _editor(qapp, tmp_path, _graph_two_boxes_side_by_side())
+    key = ed.model.edge_key("left", "right")
+    e = ed.model.find_edge_data(key)
+    far0 = list(e["target_point"])
+
+    ed._dragging_endpoint = (key, "source")
+    ed._ep_drag_armed = False                # клик, а не протяжка
+    ed._end_endpoint_drag()
+
+    assert e["target_point"] == far0, "без протяжки дальний конец неприкосновенен"

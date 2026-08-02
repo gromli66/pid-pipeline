@@ -29,9 +29,14 @@ GUARD = re.compile(
     r"|\"target_point\"|point_key|end_key|far_key|pk)\s*\]\s*=[^=]")
 
 EXPECTED = {
-    # 13 = делегаты движка + side-flip + batch-трансляции + endpoint-drag
+    # 14 = делегаты движка + side-flip + batch-трансляции + endpoint-drag
     # + откат гейта «не хуже входа» при разводе толщиной (2026-08-01)
-    "ui/editors/advanced_graph_editor.py": 13,
+    # + разворот ДАЛЬНЕГО конца после ручной смены порта (2026-08-02,
+    #   _reseat_far_end_after_endpoint_drag: репро «диагональ через блок» —
+    #   протяжка двигала только ближний конец, дальний оставался на грани,
+    #   которая новому положению не смотрит; запись идёт через движок
+    #   _seat_end_ported, своей геометрии не изобретает)
+    "ui/editors/advanced_graph_editor.py": 14,
     "ui/editors/commands/advanced_commands.py": 6,
     "ui/editors/contour_editor.py": 2,
     "ui/editors/simple_graph_editor.py": 4,
