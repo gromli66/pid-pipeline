@@ -2279,31 +2279,51 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                                                   edge['target']))
         prev_routable = self._drag_routable_edges
         prev_ctx = self._drag_route_ctx
+        prev_ses = self._avoid_session
         self._drag_routable_edges = auto_keys
         self._drag_route_ctx = self._build_drag_route_ctx({node_id})
         self._amnesty_cache = {}
+        # Этап B: мини-жест ведёт ТА ЖЕ оконная libavoid-сессия, что и drag.
+        # Иначе смена размеров/толщины оставалась бы на самописной лестнице и
+        # рождала класс дефектов («труба легла на бокс»), которого протяжка
+        # уже не делает: развод слотов косит стаб, лестница отказывает, гейт
+        # ниже откатывает ребро в прежний слот — трубы остаются в нахлёсте.
+        self._avoid_session = self._build_avoid_session({node_id})
+        work, pending = [], []
         try:
             for edge in self.edges_data:
                 if node_id not in (edge.get('source'), edge.get('target')):
                     continue
+                key = self.model.edge_key(edge['source'], edge['target'])
                 if edge.get('_manual_route'):
                     self._reproject_manual_endpoints(edge)
-                    self._update_edge_path(
-                        self.model.edge_key(edge['source'], edge['target']))
+                    self._update_edge_path(key)
                     continue
-                # ГЕЙТ «не хуже входа» (репро заказчика 2026-08-01:
-                # утолщение разводило слоты, а при отказе роутера труба
-                # становилась косой): ортогональное ребро НЕ ИМЕЕТ ПРАВА
-                # стать диагональю от развода. Лестница не нашла колено —
-                # полный откат ребра в прежний слот (нахлёст чернил
-                # честнее косой; его разведёт доводка сдвигом узла).
-                was_ortho = self._edge_is_ortho(edge)
-                bak = (list(edge.get('source_point') or []),
-                       list(edge.get('target_point') or []),
-                       [list(w) for w in edge.get('waypoints') or []],
-                       bool(edge.get('_auto_route')),
-                       bool(edge.get('_route_defect')))
-                self._reseat_moved_end(edge, node_id)
+                # снимок ДО посадки: гейт судит его же (см. ниже)
+                work.append((edge, key, self._edge_is_ortho(edge),
+                             (list(edge.get('source_point') or []),
+                              list(edge.get('target_point') or []),
+                              [list(w) for w in edge.get('waypoints') or []],
+                              bool(edge.get('_auto_route')),
+                              bool(edge.get('_route_defect')))))
+                if self._avoid_session is not None and key in auto_keys:
+                    alive = bool(edge.get('waypoints'))
+                    self._reseat_moved_end(edge, node_id, defer_route=True)
+                    pending.append((key, edge, alive, node_id))
+                else:
+                    self._reseat_moved_end(edge, node_id)
+            if pending:
+                # маршруты всех рёбер узла — ОДНОЙ транзакцией, с клиренсом и
+                # нуджингом (как кадр drag); отказ приёмки пер-ребро уводит
+                # это ребро на лестницу внутри _avoid_route_frame
+                self._avoid_route_frame({node_id}, pending)
+            # ГЕЙТ «не хуже входа» (репро заказчика 2026-08-01: утолщение
+            # разводило слоты, а при отказе роутера труба становилась косой):
+            # ортогональное ребро НЕ ИМЕЕТ ПРАВА стать диагональю от развода.
+            # Ни сессия, ни лестница не нашли колено — полный откат ребра в
+            # прежний слот (нахлёст чернил честнее косой). Гейт стоит ПОСЛЕ
+            # транзакции: до неё маршрута ещё нет и судить нечего.
+            for edge, key, was_ortho, bak in work:
                 if was_ortho and not self._edge_is_ortho(edge):
                     sp0, tp0, wp0, auto0, defect0 = bak
                     edge['source_point'] = sp0
@@ -2317,12 +2337,13 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
                         edge['_route_defect'] = True
                     else:
                         edge.pop('_route_defect', None)
-                    self._update_edge_path(
-                        self.model.edge_key(edge['source'], edge['target']))
+                    self._update_edge_path(key)
         finally:
             self._drag_routable_edges = prev_routable
             self._drag_route_ctx = prev_ctx
             self._amnesty_cache = {}
+            self._close_avoid_session()
+            self._avoid_session = prev_ses
 
     @staticmethod
     def _edge_is_ortho(edge_data: dict, tol: float = 1.0) -> bool:

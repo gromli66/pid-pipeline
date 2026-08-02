@@ -1256,11 +1256,18 @@ def _graph_two_straight_pipes():
     return _wrap(nodes, links)
 
 
-def test_width_change_gate_reverts_instead_of_diagonal(qapp, tmp_path):
+def test_width_change_gate_reverts_instead_of_diagonal(qapp, tmp_path,
+                                                       monkeypatch):
     """Гейт «не хуже входа» при разводе толщиной (репро заказчика:
     «утолщаю — разъезжаются, но одно ребро становится диагональным»):
-    вся лестница маршрутов отказала => ребро НЕ смеет стать косым —
-    полный откат в прежний слот (нахлёст чернил честнее косой)."""
+    когда маршрут не построил НИКТО — ребро НЕ смеет стать косым, полный
+    откат в прежний слот (нахлёст чернил честнее косой).
+
+    ПЕРЕОБЪЯВЛЕН на Этапе B: раньше хватало убить лестницу, теперь
+    мини-жест resize ведёт ещё и оконная libavoid-сессия — она бы этот
+    случай развела (это проверяет соседний тест). Чтобы судить ИМЕННО
+    гейт, глушим оба роутера: сессию через рычаг A/B, лестницу подменой."""
+    monkeypatch.setenv("PID_EDIT_AVOID", "0")       # сессии нет
     g = _graph_two_straight_pipes()
     ed = _editor(qapp, tmp_path, g)
     e1 = ed.model.find_edge_data(ed.model.edge_key("a", "c1"))
@@ -1280,7 +1287,41 @@ def test_width_change_gate_reverts_instead_of_diagonal(qapp, tmp_path):
     assert ed._edge_is_ortho(e1) and ed._edge_is_ortho(e2), \
         "ортогональное ребро стало косым от развода толщиной"
     assert e1["source_point"] == sp1 and e2["source_point"] == sp2, \
-        "при мёртвой лестнице ребро обязано остаться в прежнем слоте"
+        "когда маршрут не построил никто — ребро обязано остаться в слоте"
+
+
+def test_width_change_session_routes_where_ladder_failed(qapp, tmp_path):
+    """Этап B в мини-жесте resize: лестница мертва, но оконная сессия
+    строит маршрут — трубы РАЗЪЕЗЖАЮТСЯ по слотам и остаются
+    ортогональными, а не откатываются в нахлёст.
+
+    Это и есть смысл перевода resize на сессию: раньше здесь срабатывал
+    гейт и трубы оставались лежать друг на друге."""
+    import pytest as _pytest
+    from modules.graph.core import edit_avoid
+
+    if edit_avoid.load_binding() is None:
+        _pytest.skip("биндинг libavoid недоступен — сессии нет по построению")
+
+    g = _graph_two_straight_pipes()
+    ed = _editor(qapp, tmp_path, g)
+    e1 = ed.model.find_edge_data(ed.model.edge_key("a", "c1"))
+    e2 = ed.model.find_edge_data(ed.model.edge_key("a", "c2"))
+    sp1, sp2 = list(e1["source_point"]), list(e2["source_point"])
+
+    ed.set_edge_brush_size(16)
+    orig = ed._route_orthogonal
+    ed._route_orthogonal = lambda e, alive=False: False   # лестница мертва
+    try:
+        ed.apply_edge_style_at(ed.model.edge_key("a", "c1"), "size")
+        ed.apply_edge_style_at(ed.model.edge_key("a", "c2"), "size")
+    finally:
+        ed._route_orthogonal = orig
+
+    assert ed._edge_is_ortho(e1) and ed._edge_is_ortho(e2), \
+        "сессия обязана оставить рёбра ортогональными"
+    assert (e1["source_point"] != sp1) or (e2["source_point"] != sp2), \
+        "сессия построила маршрут — концы обязаны разъехаться по слотам"
 
 
 def test_width_change_spreads_with_bends_stays_ortho(qapp, tmp_path):
