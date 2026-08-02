@@ -227,8 +227,11 @@ class AdvancedGraphTab(SimpleGraphTab):
 
         self.btn_auto_fix = QPushButton("Авто-выравнивание")
         self.btn_auto_fix.setToolTip(
-            "Автоматически выровнять цепочки узлов по горизонтали и вертикали "
-            "и спрямить рёбра.\nCtrl+Z — отменить."
+            "Сгладить косые трубы и мелкие зигзаги после ручных правок.\n"
+            "Сначала трубе строится обход, потом подтягиваются изломы; "
+            "оборудование двигается только чуть-чуть и только если иначе\n"
+            "прямой не получить. Закреплённые вами точки входа не трогаются.\n"
+            "Ctrl+Z — отменить одним шагом."
         )
         self.btn_auto_fix.setStyleSheet(
             "QPushButton { background-color: #FF9800; color: white; font-weight: bold; }"
@@ -694,13 +697,20 @@ class AdvancedGraphTab(SimpleGraphTab):
         Замер §1.1 плана EDITOR_AFTER_LAYOUT: поверх раскладки автовыравнивание/
         оптимизация — регрессия на 5 из 7 графов корпуса. На фолбэк- и legacy-
         холстах (layout_applied=False или метки нет) кнопки работают как раньше.
+
+        2026-08-02: «Авто-выравнивание» ИЗ ЗАМКА ВЫВЕДЕНО — за кнопкой теперь
+        не прежний auto_fix, а Э4-сглаживание (`smooth_canvas`), которое как
+        раз и предназначено для холста после раскладки: адресно, под гейтом,
+        с откатом каждого хода. Замер по 19 холстам заказчика: косых 51 -> 12,
+        побочных ухудшений нет ни на одном файле. «Оптимизация» остаётся
+        запертой — её замер не переделывался.
         """
         from modules.graph.core import canvas_state
 
         locked = False
         if self._editor is not None:
             locked = canvas_state.has_layout(getattr(self._editor, "graph_data", None) or {})
-        for btn in (self.btn_optimize_edge, self.btn_optimize_all, self.btn_auto_fix):
+        for btn in (self.btn_optimize_edge, self.btn_optimize_all):
             if locked:
                 if btn.isEnabled():
                     btn.setProperty("_pre_lock_tooltip", btn.toolTip())
@@ -879,14 +889,31 @@ class AdvancedGraphTab(SimpleGraphTab):
 
     @Slot()
     def _auto_fix(self):
-        """Запустить Auto-Fix."""
-        if self._editor and hasattr(self._editor, "auto_fix"):
-            try:
-                self._editor.auto_fix()
-                # Вернуть фокус редактору, иначе Ctrl+Z не дойдёт и не отменит Auto-Fix
-                self._editor.setFocus()
-            except Exception as exc:
-                import traceback
-                traceback.print_exc()
-                from PySide6.QtWidgets import QMessageBox
-                QMessageBox.warning(self, "Auto-Fix Error", str(exc))
+        """Кнопка «Авто-выравнивание» = Э4, адресное СГЛАЖИВАНИЕ.
+
+        Решение заказчика 2026-08-02: «это вместо автовыравнивания кнопки».
+        Прежний auto_fix_graph (медианное выравнивание цепочек по центроидам,
+        без единой проверки коллизий) остаётся только на фолбэк-холстах без
+        раскладки — там он в родной среде; на холсте после раскладки он давал
+        регрессию на 5 листах корпуса из 7 (замер §1.1 плана), из-за чего и
+        был заперт замком Э4-00. Сглаживание работает иначе: адресно по
+        дефектам судьи, лестницей от бесплатных лекарств к сдвигу узла,
+        каждый ход под гейтом с откатом (modules/graph/core/edit_smooth).
+        """
+        if not self._editor:
+            return
+        try:
+            from modules.graph.core import canvas_state
+
+            if canvas_state.has_layout(
+                    getattr(self._editor, "graph_data", None) or {}):
+                self._editor.smooth_canvas()
+            else:
+                self._editor.auto_fix()      # фолбэк-холст: родная среда
+            # Вернуть фокус редактору, иначе Ctrl+Z не дойдёт и не отменит
+            self._editor.setFocus()
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Авто-выравнивание", str(exc))

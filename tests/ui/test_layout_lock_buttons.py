@@ -78,7 +78,12 @@ def _make_tab(monkeypatch, tmp_path, graph):
 
 
 def _lock_buttons(tab):
-    return (tab.btn_optimize_edge, tab.btn_optimize_all, tab.btn_auto_fix)
+    """Кнопки, которые замок Э4-00 выключает после раскладки.
+
+    2026-08-02: «Авто-выравнивание» ИЗ ЗАМКА ВЫВЕДЕНО — за ней теперь не
+    прежний auto_fix (он и давал регрессию), а Э4-сглаживание, которое как
+    раз для холста после раскладки и предназначено."""
+    return (tab.btn_optimize_edge, tab.btn_optimize_all)
 
 
 def test_buttons_locked_after_layout(qapp, monkeypatch, tmp_path):
@@ -151,3 +156,33 @@ def test_unlock_restores_original_tooltip(qapp, monkeypatch, tmp_path):
     for btn in _lock_buttons(tab):
         assert btn.isEnabled()
         assert btn.toolTip() == orig_tooltips[btn]
+
+
+def test_autofix_button_free_after_layout(qapp, monkeypatch, tmp_path):
+    """«Авто-выравнивание» после раскладки ДОСТУПНО и ведёт в Э4-сглаживание
+    (решение заказчика 2026-08-02: «это вместо автовыравнивания кнопки»)."""
+    tab = _make_tab(monkeypatch, tmp_path, _graph(layout_applied=True))
+    assert tab.btn_auto_fix.isEnabled(), \
+        "кнопка сглаживания обязана работать на холсте после раскладки"
+
+    called = []
+    monkeypatch.setattr(tab._editor, "smooth_canvas",
+                        lambda *a, **k: called.append("smooth") or {})
+    monkeypatch.setattr(tab._editor, "auto_fix",
+                        lambda *a, **k: called.append("autofix"))
+    tab._auto_fix()
+    assert called == ["smooth"], f"после раскладки ожидалось сглаживание: {called}"
+
+
+def test_autofix_button_keeps_legacy_on_fallback_canvas(qapp, monkeypatch,
+                                                        tmp_path):
+    """На фолбэк-холсте (раскладка не запускалась) кнопка по-прежнему зовёт
+    прежний auto_fix — там он в родной среде."""
+    tab = _make_tab(monkeypatch, tmp_path, _graph(layout_applied=False))
+    called = []
+    monkeypatch.setattr(tab._editor, "smooth_canvas",
+                        lambda *a, **k: called.append("smooth") or {})
+    monkeypatch.setattr(tab._editor, "auto_fix",
+                        lambda *a, **k: called.append("autofix"))
+    tab._auto_fix()
+    assert called == ["autofix"], f"на фолбэк-холсте ожидался auto_fix: {called}"
