@@ -767,3 +767,67 @@ def test_pinned_entry_survives_neighbour_drag(qapp, tmp_path):
 
     assert e["source_point"] == pytest.approx(pinned), \
         f"якорь входа сорвало переносом соседа: {e['source_point']} != {pinned}"
+
+
+# =====================================================================
+# Э4: сглаживание в редакторе (кнопка) — связка с реальной лестницей
+# =====================================================================
+
+def test_smooth_canvas_fixes_diagonal_and_undo_is_bytewise(qapp, tmp_path):
+    """Сглаживание убирает диагональ реальной лестницей редактора, а Ctrl+Z
+    возвращает холст побайтово (вся операция — ОДИН шаг undo)."""
+    import copy as _copy
+
+    nodes = [
+        {"id": "low", "type": "equipment", "centroid": [400.0, 220.0],
+         "bbox": [200.0, 380.0, 240.0, 420.0], "segmentation": None,
+         "class_id": 99, "class_name": "unknow", "degree": 1},
+        {"id": "high", "type": "equipment", "centroid": [120.0, 260.0],
+         "bbox": [240.0, 100.0, 280.0, 140.0], "segmentation": None,
+         "class_id": 99, "class_name": "unknow", "degree": 1},
+        {"id": "blk", "type": "equipment", "centroid": [250.0, 220.0],
+         "bbox": [190.0, 230.0, 250.0, 270.0], "segmentation": None,
+         "class_id": 99, "class_name": "unknow", "degree": 0},
+    ]
+    links = [{"id": "e1", "source": "low", "target": "high",
+              "source_point": [380.0, 220.0], "target_point": [140.0, 260.0],
+              "waypoints": []}]
+    ed = _editor(qapp, tmp_path, _wrap(nodes, links))
+    e = ed.model.find_edge_data(ed.model.edge_key("low", "high"))
+    before = _copy.deepcopy(dict(e))
+    assert not ed._edge_is_ortho(e), "фикстура обязана начинаться с диагонали"
+
+    st = ed.smooth_canvas()
+
+    assert ed._edge_is_ortho(e), f"диагональ не сглажена: {st}"
+    assert sum(st[k] for k in ("колено", "излом", "скольжение",
+                               "коннектор", "узел")) >= 1
+
+    ed.undo_mgr.undo()
+    e2 = ed.model.find_edge_data(ed.model.edge_key("low", "high"))
+    assert e2["source_point"] == before["source_point"]
+    assert e2["target_point"] == before["target_point"]
+    assert (e2.get("waypoints") or []) == (before.get("waypoints") or []), \
+        "одно Ctrl+Z обязано вернуть холст как был"
+
+
+def test_smooth_canvas_keeps_anchor(qapp, tmp_path):
+    """Сглаживание не срывает вход, закреплённый оператором."""
+    from ui.editors.undo_manager import SnapshotCommand
+
+    ed = _editor(qapp, tmp_path, _graph_pipe_past_obstacles())
+    key = ed.model.edge_key("low", "high")
+    e = ed.model.find_edge_data(key)
+    ed._dragging_endpoint = (key, "source")
+    ed._ep_drag_armed = True
+    ed._ep_on_port = False
+    ed._ep_snap_cmd = SnapshotCommand(ed.model, ed._redraw_all)
+    ed._ep_snap_cmd.execute()
+    ed._drag_endpoint_to(198.0, 400.0)
+    ed._end_endpoint_drag()
+    pinned = list(e["source_point"])
+
+    ed.smooth_canvas()
+
+    assert e["source_point"] == pytest.approx(pinned), \
+        f"якорь сорван сглаживанием: {e['source_point']} != {pinned}"

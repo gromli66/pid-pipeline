@@ -855,6 +855,65 @@ class AdvancedGraphEditor(OcrLayerMixin, ResidualLayerMixin, SimpleGraphEditor):
         self.update_statistics()
         return optimized
 
+    def smooth_canvas(self, budget=None, allow_node_shift=True) -> dict:
+        """Э4: адресное сглаживание после ручных правок.
+
+        Решение заказчика 2026-08-02: сгладить мелкие зигзаги и диагонали;
+        двигать оборудование «можно, но ограниченно». Алгоритм и пороги —
+        `modules/graph/core/edit_smooth` (там же замеры, которыми они
+        выбраны). Здесь только связка: движку отдаются РЕАЛЬНАЯ лестница
+        маршрутов редактора и мини-жест пересадки, чтобы своей геометрии
+        он не изобретал.
+
+        Один шаг undo на всю операцию (SnapshotCommand): оператор жмёт
+        кнопку — и одним Ctrl+Z возвращает лист как был.
+        """
+        from modules.graph.core import edit_smooth
+        from ui.editors.undo_manager import SnapshotCommand
+
+        cmd = SnapshotCommand(self.model, self._redraw_all)
+        cmd.description = "Сглаживание"
+        cmd.execute()
+
+        def route_fn(edge_data):
+            key = self.model.edge_key(edge_data.get('source'),
+                                      edge_data.get('target'))
+            live = self.model.find_edge_data(key)
+            if live is None:
+                return False
+            ok = self._route_orthogonal(live)
+            self._update_edge_path(key)
+            return ok
+
+        prev_ctx, prev_routable = self._drag_route_ctx, self._drag_routable_edges
+        self._drag_route_ctx = None          # вне жеста: полный набор препятствий
+        self._drag_routable_edges = set()
+        self._amnesty_cache = {}
+        try:
+            stats = edit_smooth.smooth(
+                self.model.graph_data,
+                route_fn=route_fn,
+                reseat_fn=self._reseat_after_resize,
+                budget=edit_smooth.BUDGET if budget is None else float(budget),
+                allow_node_shift=allow_node_shift,
+            )
+        finally:
+            self._drag_route_ctx = prev_ctx
+            self._drag_routable_edges = prev_routable
+            self._amnesty_cache = {}
+
+        self.model.rebuild_edge_data_index()
+        self._redraw_all()
+        cmd.finalize()
+        self.undo_mgr.push_executed(cmd)
+        self.update_status(
+            f"Сглаживание: колен {stats['колено']}, изломов "
+            f"{stats['излом']}, скольжений {stats['скольжение']}, "
+            f"коннекторов {stats['коннектор']}, узлов {stats['узел']}; "
+            f"осталось {stats['осталось']}")
+        self.update_statistics()
+        return stats
+
     def get_perpendicularity_stats(self) -> dict:
         """Статистика перпендикулярности."""
         total = len(self.edge_perp_scores)
