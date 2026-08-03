@@ -465,7 +465,11 @@ def _breaks_anchor(graph, node_id):
     якорем (якорь локален, едет с узлом) — но НЕ допустим, если якорь
     принадлежит ребру, второй конец которого мы тоже двигаем."""
     n = nodes_by_id(graph).get(node_id)
-    return bool(n and n.get("_ports"))
+    if not n:
+        return False
+    if n.get("_ports"):                    # ЛЕГАСИ до миграции Э5b
+        return True
+    return any(port_model.pinned_on_node(n, e) for e in g_edges(graph))
 
 
 # ── судья и гейт ───────────────────────────────────────────────────────

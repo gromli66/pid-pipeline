@@ -225,28 +225,44 @@ def add_manual_port(node, x, y, edge_data=None):
     return entry
 
 
+def _pin_entry(cx, cy, px, py):
+    """Кортеж порта (x, y, nx, ny, True) из абсолютной точки пина."""
+    dx, dy = px - cx, py - cy
+    length = math.hypot(dx, dy)
+    if length <= 1e-9:
+        return (px, py, 0.0, 0.0, True)
+    return (px, py, dx / length, dy / length, True)
+
+
 def pinned_port(node, edge_data):
     """Порт-ЯКОРЬ этого ребра (x, y, nx, ny, True) или None.
 
     Якорь безусловен: он не участвует в конкурсе портов, не отбрасывается
     гистерезисом при уводе оси и не теряется на контурных узлах — оператор
     поставил вход сюда, значит вход здесь. Хранится в локальных координатах
-    от центроида, поэтому едет с узлом и переживает resize
-    (`rescale_manual_ports`)."""
-    ref = edge_ref(edge_data)
-    if ref is None or not node:
+    от центроида, поэтому едет с узлом и переживает resize.
+
+    Источник (Э5, модель «пин на ребре»): edge['pin_source'|'pin_target']
+    конца, сидящего на этом узле. Легаси node['_ports'] с владельцем-парой
+    читается ДО миграции открытия (Э5b) — новые записи туда не делаются."""
+    if not node or not edge_data:
         return None
     cx, cy = _node_cxy(node)
+    pin = pinned_on_node(node, edge_data)
+    if pin is not None:
+        return _pin_entry(cx, cy,
+                          cx + float(pin.get("dx", 0.0)),
+                          cy + float(pin.get("dy", 0.0)))
+    # ЛЕГАСИ (до миграции Э5b): якорь в node['_ports'] по паре узлов.
+    ref = edge_ref(edge_data)
+    if ref is None:
+        return None
     for p in node.get("_ports") or []:
         if p.get("edge") != ref:
             continue
-        px = cx + float(p.get("dx", 0.0))
-        py = cy + float(p.get("dy", 0.0))
-        dx, dy = px - cx, py - cy
-        length = math.hypot(dx, dy)
-        if length <= 1e-9:
-            return (px, py, 0.0, 0.0, True)
-        return (px, py, dx / length, dy / length, True)
+        return _pin_entry(cx, cy,
+                          cx + float(p.get("dx", 0.0)),
+                          cy + float(p.get("dy", 0.0)))
     return None
 
 
@@ -265,6 +281,93 @@ def rescale_manual_ports(node, old_bbox, new_bbox):
     for p in ports:
         p["dx"] = float(p.get("dx", 0.0)) * sx
         p["dy"] = float(p.get("dy", 0.0)) * sy
+
+
+# ────────────────────── пины на ребре (Э5) ──────────────────────
+# Модель «пин входа — свойство КОНЦА РЕБРА» (утверждена 2026-08-03):
+# edge['pin_source'|'pin_target'] = {'dx','dy'} — локальное смещение (x, y)
+# от центроида узла этого конца: пин едет с узлом и переживает resize
+# (rescale_edge_pins). Пин на КОННЕКТОРЕ запрещён — конец коннектора
+# всегда центроид. Ключи pin_* не входят в canvas_state._EDGE_KEYS —
+# sha проекции холста не меняется; в FXML не текут.
+
+PIN_KEYS = {"source": "pin_source", "target": "pin_target"}
+
+
+def pin_role(node, edge_data):
+    """Роль конца ребра на этом узле: 'source' | 'target' | None."""
+    if not node or not edge_data:
+        return None
+    nid = node.get("id")
+    if nid is None:
+        return None
+    if edge_data.get("source") == nid:
+        return "source"
+    if edge_data.get("target") == nid:
+        return "target"
+    return None
+
+
+def edge_pin(edge_data, role):
+    """Запись пина конца ребра ({'dx','dy'}) или None."""
+    if not edge_data or role not in PIN_KEYS:
+        return None
+    pin = edge_data.get(PIN_KEYS[role])
+    if isinstance(pin, dict) and "dx" in pin and "dy" in pin:
+        return pin
+    return None
+
+
+def pinned_on_node(node, edge_data):
+    """Пин конца edge_data, сидящего на ЭТОМ узле, или None."""
+    role = pin_role(node, edge_data)
+    return edge_pin(edge_data, role) if role else None
+
+
+def set_edge_pin(node, edge_data, role, x, y):
+    """Закрепить вход конца ребра в точке (x, y): {'dx','dy'} от центроида.
+
+    Повторный вызов перезаписывает пин (оператор двигает вход много раз за
+    жест). На КОННЕКТОРЕ пин не создаётся (конец == центроид) — None."""
+    from modules.graph.core.graph_access import is_connector
+
+    if role not in PIN_KEYS or not node or edge_data is None:
+        return None
+    if is_connector(node):
+        return None
+    cx, cy = _node_cxy(node)
+    pin = {"dx": float(x - cx), "dy": float(y - cy)}
+    edge_data[PIN_KEYS[role]] = pin
+    return pin
+
+
+def clear_edge_pin(edge_data, role):
+    """Отвязать вход: удалить пин конца. True, если пин был."""
+    if edge_data is None or role not in PIN_KEYS:
+        return False
+    return edge_data.pop(PIN_KEYS[role], None) is not None
+
+
+def rescale_edge_pins(node, edges, old_bbox, new_bbox):
+    """Resize узла: смещения пинов ИНЦИДЕНТНЫХ рёбер масштабируются с рамкой
+    (аналог rescale_manual_ports для модели «пин на ребре»)."""
+    if not node or not old_bbox or not new_bbox \
+            or len(old_bbox) != 4 or len(new_bbox) != 4:
+        return
+    ow, oh = old_bbox[2] - old_bbox[0], old_bbox[3] - old_bbox[1]
+    nw, nh = new_bbox[2] - new_bbox[0], new_bbox[3] - new_bbox[1]
+    if ow <= 0 or oh <= 0:
+        return
+    sx, sy = nw / ow, nh / oh
+    nid = node.get("id")
+    for e in edges or []:
+        for role in PIN_KEYS:
+            if e.get(role) != nid:
+                continue
+            pin = edge_pin(e, role)
+            if pin is not None:
+                pin["dx"] = float(pin["dx"]) * sx
+                pin["dy"] = float(pin["dy"]) * sy
 
 
 def side_slots(node, side, k, rect=None, pitch=None):

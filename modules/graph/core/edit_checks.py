@@ -494,8 +494,9 @@ def end_classes(graph, mid_tol: float = MID_TOL,
             if on_v and on_h:
                 res["corner"].append(item)
                 continue
-            if port_model.is_on_port(node, x, y, tol=port_tol) \
-                    and node.get("_ports"):
+            if port_model.pinned_on_node(node, e) is not None \
+                    or (port_model.is_on_port(node, x, y, tol=port_tol)
+                        and node.get("_ports")):
                 res["manual"].append(item)
                 continue
             if on_v:

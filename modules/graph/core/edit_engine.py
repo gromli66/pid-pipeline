@@ -143,8 +143,8 @@ def _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y,
         if p is not None and _port_side(rect, float(p[1]),
                                         float(p[0])) == side:
             taken.append(float(p[1]) if horiz else float(p[0]))
-        if ps[4]:
-            continue                       # сосед на ручном порту
+        if ps[4] or port_model.pinned_on_node(node, e):
+            continue              # сосед на ручном порту/пине ребра (Э5)
         if _NORMAL_SIDE.get((ps[2], ps[3])) != side:
             continue
         entries.append((float(refp[1]) if horiz else float(refp[0]),
@@ -209,7 +209,8 @@ def _poly_adjust(node, node_edges, edge_data, role, px, py, ref_x, ref_y):
         entries = []
         widths = [_ink_w(edge_data)]
         for e in node_edges or []:
-            if e is edge_data or e.get("_manual_route"):
+            if e is edge_data or e.get("_manual_route") \
+                    or port_model.pinned_on_node(node, e):
                 continue
             if (e.get("source") or e.get("from")) == nid:
                 end_key = "source_point"
