@@ -232,7 +232,9 @@ async def rollback_diagram(
     if ArtifactType.GRAPH_CANVAS in art_types:
         from app.services.storage import StorageService
         graph_dir = StorageService().base_path / str(uid) / "graph"
-        # residual_defects.json производен от холста — сносится вместе с ним.
+        # residual_defects.json — ЛЕГАСИ (подсветка очагов вырезана
+        # 2026-08-02): больше не производится, но на старых установках лежит
+        # рядом с холстом и сносится вместе с ним.
         for fname in ("graph_canvas.json", "residual_defects.json"):
             f = graph_dir / fname
             try:

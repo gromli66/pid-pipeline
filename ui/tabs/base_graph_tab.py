@@ -590,7 +590,6 @@ class _GraphArtifactDownloader(QObject):
         if self.want_canvas:
             optional = optional + [
                 ("graph_canvas", "graph_canvas.json"),
-                ("residual_defects", "residual_defects.json"),
             ]
 
         try:
@@ -792,7 +791,6 @@ class BaseGraphTab(AppearanceMixin, QWidget):
         try:
             # Остаток раскладки (Э12): показывает только AdvancedGraphTab,
             # путь сохраняется здесь — artifacts дальше не передаются.
-            self._residual_path = artifacts.get("residual_defects")
             editor = self._create_editor()
             editor.status_callback = lambda msg: self.status_label.setText(msg)
             editor.stats_callback = self._update_stats

@@ -114,7 +114,6 @@ def task_run_layout(self, diagram_uid: str, stage_id: int = None,
     from app.models.stage import ProcessingStage, StageType
     from modules.graph.core import canvas_state
     from modules.graph.core.layout import LayoutParams, layout
-    from modules.graph.core.layout.residual import collect_residual
     from modules.graph.core.canvas_input import to_canvas
 
     storage_path = Path(os.getenv("STORAGE_PATH", "./storage/diagrams"))
@@ -165,8 +164,6 @@ def task_run_layout(self, diagram_uid: str, stage_id: int = None,
             graph, _transform = to_canvas(validated)
 
         with obs.step("compute", logger):
-            # stages["orig"] — снимок входа раскладки; по нему residual (Э12)
-            # считает легальность наложений (детекция ещё на своих местах).
             layout_stages = {}
             graph, stats = layout(graph, LayoutParams(), stages=layout_stages)
             logger.info("[%s] раскладка: дефектов %s -> %s, узлов %d",
@@ -224,42 +221,6 @@ def task_run_layout(self, diagram_uid: str, stage_id: int = None,
         # PG-транзакцию в аварийном состоянии перед complete_stage.
         db.commit()
 
-        # ─── Э12: остаток — оператору адресно ───
-        # Строго ПОСЛЕ обеих защит и записи холста: файл-сирота при
-        # выброшенном результате невозможен. Ошибка здесь раскладку не валит:
-        # холст уже записан, подсветка — вспомогательный артефакт.
-        try:
-            residual = collect_residual(graph, layout_stages["orig"])
-            # Метка холста, для которого посчитан остаток: вкладка сверяет её
-            # с загруженным холстом и не подсвечивает устаревшее.
-            residual["canvas_sha"] = canvas_state.graph_projection_sha(graph)
-            residual_path = graph_dir / "residual_defects.json"
-            rsize = _atomic_write_json(
-                residual_path, json.dumps(residual, ensure_ascii=False))
-            rrel = str(residual_path.relative_to(storage_path))
-            rold = db.query(Artifact).filter(
-                Artifact.diagram_uid == diagram_uid,
-                Artifact.artifact_type == ArtifactType.RESIDUAL_DEFECTS,
-            ).first()
-            if rold:
-                rold.file_path = rrel
-                rold.file_size = rsize
-            else:
-                db.add(Artifact(
-                    diagram_uid=diagram_uid,
-                    artifact_type=ArtifactType.RESIDUAL_DEFECTS,
-                    file_path=rrel,
-                    file_size=rsize,
-                    mime_type="application/json",
-                ))
-            logger.info("[%s] остаток раскладки: %d очагов",
-                        diagram_uid, residual["total"])
-        except Exception as exc:  # noqa: BLE001 — подсветка не валит раскладку
-            # rollback обязателен: упавший запрос абортит PG-транзакцию, и без
-            # него итоговый db.commit() уронил бы задачу после записи холста.
-            db.rollback()
-            logger.exception("[%s] остаток раскладки не посчитан: %s",
-                             diagram_uid, exc)
 
         complete_stage(stage, {
             "defects_before": stats["defects_before"],
