@@ -15,8 +15,8 @@
 2. Покадровый зигзаг (именной кейс node_96/971, шаги 5px):
      python -X utf8 tools/drag_stress_probe.py graph_edited971.json --zigzag node_96
    На каждом кадре протяжки: (а) полные пути инцидентных рёбер строго
-   ортогональны (max_dev == 0), (б) авто-колени едут за узлом (waypoints
-   меняются между кадрами), (в) предпросмотр == итог (снимок последнего
+   ортогональны (max_dev == 0), (б) колени едут за узлом (Э5: waypoints —
+   кэш расчёта, флагов нет), (в) предпросмотр == итог (снимок последнего
    кадра байт-в-байт равен состоянию после отпускания).
 
 Рычаг A/B: --avoid off ставит PID_EDIT_AVOID=0 — жесты идут по самописной
@@ -50,12 +50,13 @@ def _judge_pairs(graph: dict) -> set:
 
 
 def _edge_proj(e: dict) -> tuple:
-    """Проекция ребра для сверки undo (геометрия + видимые флаги)."""
+    """Проекция ребра для сверки undo (геометрия + пины входов, Э5)."""
     return (e.get("source"), e.get("target"),
             tuple(e.get("source_point") or []),
             tuple(e.get("target_point") or []),
             tuple(tuple(w) for w in e.get("waypoints") or []),
-            bool(e.get("_auto_route")))
+            tuple(sorted((e.get("pin_source") or {}).items())),
+            tuple(sorted((e.get("pin_target") or {}).items())))
 
 
 def _graph_proj(graph: dict) -> tuple:
@@ -69,10 +70,15 @@ def _graph_proj(graph: dict) -> tuple:
 
 
 def _make_editor(graph_file: Path):
-    """Headless-редактор на КОПИИ файла корпуса (canvas-режим)."""
+    """Headless-редактор на КОПИИ файла корпуса (canvas-режим).
+
+    Э5: копия сперва прогоняется миграцией открытия (_reseat_canvas_
+    endpoints — легаси _ports/_manual_route/_auto_route -> пины) — тот же
+    путь, что у боевой вкладки; стенд меряет мигрированные данные."""
     from PySide6.QtWidgets import QApplication
     from PySide6.QtGui import QImage, QColor
     from ui.editors.advanced_graph_editor import AdvancedGraphEditor
+    from ui.tabs.base_graph_tab import _reseat_canvas_endpoints
 
     QApplication.instance() or QApplication([])
     graph = json.loads(graph_file.read_text(encoding="utf-8"))
@@ -83,6 +89,7 @@ def _make_editor(graph_file: Path):
     img.save(str(tmp / "raster.png"))
     gp = tmp / graph_file.name
     gp.write_text(json.dumps(graph), encoding="utf-8")
+    _reseat_canvas_endpoints(gp)
 
     ed = AdvancedGraphEditor()
     ed._canvas_mode = True   # как вкладка: флаг ДО load_data
@@ -91,14 +98,13 @@ def _make_editor(graph_file: Path):
 
 
 def _flags_snapshot(links: list) -> list:
-    return [(bool(e.get("_route_defect")), bool(e.get("_auto_route")))
-            for e in links]
+    return [bool(e.get("_route_defect")) for e in links]
 
 
 def _restore_flags(links: list, snap: list) -> None:
     """_route_defect не входит в undo-снапшот drag (не в sha) — вернуть
     руками, чтобы жесты не пятнали друг друга в стрессе."""
-    for e, (defect, _auto) in zip(links, snap):
+    for e, defect in zip(links, snap):
         if defect:
             e["_route_defect"] = True
         else:
@@ -132,13 +138,11 @@ def run_stress(ed, step: float) -> dict:
         cy, cx = node["centroid"]                    # centroid = [y, x]!
         for dx, dy in ((step, 0.0), (-step, 0.0), (0.0, step), (0.0, -step)):
             flags = _flags_snapshot(graph["links"])
-            # рёбра, которые жест поведёт сам (правило редактора
-            # _drag_routable_edges, start_drag_node)
+            # рёбра, которые жест ведёт сам, — ВСЕ инцидентные (Э5:
+            # правило редактора _drag_routable_edges, start_drag_node)
             live_ids = {
                 e.get("id") for e in graph["links"]
-                if nid in (e.get("source"), e.get("target"))
-                and not e.get("_manual_route")
-                and (not e.get("waypoints") or e.get("_auto_route"))}
+                if nid in (e.get("source"), e.get("target"))}
             t0 = time.perf_counter()
             ed.start_drag_node(nid)
             ed.drag_node_to(cx + dx, cy + dy)        # drag ждёт (x, y)
@@ -207,9 +211,7 @@ def run_zigzag(ed, nid: str, step: float = 5.0, frames: int = 6) -> dict:
         ed.drag_node_to(x, cy)
         max_dev = max(max_dev, dev())
         cur_wps = wps_snap()
-        had_auto = any(e.get("_auto_route") and (e.get("waypoints") or [])
-                       for e in incident)
-        if had_auto:
+        if any((e.get("waypoints") or []) for e in incident):
             knees_frames += 1
             if cur_wps != prev_wps:
                 knees_moved += 1

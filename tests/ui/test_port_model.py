@@ -376,6 +376,77 @@ def test_manual_port_survives_resize_undo_bytewise(qapp, tmp_path):
     assert ed.model.find_edge_data(key)["pin_source"] != pin_before
 
 
+def test_endpoint_drag_never_pins_connector(qapp, tmp_path):
+    """Э5: пин на КОННЕКТОРЕ запрещён — конец коннектора всегда центроид.
+
+    Протяжка конца К коннектору дальше snap-порога от центроида: пин не
+    рождается (set_edge_pin гейтит is_connector), конец сажается движком
+    в центроид."""
+    g = _graph_box_conn_small()
+    ed = _editor(qapp, tmp_path, g)
+    key = ed.model.edge_key("box", "conn")
+
+    # (330, 215): 33px от центроида коннектора (300, 200) — снапа нет
+    _drop_endpoint(ed, key, "target", 330.0, 215.0)
+
+    e = ed.model.find_edge_data(key)
+    assert "pin_target" not in e, "пин на коннекторе запрещён"
+    assert e["target_point"] == [200.0, 300.0], \
+        "конец коннектора обязан вернуться в центроид"
+
+
+def test_unpin_endpoint_returns_end_to_port_contest(qapp, tmp_path):
+    """Э5: «отвязать вход» — пин снят, конец пересаживается общим
+    конкурсом (мини-жест); undo возвращает и пин, и точку."""
+    g = _graph_box_conn_small()
+    ed = _editor(qapp, tmp_path, g)
+    key = ed.model.edge_key("box", "conn")
+    _drop_endpoint(ed, key, "source", 165.0, 225.0)
+    e = ed.model.find_edge_data(key)
+    assert e.get("pin_source") == {"dx": 40.0, "dy": 25.0}
+    pinned_sp = list(e["source_point"])
+
+    assert ed._unpin_endpoint(key, "source") is True
+    e = ed.model.find_edge_data(key)
+    assert "pin_source" not in e, "пин обязан быть снят"
+    assert e["source_point"] == [200.0, 160.0], \
+        "конец обязан пересесть общим конкурсом (порт на общей оси)"
+
+    ed.undo()
+    e = ed.model.find_edge_data(key)
+    assert e.get("pin_source") == {"dx": 40.0, "dy": 25.0}, \
+        "undo обязан вернуть пин"
+    assert e["source_point"] == pinned_sp, "undo обязан вернуть точку"
+    # повторный unpin несуществующего пина — no-op
+    ed.redo()
+    assert ed._unpin_endpoint(key, "source") is False
+
+
+def test_pin_dies_with_edge_and_is_not_inherited(qapp, tmp_path):
+    """Э5: пин живёт В РЕБРЕ — удаление ребра уносит пин; новое ребро
+    между той же парой узлов чужого пина НЕ наследует (регресс к
+    хранилищу с ключом-парой узлов, находка аудита 2026-08-03)."""
+    from ui.editors import port_model
+
+    g = _graph_box_conn_small()
+    ed = _editor(qapp, tmp_path, g)
+    key = ed.model.edge_key("box", "conn")
+    _drop_endpoint(ed, key, "source", 165.0, 225.0)
+    assert ed.model.find_edge_data(key).get("pin_source")
+
+    ed.model.remove_edge(key)
+    assert ed.model.find_edge_data(key) is None
+
+    new_e = ed.model.create_edge_data("box", "conn")
+    ed.model.add_edge("box", "conn", new_e)
+    e = ed.model.find_edge_data(key)
+    assert e is not None
+    assert "pin_source" not in e and "pin_target" not in e, \
+        "новое ребро унаследовало чужой пин"
+    assert port_model.pinned_port(ed.model.nodes["box"], e) is None, \
+        "pinned_port не имеет права найти якорь для нового ребра"
+
+
 # =====================================================================
 # (4) Полигон без скина: порты на прямых участках контура
 # =====================================================================
