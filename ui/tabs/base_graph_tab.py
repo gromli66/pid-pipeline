@@ -586,7 +586,6 @@ class _GraphArtifactDownloader(QObject):
             ("coco_validated", "coco_validated.json"),
         ]
         # WYSIWYG-вкладка: свой артефакт-холст, если он уже сохранялся,
-        # и остаток раскладки для подсветки очагов (Э12).
         if self.want_canvas:
             optional = optional + [
                 ("graph_canvas", "graph_canvas.json"),

@@ -537,7 +537,6 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         if hasattr(self, "_ocr_block_items"):
             self._ocr_block_items.clear()
             self._ocr_hl_restore = []
-        # Слой очагов остатка (Э12): item'ы сняты Base'ом, сбросить ссылки.
         # Призрак вставки не переживает перерисовку сцены (item'ы удалены).
         if getattr(self, "_paste_ghost", None) is not None:
             self._paste_ghost = None
@@ -552,7 +551,6 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         # OCR текст-блоки поверх графа (видимы только в состоянии 'ocr').
         if hasattr(self, "_ocr_block_items"):
             self.refresh_ocr_layer()
-        # Маркеры очагов остатка (Э12) — пересоздать поверх.
 
     def _after_statistics_update(self):
         """Обновить multi-select визуалы."""
@@ -1126,7 +1124,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
            нет; без клиренса — колено впритык лучше диагонали;
         3. совсем некуда → честная диагональ, но ПОМЕЧЕННАЯ
            (_route_defect=True — не в sha, FXML игнорирует): судья и
-           подсветка очагов видят её как несведённый маршрут, а не норму.
+           судья видит её как несведённый маршрут, а не норму.
         """
         if self._route_orthogonal_main(edge_data, alive):
             # финальный валидатор ПОВЕРХ главного роутера (репро 222222,
