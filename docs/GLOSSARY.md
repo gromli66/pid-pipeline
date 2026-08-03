@@ -36,7 +36,8 @@
 | **segmentation** | Полигон контура, flat list `[x1, y1, x2, y2, ...]` |
 | **ann_idx / ann_id** | ID COCO annotation — ключ связи между graph node и contour data |
 | **source_point / target_point** | Точки соединения ребра с узлами, формат `[y, x]` |
-| **waypoints** | Промежуточные точки ребра графа (формат `[[y1,x1], [y2,x2], ...]`), определяющие L-маршрут. Используются при рендеринге polyline и экспорте FXML |
+| **waypoints** | Промежуточные точки ребра графа (формат `[[y1,x1], [y2,x2], ...]`), определяющие L-маршрут. Используются при рендеринге polyline и экспорте FXML. В холсте «Ручной правки» — кэш последнего расчёта маршрута, не намерение оператора (любой жест вправе перестроить) |
+| **пин входа (pin_source / pin_target)** | Ключ ребра холста «Ручной правки» (модель «пин на ребре», 2026-08-03): `{'dx','dy'}` — локальное смещение **(x, y)** конца ребра от центроида узла; единственное персистентное намерение оператора, переживает undo/save/resize. Пин на коннекторе запрещён. API: `modules/graph/core/ports.py`; заменил легаси `_manual_route`/`_auto_route`/`node['_ports']` (до 2026-08-03) |
 | **node-link format** | JSON-формат представления графа: `{"nodes": [...], "edges": [...]}`. Каждый node содержит id, class_name, centroid, bbox; каждый edge — source, target, source_point, target_point, waypoints |
 | **contours_all** | Поле узла графа, содержащее множественные полигоны из contour_extractor (для drossel/voronka). Используется при генерации FXML как массив `<Polygon>` элементов |
 | **auto / manual_review** | Статус контура SAM2: `auto` — принят автоматически (confidence ≥ threshold), `manual_review` — требует ручной проверки оператором |

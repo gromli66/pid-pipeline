@@ -1,7 +1,7 @@
 # DATA_FORMATS.md — Форматы данных P&ID Pipeline
 
 **Аудитория:** DEV / ML
-**Версия:** 1.2
+**Версия:** 1.3
 **Обновлено:** 2026-08-03
 **Связанные документы:** [ARCHITECTURE.md](ARCHITECTURE.md), [STATUS_MACHINE.md](STATUS_MACHINE.md), [MODULES.md](MODULES.md)
 
@@ -93,7 +93,7 @@
 
 ## 3. Graph format
 
-Файлы: `graph.json` (автоматический), `graph_validated.json` (после валидации). Формат: NetworkX node-link.
+Файлы: `graph.json` (автоматический), `graph_validated.json` (после валидации). Формат: NetworkX node-link. Холст «Ручной правки» — `graph/graph_canvas.json` (и его локальные сейвы `graph_edited*.json`) — тот же node-link в системе холста 1920x1080 плюс ключи пинов у рёбер (см. «Пины входа» ниже).
 
 ### Верхний уровень
 
@@ -174,6 +174,19 @@
 | `waypoints` | `[[y, x], ...]` | — | Промежуточные точки (для L-routing в UI) |
 | `diameter_text` | string | — | Текст диаметра (`"Dv50"`, `"Dn100"`) — после OCR binding |
 | `diameter_value` | float | — | Числовое значение диаметра (для FXML strokeWidth) |
+
+### Пины входа (только холст «Ручной правки»)
+
+Модель «пин на ребре» (2026-08-03): единственное персистентное намерение оператора — пин входа. Встречается только в файлах холста (`graph/graph_canvas.json`, локальные сейвы `graph_edited*.json`).
+
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `pin_source` | `{"dx": float, "dy": float}` | Пин конца source: локальное смещение **(x, y)** от центроида узла-источника |
+| `pin_target` | `{"dx": float, "dy": float}` | Пин конца target: то же для узла-цели |
+
+Смещение едет с узлом и масштабируется при resize (`rescale_edge_pins`); на коннекторном конце пин запрещён (конец коннектора — всегда центроид). Посадка сажает конец в пин первее всего (`seat_end`); API — `modules/graph/core/ports.py`, секция «пины на ребре». Пины не входят в sha-проекцию холста (`graph_projection_sha`) и не экспортируются в FXML. `waypoints` в холсте — кэш последнего расчёта маршрута, не намерение.
+
+**Легаси до 2026-08-03** (мигрируются в пины один раз при открытии вкладки, `ui/tabs/base_graph_tab.py::_reseat_canvas_endpoints`): `edge["_manual_route"]`, `edge["_auto_route"]`, `node["_ports"]`. Серверная подпись `_auto_route` (`layout/avoid_router.py`) продолжает писаться в свежих холстах, но редактор её не читает и стирает.
 
 ---
 

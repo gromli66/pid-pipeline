@@ -1,7 +1,7 @@
 # UI_GUIDE.md — Руководство по UI приложения
 
 **Аудитория:** DEV  
-**Версия:** 1.2  
+**Версия:** 1.3  
 **Обновлено:** 2026-08-03  
 **Связанные документы:** ARCHITECTURE.md, STATUS_MACHINE.md, CODING_GUIDE.md, API.md
 
@@ -249,7 +249,8 @@ Signals: `confirmed()` — подтверждение завершения ва�
 
 - **Замок авто-инструментов.** На холсте с `layout_applied: true` (продукт авто-раскладки) кнопки «Оптимизировать», «Оптимизировать все» и «Авто-выравнивание» выключены с поясняющим тултипом (`_apply_layout_lock`); на фолбэк- и legacy-холстах работают как раньше.
 - **Очаги остатка раскладки** — вырезано 2026-08-02: кнопка «Очаги (N)», маркеры (`ResidualLayerMixin`) и панель (`ResidualPanel`) удалены из UI; артефакт `residual_defects.json` — легаси (см. DATA_FORMATS.md).
-- **Починка посадки концов.** При открытии актуального холста концы рёбер пересаживаются каноном `seating` (`ui/tabs/base_graph_tab.py::_reseat_canvas_endpoints`, канон — `modules/graph/core/pretransform.seat_edge_endpoints`); правится локальная temp-копия, на сервер починка уезжает обычным сохранением оператора.
+- **Починка посадки концов.** При открытии актуального холста концы рёбер пересаживаются каноном `seating` (`ui/tabs/base_graph_tab.py::_reseat_canvas_endpoints`, канон — `modules/graph/core/pretransform.seat_edge_endpoints`); правится локальная temp-копия, на сервер починка уезжает обычным сохранением оператора. Конец, закреплённый пином (см. §6.3), — вне канона: пин восстанавливается последним словом прогона.
+- **Миграция легаси-намерений (до 2026-08-03).** Там же, в `_reseat_canvas_endpoints`, старые хранилища ручных правок один раз переводятся в пины: `node['_ports']` с владельцем-парой → пины живых рёбер пары (записи без владельца, сироты без ребра и коннекторы — дроп с логом), `_manual_route` → пины обоих не-коннекторных концов (флаг снимается), `_auto_route` стирается — серверная подпись `avoid_router` продолжает писаться в свежих холстах, но редактором не читается (инертна).
 
 ### 5.6 ContourTab
 
@@ -352,6 +353,8 @@ Signal: `confirmed()` — без аргументов.
 | `drag_node` | `DragNodeHandler` | Ctrl+drag узла → `DragNodeCommand`, пересчёт рёбер |
 | `multi_select` | `MultiSelectHandler` | Ctrl+drag rect → select → drag group → `BatchDragCommand` |
 | `edit_waypoint` | `EditWaypointHandler` | Ctrl+Click/drag на waypoint → `MoveWaypointCommand` / `AddWaypointCommand` / `DeleteWaypointCommand` |
+
+**Пин входа (модель «пин на ребре», 2026-08-03).** Единственное персистентное намерение оператора — пин входа: `edge['pin_source'|'pin_target']` = `{'dx','dy'}`, локальное смещение **(x, y)** от центроида узла конца (едет с узлом, масштабируется при resize через `rescale_edge_pins`, переживает undo/save). API — `modules/graph/core/ports.py`, секция «пины на ребре» (`pin_role` / `edge_pin` / `pinned_on_node` / `set_edge_pin` / `clear_edge_pin` / `rescale_edge_pins`); `ui/editors/port_model.py` — тонкий реэкспорт. Посадка (`seat_end`, `modules/graph/core/edit_engine.py`) сажает конец в пин первее всего; пин на коннекторе запрещён — конец коннектора всегда центроид. Жесты (режим edit_waypoint): протяжка маркера конца ставит/двигает пин (конец липнет к портам); «отвязать вход» — ПКМ по маркеру конца; маркеры портов на время протяжки: голубые — кандидаты (производные, не хранятся), оранжевые — пины. Waypoints — кэш последнего расчёта маршрута: drag узла ведёт все инцидентные рёбра, любой жест вправе перестроить маршрут. Флаги `_manual_route`/`_auto_route` и якоря `node['_ports']` мертвы (до 2026-08-03, мигрируются при открытии — см. §5.5). Пины не входят в sha-проекцию холста (`graph_projection_sha`) и не текут в FXML.
 
 **Auto-fix** (`autofix_chains.py`): выравнивает узлы по ортогональным цепочкам. Union-Find для H- и V-цепочек, weighted median, clamp для equipment/connector, multi-pass до сходимости.
 
@@ -637,6 +640,8 @@ Singleton обёртка над `QSettings` (реестр Windows / `~/.config` 
 | Ctrl+drag на узле | Drag node (в режиме drag_node) |
 | Ctrl+drag rect | Multi-select (в режиме multi_select) |
 | Ctrl+Click на waypoint | Edit waypoint (в режиме edit_waypoint) |
+| Протяжка маркера конца ребра | Поставить/передвинуть пин входа (в режиме edit_waypoint, см. §6.3) |
+| ПКМ по маркеру конца ребра | «Отвязать вход» — снять пин (в режиме edit_waypoint) |
 
 ### 12.4 Mask editors
 

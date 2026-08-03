@@ -1,8 +1,8 @@
 # CODING_GUIDE.md — Паттерны и правила кода P&ID Pipeline
 
 **Аудитория:** DEV
-**Версия:** 1.1
-**Обновлено:** 2026-04-09
+**Версия:** 1.2
+**Обновлено:** 2026-08-03
 **Связанные документы:** ARCHITECTURE.md, DATA_FORMATS.md, API.md, GLOSSARY.md
 
 ---
@@ -63,11 +63,11 @@ BaseGraphEditor          — рендеринг, zoom, hit testing, selection, e
 
 - **Создание рёбер:** переопределяет `add_edge()` — концы садит КАНОН посадки `modules/graph/core/seating.reseat_edge` (Э1: коннектор → центроид, FIXED_SIZES-скин → граница content-rect, полигон → луч в контур, bbox → грань; тот же модуль, что сажает выход раскладки). Старые `connect_bbox_bbox`/… из `graph_geometry.py` в этом классе больше не используются — их единственный живой вызывающий `contour_editor.py` (растровые координаты, канон холста там неприменим)
 - **Edge building with waypoints:** `add_edge_with_waypoints()` — ручная прокладка ломаной (Ctrl+Click промежуточных точек)
-- **Optimize:** `optimize_edge()` — концы и ось от канона `seating` (Э1); `optimize_all_edges()` — batch; рёбра с `_manual_route` не пересаживаются
+- **Optimize:** `optimize_edge()` — концы и ось от канона `seating` (Э1); `optimize_all_edges()` — batch; конец с пином входа (`pin_source`/`pin_target`, API — `modules/graph/core/ports.py`) садится в пин первее всего; флаг `_manual_route` мёртв (до 2026-08-03, мигрируется в пины при открытии)
 - **Perpendicularity:** `edge_perp_scores` dict, `_before_edge_draw()` вычисляет score; неперпендикулярные рёбра — оранжевые, утолщённые
 - **Drag:** `start_drag_node()` / `drag_node_to()` / `end_drag_node()` — одиночный и batch (multi-select); `_batch_move_fast()` для группового drag без routing; `_recalculate_edge()` — посадка концов каноном `seating` (Э1) + маршрут `route_edge_v2`
 - **Multi-select:** `selected_nodes` + `selected_edges` sets; `toggle_select_node/edge()`; rubber band (Shift+ЛКМ); `batch_delete()` — snapshot-based undo
-- **Waypoints:** показ/скрытие маркеров; `find_waypoint_at()`, drag/add/delete waypoint; endpoint markers — drag endpoint'а переключает сторону bbox
+- **Waypoints:** показ/скрытие маркеров; `find_waypoint_at()`, drag/add/delete waypoint; waypoints — кэш последнего расчёта маршрута (любой жест вправе перестроить); endpoint markers — протяжка конца ставит/двигает пин входа (`set_edge_pin`), ПКМ по маркеру конца — «отвязать вход» (`clear_edge_pin`); см. UI_GUIDE.md §6.3
 - **Grid:** `toggle_grid()`, `snap_to_grid()`, `_compute_grid_size()` (по медиане ширины bbox'ов)
 - **Auto-fix:** `auto_fix()` → `auto_fix_graph()` — выравнивание узлов по H/V цепочкам, снимок SnapshotCommand
 - **KKS:** hover tooltip по bbox; `_open_kks_edit_dialog()` с нормализацией через `KksMatcher`; toggle KKS labels
@@ -684,6 +684,7 @@ overlay.get_draw_points()            # → list[(x, y)]
 | `segmentation` | flat `[x1, y1, x2, y2, ...]` | `[100, 200, 110, 210, ...]` | graph JSON |
 | `source_point` / `target_point` | `[y, x]` | `[300.0, 500.0]` | edge data |
 | `waypoints` | `list[[y, x], ...]` | `[[300, 500], [310, 510]]` | edge data |
+| `pin_source` / `pin_target` | `{"dx", "dy"}` — смещение **(x, y)** от центроида узла | `{"dx": 24.0, "dy": -8.0}` | edge data (холст «Ручной правки»), см. DATA_FORMATS.md §3 |
 | COCO `bbox` | `[x, y, w, h]` | `[480, 280, 40, 60]` | COCO JSON |
 
 **Ключевые правила:**
