@@ -539,8 +539,12 @@ def test_open_straightness_beats_port(tmp_path):
 
 
 def test_open_keeps_end_on_manual_port(tmp_path):
-    """Конец обычного (не _manual_route) ребра на РУЧНОМ порту узла —
-    открытие не срывает его канон-лучом."""
+    """ПЕРЕОБЪЯВЛЕН 2026-08-03 (модель «пин на ребре», решение Д4):
+    БЕЗВЛАДЕЛЬНЫЙ легаси-якорь node['_ports'] (старая «подсказка судье»)
+    при миграции отбрасывается — намерение оператора несут только пины
+    рёбер. Конец, державшийся таким портом, уходит в общий конкурс и
+    мигрирует на порт-кандидат; файл переписывается один раз,
+    второй прогон — no-op."""
     from ui.tabs.base_graph_tab import _reseat_canvas_endpoints
 
     nodes = [
@@ -555,10 +559,14 @@ def test_open_keeps_end_on_manual_port(tmp_path):
               "waypoints": []}]
     p = _open_canvas(tmp_path, nodes, links)
 
-    assert not _reseat_canvas_endpoints(p)
+    assert _reseat_canvas_endpoints(p)       # миграция: _ports удалены
     g = json.loads(p.read_text(encoding="utf-8"))
-    assert g["links"][0]["source_point"] == [115.0, 120.0], \
-        "reseat-при-открытии сорвал конец с ручного порта"
+    assert not any(n.get("_ports") for n in g["nodes"])
+    assert "pin_source" not in g["links"][0], \
+        "безвладельный якорь не превращается в пин (Д4: дроп)"
+    assert g["links"][0]["source_point"] == [100.0, 120.0], \
+        "конец ушёл в общий конкурс — порт-кандидат (центр правой грани)"
+    assert not _reseat_canvas_endpoints(p)   # идемпотентно
 
 
 def test_open_still_fixes_off_canon_ends(tmp_path):

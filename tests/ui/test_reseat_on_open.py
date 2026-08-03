@@ -67,10 +67,10 @@ def test_broken_file_is_skipped(tmp_path):
 
 
 def test_manual_route_migrates_to_anchor(tmp_path):
-    """ПЕРЕОБЪЯВЛЕН 2026-08-02 (решение заказчика: жест «оставить как
-    нарисовал» не нужен). Заморозка маршрута отменена, но точки оператора
-    не выбрасываются: при открытии они ПЕРЕВОДЯТСЯ В ЯКОРЯ (порты с
-    владельцем-ребром). Итог: геометрия концов та же, пометка снята,
+    """ПЕРЕОБЪЯВЛЕН 2026-08-03 (модель «пин на ребре»): заморозка маршрута
+    отменена (2026-08-02), и точки оператора теперь переводятся в ПИНЫ
+    КОНЦОВ РЕБРА (edge['pin_source'|'pin_target']), а не в якоря узла.
+    Итог: геометрия концов та же, пометка снята, узлы чисты от _ports,
     маршрут снова участвует в пересчёте, второй прогон — no-op."""
     from ui.tabs.base_graph_tab import _reseat_canvas_endpoints
 
@@ -79,17 +79,19 @@ def test_manual_route_migrates_to_anchor(tmp_path):
     g["links"][0]["_manual_route"] = True
     p.write_text(json.dumps(g), encoding="utf-8")
 
-    assert _reseat_canvas_endpoints(p)        # миграция: заморозка -> якорь
+    assert _reseat_canvas_endpoints(p)        # миграция: заморозка -> пин
     g2 = json.loads(p.read_text(encoding="utf-8"))
     e = g2["links"][0]
     assert e["source_point"] == [100.0, 120.0], \
-        "конец на БОКСЕ обязан уцелеть — его держит якорь"
+        "конец на БОКСЕ обязан уцелеть — его держит пин"
     assert e["target_point"] == [100.0, 300.0], \
-        "конец на КОННЕКТОРЕ приходит к центроиду (канон), якорить нечего"
+        "конец на КОННЕКТОРЕ приходит к центроиду (канон), пинить нечего"
     assert "_manual_route" not in e, "отменённая пометка обязана уйти"
-    anchors = [pt for n in g2["nodes"] for pt in (n.get("_ports") or [])]
-    assert anchors and all(a.get("edge") for a in anchors), \
-        f"точка оператора не закреплена якорем: {anchors}"
+    assert e.get("pin_source") == {"dx": 20.0, "dy": 0.0}, \
+        f"точка оператора не закреплена пином ребра: {e.get('pin_source')}"
+    assert "pin_target" not in e, "пин на коннекторе запрещён"
+    assert not any(n.get("_ports") for n in g2["nodes"]), \
+        "якорей в узлах больше не бывает"
     assert not _reseat_canvas_endpoints(p), "миграция обязана быть идемпотентной"
 
 

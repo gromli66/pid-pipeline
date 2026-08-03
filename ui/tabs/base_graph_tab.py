@@ -363,21 +363,29 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
     undo-стек и автосейв не затрагиваются, на сервер починка уедет обычным
     сохранением оператора.
 
-    Ручная посадка оператора (`_manual_route`) неприкосновенна (инвариант
-    плана, приёмка T-D.3): канон вернул бы такой конец на луч — концы и
-    waypoints этих рёбер восстанавливаются после прогона.
+    Э5b (модель «пин на ребре», утверждена 2026-08-03): единственное
+    персистентное намерение оператора — пин входа edge['pin_source'|
+    'pin_target'] (локальное смещение от центроида узла). Открытие мигрирует
+    легаси-хранилища ОДИН раз: node['_ports'] с владельцем-парой -> пины
+    живых рёбер пары (безвладельные «подсказки судье», сироты без ребра и
+    коннекторы — дроп с логом, решение Д4); _manual_route -> пины обоих
+    не-коннекторных концов, флаг снимается (решение заказчика 2026-08-02).
+    Закреплённый пином конец — вне канона и конкурса портов: pin-restore
+    ставит его после канона и ПОСЛЕДНИМ словом прогона (доводки лифта/
+    развода пин не двигают).
 
     Этап A (портовая модель, `ui/editors/port_model.py`): конец, сидевший на
-    ПОРТУ своего узла (ручном из node['_ports'] или каталожном кандидате),
-    каноном не срывается — иначе ray-посадка возвращала бы «гуляние по
-    периметру» при каждом открытии. Исключение — прямизна: если канон
-    посадил конец СТРОГОЙ прямой к его ref (соосная пара/слабина), прямая
-    важнее порта — «как сейчас».
+    каталожном порту-кандидате, каноном не срывается — иначе ray-посадка
+    возвращала бы «гуляние по периметру» при каждом открытии. Исключение —
+    прямизна: если канон посадил конец СТРОГОЙ прямой к его ref (соосная
+    пара/слабина), прямая важнее порта — «как сейчас».
     """
     from copy import deepcopy
 
+    from modules.graph.core.graph_access import is_connector
     from modules.graph.core.pretransform import seat_edge_endpoints
     from ui.editors import port_model
+    from ui.editors import port_model as _pm
 
     try:
         canvas = json.loads(Path(canvas_path).read_text(encoding="utf-8"))
@@ -387,6 +395,39 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
     edges_list = (canvas.get("links") if "links" in canvas
                   else canvas.get("edges")) or []
     byid = {n.get("id"): n for n in canvas.get("nodes") or []}
+
+    # ─── Э5b (а): миграция node['_ports'] -> пины рёбер ───
+    # Владелец-пара не различает мультирёбра — пин дублируется на все живые
+    # рёбра пары (как отдавал их pinned_port, решение Д3). Уже стоящий пин
+    # ребра не перетирается: он новее легаси-записи узла.
+    pair_edges: dict = {}
+    for e in edges_list:
+        ref = _pm.edge_ref(e)
+        if ref:
+            pair_edges.setdefault(ref, []).append(e)
+    ports_nodes = ports_migrated = ports_dropped = 0
+    for n in canvas.get("nodes") or []:
+        if "_ports" not in n:
+            continue
+        plist = n.pop("_ports") or []
+        ports_nodes += 1
+        for p in plist:
+            ref = p.get("edge")
+            live = pair_edges.get(ref) or []
+            if ref is None or is_connector(n) or not live:
+                ports_dropped += 1
+                continue
+            for e in live:
+                role = _pm.pin_role(n, e)
+                if role is None or _pm.edge_pin(e, role) is not None:
+                    continue
+                e[_pm.PIN_KEYS[role]] = {"dx": float(p.get("dx", 0.0)),
+                                         "dy": float(p.get("dy", 0.0))}
+                ports_migrated += 1
+    if ports_nodes:
+        logger.info("reseat: якоря узлов -> пины рёбер: %d перенесено, "
+                    "%d отброшено (без владельца/ребра или коннектор)",
+                    ports_migrated, ports_dropped)
 
     def _end_ref(e, end_key):
         """Ref конца ПОСЛЕ канона: смежный waypoint, иначе другой конец."""
@@ -398,20 +439,26 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
     snap = [deepcopy((e.get("source_point"), e.get("target_point"),
                       e.get("waypoints"))) for e in edges_list]
     seat_edge_endpoints(canvas)
-    # ЯКОРЬ ВХОДА выше канона (решение заказчика 2026-08-02): канон про порты
-    # не знает и сорвал бы закреплённую оператором точку при каждом открытии.
-    # Раньше её защищал флаг _manual_route — он отменён, защита переходит к
-    # якорю (порт с владельцем-ребром в node['_ports']).
-    from ui.editors import port_model as _pm
-    for e in edges_list:
-        for end_key, node_key in (("source_point", "source"),
-                                  ("target_point", "target")):
-            pin = _pm.pinned_port(byid.get(e.get(node_key)), e)
-            if pin is not None:
-                e[end_key] = [pin[1], pin[0]]
+
+    def _apply_pins():
+        """ПИН ВХОДА выше канона (решение заказчика 2026-08-02): канон про
+        пины не знает и сорвал бы закреплённую оператором точку при каждом
+        открытии. Зовётся после канона и последним словом прогона."""
+        for e in edges_list:
+            for end_key, node_key in (("source_point", "source"),
+                                      ("target_point", "target")):
+                pin = _pm.pinned_port(byid.get(e.get(node_key)), e)
+                if pin is not None:
+                    e[end_key] = [pin[1], pin[0]]
+
+    _apply_pins()
     moved = 0
     for e, (sp0, tp0, wp0) in zip(edges_list, snap):
         if e.get("_manual_route"):
+            # Последний миграционный проход: геометрия ещё под защитой
+            # флага, канон откатывается; пины поставит блок (б) ниже —
+            # ПОСЛЕ материализации луча/лифта (точки оператора там уже
+            # доведены до границы формы). Дальше флаг мёртв.
             e["source_point"] = sp0
             e["target_point"] = tp0
             if wp0 is None:
@@ -422,6 +469,8 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
         for end_key, node_key, alt_key, orig in (
                 ("source_point", "source", "from", sp0),
                 ("target_point", "target", "to", tp0)):
+            if _pm.edge_pin(e, node_key):
+                continue        # вход закреплён пином — его вернул _apply_pins
             new = e.get(end_key)
             if orig is None or new == orig:
                 continue
@@ -443,6 +492,8 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
         # портовых пинов роутинга выходят уже портовыми.
         for end_key, node_key, alt_key in (("source_point", "source", "from"),
                                            ("target_point", "target", "to")):
+            if _pm.edge_pin(e, node_key):
+                continue        # закреплённый вход вне конкурса портов
             p = e.get(end_key)
             node = byid.get(e.get(node_key) or e.get(alt_key))
             if p is None or node is None:
@@ -465,25 +516,13 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
     _materialize_ray_ends(canvas, byid)
     _lift_skin_ends_to_bbox(canvas, byid)
     _spread_stacked_ends(canvas, byid)
-    # 2026-08-01 («зигзаг прибит гвоздями»): маршруты без подписи — от
-    # сервера старых эпох (avoid_router не ставил _auto_route) — редактор
-    # считал их ручными и не вёл при drag. Подписываем как авто; ручные
-    # (_manual_route) не трогаются. Флаг не в sha-проекции.
-    # 2026-08-02, решение заказчика: жест «оставить трубу ровно как нарисовал»
-    # НЕ НУЖЕН — нужен обычный обход с зафиксированным входом. Понятие
-    # «маршрут нарисован руками» отменено, старые пометки уходят: иначе такая
-    # труба навсегда вне пересчёта, и после переезда конца на якорь у неё
-    # остаётся косой хвост от старого маршрута (репро graph_edited_fix3:
-    # стаб 6.2px и заход в чужой блок).
-    #
-    # Заморозка ПЕРЕВОДИТСЯ В ЯКОРЯ, а не выбрасывается: точки, поставленные
-    # руками, закрепляются портами-владельцами и переживают канон при каждом
-    # следующем открытии. Стоит ПОСЛЕ восстановления геометрии (выше) — там
-    # она ещё под защитой флага — и ДО подписи _auto_route, чтобы
-    # расфиксированное ребро получило подпись в ЭТОМ ЖЕ проходе (иначе второе
-    # открытие снова меняло бы файл).
-    from modules.graph.core.graph_access import is_connector
-
+    # ─── Э5b (б): заморозка _manual_route -> пины концов ───
+    # Решение заказчика 2026-08-02: «маршрут руками» отменён, вход держит
+    # якорь; с 2026-08-03 якорь живёт на ребре. Стоит ПОСЛЕ материализации/
+    # лифта: точки оператора уже доведены до границы формы — пин фиксирует
+    # именно их. «Оба конца или только реально-ручной» — код эпохи флага не
+    # различал, данных нет: консервативно оба (как прежний перевод в якоря).
+    # У коннектора якорить некуда — конец сразу в центроид.
     unfrozen = 0
     for e in edges_list:
         if not e.get("_manual_route"):
@@ -495,24 +534,27 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
             if node is None or not pt:
                 continue
             if is_connector(node):
-                # у коннектора канонический конец — сам центроид; якорить
-                # некуда, поэтому сразу приводим к канону (иначе следующее
-                # открытие двигало бы точку и прогон не был бы идемпотентен)
                 c = node.get("centroid")
                 if c:
                     e[end_key] = [float(c[0]), float(c[1])]
                 continue
-            _pm.add_manual_port(node, float(pt[1]), float(pt[0]), e)
+            _pm.set_edge_pin(node, e, node_key, float(pt[1]), float(pt[0]))
         e.pop("_manual_route", None)
         unfrozen += 1
     if unfrozen:
-        logger.info("reseat: заморозка снята с %d рёбер, их точки закреплены "
-                    "якорями", unfrozen)
-
+        logger.info("reseat: заморозка снята с %d рёбер, входы закреплены "
+                    "пинами", unfrozen)
+    # Последнее слово прогона: доводки выше про пины не знают и могли
+    # сдвинуть закреплённый конец (луч/лифт/развод) — вернуть в пин.
+    _apply_pins()
+    # 2026-08-01 («зигзаг прибит гвоздями»): маршруты без подписи — от
+    # сервера старых эпох (avoid_router не ставил _auto_route) — редактор
+    # считал их ручными и не вёл при drag. Подписываем как авто. Флаг не в
+    # sha-проекции. Уходит целиком в Э5c (редактор перестанет читать флаг —
+    # подпись сменится стиранием).
     flagged = 0
     for e in edges_list:
-        if (e.get("waypoints") or []) and not e.get("_auto_route") \
-                and not e.get("_manual_route"):
+        if (e.get("waypoints") or []) and not e.get("_auto_route"):
             e["_auto_route"] = True
             flagged += 1
     # идемпотентность: канон и редакторские доводки (лифт скинов) могут
@@ -520,7 +562,7 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
     moved = sum(
         (e.get("source_point") != s0) + (e.get("target_point") != t0)
         for e, (s0, t0, _w0) in zip(edges_list, snap))
-    moved += flagged + unfrozen
+    moved += flagged + unfrozen + ports_nodes
     if not moved:
         return False
     Path(canvas_path).write_text(json.dumps(canvas, ensure_ascii=False),
