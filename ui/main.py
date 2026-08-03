@@ -36,6 +36,10 @@ from ui.windows.main_window import MainWindow
 # Увеличить лимит загрузки изображений (по умолчанию 256 МБ, нужно для P&ID ~15000x7000)
 QImageReader.setAllocationLimit(1024)  # 1 ГБ
 
+# Дженерик-алиасы: не семейства, а «подбери сам». В примари-слоте рядом с
+# эмодзи-шрифтом Qt отдаёт ему общие кодпоинты (цифры, ⚠, ⚙) — см. _load_bundled_fonts.
+_GENERIC_FAMILIES = {"sans serif", "sans-serif", "serif", "monospace", "system"}
+
 
 def _load_bundled_fonts(app):
     """Подключить шрифты из ui/resources/fonts как fallback шрифта приложения.
@@ -52,6 +56,11 @@ def _load_bundled_fonts(app):
     fonts_dir = Path(__file__).resolve().parent / "resources" / "fonts"
     if not fonts_dir.is_dir():
         return
+    f = app.font()
+    # Резолвим примари ДО регистрации бандла: после addApplicationFont эмодзи-шрифт
+    # тоже кандидат, и в бедной БД шрифтов QFontInfo выберет именно его (в пустой БД —
+    # он единственный) → эмодзи станет примари, цифры уедут туда же.
+    concrete = QFontInfo(f).family()
     families = []
     for fp in sorted(fonts_dir.glob("*.ttf")) + sorted(fonts_dir.glob("*.otf")):
         font_id = QFontDatabase.addApplicationFont(str(fp))
@@ -63,12 +72,22 @@ def _load_bundled_fonts(app):
                 families.append(fam)
     if not families:
         return
-    f = app.font()
-    # Берём КОНКРЕТНОЕ разрешённое семейство, а не дженерик-алиас (на Linux/Astra
+    # В примари нужно КОНКРЕТНОЕ семейство, а не дженерик-алиас (на Linux/Astra
     # f.family() == 'Sans Serif'): при дженерик-примари Qt отдаёт общие кодпоинты
-    # (цифры 0-9, ⚠, ⚙) эмодзи-шрифту → цифры «плыли». QFontInfo резолвит в
+    # (цифры 0-9, ⚠, ⚙) эмодзи-шрифту → цифры «плыли». QFontInfo выше резолвит в
     # реальный шрифт (Linux→DejaVu Sans, Windows→Segoe UI), эмодзи остаются fallback.
-    concrete = QFontInfo(f).family()
+    # Если конкретного семейства нет (пустая БД шрифтов — так ведёт себя Qt-плагин
+    # offscreen на Windows: ни одного системного шрифта, QFontInfo даёт ''), то
+    # примари всё равно достался бы эмодзи-шрифту — ровно тот баг, который лечим.
+    # Тогда шрифт приложения не трогаем: эмодзи-фолбэка не будет, но цифры целы.
+    if not concrete or concrete.lower() in _GENERIC_FAMILIES or concrete in families:
+        logging.getLogger(__name__).warning(
+            "Примари-шрифт не резолвится в конкретное семейство (%r) — "
+            "fallback-шрифты не подключены: %s",
+            concrete,
+            ", ".join(families),
+        )
+        return
     f.setFamilies([concrete, *families])
     app.setFont(f)
     logging.getLogger(__name__).info(
