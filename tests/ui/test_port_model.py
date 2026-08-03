@@ -548,6 +548,43 @@ def test_polygon_manual_port_survives_move(qapp, tmp_path):
     assert e["pin_source"] == {"dx": 20.0, "dy": -80.0}
 
 
+def test_polygon_vertex_edit_keeps_pin_absolute(qapp, tmp_path):
+    """Э5: правка вершин полигона двигает ЦЕНТРОИД, но не закреплённую
+    оператором точку — смещения пина компенсируются на дельту центроида
+    (находка аудита 2026-08-03: со старым node._ports якорь дрейфовал)."""
+    from types import SimpleNamespace
+    from ui.editors import port_model
+
+    nodes = [
+        {"id": "poly", "type": "equipment", "centroid": [300.0, 300.0],
+         "bbox": [200.0, 200.0, 400.0, 400.0], "segmentation": list(DIAMOND),
+         "class_id": 99, "class_name": "unknow", "degree": 1},
+        {"id": "conn", "type": "connector", "centroid": [300.0, 600.0],
+         "bbox": None, "segmentation": None,
+         "class_id": -1, "class_name": "connector", "degree": 1},
+    ]
+    links = [{"id": "edge_1", "source": "poly", "target": "conn",
+              "source_point": [220.0, 320.0], "target_point": [300.0, 600.0],
+              "waypoints": [],
+              "pin_source": {"dx": 20.0, "dy": -80.0}}]  # абсолют (320, 220)
+    g = _wrap(nodes, links)
+    ed = _editor(qapp, tmp_path, g)
+    e = ed.model.find_edge_data(ed.model.edge_key("poly", "conn"))
+
+    # правка вершины: (400,300) -> (480,300), центроид уезжает на +20 по x
+    new_seg = [300.0, 200.0, 480.0, 300.0, 300.0, 400.0, 200.0, 300.0]
+    ed._poly_edit_node = "poly"
+    ed._poly_overlay = SimpleNamespace(get_polygon=lambda: list(new_seg))
+    ed._poly_write_node()
+
+    assert ed.nodes["poly"]["centroid"] == [300.0, 320.0]
+    p = port_model.pinned_port(ed.nodes["poly"], e)
+    assert (p[0], p[1]) == (320.0, 220.0), \
+        f"точка пина уехала вместе с центроидом: {(p[0], p[1])}"
+    assert e["source_point"] == [220.0, 320.0], \
+        "закреплённый конец сдвинут правкой вершин"
+
+
 # =====================================================================
 # (5) Reseat-при-открытии: порт не срывается
 # =====================================================================

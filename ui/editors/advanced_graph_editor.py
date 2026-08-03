@@ -5308,7 +5308,24 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         xs = seg[0::2]
         ys = seg[1::2]
         node['bbox'] = [min(xs), min(ys), max(xs), max(ys)]
-        node['centroid'] = [sum(ys) / len(ys), sum(xs) / len(xs)]  # [y, x]
+        old_c = node.get('centroid') or [0.0, 0.0]
+        new_c = [sum(ys) / len(ys), sum(xs) / len(xs)]  # [y, x]
+        # Пины хранятся смещением ОТ ЦЕНТРОИДА: правка вершин двигает
+        # центроид, но закреплённую оператором точку двигать не должна —
+        # дельта компенсируется в смещениях пинов инцидентных рёбер.
+        dcy, dcx = new_c[0] - float(old_c[0]), new_c[1] - float(old_c[1])
+        if dcx or dcy:
+            from ui.editors import port_model
+            nid = node.get('id')
+            for e in self.edges_data:
+                for role in ('source', 'target'):
+                    if e.get(role) != nid:
+                        continue
+                    pin = port_model.edge_pin(e, role)
+                    if pin is not None:
+                        pin['dx'] = float(pin['dx']) - dcx
+                        pin['dy'] = float(pin['dy']) - dcy
+        node['centroid'] = new_c
         node['area'] = (node['bbox'][2] - node['bbox'][0]) * \
                        (node['bbox'][3] - node['bbox'][1])
         self._refresh_node_visual(self._poly_edit_node)
