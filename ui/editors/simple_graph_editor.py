@@ -297,10 +297,9 @@ class SimpleGraphEditor(BaseGraphEditor):
         self._resize_start_bbox = bbox.copy()
         self._resize_start_centroid = node['centroid'].copy()
         self._resize_start_area = node.get('area', 0)
-        # Этап A: ручные порты масштабируются вместе с рамкой — undo обязан
-        # вернуть и их (скептик: после undo порт вылетал за границу узла).
-        self._resize_start_ports = ([dict(p) for p in node['_ports']]
-                                    if node.get('_ports') else None)
+        # Э5: пины концов инцидентных рёбер масштабируются вместе с рамкой —
+        # undo обязан вернуть и их (иначе пин вылетает за границу узла).
+        self._resize_start_pins = self._snapshot_edge_pins(node_id)
 
         self._resize_overlay = ResizableNodeOverlay(
             scene=self.scene,
@@ -325,12 +324,12 @@ class SimpleGraphEditor(BaseGraphEditor):
         node['centroid'] = [(y1 + y2) / 2, (x1 + x2) / 2]
         node['area'] = (x2 - x1) * (y2 - y1)
 
-        # Этап A (портовая модель): ручные порты — локальные смещения от
-        # центроида; при resize масштабируются вместе с рамкой (перепроекция
-        # на границу).
-        if node.get('_ports') and len(old_bbox) == 4:
+        # Э5: пины концов инцидентных рёбер — локальные смещения от
+        # центроида; при resize масштабируются вместе с рамкой.
+        if len(old_bbox) == 4:
             from ui.editors import port_model
-            port_model.rescale_manual_ports(node, old_bbox, new_bbox)
+            port_model.rescale_edge_pins(node, self.edges_data,
+                                         old_bbox, new_bbox)
 
         # Обновляем bbox rect если есть
         if node_id in self.bbox_items:
@@ -346,12 +345,28 @@ class SimpleGraphEditor(BaseGraphEditor):
         # движок, только ближний конец)
         self._reseat_after_resize(node_id)
 
+    def _snapshot_edge_pins(self, node_id: str) -> dict:
+        """Э5: снимок пинов концов инцидентных рёбер для undo resize —
+        {(edge_key, role): {'dx','dy'} | None}."""
+        from ui.editors import port_model
+        snap = {}
+        for e in self.edges_data:
+            for role in ('source', 'target'):
+                if e.get(role) != node_id:
+                    continue
+                key = self.model.edge_key(e['source'], e['target'])
+                pin = port_model.edge_pin(e, role)
+                snap[(key, role)] = dict(pin) if pin else None
+        return snap
+
     def _reseat_after_resize(self, node_id: str):
         """База: пересадка концов рёбер узла после resize (point-to-point).
 
         ВНИМАНИЕ: переписывает ОБА конца по центроидам — легаси-контракт
-        простого редактора. «Ручная правка» (AdvancedGraphEditor)
-        переопределяет: движок, только ближний конец (Э2d)."""
+        простого редактора; вход с ПИНОМ (Э5) держится в пине. «Ручная
+        правка» (AdvancedGraphEditor) переопределяет: движок, только
+        ближний конец (Э2d)."""
+        from ui.editors import port_model
         for edge in self.edges_data:
             if edge['source'] == node_id or edge['target'] == node_id:
                 other_id = edge['target'] if edge['source'] == node_id else edge['source']
@@ -363,8 +378,10 @@ class SimpleGraphEditor(BaseGraphEditor):
                 tp_x, tp_y = self.get_connection_point(edge['target'],
                     self.nodes[edge['source']]['centroid'][1],
                     self.nodes[edge['source']]['centroid'][0])
-                edge['source_point'] = [sp_y, sp_x]
-                edge['target_point'] = [tp_y, tp_x]
+                ps = port_model.pinned_port(self.nodes.get(edge['source']), edge)
+                pt = port_model.pinned_port(self.nodes.get(edge['target']), edge)
+                edge['source_point'] = [ps[1], ps[0]] if ps else [sp_y, sp_x]
+                edge['target_point'] = [pt[1], pt[0]] if pt else [tp_y, tp_x]
                 key = self.model.edge_key(edge['source'], edge['target'])
                 self._update_edge_path(key)
 
@@ -383,8 +400,6 @@ class SimpleGraphEditor(BaseGraphEditor):
 
         # Только если реально изменилось
         if new_bbox != self._resize_start_bbox:
-            new_ports = ([dict(p) for p in node['_ports']]
-                         if node.get('_ports') else None)
             cmd = ResizeNodeCommand(
                 self.model, self, node_id,
                 old_bbox=self._resize_start_bbox,
@@ -393,8 +408,8 @@ class SimpleGraphEditor(BaseGraphEditor):
                 new_bbox=new_bbox,
                 new_centroid=new_centroid,
                 new_area=new_area,
-                old_ports=getattr(self, '_resize_start_ports', None),
-                new_ports=new_ports,
+                old_pins=getattr(self, '_resize_start_pins', None),
+                new_pins=self._snapshot_edge_pins(node_id),
             )
             self.undo_mgr.push_executed(cmd)
             self.update_status(f"Resize: {node_id} → {int(new_bbox[2]-new_bbox[0])}×{int(new_bbox[3]-new_bbox[1])}")
@@ -403,8 +418,7 @@ class SimpleGraphEditor(BaseGraphEditor):
         self._resize_start_bbox = new_bbox
         self._resize_start_centroid = new_centroid
         self._resize_start_area = new_area
-        self._resize_start_ports = ([dict(p) for p in node['_ports']]
-                                    if node.get('_ports') else None)
+        self._resize_start_pins = self._snapshot_edge_pins(node_id)
 
     def _stop_resize(self):
         """Убрать resize handles и вернуться в предыдущий режим."""

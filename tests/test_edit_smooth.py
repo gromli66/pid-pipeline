@@ -111,8 +111,8 @@ def test_end_kind_all_kinds():
     assert es.end_kind(conn, e) == "connector"
     assert es.end_kind(poly, e) == "contour"
     assert es.end_kind(None, e) == "none"
-    ports.add_manual_port(box, 120.0, 108.0, e)
-    assert es.end_kind(box, e) == "anchor", "якорь обязан быть виден первым"
+    ports.set_edge_pin(box, e, "source", 120.0, 108.0)
+    assert es.end_kind(box, e) == "anchor", "пин обязан быть виден первым"
 
 
 # ── гейт ───────────────────────────────────────────────────────────────
@@ -155,7 +155,7 @@ def _canvas_with_anchor():
     a = _box("a", 100.0, 100.0)
     b = _box("b", 300.0, 108.0)
     e = _edge("e1", "a", "b", (120.0, 100.0), (280.0, 108.0))
-    ports.add_manual_port(a, 120.0, 100.0, e)
+    ports.set_edge_pin(a, e, "source", 120.0, 100.0)
     return _g([a, b], [e])
 
 

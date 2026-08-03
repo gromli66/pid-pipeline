@@ -302,16 +302,18 @@ class AddEquipmentNodeCommand(Command):
 class ResizeNodeCommand(Command):
     """Изменение размера bbox узла.
 
-    Этап A: ручные порты (`node['_ports']`) масштабируются вместе с рамкой
-    (`port_model.rescale_manual_ports` в `_on_node_resized`) — undo обязан
-    вернуть и их, иначе после отката порт остаётся отмасштабированным при
-    старой рамке и вылетает за границу узла.
+    Э5: пины концов инцидентных рёбер (edge['pin_source'|'pin_target'] —
+    локальные смещения от центроида) масштабируются вместе с рамкой
+    (`port_model.rescale_edge_pins` в `_on_node_resized`) — undo обязан
+    вернуть и их, иначе после отката пин остаётся отмасштабированным при
+    старой рамке и вылетает за границу узла. Снимок пинов:
+    {(edge_key, role): {'dx','dy'} | None}.
     """
 
     def __init__(self, model: GraphDataModel, editor, node_id: str,
                  old_bbox: list, old_centroid: list, old_area: float,
                  new_bbox: list, new_centroid: list, new_area: float,
-                 old_ports: list | None = None, new_ports: list | None = None):
+                 old_pins: dict | None = None, new_pins: dict | None = None):
         self._model = model
         self._editor = editor
         self._node_id = node_id
@@ -321,17 +323,21 @@ class ResizeNodeCommand(Command):
         self._new_bbox = new_bbox
         self._new_centroid = new_centroid
         self._new_area = new_area
-        self._old_ports = old_ports
-        self._new_ports = new_ports
+        self._old_pins = old_pins
+        self._new_pins = new_pins
 
-    def _apply_ports(self, ports):
-        node = self._model.nodes.get(self._node_id)
-        if node is None:
+    def _apply_pins(self, pins):
+        if not pins:
             return
-        if ports is None:
-            node.pop('_ports', None)
-        else:
-            node['_ports'] = [dict(p) for p in ports]
+        from ui.editors import port_model
+        for (key, role), pin in pins.items():
+            edge_data = self._model.find_edge_data(key)
+            if edge_data is None:
+                continue
+            if pin is None:
+                port_model.clear_edge_pin(edge_data, role)
+            else:
+                edge_data[port_model.PIN_KEYS[role]] = dict(pin)
 
     def execute(self):
         self._model.update_node(self._node_id, {
@@ -339,7 +345,7 @@ class ResizeNodeCommand(Command):
             'centroid': self._new_centroid,
             'area': self._new_area,
         })
-        self._apply_ports(self._new_ports)
+        self._apply_pins(self._new_pins)
         self._editor._redraw_all()
 
     def undo(self):
@@ -348,7 +354,7 @@ class ResizeNodeCommand(Command):
             'centroid': self._old_centroid,
             'area': self._old_area,
         })
-        self._apply_ports(self._old_ports)
+        self._apply_pins(self._old_pins)
         self._editor._redraw_all()
 
     @property

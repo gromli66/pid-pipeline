@@ -16,11 +16,11 @@ ConnectionPoints — §6.1 EDITOR_AFTER_LAYOUT_PLAN):
       полигон без скина      → середины ПРЯМЫХ участков контура длиной
                                >= MIN_POLY_EDGE (перпендикулярный вход);
       коннектор              → центроид (единственный порт).
-  * РУЧНЫЕ ПОРТЫ — хранятся в node['_ports'] = [{'dx','dy'}, ...] —
-    ЛОКАЛЬНЫЕ смещения от центроида: при переносе узла порт едет с ним,
-    при resize смещения масштабируются (`rescale_manual_ports`).
-    Ключ '_ports' не входит в canvas_state._NODE_KEYS — sha проекции холста
-    не меняется; в FXML не течёт (graph_to_fxml читает известные поля).
+  * ПИН ВХОДА (Э5, 2026-08-03) — свойство КОНЦА РЕБРА:
+    edge['pin_source'|'pin_target'] = {'dx','dy'} — локальное смещение от
+    центроида узла (см. секцию «пины на ребре» ниже). Легаси node['_ports']
+    больше не пишется; читается только `pinned_port` (файлы мимо миграции)
+    и `manual_ports` (сервер, инертно) до полного вымирания старых сейвов.
   * ВЫБОР ПОРТА (`choose_port`) — по качеству маршрута с гистерезисом:
     остаёмся на текущем порту, пока (а) вход через него не с изнанки
     (обязательная смена — обобщение side-flip) и (б) альтернатива не
@@ -200,31 +200,6 @@ def edge_ref(edge_data):
     return f"{a}|{b}" if str(a) <= str(b) else f"{b}|{a}"
 
 
-def add_manual_port(node, x, y, edge_data=None):
-    """Создать постоянный ручной порт узла в точке (x, y) — хранится как
-    локальное смещение от центроида.
-
-    edge_data задаёт ВЛАДЕЛЬЦА порта (решение заказчика 2026-08-02: «нужен
-    классический обход, но с фиксированным входом»). Порт владельца —
-    настоящий якорь: `pinned_port` возвращает его безусловно, минуя конкурс
-    кандидатов. Без владельца порт остаётся прежней «подсказкой судье»,
-    которую гистерезис вправе отбросить (совместимость со старыми холстами).
-
-    Повторный вызов для того же ребра ПЕРЕЗАПИСЫВАЕТ его порт, а не плодит
-    новые: оператор двигает вход много раз за жест."""
-    cx, cy = _node_cxy(node)
-    ref = edge_ref(edge_data)
-    entry = {"dx": float(x - cx), "dy": float(y - cy)}
-    if ref is not None:
-        entry["edge"] = ref
-        for p in node.get("_ports") or []:
-            if p.get("edge") == ref:
-                p.update(entry)
-                return p
-    node.setdefault("_ports", []).append(entry)
-    return entry
-
-
 def _pin_entry(cx, cy, px, py):
     """Кортеж порта (x, y, nx, ny, True) из абсолютной точки пина."""
     dx, dy = px - cx, py - cy
@@ -264,23 +239,6 @@ def pinned_port(node, edge_data):
                           cx + float(p.get("dx", 0.0)),
                           cy + float(p.get("dy", 0.0)))
     return None
-
-
-def rescale_manual_ports(node, old_bbox, new_bbox):
-    """Resize узла: смещения ручных портов масштабируются вместе с рамкой
-    (перепроекция на границу — как геометрия в _on_node_resized)."""
-    ports = node.get("_ports")
-    if not ports or not old_bbox or not new_bbox \
-            or len(old_bbox) != 4 or len(new_bbox) != 4:
-        return
-    ow, oh = old_bbox[2] - old_bbox[0], old_bbox[3] - old_bbox[1]
-    nw, nh = new_bbox[2] - new_bbox[0], new_bbox[3] - new_bbox[1]
-    if ow <= 0 or oh <= 0:
-        return
-    sx, sy = nw / ow, nh / oh
-    for p in ports:
-        p["dx"] = float(p.get("dx", 0.0)) * sx
-        p["dy"] = float(p.get("dy", 0.0)) * sy
 
 
 # ────────────────────── пины на ребре (Э5) ──────────────────────

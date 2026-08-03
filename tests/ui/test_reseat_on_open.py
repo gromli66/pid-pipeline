@@ -263,10 +263,12 @@ def test_skin_end_lifted_to_bbox_on_open(tmp_path):
     assert not _reseat_canvas_endpoints(path)    # идемпотентно
 
 
-def test_unsigned_zigzag_gets_auto_flag_on_open(tmp_path):
-    """«Зигзаг прибит гвоздями» (2026-08-01): маршрут без подписи (сервер
-    старых эпох не ставил _auto_route) при открытии подписывается как
-    авто — drag снова ведёт его; _manual_route не трогается."""
+def test_route_flags_are_stripped_on_open(tmp_path):
+    """ПЕРЕОБЪЯВЛЕН 2026-08-03 (Э5, бывший test_unsigned_zigzag_gets_auto_
+    flag_on_open): флагов принадлежности маршрута больше нет — waypoints
+    у всех рёбер кэш, drag ведёт любой маршрут. Открытие СТИРАЕТ
+    _auto_route (в т.ч. серверную подпись avoid_router) и переводит
+    _manual_route в пины; второй прогон — no-op."""
     from ui.tabs.base_graph_tab import _reseat_canvas_endpoints
 
     g = {
@@ -281,7 +283,7 @@ def test_unsigned_zigzag_gets_auto_flag_on_open(tmp_path):
         "links": [
             {"id": "e1", "source": "a", "target": "b",
              "source_point": [100.0, 120.0], "target_point": [200.0, 300.0],
-             "waypoints": [[100.0, 300.0]]},
+             "waypoints": [[100.0, 300.0]], "_auto_route": True},
             {"id": "e2", "source": "a", "target": "b",
              "source_point": [100.0, 120.0], "target_point": [200.0, 300.0],
              "waypoints": [[200.0, 120.0]], "_manual_route": True},
@@ -295,10 +297,10 @@ def test_unsigned_zigzag_gets_auto_flag_on_open(tmp_path):
     g2 = json.loads(path.read_text(encoding="utf-8"))
     e1 = next(e for e in g2["links"] if e["id"] == "e1")
     e2 = next(e for e in g2["links"] if e["id"] == "e2")
-    assert e1.get("_auto_route") is True      # безфлаговый подписан
-    # ПЕРЕОБЪЯВЛЕНО 2026-08-02: заморозка отменена, поэтому бывшее «ручное»
-    # ребро в ЭТОМ ЖЕ проходе расфиксируется и тоже получает подпись —
-    # иначе прогон не идемпотентен (второе открытие подписало бы его).
+    assert "_auto_route" not in e1, "серверная подпись стёрта — флаг мёртв"
+    assert e1["waypoints"] == [[100.0, 300.0]], "маршрут (кэш) цел"
     assert "_manual_route" not in e2
-    assert e2.get("_auto_route") is True
+    assert "_auto_route" not in e2
+    assert e2.get("pin_source") == {"dx": 20.0, "dy": 0.0}, \
+        "точка оператора закреплена пином ребра"
     assert not _reseat_canvas_endpoints(path)  # идемпотентно

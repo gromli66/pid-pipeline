@@ -22,7 +22,6 @@ from modules.graph.core.ports import (  # noqa: F401
     _poly_contour,
     _poly_ports,
     _pt_in_poly,
-    add_manual_port,
     all_ports,
     candidate_ports,
     choose_port,
@@ -37,6 +36,5 @@ from modules.graph.core.ports import (  # noqa: F401
     pinned_on_node,
     pinned_port,
     rescale_edge_pins,
-    rescale_manual_ports,
     set_edge_pin,
 )

@@ -5,8 +5,9 @@
 жест теми же методами, что дёргает мышь. Здесь закреплены обещания
 Этапа B: сессия включается на жест и закрывается на release; live-ребро
 получает маршрут с клиренсом от чужой формы («вдоль/сквозь» исчезают по
-построению); чужая труба и _manual_route байт-в-байт; предпросмотр ==
-итог; undo побайтово; PID_EDIT_AVOID=0 возвращает лестницу.
+построению); чужая труба байт-в-байт, пин-конец стоит в пине (Э5);
+предпросмотр == итог; undo побайтово; PID_EDIT_AVOID=0 возвращает
+лестницу.
 
 Координаты двойственны (CODING_GUIDE §6): centroid/точки концов/waypoints
 = [y, x]; bbox = [x1, y1, x2, y2].
@@ -90,10 +91,9 @@ def _edge(ed, a, b):
 
 
 def _proj(e):
-    return (copy.deepcopy(e.get("source_point")),
-            copy.deepcopy(e.get("target_point")),
-            copy.deepcopy(e.get("waypoints") or []),
-            bool(e.get("_auto_route")), bool(e.get("_manual_route")))
+    # Полный dict (Э5): «байт-в-байт» охраняет и инертные ключи
+    # (серверная подпись в старых данных, пины, кэши сторон).
+    return copy.deepcopy(e)
 
 
 def _full_pts(e):
@@ -128,7 +128,7 @@ def test_avoid_route_clears_foreign_box(qapp, tmp_path):
     e = _edge(ed, "box_a", "box_b")
     pts = _full_pts(e)
     _assert_ortho(pts)
-    assert e.get("_auto_route") and (e.get("waypoints") or []), \
+    assert e.get("waypoints") or [], \
         "обход чужого бокса обязан родиться на кадре"
     ed.end_drag_node()
     # ни один сегмент не в клиренс-коридоре C (ортогональный маршрут:
@@ -154,17 +154,23 @@ def test_foreign_edge_byte_identical(qapp, tmp_path):
         "чужая труба обязана быть байт-в-байт (контракт 2026-08-01)"
 
 
-def test_manual_route_untouched_by_session(qapp, tmp_path):
+def test_pinned_end_held_by_session(qapp, tmp_path):
+    """Э5 (замена test_manual_route_untouched_by_session — класс
+    неприкосновенных live-рёбер умер): сессия роутит ВСЕ инцидентные
+    рёбра, а конец, закреплённый ПИНОМ, стоит в пин-точке на каждом
+    кадре — «то же самое, только один порт зафиксирован»."""
     g = _graph()
-    g["links"][0]["_manual_route"] = True
-    g["links"][0]["waypoints"] = [[260.0, 140.0], [260.0, 420.0]]
+    g["links"][0]["pin_source"] = {"dx": 40.0, "dy": 20.0}
     ed = _editor(qapp, tmp_path, g)
-    ed.start_drag_node("box_c")           # box_c: ребро edge_2 live
-    ed.drag_node_to(300.0, 290.0)
     e1 = _edge(ed, "box_a", "box_b")
-    assert e1.get("_manual_route") and \
-        e1["waypoints"] == [[260.0, 140.0], [260.0, 420.0]], \
-        "_manual_route неприкосновенен для сессии"
+    ed.start_drag_node("box_a")
+    for x, y in ((120.0, 230.0), (100.0, 290.0)):
+        ed.drag_node_to(x, y)
+        c = ed.nodes["box_a"]["centroid"]
+        assert e1["source_point"] == pytest.approx(
+            [c[0] + 20.0, c[1] + 40.0]), \
+            "пин-конец обязан стоять в центроид+смещение на каждом кадре"
+    assert e1["pin_source"] == {"dx": 40.0, "dy": 20.0}, "пин мутирован"
     ed.end_drag_node()
 
 
@@ -216,20 +222,30 @@ def test_batch_all_internal_no_session_pure_translation(qapp, tmp_path):
 
 
 def test_batch_boundary_routed_by_session(qapp, tmp_path):
-    """Смешанное выделение: boundary live-ребро ведёт сессия (ортогонально,
-    без диагоналей), ребро с waypoints оператора не перекладывается."""
+    """Смешанное выделение (переобъявлен 2026-08-03, Э5): сессия ведёт ОБА
+    boundary-ребра — и прямое, и с коленами прошлой эпохи (заморозка
+    «waypoints без флага = оператора» снесена — корень жалобы «крутится
+    вокруг колена»). Дальний конец на чужом узле байт-в-байт (C6)."""
     ed = _editor(qapp, tmp_path, _graph())
-    e2_wps_before = copy.deepcopy(_edge(ed, "box_c", "box_d")["waypoints"])
+    e2_tp_before = copy.deepcopy(_edge(ed, "box_c", "box_d")["target_point"])
     ed.selected_nodes = {"box_a", "box_c"}
     ed.start_drag_node("box_a")
     assert ed._avoid_session is not None
     ed.drag_node_to(100.0, 290.0)      # box_a к оси box_c
     e1 = _edge(ed, "box_a", "box_b")   # boundary live: сессия роутит
     _assert_ortho(_full_pts(e1))
+    e2 = _edge(ed, "box_c", "box_d")   # колено прошлой эпохи — тоже live
+    _assert_ortho(_full_pts(e2))
     ed.end_drag_node()
-    # waypoints оператора у edge_2 байт-в-байт: ребро не routable —
-    # boundary-кадр пересаживает только ближний конец, полилинию не трогает
-    assert _edge(ed, "box_c", "box_d")["waypoints"] == e2_wps_before
+    # Дальний конец: байт-в-байт, ПОКА грань не стала изнаночной (side-flip
+    # — «нужда»); группа уехала box_c ВБОК от box_d — конец пересел на
+    # обращённую грань, но обязан остаться на рамке box_d.
+    ty, tx = _edge(ed, "box_c", "box_d")["target_point"]
+    assert (min(abs(tx - 100.0), abs(tx - 160.0)) <= 0.5
+            and 350.0 - 0.5 <= ty <= 390.0 + 0.5) or \
+           (min(abs(ty - 350.0), abs(ty - 390.0)) <= 0.5
+            and 100.0 - 0.5 <= tx <= 160.0 + 0.5), \
+        f"дальний конец сорван с рамки box_d: {[ty, tx]} (был {e2_tp_before})"
 
 
 def test_session_failure_mid_gesture_degrades(qapp, tmp_path, monkeypatch):
@@ -251,14 +267,15 @@ def test_session_failure_mid_gesture_degrades(qapp, tmp_path, monkeypatch):
 
 
 def test_no_orphan_auto_route_on_double_refusal(qapp, tmp_path, monkeypatch):
-    """Репро скептика ревью: кадр 1 — сессия приняла колено; кадр 2 —
-    приёмка бракует (ends_ok=False), лестница гасит в прямую. Флаг
-    _auto_route НЕ имеет права пережить маршрут (паритет :2155-2163)."""
+    """Репро скептика ревью (переобъявлен на Э5, флагов больше нет):
+    кадр 1 — сессия приняла колено; кадр 2 — приёмка бракует
+    (ends_ok=False), лестница гасит соосную пару в прямую — мёртвое
+    колено не переживает маршрут."""
     ed = _editor(qapp, tmp_path, _graph())
     ed.start_drag_node("box_a")
     ed.drag_node_to(100.0, 290.0)                  # колено от сессии
     e = _edge(ed, "box_a", "box_b")
-    assert e.get("_auto_route") and e.get("waypoints")
+    assert e.get("waypoints")
     real = ed._avoid_session.route_frame
 
     def reject(nodes, edges_data):
@@ -270,7 +287,6 @@ def test_no_orphan_auto_route_on_double_refusal(qapp, tmp_path, monkeypatch):
     monkeypatch.setattr(ed._avoid_session, "route_frame", reject)
     ed.drag_node_to(100.0, 200.0)                  # назад к соосности
     assert not e.get("waypoints"), "соосная пара обязана погаснуть"
-    assert not e.get("_auto_route"), "сирота _auto_route на прямом ребре"
     ed.end_drag_node()
 
 

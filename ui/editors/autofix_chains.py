@@ -420,8 +420,8 @@ def auto_fix_graph(
     # Теперь: пересаживаются ТОЛЬКО рёбра, затронутые сдвигом узлов, и
     # только каноном `modules/graph/core/seating.reseat_edge` — тем же
     # модулем, что сажает выход раскладки. Нетронутые рёбра сохраняют
-    # входную посадку (инвариант «не больше входа»), рёбра с ручным
-    # маршрутом (_manual_route) неприкосновенны (инвариант плана, H4).
+    # входную посадку (инвариант «не больше входа»); вход с ПИНОМ (Э5)
+    # канону не отдаётся — после пересадки конец возвращается в пин.
     # Waypoints затронутых рёбер стираются ДО пересадки — это прежняя
     # семантика выпрямления (иначе после сдвига узлов остаётся устаревший
     # зигзаг с диагональным хвостом), а канон затем сажает концы на общую
@@ -434,8 +434,10 @@ def auto_fix_graph(
         if math.hypot(_cx(n) - ox, _cy(n) - oy) > 0.5:
             moved_ids.add(nid)
 
+    from ui.editors import port_model
+
     for e in edges_data:
-        if e.get('_manual_route'):
+        if e.get('_manual_route'):        # легаси-файлы мимо миграции
             continue
         if e['source'] not in moved_ids and e['target'] not in moved_ids:
             continue
@@ -443,6 +445,12 @@ def auto_fix_graph(
             continue                      # висячее ребро — как и раньше, мимо
         e['waypoints'] = []
         reseat_edge(nodes, e)
+        # Э5: вход с пином канону не отдаётся — вернуть конец в пин
+        for role, pk in (('source', 'source_point'),
+                         ('target', 'target_point')):
+            pin = port_model.pinned_port(nodes.get(e.get(role)), e)
+            if pin is not None:
+                e[pk] = [pin[1], pin[0]]
         sp, tp = e.get('source_point'), e.get('target_point')
         if sp and tp and (abs(sp[0] - tp[0]) <= STRAIGHT_TOL
                           or abs(sp[1] - tp[1]) <= STRAIGHT_TOL):

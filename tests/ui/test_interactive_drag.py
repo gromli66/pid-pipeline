@@ -282,25 +282,24 @@ def test_drag_perpendicular_far_end_bitexact(qapp, tmp_path):
 
 
 def test_drag_keeps_waypoints_intact(qapp, tmp_path):
-    """Э3: у ребра с waypoint'ом drag узла не трогает ни промежуточные точки,
-    ни дальний конец; ближний конец сажается к ПЕРВОМУ waypoint'у (не к
-    центроиду соседа). Старая механика стирала waypoints и строила маршрут
-    заново.
-
-    Этап A: порт — ось waypoint'а (y=235) больше не накрыта рамкой узла,
-    конец садится в порт (центр правой грани, y=350) вместо ray-клампа в
-    угол ([310,180])."""
+    """ПЕРЕОБЪЯВЛЕН 2026-08-03 (Э5) — КОРЕНЬ ЖАЛОБЫ «рёбра крутятся вокруг
+    Z-колен»: waypoints — кэш расчёта, drag узла ПЕРЕСТРАИВАЕТ маршрут, а
+    не вращает ребро вокруг замороженного колена (прежняя заморозка
+    «waypoints без _auto_route = маршрут оператора» снесена). Дальний
+    конец по-прежнему байт-в-байт (C6), путь ортогонален."""
     g = _graph_two_boxes()
-    g["links"][0]["waypoints"] = [[235.0, 300.0]]
+    g["links"][0]["waypoints"] = [[235.0, 300.0]]   # колено прошлой эпохи
     _assert_canonical(g)
     ed = _editor(qapp, tmp_path, g)
     e = ed.model.find_edge_data(ed.model.edge_key("box_a", "box_b"))
 
     _drag(ed, "box_a", 140.0, 350.0)
 
-    assert e["waypoints"] == [[235.0, 300.0]], "waypoints тронуты"
     assert e["target_point"] == [235.0, 400.0], "дальний конец тронут"
-    assert e["source_point"] == pytest.approx([350.0, 180.0])
+    assert e["source_point"] == pytest.approx([350.0, 180.0]), \
+        "ближний конец обязан сидеть в порту (центр правой грани)"
+    assert e["waypoints"], "увод с оси обязан дать честный маршрут"
+    _assert_orthogonal(_full_path_xy(e))
 
 
 # ── Э3.2: честный предпросмотр — до отпускания == после ──────────────────
@@ -903,7 +902,6 @@ def test_drag_away_and_back_keeps_ports_nonport_pair(qapp, tmp_path):
 
     _drag(ed, "box_a", 140.0, 330.0)          # увод вниз: маршрут родился
     assert e["waypoints"], "маршрут обязан был родиться"
-    assert e.get("_auto_route") is True, "авто-маршрут обязан нести флаг"
 
     _drag(ed, "box_a", 140.0, 200.0)          # возврат ровно в исходную
     assert e["source_point"] == [200.0, 180.0]      # порт: середина грани
@@ -934,11 +932,9 @@ def test_drag_away_and_back_restores_straight_port_pair(qapp, tmp_path):
 
     _drag(ed, "box_a", 140.0, 330.0)          # увод вниз: маршрут родился
     assert e["waypoints"], "маршрут обязан был родиться"
-    assert e.get("_auto_route") is True
 
     _drag(ed, "box_a", 140.0, 200.0)          # возврат ровно в исходную
     assert e["waypoints"] == [], "мёртвое авто-колено осталось в данных"
-    assert "_auto_route" not in e, "флаг обязан гаснуть вместе с маршрутом"
     assert e["source_point"] == [200.0, 180.0]
     assert e["target_point"] == [200.0, 400.0]
 
@@ -1057,7 +1053,6 @@ def test_drag_connector_in_poly_pocket_births_route_over_empty_corner(
 
     assert e["waypoints"], \
         "обход над пустым углом bbox полигона обязан родиться"
-    assert e.get("_auto_route") is True
     pts = _full_path_xy(e)
     _assert_orthogonal(pts)
     for a, b in zip(pts, pts[1:]):
@@ -1088,17 +1083,14 @@ def test_route_through_poly_contour_still_rejected(qapp, tmp_path):
         assert ed._route_orthogonal_main(e) is False, \
             "маршрут сквозь реальный контур обязан браковаться"
         assert e["waypoints"] == [], "бракованный маршрут попал в данные"
-        assert "_auto_route" not in e
 
         # Э3-лестница: отказ главного НЕ оставляет диагональ — L-фолбэк
         # находит чистое колено по карману (контур запрещён и фолбэку,
         # кандидат сквозь колонну отброшен)
         assert ed._route_orthogonal(e) is True
         assert e["waypoints"] == clean
-        assert e.get("_auto_route") is True
         assert "_route_defect" not in e
         e["waypoints"] = []
-        e.pop("_auto_route", None)
 
         age.route_edge_v2 = lambda **kw: [list(w) for w in clean]
         assert ed._route_orthogonal(e) is True, \
@@ -1175,24 +1167,26 @@ def test_resize_reseats_only_near_end(qapp, tmp_path):
 
 
 def test_size_panel_rescales_manual_ports(qapp, tmp_path):
-    """Э2d: панель «Размеры» масштабирует ручные порты (раньше теряла)."""
+    """Э2d/Э5: панель «Размеры» масштабирует пины концов инцидентных
+    рёбер (раньше — ручные порты узла)."""
     g = _graph_two_boxes()
     ed = _editor(qapp, tmp_path, g)
     node = ed.nodes["box_a"]
     node["segmentation"] = [100.0, 160.0, 180.0, 160.0,
                             180.0, 240.0, 100.0, 240.0]
-    node["_ports"] = [{"dx": 40.0, "dy": 0.0}]
+    e = ed.model.find_edge_data(ed.model.edge_key("box_a", "box_b"))
+    e["pin_source"] = {"dx": 40.0, "dy": 0.0}
 
     ed._resize_node_poly(node, 2.0)
-    assert node["_ports"] == [{"dx": 80.0, "dy": 0.0}]
+    assert e["pin_source"] == {"dx": 80.0, "dy": 0.0}
 
 
 # ── 2026-08-01: чужие рёбра при drag НЕПРИКОСНОВЕННЫ (уступание удалено) ──
 
 def _edge_bytes(e):
-    return json.dumps({"sp": e.get("source_point"), "tp": e.get("target_point"),
-                       "wps": e.get("waypoints"), "auto": e.get("_auto_route")},
-                      sort_keys=True)
+    # Полный dict (Э5): контракт «чужие байт-в-байт» охраняет и инертные
+    # ключи (серверная подпись _auto_route в старых данных, пины и т.д.)
+    return json.dumps(e, sort_keys=True, default=str)
 
 
 def test_foreign_pipe_is_untouchable_under_drag(qapp, tmp_path):

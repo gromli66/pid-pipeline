@@ -206,14 +206,13 @@ def _drop_endpoint(ed, key, endpoint, x, y):
 
 
 def test_endpoint_drop_free_creates_manual_port(qapp, tmp_path):
-    """Отпускание конца в свободном месте границы создаёт постоянный ЯКОРЬ
-    входа: node['_ports'] — ЛОКАЛЬНОЕ смещение от центроида + владелец-ребро.
+    """Отпускание конца в свободном месте границы закрепляет вход ПИНОМ
+    КОНЦА РЕБРА: edge['pin_source'] — локальное смещение от центроида.
 
-    ПЕРЕОБЪЯВЛЕН 2026-08-02 (решение заказчика «нужен классический обход, но
-    с фиксированным входом»): флаг _manual_route здесь больше НЕ ставится —
-    он исключал трубу из всех роутингов навсегда, и она оставалась голой
-    прямой сквозь чужие блоки. Вход держит якорь, форму трубы считает
-    роутер."""
+    ПЕРЕОБЪЯВЛЕН 2026-08-03 (Э5, модель «пин на ребре»; решение заказчика
+    2026-08-02 «классический обход с фиксированным входом» в силе): флаг
+    _manual_route не ставится, узел чист (_ports больше не бывает), форму
+    трубы считает роутер."""
     g = _graph_box_conn_small()
     _assert_canonical(g)
     ed = _editor(qapp, tmp_path, g)
@@ -227,21 +226,17 @@ def test_endpoint_drop_free_creates_manual_port(qapp, tmp_path):
     assert e["source_point"] == [225.0, 160.0]
     assert e.get("_manual_route") is None, \
         "закрепление ВХОДА не должно замораживать МАРШРУТ"
-    ports = node.get("_ports") or []
-    assert len(ports) == 1, f"якорь не создан: {ports}"
-    assert (ports[0]["dx"], ports[0]["dy"]) == (40.0, 25.0), \
-        f"якорь не локальный: {ports[0]}"
-    assert ports[0].get("edge") == "box|conn", \
-        f"у якоря нет владельца-ребра: {ports[0]}"
+    assert e.get("pin_source") == {"dx": 40.0, "dy": 25.0}, \
+        f"вход не закреплён пином ребра: {e.get('pin_source')}"
+    assert not node.get("_ports"), "якорей в узле больше не бывает"
 
 
 def test_endpoint_drop_on_candidate_port_snaps_to_it(qapp, tmp_path):
     """Конец липнет к порту-кандидату (центр грани).
 
-    ПЕРЕОБЪЯВЛЕН 2026-08-02: раньше проверялось, что якорь при этом НЕ
-    создаётся. Теперь выбор оператора закрепляется ВСЕГДА — иначе его негде
-    хранить, и первый же пересчёт уводит конец обратно в середину грани
-    (замер аудита). Липкость к кандидату при этом сохраняется."""
+    ПЕРЕОБЪЯВЛЕН 2026-08-03 (Э5): выбор оператора закрепляется ВСЕГДА
+    (решение 2026-08-02) — теперь пином конца ребра. Липкость к кандидату
+    сохраняется."""
     g = _graph_box_conn_small()
     ed = _editor(qapp, tmp_path, g)
     key = ed.model.edge_key("box", "conn")
@@ -252,13 +247,12 @@ def test_endpoint_drop_on_candidate_port_snaps_to_it(qapp, tmp_path):
 
     e = ed.model.find_edge_data(key)
     assert e["source_point"] == [200.0, 160.0], "конец обязан прилипнуть к порту"
-    ports = ed.model.nodes["box"].get("_ports") or []
-    assert len(ports) == 1 and ports[0].get("edge") == "box|conn", \
-        f"выбор оператора обязан закрепиться якорем: {ports}"
+    assert e.get("pin_source") == {"dx": 40.0, "dy": 0.0}, \
+        f"выбор оператора обязан закрепиться пином: {e.get('pin_source')}"
 
 
 def test_manual_port_rides_with_node(qapp, tmp_path):
-    """Перенос узла: ручной порт — локальная точка узла, конец едет с ним."""
+    """Перенос узла: пин — локальная точка узла, конец едет с ним."""
     g = _graph_box_conn_small()
     ed = _editor(qapp, tmp_path, g)
     key = ed.model.edge_key("box", "conn")
@@ -268,10 +262,9 @@ def test_manual_port_rides_with_node(qapp, tmp_path):
 
     e = ed.model.find_edge_data(key)
     assert e["source_point"] == pytest.approx([245.0, 180.0]), \
-        "пришпиленный конец обязан ехать с узлом (центроид + смещение порта)"
-    # смещение якоря не изменилось (владелец-ребро в словаре — не помеха)
-    pt = ed.model.nodes["box"]["_ports"][0]
-    assert (pt["dx"], pt["dy"]) == (40.0, 25.0), f"якорь уехал: {pt}"
+        "пришпиленный конец обязан ехать с узлом (центроид + смещение пина)"
+    pin = e["pin_source"]
+    assert (pin["dx"], pin["dy"]) == (40.0, 25.0), f"пин уехал: {pin}"
 
 
 def test_manual_port_undo_redo_bytewise(qapp, tmp_path):
@@ -282,10 +275,8 @@ def test_manual_port_undo_redo_bytewise(qapp, tmp_path):
     key = ed.model.edge_key("box", "conn")
 
     def state():
-        n = ed.model.nodes["box"]
         e = ed.model.find_edge_data(key)
-        return json.dumps({"ports": n.get("_ports"),
-                           "manual": e.get("_manual_route"),
+        return json.dumps({"pin": e.get("pin_source"),
                            "sp": e["source_point"], "tp": e["target_point"],
                            "wps": e.get("waypoints")}, sort_keys=True)
 
@@ -301,7 +292,7 @@ def test_manual_port_undo_redo_bytewise(qapp, tmp_path):
 
 
 def test_manual_port_survives_save_load(qapp, tmp_path):
-    """node['_ports'] переживает save/load модели."""
+    """Пин конца ребра переживает save/load модели."""
     g = _graph_box_conn_small()
     ed = _editor(qapp, tmp_path, g)
     key = ed.model.edge_key("box", "conn")
@@ -310,78 +301,79 @@ def test_manual_port_survives_save_load(qapp, tmp_path):
     out = tmp_path / "saved.json"
     assert ed.model.save(str(out))
     saved = json.loads(out.read_text(encoding="utf-8"))
-    want = {"dx": 40.0, "dy": 25.0, "edge": "box|conn"}
-    node = next(n for n in saved["nodes"] if n["id"] == "box")
-    assert node.get("_ports") == [want], \
-        f"якорь (со владельцем) не пережил save: {node.get('_ports')}"
+    want = {"dx": 40.0, "dy": 25.0}
+    edge = next(l for l in saved["links"] if l["id"] == "edge_1")
+    assert edge.get("pin_source") == want, \
+        f"пин не пережил save: {edge.get('pin_source')}"
 
     ed2 = _editor(qapp, tmp_path, saved)
-    assert ed2.model.nodes["box"].get("_ports") == [want], \
-        "якорь не пережил load — вход перестанет быть фиксированным"
+    assert ed2.model.find_edge_data(key).get("pin_source") == want, \
+        "пин не пережил load — вход перестанет быть фиксированным"
 
 
 def test_ports_do_not_change_projection_sha(qapp, tmp_path):
-    """'_ports' вне canvas_state._NODE_KEYS: sha геометрической проекции
-    холста от появления портов не меняется."""
+    """Пины рёбер вне canvas_state._EDGE_KEYS (белый список): sha
+    геометрической проекции холста от появления пина не меняется."""
     from modules.graph.core.canvas_state import graph_projection_sha
 
     g = _graph_box_conn_small()
     sha0 = graph_projection_sha(g)
     g2 = copy.deepcopy(g)
-    g2["nodes"][0]["_ports"] = [{"dx": 40.0, "dy": 25.0}]
+    g2["links"][0]["pin_source"] = {"dx": 40.0, "dy": 25.0}
     assert graph_projection_sha(g2) == sha0, \
-        "_ports обязан быть невидим для sha проекции холста"
+        "пин ребра обязан быть невидим для sha проекции холста"
 
 
 def test_manual_port_rescaled_on_resize(qapp, tmp_path):
-    """Resize узла: смещения ручного порта масштабируются с рамкой —
-    порт остаётся на границе."""
+    """Resize узла: смещения пина масштабируются с рамкой — вход остаётся
+    на границе."""
     g = _graph_box_conn_small()
     ed = _editor(qapp, tmp_path, g)
     key = ed.model.edge_key("box", "conn")
-    _drop_endpoint(ed, key, "source", 165.0, 225.0)   # порт (160, 225)
+    _drop_endpoint(ed, key, "source", 165.0, 225.0)   # пин (160, 225)
 
     # bbox [80,160,160,240] -> [80,160,240,320]: рамка x2 в обе стороны
     ed._on_node_resized("box", [80.0, 160.0, 240.0, 320.0])
 
-    node = ed.model.nodes["box"]
-    pt = node["_ports"][0]
-    assert (pt["dx"], pt["dy"]) == (80.0, 50.0), f"якорь не отмасштабирован: {pt}"
-    assert pt.get("edge") == "box|conn", "resize потерял владельца якоря"
-    # порт в абсолюте: центроид (160, 240) + (80, 50) = (240, 290) — на грани
+    e = ed.model.find_edge_data(key)
+    pin = e["pin_source"]
+    assert (pin["dx"], pin["dy"]) == (80.0, 50.0), \
+        f"пин не отмасштабирован: {pin}"
+    # пин в абсолюте: центроид (160, 240) + (80, 50) = (240, 290) — на грани
     from ui.editors import port_model
-    px, py = port_model.manual_ports(node)[0][:2]
-    assert (px, py) == (240.0, 290.0)
+    p = port_model.pinned_port(ed.model.nodes["box"], e)
+    assert (p[0], p[1]) == (240.0, 290.0)
 
 
 def test_manual_port_survives_resize_undo_bytewise(qapp, tmp_path):
-    """Находка скептика этапа A: undo РЕАЛЬНОГО resize-жеста обязан вернуть
-    и смещения ручных портов — иначе порт остаётся отмасштабированным при
-    старой рамке и вылетает за границу узла."""
+    """Undo РЕАЛЬНОГО resize-жеста обязан вернуть и смещения пина —
+    иначе пин остаётся отмасштабированным при старой рамке и вылетает
+    за границу узла (находка скептика этапа A, переобъявлена на Э5)."""
     g = _graph_box_conn_small()
     ed = _editor(qapp, tmp_path, g)
     key = ed.model.edge_key("box", "conn")
-    _drop_endpoint(ed, key, "source", 165.0, 225.0)   # порт {dx:25, dy:40}? нет:
+    _drop_endpoint(ed, key, "source", 165.0, 225.0)
     node = ed.model.nodes["box"]
-    ports_before = [dict(p) for p in node["_ports"]]
+    e = ed.model.find_edge_data(key)
+    pin_before = dict(e["pin_source"])
     bbox_before = list(node["bbox"])
 
     # реальный жест: старт -> протяжка ручки -> коммит
     ed._start_resize("box")
     ed._on_node_resized("box", [80.0, 160.0, 240.0, 320.0])
     ed._commit_resize("box")
-    assert node["_ports"] != ports_before          # порт отмасштабирован
+    assert e["pin_source"] != pin_before           # пин отмасштабирован
 
     ed.undo_mgr.undo()
     node = ed.model.nodes["box"]
     assert node["bbox"] == bbox_before
-    assert node["_ports"] == ports_before, \
-        "undo не вернул смещения ручного порта (порт вне узла)"
+    assert ed.model.find_edge_data(key)["pin_source"] == pin_before, \
+        "undo не вернул смещения пина (вход вне узла)"
 
     ed.undo_mgr.redo()
     node = ed.model.nodes["box"]
     assert node["bbox"] == [80.0, 160.0, 240.0, 320.0]
-    assert node["_ports"] != ports_before          # redo вернул масштаб
+    assert ed.model.find_edge_data(key)["pin_source"] != pin_before
 
 
 # =====================================================================
@@ -458,19 +450,22 @@ def test_polygon_entry_pinned_during_drag(qapp, tmp_path):
 
 
 def test_polygon_manual_port_survives_move(qapp, tmp_path):
-    """Пришпиленный (ручной) порт на контуре переживает перенос узла."""
+    """Запиненный вход на контуре переживает перенос узла.
+
+    ПЕРЕОБЪЯВЛЕН 2026-08-03 (Э5): фиксацию несёт пин конца ребра
+    (edge['pin_source']), а не якорь узла/флаг _manual_route."""
     nodes = [
         {"id": "poly", "type": "equipment", "centroid": [300.0, 300.0],
          "bbox": [200.0, 200.0, 400.0, 400.0], "segmentation": list(DIAMOND),
-         "class_id": 99, "class_name": "unknow", "degree": 1,
-         "_ports": [{"dx": 20.0, "dy": -80.0}]},     # (320, 220) на контуре
+         "class_id": 99, "class_name": "unknow", "degree": 1},
         {"id": "conn", "type": "connector", "centroid": [300.0, 600.0],
          "bbox": None, "segmentation": None,
          "class_id": -1, "class_name": "connector", "degree": 1},
     ]
     links = [{"id": "edge_1", "source": "poly", "target": "conn",
               "source_point": [220.0, 320.0], "target_point": [300.0, 600.0],
-              "waypoints": [], "_manual_route": True}]
+              "waypoints": [],
+              "pin_source": {"dx": 20.0, "dy": -80.0}}]  # (320, 220) на контуре
     g = _wrap(nodes, links)
     ed = _editor(qapp, tmp_path, g)
     e = ed.model.find_edge_data(ed.model.edge_key("poly", "conn"))
@@ -478,8 +473,8 @@ def test_polygon_manual_port_survives_move(qapp, tmp_path):
     _drag(ed, "poly", 350.0, 340.0)     # +50 по x, +40 по y
 
     assert e["source_point"] == pytest.approx([260.0, 370.0]), \
-        "пришпиленный порт обязан ехать с полигоном"
-    assert ed.model.nodes["poly"]["_ports"] == [{"dx": 20.0, "dy": -80.0}]
+        "запиненный вход обязан ехать с полигоном"
+    assert e["pin_source"] == {"dx": 20.0, "dy": -80.0}
 
 
 # =====================================================================

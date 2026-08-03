@@ -241,10 +241,10 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self._batch_internal_edges: list = []
         self._batch_boundary_edges: list = []
         self._batch_bound_blocks: list = []
-        # Э6/Э7-a: рёбра, которые drag ведёт сам (на старте жеста без
-        # маршрута оператора: waypoints пусты ИЛИ несут флаг _auto_route,
-        # и не _manual_route) — только им разрешено рожать/перестраивать
-        # ортогональный маршрут на кадрах протяжки.
+        # Э5: рёбра, которые ведёт текущий жест, — ВСЕ инцидентные ему.
+        # Геометрия производная: waypoints — кэш последнего расчёта, drag
+        # вправе перестраивать любой маршрут; закреплён только вход с пином
+        # (edge['pin_source'|'pin_target'], seat_end сажает в него).
         self._drag_routable_edges: set = set()
         # Э7-перф: кэш жеста для входов route_edge_v2 (bbox'ы узлов + пути
         # рёбер собираются один раз в start_drag_node; двигающиеся узлы и
@@ -607,9 +607,6 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         )
         if probe['waypoints']:
             edge_data['waypoints'] = [list(wp) for wp in probe['waypoints']]
-            # Э7-c: авто-маршрут (не оператора) — следующий drag вправе
-            # перестраивать/гасить его (_drag_routable_edges).
-            edge_data['_auto_route'] = True
         edge_data['straight_line_distance'] = math.sqrt((tgt_x - src_x)**2 + (tgt_y - src_y)**2)
         edge_data['connection_type'] = connection_type
 
@@ -774,13 +771,6 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
 
         edge_data = self.model.find_edge_data(key)
         if not edge_data:
-            return False
-
-        # Ручную посадку оператора инструменты не пересаживают (инвариант
-        # плана EDITOR_AFTER_LAYOUT_PLAN, H4).
-        if edge_data.get('_manual_route'):
-            self.update_status(
-                f"Ребро {node_a} — {node_b}: ручной маршрут, посадка не пересчитывается")
             return False
 
         original_source_id = edge_data['source']
@@ -982,16 +972,6 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         (решение о waypoints + route_edge_v2) — прежняя логика из
         graph_editor.py:2497-2595.
         """
-        # Ручной режим: точки прикрепления заданы пользователем вручную.
-        # Не пересчитываем маршрут к ортогональности — только удерживаем
-        # точки на границе узла (на случай, если узел подвинули).
-        if edge_data.get('_manual_route'):
-            self._reproject_manual_endpoints(edge_data)
-            key = self.model.edge_key(edge_data['source'], edge_data['target'])
-            self._update_edge_path(key)
-            self.edge_perp_scores[key] = {'is_good': True, 'score': 1.0, 'source_angle': 0}
-            return
-
         src_id, tgt_id = edge_data['source'], edge_data['target']
         src = self.nodes[src_id]
         tgt = self.nodes[tgt_id]
@@ -1021,9 +1001,6 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         from modules.graph.core import seating
 
         edge_data['waypoints'] = []
-        # Э7-c: маршрут пересобирается НЕ drag'ом (optimize/L-route/цикл
-        # сторон) — итог принадлежит оператору, авто-флаг снимается.
-        edge_data.pop('_auto_route', None)
         seating.reseat_edge(self.nodes, edge_data)
         self._engine_finish_ends(edge_data)      # Э2c: порт/слот, не угол
         sp, tp = edge_data['source_point'], edge_data['target_point']
@@ -1078,24 +1055,6 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         else:
             self.edge_perp_scores[edge_key] = {'is_good': True, 'score': 1.0, 'source_angle': 0}
 
-    def _reproject_manual_endpoints(self, edge_data: dict):
-        """Удержать вручную заданные точки прикрепления на границе узлов.
-
-        Вызывается при пересчёте ребра в ручном режиме (_manual_route): если
-        узел сдвинули/изменили, точка перепроецируется на новый периметр, но
-        маршрут остаётся прямым (waypoints не трогаем)."""
-        for endpoint, point_key, side_key in (
-            ('source', 'source_point', '_src_side'),
-            ('target', 'target_point', '_tgt_side'),
-        ):
-            pt = edge_data.get(point_key)
-            if not pt:
-                continue
-            node_id = edge_data['source'] if endpoint == 'source' else edge_data['target']
-            px, py = self._project_to_node_border(node_id, pt[1], pt[0])
-            edge_data[point_key] = [py, px]
-            edge_data[side_key] = closest_bbox_side(self._get_node_bbox(node_id), px, py)
-
     def _seated_face(self, node_id: str, px: float, py: float,
                      other_x: float, other_y: float) -> str:
         """Сторона узла для route_edge_v2: грань, на которой сидит конец.
@@ -1142,7 +1101,6 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 edge_data.pop('_route_defect', None)
                 return True
             edge_data['waypoints'] = []
-            edge_data.pop('_auto_route', None)
         if self._route_fallback_lz(edge_data) \
                 or self._route_fallback_z(edge_data):
             edge_data.pop('_route_defect', None)
@@ -1185,7 +1143,6 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                    for a, b in zip(pts, pts[1:])):
                 continue
             edge_data['waypoints'] = [[wy, wx]]
-            edge_data['_auto_route'] = True
             return True
         return False
 
@@ -1233,14 +1190,12 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             if not any(self._fb_seg_bad(a, b, edge_data, amn)
                        for a, b in zip(pts, pts[1:])):
                 edge_data['waypoints'] = [[sy, xm], [ty, xm]]
-                edge_data['_auto_route'] = True
                 return True
         for ym in ys:                                # V-H-V
             pts = ((sx, sy), (sx, ym), (tx, ym), (tx, ty))
             if not any(self._fb_seg_bad(a, b, edge_data, amn)
                        for a, b in zip(pts, pts[1:])):
                 edge_data['waypoints'] = [[ym, sx], [ym, tx]]
-                edge_data['_auto_route'] = True
                 return True
         return False
 
@@ -1382,11 +1337,8 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         вызывающего и для почти-соосной пары даёт min(...) == 0 —
         приоритет прямой трубы над коленом обеспечен по построению.
 
-        Успешный маршрут помечается флагом ребра `_auto_route` (Э7-c):
-        авто-колено отличимо от waypoints оператора, следующий drag вправе
-        его перестраивать и гасить. Флаг снимает вызывающий, когда маршрут
-        гаснет (waypoints=[]); в graph_projection_sha он не попадает
-        (canvas_state._EDGE_KEYS — белый список), FXML его игнорирует.
+        Э5: waypoints — кэш последнего расчёта, флагов принадлежности нет;
+        следующий жест вправе перестраивать и гасить любой маршрут.
 
         Концы НЕ трогает (пишет только waypoints + кэши сторон) —
         пересадка концов по осям подводящих сегментов остаётся
@@ -1505,7 +1457,6 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 if _seg_pierces_polygon(a[0], a[1], b[0], b[1], pseg):
                     return False
         edge_data['waypoints'] = waypoints
-        edge_data['_auto_route'] = True
         edge_data['_src_side'] = src_side
         edge_data['_tgt_side'] = tgt_side
         return True
@@ -1943,8 +1894,8 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
     # Кадр жеста = посадка концов движком (как раньше) -> moveShape +
     # одна processTransaction по окну -> приёмка маршрутов live-рёбер.
     # Чужие рёбра стоят в сессии ФИКСАМИ (байт-в-байт, контракт
-    # 2026-08-01), _manual_route неприкосновенен. Любой сбой сессии =
-    # жест доезжает на самописной лестнице (запасной путь по заданию).
+    # 2026-08-01). Любой сбой сессии = жест доезжает на самописной
+    # лестнице (запасной путь по заданию).
 
     def _build_avoid_session(self, moving_ids: set):
         """Сессия жеста или None (нет биндинга / нет routable-рёбер /
@@ -2048,19 +1999,13 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                     if node_now is not None:
                         ctx['fail_anchor'][edge_key] = (
                             node_now['centroid'][1], node_now['centroid'][0])
-                if not (edge_data.get('waypoints') or []):
-                    # паритет гашения с прямым путём (:2155-2163): маршрута
-                    # нет — флаг _auto_route не живёт (иначе сирота уезжал
-                    # в сейв и redo — репро скептика ревью)
-                    edge_data.pop('_auto_route', None)
             self._refresh_edge_decor(edge_key, edge_data)
 
     def _avoid_apply_route(self, edge_data: dict, pts: list) -> bool:
         """Приёмка маршрута сессии тем же судом, что у лестницы
         (финальный валидатор _route_orthogonal): прошивание/hug с
-        амнистией входа жеста. Успех пишет waypoints + _auto_route и
-        кэши сторон (паритет с _route_orthogonal_main); прямая — паритет
-        гашения (флаг на прямом ребре не живёт)."""
+        амнистией входа жеста. Успех пишет waypoints и кэши сторон
+        (паритет с _route_orthogonal_main)."""
         amn = self._amnesty_ids(edge_data)
         if any(self._fb_seg_bad(a, b, edge_data, amn)
                for a, b in zip(pts, pts[1:])):
@@ -2068,11 +2013,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         mid = pts[1:-1]
         if not mid:
             edge_data['waypoints'] = []
-            edge_data.pop('_auto_route', None)
             edge_data.pop('_route_defect', None)
             return True
         edge_data['waypoints'] = [[y, x] for x, y in mid]
-        edge_data['_auto_route'] = True
         # Кэши сторон — от РЕАЛЬНЫХ стабов маршрута (первый/последний
         # сегмент), не от соосности концов: маршрут «из боковой грани и
         # обратно» у соосной пары писал бы ложные bottom/top (репро
@@ -2118,8 +2061,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         геометрии и пересаживает оба конца (дальний уезжал в 25/36 прогонов
         interactive_bench — замер Э0).
 
-        Э6/Э7-a: ребру, у которого на старте drag НЕ было маршрута
-        оператора (_drag_routable_edges: waypoints пусты или _auto_route),
+        Э5: жест ведёт все инцидентные рёбра (_drag_routable_edges);
         при уводе с оси больше слабины и порога строится ортогональный
         L/Z-маршрут (_route_orthogonal) от НЕПОДВИЖНОГО дальнего конца;
         маршрут прошлого кадра протяжки стирается и строится заново —
@@ -2153,9 +2095,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         skip_route = ((not defer_route) and routable and not route_alive
                       and self._routing_failed_nearby(edge_key, moved_node_id))
         if route_alive and not reuse:
-            # авто-маршрут прошлого кадра протяжки: перестраивается с нуля
-            # от текущей геометрии (waypoints оператора сюда не попадают —
-            # такие рёбра в _drag_routable_edges не заносятся)
+            # маршрут прошлого кадра протяжки: перестраивается с нуля от
+            # текущей геометрии (Э5: waypoints — кэш, drag ведёт все
+            # инцидентные рёбра)
             edge_data['waypoints'] = []
         wps = edge_data.get('waypoints') or []
         if src_id == moved_node_id:
@@ -2188,9 +2130,14 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         # грань. Блок стоит ДО роутинга: маршрут ниже строится уже от
         # правильной грани В ЭТОМ ЖЕ кадре (иначе на отпускании оставалась
         # диагональ сквозь чужие блоки — второй скрин).
+        from ui.editors import port_model as _pm
         fp = edge_data.get(far_key)
-        if (far_node is not None and fp is not None
-                and not edge_data.get('_manual_route')):
+        # Пин оператора > автолечение изнанки: закреплённый дальний конец
+        # side-flip не пересаживает (seat_end всё равно вернул бы пин) —
+        # наложение остаётся судье.
+        far_pin = _pm.edge_pin(
+            edge_data, 'source' if far_key == 'source_point' else 'target')
+        if far_node is not None and fp is not None and far_pin is None:
             wps_now = edge_data.get('waypoints') or []
             far_adj = ((wps_now[-1] if far_key == 'target_point' else wps_now[0])
                        if wps_now else edge_data[point_key])
@@ -2204,10 +2151,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                     fp, fa_x, fa_y, try_slack=True)
                 edge_data[far_key] = [fy, fx]
                 if routable:
-                    # авто-маршрут строился от старой грани — сброс; роутинг
+                    # маршрут строился от старой грани — сброс; роутинг
                     # ниже перестроит его от новой конфигурации на этом кадре
                     edge_data['waypoints'] = []
-                    edge_data.pop('_auto_route', None)
                     reuse = False
                     skip_route = False
                     route_alive = False
@@ -2250,14 +2196,11 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 edge_data[point_key], ref2[1], ref2[0], try_slack=False)
             edge_data[point_key] = [ay, ax]
         elif routable and not reuse:
-            # Э7-c: маршрут погашен (строгая соосность) либо лестница
-            # отказала — ребро прямое, пометку ставит обёртка лестницы.
+            # Маршрут погашен (строгая соосность) либо лестница отказала —
+            # ребро прямое, пометку ставит обёртка лестницы.
             # ВОССТАНОВЛЕНИЕ старого маршрута ОТВЕРГНУТО ДВАЖДЫ (2026-08-01):
             # старые колени + едущий порт = косой стаб 15-30px и «зигзаг
-            # прибит гвоздями» (репро заказчика). Правка-предшественник
-            # не удалила блок (replace без assert смолчал) — ложь в
-            # сообщении e3b3493, исправлено здесь.
-            edge_data.pop('_auto_route', None)
+            # прибит гвоздями» (репро заказчика).
             if self._drag_route_ctx is not None:
                 self._drag_route_ctx['route_anchor'].pop(edge_key, None)
                 if not skip_route and self._drag_route_ctx['bounded']:
@@ -2311,23 +2254,21 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         пересаживается ТОЛЬКО конец у изменённого узла — движком
         (порт/слот/контур); дальние концы соседей неприкосновенны (C6).
         Прежний путь переписывал ОБА конца по центроидам: терял порты,
-        рушил дальние концы и косил стабы маршрутов. _manual_route —
-        перепроекция на новую границу, как в drag.
+        рушил дальние концы и косил стабы маршрутов. Пин конца движок
+        уважает сам (seat_end: пин первее всего).
 
         Мини-жест (репро заказчика 2026-08-01 «после resize линии
         наслаиваются»): авто-маршруты рёбер узла ПЕРЕСТРАИВАЮТСЯ от новых
         посадок — вне drag роутинг заперт за _drag_routable_edges, и без
         мини-жеста концы разъезжались по слотам, а колени оставались
         стопкой (трубы лежали друг на друге всей длиной)."""
+        # Э5: мини-жест ведёт ВСЕ рёбра узла (waypoints — кэш расчёта).
         auto_keys = set()
         for edge in self.edges_data:
             if node_id not in (edge.get('source'), edge.get('target')):
                 continue
-            if edge.get('_manual_route'):
-                continue
-            if not (edge.get('waypoints') or []) or edge.get('_auto_route'):
-                auto_keys.add(self.model.edge_key(edge['source'],
-                                                  edge['target']))
+            auto_keys.add(self.model.edge_key(edge['source'],
+                                              edge['target']))
         prev_routable = self._drag_routable_edges
         prev_ctx = self._drag_route_ctx
         prev_ses = self._avoid_session
@@ -2346,16 +2287,11 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 if node_id not in (edge.get('source'), edge.get('target')):
                     continue
                 key = self.model.edge_key(edge['source'], edge['target'])
-                if edge.get('_manual_route'):
-                    self._reproject_manual_endpoints(edge)
-                    self._update_edge_path(key)
-                    continue
                 # снимок ДО посадки: гейт судит его же (см. ниже)
                 work.append((edge, key, self._edge_is_ortho(edge),
                              (list(edge.get('source_point') or []),
                               list(edge.get('target_point') or []),
                               [list(w) for w in edge.get('waypoints') or []],
-                              bool(edge.get('_auto_route')),
                               bool(edge.get('_route_defect')))))
                 if self._avoid_session is not None and key in auto_keys:
                     alive = bool(edge.get('waypoints'))
@@ -2376,14 +2312,10 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             # транзакции: до неё маршрута ещё нет и судить нечего.
             for edge, key, was_ortho, bak in work:
                 if was_ortho and not self._edge_is_ortho(edge):
-                    sp0, tp0, wp0, auto0, defect0 = bak
+                    sp0, tp0, wp0, defect0 = bak
                     edge['source_point'] = sp0
                     edge['target_point'] = tp0
                     edge['waypoints'] = wp0
-                    if auto0:
-                        edge['_auto_route'] = True
-                    else:
-                        edge.pop('_auto_route', None)
                     if defect0:
                         edge['_route_defect'] = True
                     else:
@@ -3054,14 +2986,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                     self._batch_internal_edges.append(e)
                 else:
                     self._batch_boundary_edges.append(e)
-                    # Э6/Э7-a: boundary-ребро без маршрута оператора drag
-                    # ведёт сам (то же правило, что у одиночного drag);
-                    # Э7-c: авто-маршрут прошлого жеста (_auto_route) —
-                    # тоже наш, перестраивается и гасится.
-                    if not e.get('_manual_route') and (
-                            not e.get('waypoints') or e.get('_auto_route')):
-                        self._drag_routable_edges.add(
-                            self.model.edge_key(sid, tid))
+                    # Э5: boundary-рёбра ведёт жест — все (waypoints — кэш).
+                    self._drag_routable_edges.add(
+                        self.model.edge_key(sid, tid))
 
             # Э3: блоки, привязанные к узлам выделения, едут вместе с группой
             # (undo покрыт snapshot'ом BatchDragCommand — он включает text_blocks)
@@ -3086,19 +3013,14 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                         # (adjusting=End), но ручные рёбра перепроецируются
                         # мимо undo — DragNodeCommand возвращает всё скопом.
                         'waypoints': [wp.copy() for wp in edge_data.get('waypoints', [])],
-                        # Э7-c: авто-флаг живёт/умирает вместе с маршрутом —
-                        # undo обязан вернуть и его.
-                        '_auto_route': bool(edge_data.get('_auto_route')),
+                        # кэши сторон мутируют на кадрах — undo обязан
+                        # вернуть и их (иначе side_kept/декор судят по лжи)
+                        '_src_side': edge_data.get('_src_side'),
+                        '_tgt_side': edge_data.get('_tgt_side'),
                     }
-                    # Э6/Э7-a: ребро без маршрута оператора на старте жеста
-                    # drag ведёт сам — вправе рожать/перестраивать
-                    # ортогональный маршрут на кадрах; Э7-c: авто-маршрут
-                    # прошлого жеста (_auto_route) — тоже наш; маршрут
-                    # оператора (ручные waypoints) и _manual_route — табу.
-                    if not edge_data.get('_manual_route') and (
-                            not edge_data.get('waypoints')
-                            or edge_data.get('_auto_route')):
-                        self._drag_routable_edges.add(key)
+                    # Э5: жест ведёт все инцидентные рёбра (waypoints — кэш;
+                    # закреплён только вход с пином, его держит seat_end).
+                    self._drag_routable_edges.add(key)
             # Э3: бэкап bbox привязанных текст-блоков — они едут за узлом,
             # undo обязан вернуть и их (тест T-C: undo возвращает оба).
             self.drag_start_block_bboxes = {}
@@ -3220,26 +3142,16 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             # отпускание НИЧЕГО не пересчитывает (итог жеста = последний
             # кадр), иначе Гаусс-Зейдель по свежим путям соседей двигал
             # маршрут и конец после отпускания (32/46 расхождений в репро).
-            if e.get('_manual_route'):
-                # Этап A: пришпиленный конец едет с узлом выделения (порт —
-                # локальная точка узла); дальше удержание на границе.
-                near = e['source'] if e['source'] in sel else e['target']
-                pk = 'source_point' if e['source'] == near else 'target_point'
-                pt = e.get(pk)
-                if pt:
-                    e[pk] = [pt[0] + dy, pt[1] + dx]
-                self._recalculate_edge(e)   # ручной: только удержание на границе
+            near = e['source'] if e['source'] in sel else e['target']
+            key = self.model.edge_key(e['source'], e['target'])
+            if self._avoid_session is not None \
+                    and key in self._drag_routable_edges:
+                # Этап B: маршрут кадра строит сессия одной транзакцией
+                alive = bool(e.get('waypoints'))
+                self._reseat_moved_end(e, near, defer_route=True)
+                pending.append((key, e, alive, near))
             else:
-                near = e['source'] if e['source'] in sel else e['target']
-                key = self.model.edge_key(e['source'], e['target'])
-                if self._avoid_session is not None \
-                        and key in self._drag_routable_edges:
-                    # Этап B: маршрут кадра строит сессия одной транзакцией
-                    alive = bool(e.get('waypoints'))
-                    self._reseat_moved_end(e, near, defer_route=True)
-                    pending.append((key, e, alive, near))
-                else:
-                    self._reseat_moved_end(e, near)
+                self._reseat_moved_end(e, near)
         if self._avoid_session is not None:
             # internal-рёбра и ручные фиксы уже сдвинуты выше — сессия
             # дотащит их фиксированные маршруты до роутера на этом кадре
@@ -3350,8 +3262,6 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         affected = [e for e in self.edges_data if e['source'] == node_id or e['target'] == node_id]
 
         for e in affected:
-            if e.get('_manual_route'):
-                continue  # ручные точки прикрепления не пересчитываем
             sid, tid = e['source'], e['target']
             s, t = self.nodes[sid], self.nodes[tid]
             s_cx, s_cy = s['centroid'][1], s['centroid'][0]
@@ -3363,34 +3273,23 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
 
         pending = []
         for e in affected:
-            if e.get('_manual_route'):
-                # Этап A: пришпиленный конец (ручной порт/ручная посадка) —
-                # локальная точка узла, едет с ним на дельту жеста; затем
-                # удержание на границе (ветка _manual_route внутри
-                # _recalculate_edge — для чистой трансляции это no-op).
-                pk = ('source_point' if e['source'] == node_id
-                      else 'target_point')
-                pt = e.get(pk)
-                if pt:
-                    e[pk] = [pt[0] + dy, pt[1] + dx]
-                self._recalculate_edge(e)
+            # Э3 (adjusting=End): дальний конец неприкосновенен; Э5:
+            # waypoints — кэш, жест ведёт все инцидентные рёбра, вход с
+            # пином держит seat_end. reseat_edge целиком не зовётся.
+            key = self.model.edge_key(e['source'], e['target'])
+            if self._avoid_session is not None \
+                    and key in self._drag_routable_edges:
+                # Этап B: маршрут кадра строит сессия одной
+                # транзакцией ниже; alive — для гистерезиса лестницы
+                # при пер-рёберном отказе приёмки
+                alive = bool(e.get('waypoints'))
+                self._reseat_moved_end(e, node_id, defer_route=True)
+                pending.append((key, e, alive, node_id))
             else:
-                # Э3 (adjusting=End): дальний конец и waypoints неприкосновенны;
-                # reseat_edge целиком на drag-пути больше не зовётся.
-                key = self.model.edge_key(e['source'], e['target'])
-                if self._avoid_session is not None \
-                        and key in self._drag_routable_edges:
-                    # Этап B: маршрут кадра строит сессия одной
-                    # транзакцией ниже; alive — для гистерезиса лестницы
-                    # при пер-рёберном отказе приёмки
-                    alive = bool(e.get('waypoints'))
-                    self._reseat_moved_end(e, node_id, defer_route=True)
-                    pending.append((key, e, alive, node_id))
-                else:
-                    self._reseat_moved_end(e, node_id)
+                self._reseat_moved_end(e, node_id)
         if self._avoid_session is not None:
-            # и с пустым pending: фиксы ручных/операторских рёбер узла
-            # обязаны доехать до роутера (нуджинг соседей по ним)
+            # и с пустым pending: чужие фиксы обязаны доехать до роутера
+            # (нуджинг соседей по ним)
             self._avoid_route_frame({node_id}, pending)
 
         # Дефект 2: НЕинцидентные авто-трубы уступают надвинутому боксу
@@ -3498,9 +3397,8 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         edge_key, wp_idx = self.dragging_waypoint
         edge_data = self.model.find_edge_data(edge_key)
         if edge_data and self.dragging_wp_start:
-            # Э7-c: оператор тронул waypoint — маршрут больше не авто
-            # (drag не вправе его перестраивать)
-            edge_data.pop('_auto_route', None)
+            # Э5: правка waypoint — одноразовая косметика; следующий жест,
+            # задевший ребро, пересчитает маршрут (waypoints — кэш).
             new_wp = edge_data['waypoints'][wp_idx].copy()
             cmd = MoveWaypointCommand(self.model, self, edge_key, wp_idx,
                                       self.dragging_wp_start, new_wp)
@@ -3511,9 +3409,6 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
 
     def _add_waypoint_on_segment(self, edge_key: tuple, segment_index: int, x: float, y: float):
         edge_data = self.model.find_edge_data(edge_key)
-        if edge_data is not None:
-            # Э7-c: ручная правка маршрута — авто-флаг снимается
-            edge_data.pop('_auto_route', None)
         snapped_x, snapped_y = self.snap_to_grid(x, y)
         new_wp = [snapped_y, snapped_x]
         cmd = AddWaypointCommand(self.model, self, edge_key, segment_index, new_wp)
@@ -3529,8 +3424,6 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         if wp_idx >= len(waypoints):
             return
         old_wp = waypoints[wp_idx].copy()
-        # Э7-c: ручная правка маршрута — авто-флаг снимается
-        edge_data.pop('_auto_route', None)
         cmd = DeleteWaypointCommand(self.model, self, edge_key, wp_idx, old_wp)
         self.undo_mgr.execute(cmd)
         self._refresh_waypoint_markers_for_edge(edge_key)
@@ -3560,7 +3453,6 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             idx = sides_cycle.index(current_side) if current_side in sides_cycle else 0
             new_side = sides_cycle[(idx + 1) % 4]
             edge_data[side_key] = new_side
-            edge_data.pop('_manual_route', None)  # явный пересчёт сбрасывает ручной режим
             self._recalculate_edge(edge_data, keep_sides=True)
             self._refresh_waypoint_markers_for_edge(key)
 
@@ -3574,7 +3466,6 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         if not edge_data:
             return
         old_wp = [wp.copy() for wp in edge_data.get('waypoints', [])]
-        edge_data.pop('_manual_route', None)  # явный авто-роутинг сбрасывает ручной режим
         self._recalculate_edge(edge_data)
 
         cmd = AutoLRouteCommand(self.model, self, edge_key, old_wp)
@@ -3618,14 +3509,24 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
 
     def _show_port_markers(self, node_id: str):
         """Маленькие маркеры портов узла на время drag конца ребра:
-        голубые — кандидаты (производные), оранжевые — ручные."""
+        голубые — кандидаты (производные), оранжевые — пины рёбер (Э5)."""
         self._hide_port_markers()
         from ui.editors import port_model
         node = self.nodes.get(node_id)
         if not node:
             return
         r = 3.0
-        for px, py, _nx, _ny, manual in port_model.all_ports(node):
+        cx, cy = port_model._node_cxy(node)
+        nid = node.get('id')
+        pins = []
+        for e in self.edges_data:
+            if nid not in (e.get('source'), e.get('target')):
+                continue
+            pin = port_model.pinned_on_node(node, e)
+            if pin is not None:
+                pins.append((cx + float(pin['dx']), cy + float(pin['dy']),
+                             0.0, 0.0, True))
+        for px, py, _nx, _ny, manual in pins + port_model.all_ports(node):
             color = QColor(255, 152, 0) if manual else QColor(0, 188, 212)
             m = QGraphicsEllipseItem(px - r, py - r, r * 2, r * 2)
             m.setPen(QPen(color, 1.5))
@@ -3714,9 +3615,10 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         """Ручное перемещение точки прикрепления.
 
         Точка свободно скользит по периметру узла (bbox/полигон). Линия НЕ
-        пересчитывается к ортогональности: промежуточные waypoints убираются,
-        остаётся прямой отрезок до другого конца. Ставится флаг _manual_route,
-        чтобы последующие пересчёты не возвращали точку в центр стороны.
+        пересчитывается обычным кадровым конвейером (сессия/лестница).
+        Точка оператора закрепляется ПИНОМ конца ребра (edge['pin_source'|
+        'pin_target']) — seat_end сажает в пин первее всего; снять пин —
+        ПКМ по маркеру конца («отвязать вход»).
         """
         if not self._dragging_endpoint:
             return
@@ -3749,18 +3651,16 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         edge_data[side_key] = closest_bbox_side(self._get_node_bbox(node_id), px, py)
         # Решение заказчика 2026-08-02: «нужен КЛАССИЧЕСКИЙ ОБХОД, но с
         # ФИКСИРОВАННЫМ ВХОДОМ; даже когда двигаю вход — пересчитывать».
-        # Поэтому: (1) точка оператора немедленно становится ЯКОРЕМ ребра
-        # (порт с владельцем — переживает кадр, перенос узла и resize);
-        # (2) флаг «маршрут нарисован руками» больше НЕ ставится — он
-        # исключал трубу из всех роутингов навсегда, и она оставалась голой
-        # прямой сквозь чужие блоки (репро graph_edited_fix2: 245px через три
-        # клапана); (3) маршрут пересчитывается ПРЯМО НА КАДРЕ протяжки, так
-        # что оператор видит настоящий обход, а не прямую-обманку.
+        # Точка оператора немедленно становится ПИНОМ конца ребра (Э5:
+        # переживает кадр, перенос узла и resize; на коннекторе пин не
+        # рождается — set_edge_pin вернёт None, конец держит центроид),
+        # а маршрут пересчитывается ПРЯМО НА КАДРЕ протяжки — оператор
+        # видит настоящий обход, а не прямую-обманку.
         from ui.editors import port_model as _pm
         node = self.nodes.get(node_id)
         if node is not None:
-            _pm.add_manual_port(node, px, py, edge_data)
-        edge_data.pop('_manual_route', None)   # понятие отменено заказчиком
+            _pm.set_edge_pin(node, edge_data, endpoint, px, py)
+        edge_data.pop('_manual_route', None)   # легаси-флаг: файл мимо миграции
         key = self.model.edge_key(edge_data['source'], edge_data['target'])
         if self._drag_route_ctx is None:
             # кадровый конвейер обычно поднимает _start_endpoint_drag; если
@@ -3835,10 +3735,10 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self._update_edge_path(edge_key)
 
     def _end_endpoint_drag(self):
-        # Этап A: отпускание конца в СВОБОДНОМ месте границы (не на порту)
-        # рождает постоянный ручной порт узла — локальное смещение от
-        # центроида в node['_ports']. Undo побайтово: создание порта попадает
-        # в снапшот _ep_snap_cmd (модель целиком, включая nodes).
+        # Э5: пин конца уже записан на кадрах протяжки (set_edge_pin в
+        # _drag_endpoint_to); здесь — страховка для жеста, пришедшего в
+        # обход кадров. Undo побайтово: пин в данных ребра, снапшот
+        # _ep_snap_cmd покрывает модель целиком.
         if self._dragging_endpoint and getattr(self, '_ep_drag_armed', False) \
                 and not self._ep_on_port:
             edge_key, endpoint = self._dragging_endpoint
@@ -3851,7 +3751,8 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 pt = edge_data.get('source_point' if endpoint == 'source'
                                    else 'target_point')
                 if node is not None and pt:
-                    port_model.add_manual_port(node, pt[1], pt[0], edge_data)
+                    port_model.set_edge_pin(node, edge_data, endpoint,
+                                            pt[1], pt[0])
         # Итог жеста = состояние последнего кадра (тот же принцип, что у
         # переноса узла: предпросмотр честен по построению). Здесь только
         # закрытие сессии и очистка кадрового состояния — ДО finalize
@@ -3869,6 +3770,43 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self._dragging_endpoint = None
         self._dragging_ep_start_side = None
         self.update_status("Точка прикрепления перемещена")
+
+    def contextMenuEvent(self, event):
+        """ПКМ по маркеру конца — «отвязать вход» (Э5): пин снимается,
+        конец возвращается в общий конкурс портов и пересаживается
+        мини-жестом. Остальные ПКМ глушатся, как в Base (Ctrl+ПКМ —
+        удаление)."""
+        pos = self.mapToScene(event.pos())
+        hit = self._find_endpoint_at(pos.x(), pos.y())
+        if hit is not None:
+            edge_key, endpoint = hit
+            if self._unpin_endpoint(edge_key, endpoint):
+                event.accept()
+                return
+        super().contextMenuEvent(event)
+
+    def _unpin_endpoint(self, edge_key: tuple, endpoint: str) -> bool:
+        """Э5: снять пин конца («отвязать вход»). Один шаг undo."""
+        from ui.editors import port_model as _pm
+
+        edge_data = self.model.find_edge_data(edge_key)
+        if edge_data is None or _pm.edge_pin(edge_data, endpoint) is None:
+            return False
+        node_id = (edge_data['source'] if endpoint == 'source'
+                   else edge_data['target'])
+        snap_cmd = AutoFixCommand(self.model, self._redraw_all)
+        snap_cmd.description = "Отвязать вход"
+        snap_cmd.execute()
+        _pm.clear_edge_pin(edge_data, endpoint)
+        # Мини-жест: конец и маршруты рёбер узла пересаживаются той же
+        # механикой, что resize/толщина (сессия + гейт «не хуже входа»).
+        self._reseat_after_resize(node_id)
+        snap_cmd.finalize()
+        self.undo_mgr.push_executed(snap_cmd)
+        self._refresh_endpoint_markers()
+        self._refresh_waypoint_markers_for_edge(edge_key)
+        self.update_status("Вход отвязан — конец снова в общем конкурсе портов")
+        return True
 
     # =================================================================
     # Grid
@@ -4258,11 +4196,12 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             new_w, new_h = short, long_
         node['bbox'] = [cx - new_w / 2, cy - new_h / 2, cx + new_w / 2, cy + new_h / 2]
         node['area'] = new_w * new_h
-        # Э2d: ручные порты — локальные смещения от центроида, при смене
-        # рамки масштабируются (панель «Размеры» их раньше теряла)
-        if node.get('_ports') and bb and len(bb) == 4:
+        # Э5: пины инцидентных рёбер — локальные смещения от центроида,
+        # при смене рамки масштабируются (иначе якорь уползает с грани)
+        if bb and len(bb) == 4:
             from ui.editors import port_model
-            port_model.rescale_manual_ports(node, bb, node['bbox'])
+            port_model.rescale_edge_pins(node, self.edges_data,
+                                         bb, node['bbox'])
 
     def _resize_node_poly(self, node: dict, scale: float):
         """Масштабировать полигон вокруг центроида с сохранением формы."""
@@ -4282,10 +4221,11 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         node['bbox'] = [min(xs), min(ys), max(xs), max(ys)]
         if node.get('area'):
             node['area'] = node['area'] * (scale * scale)
-        # Э2d: ручные порты масштабируются вместе с формой
-        if node.get('_ports') and len(old_bb) == 4:
+        # Э5: пины инцидентных рёбер масштабируются вместе с формой
+        if len(old_bb) == 4:
             from ui.editors import port_model
-            port_model.rescale_manual_ports(node, old_bb, node['bbox'])
+            port_model.rescale_edge_pins(node, self.edges_data,
+                                         old_bb, node['bbox'])
 
     def _move_node_geom(self, node_id: str, dx: float, dy: float):
         """Сдвинуть узел (centroid + bbox + segmentation) на (dx, dy)."""
@@ -5373,10 +5313,10 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                        (node['bbox'][3] - node['bbox'][1])
         self._refresh_node_visual(self._poly_edit_node)
         # Тот же мини-жест, что после resize: пересаживаются ТОЛЬКО ближние
-        # концы (дальние неприкосновенны, C6), авто-маршруты перестраивает
-        # оконная libavoid-сессия, _manual_route — перепроекция на новую
-        # границу. Стоит ДО _poly_push у всех трёх вызывающих (двинул/добавил/
-        # удалил вершину) — значит пересадка попадает в тот же шаг undo.
+        # концы (дальние неприкосновенны, C6), маршруты перестраивает
+        # оконная libavoid-сессия; вход с пином держит seat_end. Стоит ДО
+        # _poly_push у всех трёх вызывающих (двинул/добавил/удалил
+        # вершину) — значит пересадка попадает в тот же шаг undo.
         self._reseat_after_resize(self._poly_edit_node)
 
     def _poly_push(self, before_snap, desc: str):
