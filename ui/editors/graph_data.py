@@ -206,7 +206,14 @@ class GraphDataModel:
         )
 
     def restore(self, snap: tuple):
-        """Восстановить из snapshot + перестроить индексы + sync graph_data."""
+        """Восстановить из snapshot + перестроить индексы + sync graph_data.
+
+        Снапшот копируется: он остаётся жить в undo-стеке
+        (SnapshotCommand._before/_after), и без копии модель алиасила бы
+        историю — следующий жест мутировал бы отменённые состояния
+        задним числом (redo прыгал бы через жест).
+        """
+        snap = deepcopy(snap)
         if len(snap) == 6:
             (self.nodes, self.edges_data, self.edges, graph_meta,
              self.text_blocks, self.bindings) = snap

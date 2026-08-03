@@ -206,7 +206,15 @@ class EditWaypointHandler(ModeHandler):
         ed._show_endpoint_markers()
 
     def on_exit(self, ed):
-        """Скрыть маркеры."""
+        """Скрыть маркеры, добив живой жест."""
+        # Esc/смена режима посреди протяжки: жест обязан завершиться штатно
+        # (undo-снапшот + закрытие libavoid-сессии) — как у DragNodeHandler,
+        # иначе кадровое состояние (_drag_route_ctx, сессия, _ep_snap_cmd)
+        # переживает жест и питает внежестовые роутинги устаревшим снапшотом.
+        if ed.dragging_waypoint:
+            ed._end_waypoint_drag()
+        elif ed._dragging_endpoint:
+            ed._end_endpoint_drag()
         ed._hide_waypoint_markers()
         ed._hide_endpoint_markers()
 
