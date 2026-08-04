@@ -126,6 +126,15 @@ ALLOWLIST = {
     ("optimize_edge", "skin_poly"):
         "скин на рамке bbox vs letterbox, 8.50px",
     ("add_edge", "skin_poly"): "скин на рамке bbox vs letterbox, 8.50px",
+    #
+    # 2026-08-04 (репро «конец в середине арматуры» во вкладке «Проверка
+    # схемы»/SimpleGraphTab): предварительный канон get_connection_point
+    # тоже выталкивает скиновый конец на рамку (_lift_to_seat_rect) — в
+    # простом редакторе он единственная посадка, движковой доводки там нет.
+    ("get_connection_point", "skin"):
+        "скин на рамке bbox vs letterbox, 8.50px",
+    ("get_connection_point", "skin_poly"):
+        "скин на рамке bbox vs letterbox, 8.50px",
 }
 
 

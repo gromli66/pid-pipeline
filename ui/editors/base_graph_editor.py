@@ -1190,7 +1190,52 @@ class BaseGraphEditor(QGraphicsView):
                  "source_point": None, "target_point": None, "waypoints": []}
         seating.reseat_edge(byid, probe)
         sp = probe["source_point"]                    # [y, x]
+        # «Символ тянется на рамку» (решение заказчика 2026-08-01) и здесь:
+        # канон сажает FIXED_SIZES-скин на letterbox-след графики ВНУТРИ bbox,
+        # а без _axis (граф до раскладки) полоса ложится поперёк вертикальной
+        # арматуры — конец оказывается в середине узла. На экране узел — рамка
+        # bbox, поэтому конец выталкивается на неё вдоль луча посадки.
+        sp = self._lift_to_seat_rect(node, sp, float(target_x), float(target_y))
         return (sp[1], sp[0])
+
+    @staticmethod
+    def _lift_to_seat_rect(node: dict, pt: list, toward_x: float,
+                           toward_y: float) -> list:
+        """Конец из нутра bbox СКИНОВОГО узла — на рамку, вдоль луча посадки.
+
+        Только FIXED_SIZES: у контурных узлов конец на контуре внутри bbox
+        легален. Чистая ось луча сохраняется (без дробей от арифметики).
+        pt в формате [y, x]; возвращает [y, x].
+        """
+        from modules.graph.core.edit_checks import seat_rect
+        from modules.graph.core.seating import FIXED_SIZES
+
+        if node.get("class_name") not in FIXED_SIZES:
+            return pt
+        rect = seat_rect(node)
+        if rect is None:
+            return pt
+        x1, y1, x2, y2 = rect
+        y, x = float(pt[0]), float(pt[1])
+        if not (x1 < x < x2 and y1 < y < y2):
+            return pt                       # уже на рамке или снаружи
+        dx, dy = toward_x - x, toward_y - y
+        ts = []
+        if dx > 1e-9:
+            ts.append((x2 - x) / dx)
+        elif dx < -1e-9:
+            ts.append((x1 - x) / dx)
+        if dy > 1e-9:
+            ts.append((y2 - y) / dy)
+        elif dy < -1e-9:
+            ts.append((y1 - y) / dy)
+        ts = [t for t in ts if t > 0.0]
+        if not ts:
+            return pt                       # ориентир в точке посадки
+        t = min(ts)
+        nx = x if abs(dx) < 1e-9 else x + t * dx
+        ny = y if abs(dy) < 1e-9 else y + t * dy
+        return [ny, nx]
 
     def _closest_point_on_polygon(self, polygon: list, cx: float, cy: float,
                                    px: float, py: float) -> tuple[float, float]:
