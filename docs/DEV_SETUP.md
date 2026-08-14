@@ -117,7 +117,7 @@ source .venv311/bin/activate
 | `api.txt` | FastAPI, uvicorn, celery (включает `base.txt` через `-r base.txt`) | Для локального API |
 | `worker.txt` | Celery, ultralytics, sahi, smp, albumentations, OpenCV, SAM2 (включает `base.txt` через `-r base.txt`) | Для локального worker'а |
 | `ui.txt` | PySide6, httpx, OpenCV, qasync, numpy | Для UI |
-| `dev.txt` | pytest, ruff, mypy | Для тестов и линтинга |
+| `dev.txt` | pytest, ruff, mypy | Для тестов и линтинга — **но одного его мало, см. ниже** |
 
 Файлы `api.txt` и `worker.txt` используют директиву pip `-r base.txt` для включения базовых зависимостей. При установке `pip install -r requirements/worker.txt` зависимости из `base.txt` устанавливаются автоматически. Файлы `ui.txt` и `dev.txt` — самостоятельные, без `-r` включения.
 
@@ -129,7 +129,22 @@ pip install -r requirements/dev.txt
 # Для worker-разработки (GPU)
 pip install -r requirements/worker.txt
 pip install -r requirements/dev.txt
+
+# Для прогона тестов — нужен и api.txt (пункт 0.0, 2026-08-14)
+pip install -r requirements/api.txt -r requirements/ui.txt -r requirements/dev.txt
 ```
+
+⛔ **Ни один из двух первых сценариев не ставит `fastapi`**, а `tests/observability/` его
+импортирует — по документу сбор тестов падал с `ModuleNotFoundError: fastapi` и прогон
+прерывался целиком. Для тестов ставится **`api.txt` + `ui.txt` + `dev.txt`** (`api.txt`
+подтягивает `base.txt`). Проверка среды:
+
+```bash
+python -c "import fastapi, pytest, PySide6"
+```
+
+`worker.txt` для сбора тестов не нужен: задачи воркера импортируются внутри тестов, не на
+уровне модуля.
 
 ### 4.3 PyTorch на Windows
 

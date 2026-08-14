@@ -196,4 +196,26 @@ def test_my_new_task(self):
 
 ### Для UI-логики без Qt
 
-Следовать паттерну `test_stage7_graph_flow.py`: mock PySide6 модули через `sys.modules`, использовать `MagicMock` для виджетов, тестировать логику методов через patch.
+⛔ **Не подменять `sys.modules` на уровне модуля.** Подмена без восстановления травит **всю
+сессию, начиная с коллекции**: следующие файлы по алфавиту видят заглушку вместо настоящего
+модуля. Проект наступал на это трижды — `test_ocr_phase0.py` (лечили `collect_ignore`),
+`sys.modules.setdefault` в observability (аудит 2026-07-09, C3: 13 упавших тестов
+`test_direction_nodes.py`), `_stub_qt()` в `test_stage7_graph_flow.py:163` (2026-08-14:
+`ImportError: cannot import name 'QTextLayout'` во всём `tests/ui/`).
+
+Канон — фикстура с `monkeypatch.setitem` (функциональный скоуп → авто-восстановление);
+образцы: `tests/observability/test_graph_errors.py:40-51`, `test_postprocess_log_level.py:12,41`,
+`test_contours_errors.py:47-55`.
+
+```python
+@pytest.fixture
+def widget_mod(monkeypatch):
+    for _m in ("PySide6", "PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtGui"):
+        monkeypatch.setitem(sys.modules, _m, MagicMock())
+    sys.modules.pop("ui.widgets.my_widget", None)      # свежий импорт под заглушками
+    mod = importlib.import_module("ui.widgets.my_widget")
+    yield mod
+    sys.modules.pop("ui.widgets.my_widget", None)      # ноль протечки
+```
+
+Логику методов тестировать через `patch`, виджеты — `MagicMock`.
