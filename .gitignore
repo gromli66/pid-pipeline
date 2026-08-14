@@ -79,7 +79,7 @@ diag_status.txt
 docker-compose.gpu.yml
 
 _scratch/
-
+doc_for_boss
 # vendored libavoid binding (Э7-b): win-бинарь нужен в git (*.py[cod] его матчит),
 # linux-сборка — только в Docker-образе
 !vendor/adaptagrams/win/_adaptagrams.pyd
