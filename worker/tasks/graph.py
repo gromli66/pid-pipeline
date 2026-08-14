@@ -32,7 +32,8 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 
-def _canvas_is_fresh(canvas_path, validated_path, diagram_uid) -> bool:
+def _canvas_is_fresh(canvas_path, validated_path, diagram_uid,
+                     contours_path=None) -> bool:
     """Можно ли экспортировать этот холст, или он отстал от graph_validated.
 
     Экспорт брал холст по одному факту существования файла, а файл переживает
@@ -42,10 +43,17 @@ def _canvas_is_fresh(canvas_path, validated_path, diagram_uid) -> bool:
 
     Холст без метки версии (собран до появления меток) считается свежим: это
     ручная правка оператора, сделанная старым клиентом, и терять её нельзя.
+
+    Контурная свежесть — отдельно (contours_merge): контуры не входят в
+    sha-проекцию графа, а холст без свежих контуров экспортировать нельзя —
+    FXML молча ушёл бы без выбранных оператором полигонов.
     """
     import json as _json
 
     from modules.graph.core import canvas_state
+    from modules.graph.core.contours_merge import (
+        contours_are_stale, load_validated_contours,
+    )
 
     if not validated_path.exists():
         return True          # сверять не с чем — прежнее поведение
@@ -61,6 +69,9 @@ def _canvas_is_fresh(canvas_path, validated_path, diagram_uid) -> bool:
                     diagram_uid)
         return True
     stale, reason = canvas_state.is_stale(canvas, validated)
+    if not stale and contours_path is not None:
+        stale, reason = contours_are_stale(
+            canvas, load_validated_contours(contours_path))
     if stale:
         logger.warning("[%s] холст устарел (%s) — экспорт идёт из "
                        "graph_validated", diagram_uid, reason)
@@ -492,6 +503,7 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None, bridge_gap
         logger.info("Starting FXML generation for %s", diagram_uid)
 
         from app.models import Diagram, DiagramStatus, Artifact, ArtifactType
+        from modules.canvas_to_fxml import generate_canvas_fxml
         from modules.graph_to_fxml import generate_fxml
 
         # ===== 1. Diagram from DB =====
@@ -556,7 +568,9 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None, bridge_gap
             # УСТАРЕВШУЮ раскладку. Свежесть сверяем тем же модулем, что и
             # клиент (§3.8 п. 4 плана AUTO_LAYOUT_INTEGRATION.md).
             if graph_canvas_path.exists() and _canvas_is_fresh(
-                    graph_canvas_path, graph_validated_path, diagram_uid):
+                    graph_canvas_path, graph_validated_path, diagram_uid,
+                    contours_path=(diagram_dir / "contours"
+                                   / "contours_validated.json")):
                 input_graph_path = graph_canvas_path
                 logger.info("Using canvas graph (WYSIWYG): %s", input_graph_path)
             elif graph_validated_path.exists():
@@ -599,12 +613,29 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None, bridge_gap
             nodes_count, edges_count,
         )
 
+        # WYSIWYG: холст 1920x1080 узнаём заранее — от этого зависят и enrich
+        # контурами (пропускается), и выбор конвертера. Признак —
+        # canvas_transform, который кладёт pretransform; размер — фолбэк для
+        # графов, сохранённых до его появления.
+        _graph_meta = graph_data.get("graph", {}) or {}
+        _img_size = _graph_meta.get("image_size")
+        is_canvas = bool(_graph_meta.get("canvas_transform")) or (
+            _img_size is not None
+            and [int(_img_size[0]), int(_img_size[1])] == [1080, 1920]
+        )
+
         # ===== 4. Enrich with contours (SAM2 or legacy fallback) =====
         contours_validated_path = diagram_dir / "contours" / "contours_validated.json"
         contours_auto_path = diagram_dir / "contours" / "contours_auto.json"
 
         contours_path = None
-        if contours_validated_path.exists():
+        if is_canvas:
+            # WYSIWYG-холст: enrich пропускается целиком. Контуры уже влиты
+            # при построении холста (contours_merge) в его координатах; влив
+            # здесь работал бы в растре против холста (IoU≈0), а legacy
+            # contour_extractor портил бы узлы полигонами в чужой системе.
+            logger.info("WYSIWYG: enrich контурами пропущен — холст уже с ними")
+        elif contours_validated_path.exists():
             contours_path = contours_validated_path
             logger.info("Using validated contours: %s", contours_path)
         elif contours_auto_path.exists():
@@ -612,61 +643,16 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None, bridge_gap
             logger.info("Using auto contours (not validated): %s", contours_path)
 
         if contours_path:
-            # Merge SAM2 contour polygons into graph nodes by bbox matching
+            # Merge SAM2 contour polygons into graph nodes by bbox matching.
+            # Реализация одна на оба влива (построение холста и этот, растровый
+            # путь) — modules/graph/core/contours_merge: только выбранные
+            # оператором polygon_validated, только equipment, IoU > 0.5.
             try:
-                with open(contours_path, 'r', encoding='utf-8') as f:
-                    contours_data = json.load(f)
-
-                # ТОЛЬКО узлы, выбранные оператором в бусине «Контуры»
-                # (polygon_validated). polygon_auto НЕ применяем — иначе SAM2-контур
-                # лёг бы на все подходящие узлы, включая невыбранные. Для невыбранных
-                # узлов граница останется по bbox (CVAT / добавленные боксы).
-                contour_nodes = [
-                    n for n in contours_data.get("nodes", [])
-                    if n.get("polygon_validated")
-                ]
-
-                merged = 0
-                for node in graph_data.get("nodes", []):
-                    if node.get("type") != "equipment":
-                        continue
-                    node_bbox = node.get("bbox")
-                    if not node_bbox or len(node_bbox) != 4:
-                        continue
-
-                    # Graph bbox is [x1, y1, x2, y2]; contour bbox is [x, y, w, h] COCO
-                    nx1, ny1, nx2, ny2 = node_bbox
-
-                    best_iou = 0.0
-                    best_poly = None
-                    for cn in contour_nodes:
-                        cb = cn.get("bbox", [])
-                        if len(cb) != 4:
-                            continue
-                        cx, cy, cw, ch = cb
-                        cx2, cy2 = cx + cw, cy + ch
-
-                        # IoU
-                        ix1 = max(nx1, cx)
-                        iy1 = max(ny1, cy)
-                        ix2 = min(nx2, cx2)
-                        iy2 = min(ny2, cy2)
-                        inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
-                        area_n = max(0, nx2 - nx1) * max(0, ny2 - ny1)
-                        area_c = cw * ch
-                        union = area_n + area_c - inter
-                        iou = inter / union if union > 0 else 0
-
-                        if iou > best_iou:
-                            best_iou = iou
-                            best_poly = cn.get("polygon_validated")
-
-                    if best_iou > 0.5 and best_poly:
-                        # Write to 'segmentation' — graph_to_fxml reads this
-                        # field to render Polygon elements in FXML
-                        node["segmentation"] = best_poly
-                        merged += 1
-
+                from modules.graph.core.contours_merge import (
+                    load_validated_contours, merge_validated_contours,
+                )
+                contour_nodes = load_validated_contours(contours_path)
+                merged = merge_validated_contours(graph_data, contour_nodes)
                 logger.info(
                     "Merged %d validated contour polygons into graph "
                     "(%d selected by operator); остальные узлы — по bbox",
@@ -674,7 +660,7 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None, bridge_gap
                 )
             except Exception as e:
                 logger.warning("Contour merge failed (non-fatal): %s", e, exc_info=True)
-        else:
+        elif not is_canvas:
             # Legacy fallback: old contour_extractor (if no SAM2 contours)
             original_image_path = diagram_dir / "original" / "image.png"
             if not original_image_path.exists():
@@ -710,32 +696,25 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None, bridge_gap
         # ===== 5. Generate FXML =====
         # '1920x1080' — экранный лист: генерируем в пикселях, затем стандартизируем.
         STD_1920 = "1920x1080"
-        # WYSIWYG: граф уже в координатах холста 1920x1080 (правился в редакторе) —
-        # identity-экспорт: без масштаба и без fxml_standardize (иначе двойной масштаб
-        # и повторная посадка горловин, ломающая паритет с редактором).
-        _graph_meta = graph_data.get("graph", {}) or {}
-        _img_size = _graph_meta.get("image_size")
-        # Признак холста — canvas_transform, который кладёт pretransform. Размер
-        # оставлен как фолбэк для графов, сохранённых до его появления.
-        is_canvas = bool(_graph_meta.get("canvas_transform")) or (
-            _img_size is not None
-            and [int(_img_size[0]), int(_img_size[1])] == [1080, 1920]
-        )
         with obs.step("compute", logger):
             if is_canvas:
-                gen_page_size = None
-                logger.info(
-                    "WYSIWYG: граф в холсте 1920x1080 -> identity-экспорт "
-                    "(scale/standardize пропущены)"
-                )
+                # WYSIWYG: 1:1-сериализатор холста (canvas_to_fxml) — identity,
+                # без масштаба и без fxml_standardize (двойной масштаб и
+                # повторная посадка горловин ломали паритет с редактором).
+                logger.info("WYSIWYG: identity-экспорт холста (canvas_to_fxml)")
+                gen_kwargs = {}
+                if bridge_gap is not None:
+                    gen_kwargs["bridge_gap_factor"] = bridge_gap
+                fxml_content = generate_canvas_fxml(graph_data, **gen_kwargs)
             else:
                 gen_page_size = None if page_size == STD_1920 else page_size
-            page_info = f" (page: {page_size})" if page_size else " (original pixels)"
-            logger.info("Generating FXML%s...", page_info)
-            gen_kwargs = {"page_size": gen_page_size}
-            if bridge_gap is not None:
-                gen_kwargs["bridge_gap_factor"] = bridge_gap
-            fxml_content = generate_fxml(graph_data, **gen_kwargs)
+                page_info = (f" (page: {page_size})" if page_size
+                             else " (original pixels)")
+                logger.info("Generating FXML%s...", page_info)
+                gen_kwargs = {"page_size": gen_page_size}
+                if bridge_gap is not None:
+                    gen_kwargs["bridge_gap_factor"] = bridge_gap
+                fxml_content = generate_fxml(graph_data, **gen_kwargs)
 
         # Экранный лист 1920x1080: привести к стандарту + убрать смещение скинов,
         # датчиков и невидимые разрывы мостов (tools/fxml_standardize.py). Остальные

@@ -1,7 +1,7 @@
 # DATA_FORMATS.md — Форматы данных P&ID Pipeline
 
 **Аудитория:** DEV / ML
-**Версия:** 1.3
+**Версия:** 1.4
 **Обновлено:** 2026-08-03
 **Связанные документы:** [ARCHITECTURE.md](ARCHITECTURE.md), [STATUS_MACHINE.md](STATUS_MACHINE.md), [MODULES.md](MODULES.md)
 
@@ -93,7 +93,7 @@
 
 ## 3. Graph format
 
-Файлы: `graph.json` (автоматический), `graph_validated.json` (после валидации). Формат: NetworkX node-link. Холст «Ручной правки» — `graph/graph_canvas.json` (и его локальные сейвы `graph_edited*.json`) — тот же node-link в системе холста 1920x1080 плюс ключи пинов у рёбер (см. «Пины входа» ниже).
+Файлы: `graph.json` (автоматический), `graph_validated.json` (после валидации). Формат: NetworkX node-link. Холст «Ручной правки» — `graph/graph_canvas.json` (и его локальные сейвы `graph_edited*.json`) — тот же node-link в системе холста 1920x1080 плюс ключи пинов у рёбер (см. «Пины входа» ниже) и служебные метки в `graph.canvas_transform` (см. «Метки холста» ниже).
 
 ### Верхний уровень
 
@@ -188,6 +188,22 @@
 
 **Легаси до 2026-08-03** (мигрируются в пины один раз при открытии вкладки, `ui/tabs/base_graph_tab.py::_reseat_canvas_endpoints`): `edge["_manual_route"]`, `edge["_auto_route"]`, `node["_ports"]`. Серверная подпись `_auto_route` (`layout/avoid_router.py`) продолжает писаться в свежих холстах, но редактор её не читает и стирает.
 
+### Метки холста (`graph.canvas_transform`)
+
+Только в файлах холста. Геометрию кладёт `pretransform`, метки свежести — `modules/graph/core/canvas_state.py` и `contours_merge.py`:
+
+| Ключ | Кто пишет | Описание |
+|------|-----------|----------|
+| `s`, `offx`, `offy`, `orig_image_size`, `canvas` | `pretransform` | Трансформ растр → холст 1920x1080 (обратный путь нужен OCR-распознаванию) |
+| `source_sha` | `canvas_state.stamp` | Sha-проекция `graph_validated`, из которого собран холст; расхождение = холст устарел, пересборка с нуля |
+| `layout_version` | `canvas_state.stamp` | Версия алгоритма раскладки (вида `1+fs…`) |
+| `layout_applied` | `canvas_state.stamp` | `true` — продукт авто-раскладки; `false` — UI-фолбэк без неё |
+| `operator_saved` | сервер, POST canvas/save | Оператор сохранял холст руками — раскладка не имеет права его затереть |
+| `text_imported_sha`, `text_edited` | `text_import` / `canvas_state.stamp` | Свежесть зеркала подписей из `graph_validated` |
+| `contours_merged_sha` | `contours_merge.stamp_contours` | Sha-проекция выбранных SAM2-контуров (bbox + `polygon_validated`, канон `canvas_state._canon`), влитых при сборке холста (2026-08-03) |
+
+`contours_merged_sha` — контурная свежесть отдельно от геометрической: контуры — единственный вход холста, не покрытый `source_sha` (сама sha-проекция включает `segmentation`, поэтому влив идёт строго в копию графа, а штамп считается от исходного `graph_validated`). Если оператор переиграл контуры после сборки, `contours_are_stale` объявляет холст устаревшим: диспетчер (`app/services/layout_dispatch.py`) перезапускает раскладку, UI пересобирает холст фолбэком. Холст без метки (собран до механизма) устаревает только когда выбранные контуры существуют.
+
 ---
 
 ## 4. Contours format
@@ -257,7 +273,10 @@
 
 ### Связь с графом
 
-При генерации FXML (`task_generate_fxml`) контуры вливаются в граф по `ann_idx`: для каждого узла графа с `ann_idx` ищется контур с совпадающим `ann_id`, и `polygon_validated` (или `polygon_auto`) записывается в `node["segmentation"]`. Если прямого совпадения нет — используется IoU bounding box.
+Прямой ссылки узел → контур в данных нет; влив — по IoU bounding box (bbox графа `[x1, y1, x2, y2]` против COCO-bbox контура `[x, y, w, h]`, порог IoU > 0.5), только для equipment-узлов и только `polygon_validated` (выбранные оператором; `polygon_auto` не применяется — иначе SAM2-контур лёг бы и на невыбранные узлы). Полигон пишется в `node["segmentation"]` flat-списком. Два момента влива:
+
+1. **При построении холста** (2026-08-03, `modules/graph/core/contours_merge.py`) — в задаче раскладки (`worker/tasks/layout.py`, до `to_canvas`) и в UI-фолбэке пересборки (`ui/tabs/base_graph_tab.py::_pretransform_to_canvas`, до `pretransform`). Влив в координатах растра, дальше полигон масштабируется вместе с графом; свежесть — метка `contours_merged_sha` (см. §3 «Метки холста»). Скиновым классам влив безвреден: `apply_fixed_sizes` контур снимает.
+2. **При генерации FXML** (`task_generate_fxml`) — только для не-canvas входа (`graph_validated.json` в пикселях растра). Для холста этот влив пропускается целиком: контуры уже в нём, а склейка «px растра против холста 1920x1080» давала IoU≈0 и молча теряла полигоны (причина переноса влива на построение холста).
 
 ---
 
@@ -343,9 +362,16 @@
 
 ## 6. FXML output
 
-Файл: `output/diagram.fxml`. Генерируется `modules/graph_to_fxml.py` из `graph_validated.json`.
+Файл: `fxml/diagram.fxml`. FXML — XML-формат JavaFX, используемый в САПР. Содержит визуальные элементы: контролы оборудования (со скинами), полигоны (для элементов без скинов), линии соединений.
 
-FXML — XML-формат JavaFX, используемый в САПР. Содержит визуальные элементы: контролы оборудования (со скинами), полигоны (для элементов без скинов), линии соединений.
+Два конвертера (выбирает `task_generate_fxml` по признаку `is_canvas`: есть `graph.canvas_transform`, либо `image_size == [1080, 1920]` у холстов до его появления):
+
+| Путь | Модуль | Вход |
+|------|--------|------|
+| **1:1-экспорт холста** (WYSIWYG, 2026-08-03) | `modules/canvas_to_fxml.py` (`generate_canvas_fxml`) | `graph/graph_canvas.json` — холст «Ручной правки» 1920x1080 |
+| **Пересборка сцены** (старый путь) | `modules/graph_to_fxml.py` (`generate_fxml`) | `graph_validated.json` в пикселях растра; поддерживает `page_size` A0–A4 и `1920x1080` + `tools/fxml_standardize.py` |
+
+Подсекции ниже («Маппинг», «Атрибуты контрола», «Линии», «Масштабирование») описывают **старый путь**; семантика скинов/каскада у 1:1-экспорта та же, отличия перечислены в подразделе «1:1-экспорт холста».
 
 ### Маппинг graph → FXML
 
@@ -379,6 +405,22 @@ FXML — XML-формат JavaFX, используемый в САПР. Соде
 ### Масштабирование
 
 При указании page_size (A3, A4 и т.д.) координаты масштабируются из пиксельных в миллиметры: `graph_scale = target_mm / image_pixels`.
+
+### 1:1-экспорт холста (`generate_canvas_fxml`)
+
+Конвертер — сериализатор холста, не пересборщик сцены: FXML повторяет то, что оператор видел в «Ручной правке». Отличия от старого пути:
+
+- **Identity-геометрия:** координаты и размеры строго из bbox холста, посаженных концов и `waypoints`; без растяжки скина между точками подключения, без масштабов и без `fxml_standardize`.
+- **Ось/orientation** — каскад: направление классификатора (`nasos`, `rashodomernaya_shaiba`) > `node["_axis"]` холста > стороны подключения рёбер > пропорции bbox; `REVERSE_VERTICAL_CLASSES` в вертикали → `VERTICAL_REVERSE`.
+- **Датчики** всегда `HORIZONTAL` и в родном размере холста 30x30 (без ужатия /3); авто-датчик расхода у шайбы без датчика — тот же размер (`FIXED_SIZES['datchik']`).
+- **Поправка талии** (`SKIN_CONTACT_OFFSET`) применяется — осознанное отступление от пиксельного 1:1: талия скина с приводом обязана лечь на трубу.
+- **Посадка конца трубы на контур (B2) выключена** (`contour_snap=False` у `generate_fxml_line`) — концы уже посажены редактором.
+- **KKS** только из `graph.bindings`; кегль — константа `KKS_FONT_SIZE = 10.0` (не формула `0.35·min(w,h)`).
+- **Контуры** не вливаются на экспорте — они уже в холсте (см. §4 «Связь с графом»).
+- **Мосты «— | —»** — геометрией, как в старом пути. Терминальные рёбра пропускаются; пины (`pin_source`/`pin_target`) не экспортируются; непривязанные `text_blocks` → `<Text>` System Regular 40.
+- **Порядок слоёв:** параметр `node_order='sections' | 'document'` (открытый вопрос №35, решается глазами в SceneBuilder); линии в обоих случаях первыми (под узлами), тексты — последними.
+
+CLI: `python -m modules.canvas_to_fxml graph_canvas.json -o out.fxml [--order document]`.
 
 ---
 

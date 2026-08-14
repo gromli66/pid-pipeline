@@ -118,15 +118,27 @@ def _check_fxml(xml: str):
 
 
 def test_t10_synthetic_chain():
-    """Цепочка целиком на синтетике — работает без корпуса (в т.ч. в CI)."""
+    """Цепочка целиком на синтетике — работает без корпуса (в т.ч. в CI).
+
+    FXML из холста собирает 1:1-сериализатор canvas_to_fxml (2026-08-03) —
+    тот же, что зовёт task_generate_fxml для canvas-пути.
+    """
     from modules.graph.core.pretransform import pretransform
-    from modules.graph_to_fxml import generate_fxml
+    from modules.canvas_to_fxml import generate_canvas_fxml
 
     src = _synthetic_graph()
     canvas, transform, _stats = pretransform(src)
     _check_canvas_graph(canvas, src)
     assert transform["canvas"] == [CANVAS_W, CANVAS_H]
-    _check_fxml(generate_fxml(canvas))
+    _check_fxml(generate_canvas_fxml(canvas))
+
+
+def test_legacy_raster_fxml_still_works():
+    """Не-canvas путь (validated в px растра, старый generate_fxml) остаётся
+    боевым для графов без холста — smoke, чтобы у него был хоть один тест."""
+    from modules.graph_to_fxml import generate_fxml
+
+    _check_fxml(generate_fxml(_synthetic_graph()))
 
 
 def test_t10_num_edges_metadata_is_not_trusted():
@@ -156,9 +168,9 @@ def test_t10_pretransform_is_idempotent():
 def test_t10_corpus_chain(path):
     """Та же цепочка на реальных графах корпуса."""
     from modules.graph.core.pretransform import pretransform
-    from modules.graph_to_fxml import generate_fxml
+    from modules.canvas_to_fxml import generate_canvas_fxml
 
     src = json.loads(path.read_text(encoding="utf-8"))
     canvas, _transform, _stats = pretransform(src)
     _check_canvas_graph(canvas, src)
-    _check_fxml(generate_fxml(canvas))
+    _check_fxml(generate_canvas_fxml(canvas))

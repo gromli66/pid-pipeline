@@ -1,7 +1,7 @@
 # ARCHITECTURE.md — Архитектура P&ID Pipeline
 
 **Аудитория:** ALL
-**Версия:** 1.3
+**Версия:** 1.4
 **Обновлено:** 2026-08-03
 **Связанные документы:** [GLOSSARY.md](GLOSSARY.md), [STATUS_MACHINE.md](STATUS_MACHINE.md), [DB_SCHEMA.md](DB_SCHEMA.md), [DATA_FORMATS.md](DATA_FORMATS.md)
 
@@ -48,7 +48,7 @@ Pipeline состоит из 12 этапов (в UI отображаются к�
 | 8 | OCR | auto/GPU | Surya + PaddleOCR | Распознавание текста на схеме |
 | 9 | Привязка | manual | UI: OcrBindingTab | Привязка OCR-текста к узлам (KKS) и рёбрам (диаметры) |
 | 10 | Редактор | manual | UI: AdvancedGraphTab | Финальное редактирование графа + привязок |
-| 11 | FXML | auto/CPU | graph_to_fxml | Генерация выходного FXML-файла |
+| 11 | FXML | auto/CPU | canvas_to_fxml / graph_to_fxml | Генерация выходного FXML-файла (1:1 с холста «Ручной правки»; старый конвертер — для не-canvas пути) |
 
 Между ручными этапами pipeline автоматически запускает следующий автоматический этап (auto-dispatch chain). Подробнее о переходах статусов — см. [STATUS_MACHINE.md](STATUS_MACHINE.md).
 
@@ -76,7 +76,7 @@ flowchart TD
     VALCONTOUR["✏️ Contour Validation<br/>→ contours_validated.json"]
     OCRBIND["✏️ OCR Binding<br/>→ ocr_binding.json"]
 
-    EDITGRAPH["✏️ Advanced Editor<br/>→ graph_validated.json (final)"]
+    EDITGRAPH["✏️ Advanced Editor<br/>→ graph_canvas.json (холст 1920x1080)"]
     FXML["📄 FXML Generation<br/>→ diagram.fxml"]
 
     UPLOAD --> YOLO --> CVAT --> SEG --> SKEL1 --> VALMASK --> SKEL2 --> JUNC --> VALJUNC
@@ -269,7 +269,9 @@ VALIDATED_JUNCTIONS
 
 ### Слияние контуров в граф
 
-При генерации FXML (`task_generate_fxml`) SAM2-контуры автоматически вливаются в граф: для каждого узла графа ищется контур с максимальным IoU bounding box, и полигон записывается в поле `segmentation` узла.
+Выбранные оператором SAM2-контуры (`polygon_validated` из `contours_validated.json`) вливаются в граф **при построении холста** (2026-08-03, `modules/graph/core/contours_merge.py`): в задаче раскладки (`worker/tasks/layout.py`, до `to_canvas`) и в UI-фолбэке пересборки холста — ещё в координатах растра, дальше полигон масштабируется вместе со всем графом. Сопоставление — максимальный IoU bounding box (порог 0.5), только equipment-узлы; полигон пишется в `node["segmentation"]`. Свежесть фиксирует метка `contours_merged_sha` в `graph.canvas_transform`: если оператор переиграл контуры после сборки, диспетчер (`app/services/layout_dispatch.py`) перезапускает раскладку, а UI пересобирает холст.
+
+При генерации FXML (`task_generate_fxml`) влив остаётся **только для не-canvas пути** (экспорт из `graph_validated.json` в пикселях растра); для холста enrich пропускается целиком — контуры уже в нём, а склейка «растр против холста» давала IoU≈0. Детали — [DATA_FORMATS.md](DATA_FORMATS.md) §4.
 
 ---
 

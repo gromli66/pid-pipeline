@@ -1583,12 +1583,17 @@ def generate_fxml_line(edge, nodes, edge_id: str,
                        base_stroke: float = LINE_STROKE_WIDTH,
                        use_diameter: bool = True,
                        graph_scale: float = 1.0,
-                       cuts=None) -> Optional[str]:
+                       cuts=None,
+                       contour_snap: bool = True) -> Optional[str]:
     """
     Генерирует FXML Line или Polyline для ребра.
 
     Если ребро содержит waypoints — генерируется <Polyline> через все точки.
     Иначе — простая <Line> от start до end.
+
+    contour_snap: посадка конца на SAM2-контур (B2). 1:1-экспорт холста
+    (canvas_to_fxml) выключает её: концы там уже посажены редактором, вторая
+    посадка сдвинула бы линию относительно картинки, которую видел оператор.
 
     Note:
         Координаты source_point/target_point/waypoints в формате [y, x].
@@ -1632,7 +1637,7 @@ def generate_fxml_line(edge, nodes, edge_id: str,
 
     # B2: если конец ребра соединён с ПОЛИГОН-узлом (есть segmentation и нет скина),
     # посадить конец трубы на контур, а не на detection-bbox.
-    if len(all_points) >= 2:
+    if contour_snap and len(all_points) >= 2:
         _src = nodes.get(edge.get('source'))
         _tgt = nodes.get(edge.get('target'))
         if _src and _src.get('segmentation') and get_skin_info(_src) is None:

@@ -45,7 +45,9 @@ def _png_size(path: Path):
     return None
 
 
-def _pretransform_to_canvas(graph_path: Path, image_path: Path, out_path: Path) -> bool:
+def _pretransform_to_canvas(graph_path: Path, image_path: Path, out_path: Path,
+                            contours_path: Path = None,
+                            contours_unknown: bool = False) -> bool:
     """WYSIWYG: перевести граф в холст 1920x1080 (фикс-размеры + declust).
 
     Идемпотентно (уже-1920 граф не трогается). Пишет out_path. True при успехе.
@@ -53,17 +55,41 @@ def _pretransform_to_canvas(graph_path: Path, image_path: Path, out_path: Path) 
     Это ФОЛБЭК-путь без раскладки, поэтому метка ставится с
     `layout_applied=False`: холст, собранный здесь, не должен приниматься за
     продукт раскладки (§3.6 плана).
+
+    contours_path: скачанный contours_validated.json — выбранные контуры
+    вливаются до pretransform, как у воркера (contours_merge).
+    contours_unknown: скачивание сорвалось (не-404) — вливать нечего, но и
+    штамповать «вливали ничего» нельзя: холст остаётся без контурной метки,
+    следующее открытие с контурами честно объявит его устаревшим.
     """
+    import copy
+
     from modules.graph.core.pretransform import pretransform
     from modules.graph.core import canvas_state
+    from modules.graph.core.contours_merge import (
+        load_validated_contours, merge_validated_contours, stamp_contours,
+    )
 
     graph = json.loads(graph_path.read_text(encoding="utf-8"))
-    g, transform, stats = pretransform(graph, image_hw=_png_size(image_path))
+    # Влив строго в КОПИЮ: штамп ниже обязан считаться от graph_validated,
+    # каким он лежит в файле, иначе холст рождается «устаревшим»
+    # (sha-проекция включает segmentation — см. contours_merge).
+    contour_nodes = [] if contours_unknown \
+        else load_validated_contours(contours_path)
+    src = graph
+    if contour_nodes:
+        src = copy.deepcopy(graph)
+        merged = merge_validated_contours(src, contour_nodes)
+        logger.info("контуры влиты в холст: %d (выбрано %d)",
+                    merged, len(contour_nodes))
+    g, transform, stats = pretransform(src, image_hw=_png_size(image_path))
     # Метка источника: по ней при следующем открытии видно, что geometry
     # graph_validated изменилась (оператор возвращался на Контуры/Проверку) и
     # холст надо пересобрать. Считается по ПРОЕКЦИИ, а не по файлу: OCR и
     # привязка переписывают файл, не трогая геометрию.
     canvas_state.stamp(g, graph, layout_applied=False)
+    if not contours_unknown:
+        stamp_contours(g, contour_nodes)
     out_path.write_text(json.dumps(g, ensure_ascii=False), encoding="utf-8")
     logger.info("pre-transform → холст 1920x1080: %s", stats)
     return True
@@ -604,6 +630,34 @@ def _canvas_is_stale(canvas_path: Path, source_path: Path) -> bool:
     return stale
 
 
+def _canvas_contours_stale(canvas_path: Path, contours_path,
+                           download_failed: bool = False) -> bool:
+    """Выбранные контуры менялись после сборки холста → пересборка.
+
+    Отдельно от `_canvas_is_stale`: контуры не входят в sha-проекцию графа
+    (см. contours_merge). Ошибка чтения холста = устарел (как в соседе).
+
+    download_failed: contours_validated не скачался по НЕ-404 (сеть, 5xx) —
+    состояние контуров неизвестно, инвалидировать холст нельзя: цена ложного
+    «устарел» — выброшенные правки оператора.
+    """
+    if download_failed:
+        return False
+    from modules.graph.core.contours_merge import (
+        contours_are_stale, load_validated_contours,
+    )
+
+    try:
+        canvas = json.loads(Path(canvas_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return True
+    stale, reason = contours_are_stale(
+        canvas, load_validated_contours(contours_path))
+    if stale:
+        logger.info("холст устарел по контурам: %s", reason)
+    return stale
+
+
 class _GraphArtifactDownloader(QObject):
     """Фоновый загрузчик артефактов для graph tab."""
 
@@ -628,9 +682,11 @@ class _GraphArtifactDownloader(QObject):
             ("coco_validated", "coco_validated.json"),
         ]
         # WYSIWYG-вкладка: свой артефакт-холст, если он уже сохранялся,
+        # плюс выбранные контуры — их вливает пересборка холста (фолбэк).
         if self.want_canvas:
             optional = optional + [
                 ("graph_canvas", "graph_canvas.json"),
+                ("contours_validated", "contours_validated.json"),
             ]
 
         try:
@@ -659,8 +715,20 @@ class _GraphArtifactDownloader(QObject):
                     dest = self.temp_dir / filename
                     self.api_client.download_artifact(self.uid, art_type, dest)
                     artifacts[art_type] = dest
-                except APIError:
-                    logger.info("Optional artifact %s not available", art_type)
+                except APIError as exc:
+                    # 404 = артефакта легитимно нет; всё прочее (сеть, 5xx) —
+                    # «неизвестно». Для контуров разница критична: спутать
+                    # сбой со «контуры сняты» = объявить холст устаревшим и
+                    # выбросить правки оператора.
+                    if art_type == "contours_validated" \
+                            and exc.status_code != 404:
+                        artifacts["contours_download_failed"] = True
+                        logger.warning(
+                            "contours_validated не скачался (%s) — контурная "
+                            "свежесть холста не проверяется", exc)
+                    else:
+                        logger.info("Optional artifact %s not available",
+                                    art_type)
 
             self.finished.emit(artifacts)
         except Exception as exc:
@@ -845,7 +913,11 @@ class BaseGraphTab(AppearanceMixin, QWidget):
                 # иначе они бы сконвертили граф и автосейв залил бы 1920.
                 try:
                     saved = artifacts.get("graph_canvas")
-                    if saved and not _canvas_is_stale(saved, artifacts["graph_json"]):
+                    if saved and not _canvas_is_stale(saved, artifacts["graph_json"]) \
+                            and not _canvas_contours_stale(
+                                saved, artifacts.get("contours_validated"),
+                                download_failed=bool(artifacts.get(
+                                    "contours_download_failed"))):
                         # Холст актуален — грузим правки оператора как есть
                         _import_text_into_canvas(
                             Path(saved), Path(artifacts["graph_json"]))
@@ -876,6 +948,9 @@ class BaseGraphTab(AppearanceMixin, QWidget):
                             Path(artifacts["graph_json"]),
                             Path(artifacts["original_image"]),
                             canvas_graph,
+                            contours_path=artifacts.get("contours_validated"),
+                            contours_unknown=bool(artifacts.get(
+                                "contours_download_failed")),
                         ):
                             graph_for_editor = canvas_graph
                             editor._canvas_mode = True   # сцена в холсте 1920x1080
