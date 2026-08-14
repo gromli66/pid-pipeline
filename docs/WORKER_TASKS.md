@@ -1,8 +1,8 @@
 # WORKER_TASKS.md — Celery Tasks, Routing, Dispatch
 
 **Аудитория:** DEV / OPS
-**Версия:** 1.1
-**Обновлено:** 2026-04-09
+**Версия:** 1.2
+**Обновлено:** 2026-08-03
 **Связанные документы:** ARCHITECTURE.md, STATUS_MACHINE.md, DB_SCHEMA.md, CONFIG_REFERENCE.md
 
 ---
@@ -51,6 +51,7 @@ task_routes = {
     "worker.tasks.graph.*":        {"queue": "default"},
     "worker.tasks.ocr.*":          {"queue": "ocr"},
     "worker.tasks.contours.*":     {"queue": "sam2"},
+    "worker.tasks.layout.*":       {"queue": "default"},
 }
 ```
 
@@ -116,6 +117,7 @@ UPLOAD
 - `SKELETONIZED` → UI валидация масок → API `complete_mask_validation` → `task_skeletonize_simple`
 - `DETECTED_JUNCTIONS` → UI валидация junction → API `complete_junction_validation` → `task_build_graph` + `task_extract_contours` + `task_run_ocr` (все три параллельно)
 - `BUILT` → UI валидация графа → API `complete_graph_validation` → `task_generate_fxml`
+- Закрытие этапа контуров (`POST /api/contours/{uid}/complete`, а также возврат после контуров и откат) → `app/services/layout_dispatch.py::dispatch_layout` → `task_run_layout` (§4.10; `DiagramStatus` не меняет — раскладка считается, пока оператор проходит «Привязку подписей»)
 
 ### Два механизма dispatch
 
@@ -397,19 +399,51 @@ def task_Y(self, diagram_uid: str, project_code: str = "thermohydraulics"):
 | `max_retries` | 1 |
 | `time_limit` | 300 (5 мин) |
 | `soft_time_limit` | 270 (4.5 мин) |
-| Аргументы | `diagram_uid`, `page_size=None` |
+| Аргументы | `diagram_uid`, `page_size=None`, `bridge_gap=None` |
 
 **Статус:** `VALIDATED_GRAPH` / `GENERATING_FXML` → `COMPLETED`
 
 **Логика:**
 
-1. Загрузка `graph_validated.json` (fallback: `graph.json`)
-2. `generate_fxml()` — конвертация в FXML формат
-3. Сохранение `fxml/diagram.fxml`
+1. Выбор входа: `graph_canvas.json` (холст «Ручной правки» — приоритет, если свеж по `canvas_state`) → `graph_validated.json` → `graph.json`. На холст зеркалируется текст из `graph_validated` (`text_import`) — холст считался до OCR.
+2. Enrich контурами — **только для не-canvas входа**: `contours_validated.json` (только `polygon_validated`, IoU bbox > 0.5, equipment-узлы), fallback — legacy `contour_extractor`. Для холста пропускается целиком: контуры влиты при построении холста (`modules/graph/core/contours_merge.py`), а влив в пикселях растра против холста 1920x1080 давал бы IoU≈0.
+3. Конвертация: `is_canvas` (есть `graph.canvas_transform`, либо `image_size == [1080, 1920]`) → `generate_canvas_fxml()` (`modules/canvas_to_fxml.py`, 1:1 без масштаба и без `fxml_standardize`); иначе → `generate_fxml()` (`modules/graph_to_fxml.py`; при `page_size='1920x1080'` — плюс `tools/fxml_standardize.py`). Детали различий — DATA_FORMATS.md §6.
+4. Сохранение `fxml/diagram.fxml`
 
-**Input артефакты:** `graph/graph_validated.json`
+**Input артефакты:** `graph/graph_canvas.json` (приоритет) / `graph/graph_validated.json` / `graph/graph.json`; `contours/contours_validated.json` (не-canvas путь)
 **Output артефакты:** `fxml/diagram.fxml` (FXML)
 **Auto-chain:** нет (COMPLETED — финальный статус)
+
+---
+
+### 4.10 task_run_layout
+
+**Файл:** `worker/tasks/layout.py`
+**Celery name:** `worker.tasks.layout.task_run_layout`
+**Queue:** `default`
+
+| Параметр | Значение |
+|----------|----------|
+| `max_retries` | 0 (повтор не нужен — диспетчер поставит задачу заново) |
+| `time_limit` | 1800 (30 мин; CPU-only, лимит с запасом — обязан быть перемерян на боевом железе) |
+| `soft_time_limit` | 1500 (25 мин) |
+| Аргументы | `diagram_uid`, `stage_id=None`, `dispatch_sha=None` |
+
+**Статус:** `DiagramStatus` **не меняется** — операция идёт внутри одного этапа; прогресс отражает `ProcessingStage` типа `LAYOUT` (клиент читает `GET /{uid}/stages`).
+
+**Логика:**
+
+1. Загрузка `graph_validated.json`, sha-проекция входа (`canvas_state.graph_projection_sha`).
+2. Влив выбранных SAM2-контуров (`modules/graph/core/contours_merge.py`): `polygon_validated` из `contours_validated.json` → `node["segmentation"]` (IoU bbox > 0.5, equipment-узлы), ещё в координатах растра. Строго в deepcopy графа: sha-проекция включает `segmentation`, а штамп (шаг 5) обязан считаться от исходного `graph_validated` — иначе холст рождается «устаревшим».
+3. `to_canvas` → раскладка (`modules/graph/core/layout.py`).
+4. Две защиты перед записью: (а) `graph_validated` перечитывается — sha сменился → результат выброшен (`stale_input`); (б) `operator_saved` на существующем холсте → результат выброшен (`operator_saved`).
+5. `canvas_state.stamp` (от исходного `graph_validated`) + `stamp_contours` (метка `contours_merged_sha`), атомарная запись (`tmp + os.replace`).
+
+Запускается диспетчером `app/services/layout_dispatch.py` при закрытии этапа контуров; диспетчер владеет идемпотентностью и revoke: не ставит задачу, если холст свеж и по `source_sha`, и по `contours_merged_sha`, и перезапускает раскладку, если контуры переиграны (`contours_are_stale`).
+
+**Input артефакты:** `graph/graph_validated.json`; `contours/contours_validated.json` (опционально)
+**Output артефакты:** `graph/graph_canvas.json` (GRAPH_CANVAS)
+**Auto-chain:** нет
 
 ---
 

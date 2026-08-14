@@ -38,6 +38,9 @@ from app.services.layout_policy import (
 )
 from app.services.storage import StorageService
 from modules.graph.core import canvas_state
+from modules.graph.core.contours_merge import (
+    contours_are_stale, load_validated_contours,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +89,13 @@ def _revoke(task_id: str) -> None:
         logger.info("layout: отозвана задача %s", task_id)
     except Exception as exc:  # noqa: BLE001 — брокер может быть недоступен
         logger.warning("layout: не удалось отозвать %s: %s", task_id, exc)
+
+
+def _validated_contours(uid: UUID) -> list:
+    """Выбранные оператором контуры (polygon_validated) с диска, [] если нет."""
+    path = (StorageService().base_path / str(uid)
+            / "contours" / "contours_validated.json")
+    return load_validated_contours(path)
 
 
 async def _canvas_artifact(uid: UUID, db):
@@ -167,9 +177,25 @@ async def dispatch_layout(uid: UUID, db, *, force: bool = False) -> dict:
         canvas, path, art = await _canvas(uid, db)
         canvas_info = None
         if canvas is not None:
+            stale = canvas_state.is_stale(canvas, validated)[0]
+            if not stale:
+                # Контуры — единственный вход холста вне sha-проекции графа:
+                # оператор мог переиграть их и снова закрыть этап без
+                # возврата. Проверка ленивая (геометрия уже решила — контуры
+                # не читаем) и вне event loop (json с полигонами немаленький).
+                # Corner: если задача на ту же graph-истину уже бежит, новая
+                # не ставится (ALREADY_RUNNING) — бегущая читает контуры с
+                # диска сама, а разойдясь во времени, устареет и будет
+                # переставлена следующим закрытием этапа.
+                contour_nodes = await asyncio.to_thread(
+                    _validated_contours, uid)
+                stale, c_reason = contours_are_stale(canvas, contour_nodes)
+                if stale:
+                    logger.info("layout: %s — контуры холста устарели: %s",
+                                uid, c_reason)
             canvas_info = {
                 "layout_applied": canvas_state.has_layout(canvas),
-                "stale": canvas_state.is_stale(canvas, validated)[0],
+                "stale": stale,
             }
             if art is None and not force and canvas_info["layout_applied"] \
                     and not canvas_info["stale"]:

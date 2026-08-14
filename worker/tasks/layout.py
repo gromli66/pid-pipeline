@@ -109,10 +109,15 @@ def task_run_layout(self, diagram_uid: str, stage_id: int = None,
     dispatch_sha: sha-проекция графа на момент постановки — только для лога:
         истину задача берёт из файла, который читает сама.
     """
+    from copy import deepcopy
+
     from app.db.session import SessionLocal
     from app.models import Artifact, ArtifactType, Diagram
     from app.models.stage import ProcessingStage, StageType
     from modules.graph.core import canvas_state
+    from modules.graph.core.contours_merge import (
+        load_validated_contours, merge_validated_contours, stamp_contours,
+    )
     from modules.graph.core.layout import LayoutParams, layout
     from modules.graph.core.canvas_input import to_canvas
 
@@ -161,7 +166,20 @@ def task_run_layout(self, diagram_uid: str, stage_id: int = None,
                 # защитит от гонки.
                 logger.info("[%s] истина сменилась после постановки: %s -> %s",
                             diagram_uid, dispatch_sha, source_sha)
-            graph, _transform = to_canvas(validated)
+
+            # Ручные SAM2-контуры — на холст (ещё в координатах растра).
+            # Влив строго в КОПИЮ: sha-проекция включает segmentation, и штамп
+            # ниже обязан считаться от validated, каким он лежит в файле, —
+            # иначе холст рождается «устаревшим» (см. contours_merge).
+            contour_nodes = load_validated_contours(
+                graph_dir.parent / "contours" / "contours_validated.json")
+            layout_src = validated
+            if contour_nodes:
+                layout_src = deepcopy(validated)
+                n_merged = merge_validated_contours(layout_src, contour_nodes)
+                logger.info("[%s] контуры влиты в холст: %d (выбрано %d)",
+                            diagram_uid, n_merged, len(contour_nodes))
+            graph, _transform = to_canvas(layout_src)
 
         with obs.step("compute", logger):
             layout_stages = {}
@@ -196,6 +214,7 @@ def task_run_layout(self, diagram_uid: str, stage_id: int = None,
 
         # ─── запись ───
         canvas_state.stamp(graph, validated, layout_applied=True)
+        stamp_contours(graph, contour_nodes)
         size = _atomic_write_json(
             canvas_path, json.dumps(graph, ensure_ascii=False))
 
