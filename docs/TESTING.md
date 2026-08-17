@@ -1,8 +1,8 @@
 # TESTING.md
 
 **Аудитория:** DEV
-**Версия:** 1.0
-**Обновлено:** 2026-04-09
+**Версия:** 1.2
+**Обновлено:** 2026-08-18
 **Связанные документы:** CODING_GUIDE.md, DEV_SETUP.md
 
 ---
@@ -23,7 +23,14 @@
 
 Тесты используют **pytest** и расположены в `tests/`. Основные категории: smoke-тесты импортов (worker), unit-тесты рефакторинга (модели, storage, dispatch), интеграционные тесты OCR pipeline (domain profiles, binding, classify), тесты UI-логики (graph flow, validation window) без запуска Qt Application.
 
-Все тесты работают **без Docker, GPU и реальной БД** — используют SQLite in-memory и MagicMock.
+Набор **исполняется без Docker, GPU и реальной БД** — SQLite in-memory и MagicMock; замерено на
+чистом venv `api+ui+dev+shapely` (MEASUREMENTS §25.2). Два уточнения, без которых фраза читается
+неверно:
+
+- «работают» ≠ «зелёные»: часть набора красная своими причинами (на 2026-08-17 — 57 из 746),
+  и гейт поэтому «ни одного нового красного», а не «ноль красных» — см. §7.1;
+- одно исключение из «без Docker/GPU» — `test_ocr_phase0.py`: он исключён из сбора
+  (`tests/conftest.py:17` `collect_ignore`) и запускается только в контейнере с GPU (см. §2).
 
 ---
 
@@ -120,13 +127,21 @@ Smoke-тесты совместимости OCR-стека. Запускаетс
 
 Сравнение `ConfigDrivenProfile(yaml)` с legacy `PidCyrillicProfile(python)`. Верифицирует, что YAML-профиль даёт идентичные результаты classify/noise/split для набора тестовых строк.
 
-### test_stage7_graph_flow.py (514 строк)
+### test_stage7_graph_flow.py (543 строки)
 
-Тесты Stage 7 UI: `GraphValidationWindow` (режимы, unsaved changes, undo stack) и `DiagramWorkspace` (two-phase graph flow: SimpleGraphTab → AdvancedGraphTab). Все тесты через MagicMock без Qt Application.
+Тесты Stage 7 UI: `GraphValidationWindow` (режимы, unsaved changes, undo stack) и `DiagramWorkspace` (two-phase graph flow: SimpleGraphTab → AdvancedGraphTab). Все тесты через MagicMock без Qt Application. Заглушки Qt/`ui.*` ставятся фикстурой уровня модуля со снятием за собой (`:259-271`) — образец из §6.
 
 ### test_worker/test_imports.py (110 строк)
 
 Smoke-тесты: все worker-задачи и утилиты импортируются без ошибок. Ловит broken imports после рефакторинга (переименование, удаление, circular imports). Проверяет: `set_diagram_error`, `check_deleted`, `upsert_artifact`, `safe_dispatch` и другие callable'ы.
+
+### test_collection_clean.py (64 строки)
+
+Сторож сбора (пункт 0.0): дочерним процессом проверяет, что `pytest --collect-only` чист и что набор не усох ниже `min_collected` — дефекты уровня сессии (отравленный `sys.modules`, потерянная зависимость) внутри самой сессии не ловятся. См. §7.1.
+
+### test_docs_match_code.py (13 тестов)
+
+Сторож дрейфа доков (пункт 0.6): таблицы таймаутов `WORKER_TASKS.md` §4 сверяются с декораторами `worker/tasks/*.py`, а формула «OCR по умолчанию включён/выключен» в `CLAUDE.md`, `DEPLOY_README.md`, `ROADMAP_techdebt_and_agent_team.md` — с `ocr.enabled` боевого конфига. Файлы читаются как текст, боевой код не импортируется.
 
 ---
 
@@ -201,12 +216,24 @@ def test_my_new_task(self):
 сессию, начиная с коллекции**: следующие файлы по алфавиту видят заглушку вместо настоящего
 модуля. Проект наступал на это трижды — `test_ocr_phase0.py` (лечили `collect_ignore`),
 `sys.modules.setdefault` в observability (аудит 2026-07-09, C3: 13 упавших тестов
-`test_direction_nodes.py`), `_stub_qt()` в `test_stage7_graph_flow.py:163` (2026-08-14:
-`ImportError: cannot import name 'QTextLayout'` во всём `tests/ui/`).
+`test_direction_nodes.py`), `_stub_qt()` на уровне модуля в `test_stage7_graph_flow.py`
+(2026-08-14: `ImportError: cannot import name 'QTextLayout'` во всём `tests/ui/`; вылечено
+пунктом 0.0 — заглушки переехали в фикстуру, см. ниже).
 
 Канон — фикстура с `monkeypatch.setitem` (функциональный скоуп → авто-восстановление);
-образцы: `tests/observability/test_graph_errors.py:40-51`, `test_postprocess_log_level.py:12,41`,
-`test_contours_errors.py:47-55`.
+образцы: `tests/observability/test_graph_errors.py:38-51`, `test_contours_errors.py:45-56`.
+
+Если заглушки нужны **всему файлу**, а не отдельному тесту, — фикстура `scope="module",
+autouse=True`, которая сама снимает за собой: сохранить срез `sys.modules` по своим
+префиксам до, восстановить после (`monkeypatch` в модульном скоупе не работает). Образец —
+`tests/test_stage7_graph_flow.py:259-271`. Запрет выше это не ослабляет: нельзя оставлять
+заглушку после файла, а не «нельзя ставить её на весь файл».
+
+⚠ Известное отклонение (правится пунктом 0.3x дороги): `tests/observability/` местами всё ещё
+ставит `sys.modules.setdefault("cv2", MagicMock())` на уровне модуля
+(`test_postprocess_log_level.py:38`, `test_detection_errors.py:20`, `test_ocr_errors.py:26`,
+`test_skeleton_extension_substeps.py:35`) — отсюда 11 ошибок в `tests/ui/test_square_size_ops.py`
+при полном прогоне (MEASUREMENTS §24.9). Как образец эти строки не брать.
 
 ```python
 @pytest.fixture

@@ -1,8 +1,8 @@
 # WORKER_TASKS.md — Celery Tasks, Routing, Dispatch
 
 **Аудитория:** DEV / OPS
-**Версия:** 1.2
-**Обновлено:** 2026-08-03
+**Версия:** 1.3
+**Обновлено:** 2026-08-18
 **Связанные документы:** ARCHITECTURE.md, STATUS_MACHINE.md, DB_SCHEMA.md, CONFIG_REFERENCE.md
 
 ---
@@ -190,9 +190,13 @@ def task_Y(self, diagram_uid: str, project_code: str = "thermohydraulics"):
 | Параметр | Значение |
 |----------|----------|
 | `max_retries` | 2 |
-| `time_limit` | 1800 (30 мин) |
-| `soft_time_limit` | 1740 (29 мин) |
+| `time_limit` | 5400 (90 мин) |
+| `soft_time_limit` | 5340 (89 мин) |
 | Аргументы | `diagram_uid`, `project_code="thermohydraulics"`, `model_id=None` |
+
+> Лимит поднят с 1800/1740 до 5400/5340 (`worker/tasks/detection.py:56-57`, коммит `a1e0e14`
+> от 2026-06-22): ансамбль из 3 моделей с SAHI на CPU в получас не укладывается. Это
+> перекрывает глобальный `task_time_limit` 3600 из §1 — здесь так и задумано.
 
 **Статус:** `DETECTING` → `DETECTED`
 
