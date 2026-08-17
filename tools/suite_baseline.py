@@ -1,0 +1,170 @@
+# -*- coding: utf-8 -*-
+"""suite_baseline.py — базовая линия набора тестов: что падает СЕГОДНЯ (пункт 0.3).
+
+Зачем. Набор красный не весь: часть тестов падает своими причинами, не связанными
+с текущей работой. Пока этот список не зафиксирован, любой рефакторинг получает
+чужие падения на свой счёт. Поэтому список красных лежит в git отдельным файлом
+(`tools/bench/suite_baseline.json`), а гейт проверяет не «ноль красных», а
+«ни одного НОВОГО красного».
+
+Контракт как у остальных стендов проекта (`edit_bench.py`, `layout_bench.py`):
+    python -X utf8 tools/suite_baseline.py --check           # сверка, exit 1 при регрессии
+    python -X utf8 tools/suite_baseline.py --write-baseline  # пересъём базы (Д6: отдельный коммит)
+
+Что считается провалом (`--check` → exit 1):
+    * НОВЫЙ красный — тест, который в базе зелёный, а сейчас упал;
+    * усыхание набора — собрано меньше `min_collected` (тесты молча исчезли:
+      `importorskip`, `collect_ignore`, снесённый файл).
+Позеленевший тест провалом НЕ считается — печатается и требует пересъёма базы.
+"""
+from __future__ import annotations
+
+import argparse
+import datetime
+import json
+import platform
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[1]
+BASELINE = REPO / "tools" / "bench" / "suite_baseline.json"
+
+PYTEST_RUN = ["-q", "--tb=no", "-rEf", "-p", "no:cacheprovider"]
+PYTEST_COLLECT = ["-q", "--collect-only", "-p", "no:cacheprovider"]
+
+_RED = re.compile(r"^(?:FAILED|ERROR) (\S+)")
+_TOTAL = re.compile(r"(\d+) (failed|passed|skipped|errors|error|xfailed|xpassed)")
+_COLLECTED = re.compile(r"^(\d+) tests? collected")
+
+
+def _pytest(args: list[str]) -> tuple[str, int]:
+    # -X utf8 обязателен: без него режим кодировки решает консоль, а результат
+    # набора от неё зависит. Замерено 2026-08-17: test_refactoring.py:697
+    # читает файл с кириллицей через read_text() без encoding — под cp1251
+    # это UnicodeDecodeError и красный тест, под UTF-8 тест зелёный. База
+    # должна быть одна и та же на любой машине, поэтому режим задаём здесь.
+    proc = subprocess.run(
+        [sys.executable, "-X", "utf8", "-m", "pytest", *args],
+        cwd=str(REPO),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=1800,
+    )
+    return (proc.stdout or "") + (proc.stderr or ""), proc.returncode
+
+
+def parse_red(text: str) -> set[str]:
+    """Идентификаторы красных из хвоста `-rEf` (FAILED/ERROR ...)."""
+    return {m.group(1) for line in text.splitlines() if (m := _RED.match(line))}
+
+
+def parse_totals(text: str) -> dict[str, int]:
+    """Счётчики из итоговой строки pytest («38 failed, 661 passed, ...»)."""
+    tail = [ln for ln in text.splitlines() if " in " in ln and ("passed" in ln or "failed" in ln)]
+    if not tail:
+        return {}
+    totals: dict[str, int] = {}
+    for count, kind in _TOTAL.findall(tail[-1]):
+        totals["errors" if kind == "error" else kind] = int(count)
+    return totals
+
+
+def parse_collected(text: str) -> int:
+    """Число собранных тестов из хвоста `--collect-only -q`."""
+    for line in text.splitlines():
+        if m := _COLLECTED.match(line.strip()):
+            return int(m.group(1))
+    return -1
+
+
+def compare(base_red: set[str], cur_red: set[str]) -> tuple[list[str], list[str]]:
+    """(новые красные — это регрессия, позеленевшие — повод пересъёмки базы)."""
+    return sorted(cur_red - base_red), sorted(base_red - cur_red)
+
+
+def _load_baseline() -> dict:
+    if not BASELINE.exists():
+        sys.exit(f"нет базы {BASELINE.relative_to(REPO)} — сначала --write-baseline")
+    return json.loads(BASELINE.read_text(encoding="utf-8"))
+
+
+def _measure() -> tuple[set[str], dict[str, int], int, str]:
+    run_text, _ = _pytest(PYTEST_RUN)
+    collect_text, collect_rc = _pytest(PYTEST_COLLECT)
+    if collect_rc != 0:
+        sys.exit(f"сбор pytest сломан (exit {collect_rc}) — это пункт 0.0, а не база")
+    return parse_red(run_text), parse_totals(run_text), parse_collected(collect_text), run_text
+
+
+def cmd_write() -> int:
+    red, totals, collected, run_text = _measure()
+    if not totals:
+        sys.exit("не разобрал итоговую строку pytest:\n" + run_text[-2000:])
+    BASELINE.write_text(
+        json.dumps(
+            {
+                "recorded": datetime.date.today().isoformat(),
+                "command": "python -m pytest " + " ".join(PYTEST_RUN),
+                "platform": f"{sys.platform} · CPython {platform.python_version()}",
+                "env": "requirements/api.txt + ui.txt + dev.txt + shapely==2.1.2",
+                "totals": totals,
+                "collected": collected,
+                # запас к собранным: без shapely молча исчезают 22 теста
+                # (importorskip в layout-модулях) — база это терпит, потерю
+                # целого файла уже нет
+                "min_collected": collected - 32,
+                "red": sorted(red),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    print(f"база записана: {len(red)} красных, собрано {collected}, {totals}")
+    return 0
+
+
+def cmd_check() -> int:
+    base = _load_baseline()
+    red, totals, collected, run_text = _measure()
+    new, fixed = compare(set(base["red"]), red)
+
+    print(f"сейчас:  собрано {collected}, {totals}")
+    print(f"база ({base['recorded']}, {base['platform']}): собрано {base['collected']}, {base['totals']}")
+
+    bad = False
+    if collected < base["min_collected"]:
+        print(f"\n[ПРОВАЛ] набор усох: собрано {collected} < {base['min_collected']}")
+        bad = True
+    if new:
+        print(f"\n[ПРОВАЛ] новые красные ({len(new)}) — их не было в базе:")
+        for nid in new:
+            print(f"  + {nid}")
+        bad = True
+    if fixed:
+        print(f"\n[позеленело] {len(fixed)} — пересними базу отдельным коммитом (--write-baseline):")
+        for nid in fixed:
+            print(f"  - {nid}")
+    if not bad:
+        print("\n[OK] новых красных нет")
+    else:
+        print("\nхвост прогона:\n" + "\n".join(run_text.splitlines()[-25:]))
+    return 1 if bad else 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument("--check", action="store_true", help="сверить прогон с базой, exit 1 при регрессии")
+    g.add_argument("--write-baseline", action="store_true", help="пересъём базы")
+    args = ap.parse_args()
+    return cmd_write() if args.write_baseline else cmd_check()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -49,3 +49,29 @@ _test_session_factory = sessionmaker(bind=_test_engine)
 import app.db.session as _session_mod
 _session_mod.engine = _test_engine
 _session_mod.SessionLocal = _test_session_factory
+
+
+# --- маркеры (пункт 0.3) -----------------------------------------------------
+# Ставятся автоматически, чтобы не править 22 тест-файла и не разъезжаться с
+# ними дальше: признак маркера `ui` — модуль импортирует PySide6. Смотрим
+# исходник модуля, а не sys.modules: sys.modules глобален, и первый же
+# Qt-импорт пометил бы весь набор.
+_UI_MODULES: dict[str, bool] = {}
+
+
+def _needs_qt(path: str) -> bool:
+    if path not in _UI_MODULES:
+        try:
+            _UI_MODULES[path] = "PySide6" in Path(path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            _UI_MODULES[path] = False
+    return _UI_MODULES[path]
+
+
+def pytest_collection_modifyitems(config, items):
+    import pytest
+
+    for item in items:
+        path = getattr(item, "path", None)
+        if path is not None and _needs_qt(str(path)):
+            item.add_marker(pytest.mark.ui)

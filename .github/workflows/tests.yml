@@ -1,0 +1,53 @@
+# Минимальный CI (пункт 0.3 дороги рефакторинга, стенд СТ1).
+#
+# Два вопроса, и оба — гейты плана:
+#   1. сбор pytest проходит без ошибок (пункт 0.0: один модуль, испортивший
+#      sys.modules, роняет сборку всех следующих за ним);
+#   2. новых красных нет относительно зафиксированной базы
+#      (tools/bench/suite_baseline.json) — набор красный не весь, и «ноль
+#      красных» гейтом быть не может, пока 58 падений не разобраны.
+#
+# Раннер windows-latest: база снята на Windows, обе машины разработки — Windows.
+# Linux-прогон (боевой воркер живёт в Linux-контейнере) потребует своей базы —
+# это отдельная работа, не этот пункт.
+#
+# Торч и ultralytics не ставятся: замерено, что набору они не нужны
+# (единственный потребитель, tests/test_ocr_phase0.py, в collect_ignore).
+# shapely ставится явно — он живёт в requirements/worker.txt, а без него
+# 22 теста раскладки молча исчезают из сбора (importorskip).
+name: tests
+
+on:
+  push:
+    branches: [dev, main, 'road/**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  suite:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements/*.txt
+
+      - name: Зависимости (api + ui + dev, CPU-only)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements/api.txt -r requirements/ui.txt -r requirements/dev.txt
+          pip install shapely==2.1.2
+
+      - name: Сбор pytest без ошибок
+        run: python -m pytest --collect-only -q
+
+      - name: Базовая линия набора — новых красных нет
+        run: python tools/suite_baseline.py --check
