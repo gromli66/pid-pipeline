@@ -160,68 +160,75 @@ def _stub_qt():
 
     return FakeSignal
 
-_FakeSignal = _stub_qt()
+def _stub_ui():
+    # Stub api_client
+    _api_stub = types.ModuleType("ui.services.api_client")
+    class _FakeAPIClient: pass
+    class _FakeAPIError(Exception):
+        def __init__(self, message="error"):
+            self.message = message
+            super().__init__(message)
+    _api_stub.APIClient = _FakeAPIClient
+    _api_stub.APIError = _FakeAPIError
+    sys.modules["ui.services.api_client"] = _api_stub
 
-# Stub api_client
-_api_stub = types.ModuleType("ui.services.api_client")
-class _FakeAPIClient: pass
-class _FakeAPIError(Exception):
-    def __init__(self, message="error"):
-        self.message = message
-        super().__init__(message)
-_api_stub.APIClient = _FakeAPIClient
-_api_stub.APIError = _FakeAPIError
-sys.modules["ui.services.api_client"] = _api_stub
+    _svc_stub = types.ModuleType("ui.services")
+    _svc_stub.APIClient = _FakeAPIClient
+    _svc_stub.APIError = _FakeAPIError
+    sys.modules["ui.services"] = _svc_stub
 
-_svc_stub = types.ModuleType("ui.services")
-_svc_stub.APIClient = _FakeAPIClient
-_svc_stub.APIError = _FakeAPIError
-sys.modules["ui.services"] = _svc_stub
+    # Stub editors
+    _bge_stub = types.ModuleType("ui.editors.base_graph_editor")
+    class _FakeBaseGraphEditor:
+        def __init__(self):
+            self.undo_mgr = MagicMock()
+            self.undo_mgr.stack_depth = 0
+            self.model = MagicMock()
+            self.status_callback = None
+            self.stats_callback = None
+    _bge_stub.BaseGraphEditor = _FakeBaseGraphEditor
+    sys.modules["ui.editors.base_graph_editor"] = _bge_stub
 
-# Stub editors
-_bge_stub = types.ModuleType("ui.editors.base_graph_editor")
-class _FakeBaseGraphEditor:
-    def __init__(self):
-        self.undo_mgr = MagicMock()
-        self.undo_mgr.stack_depth = 0
-        self.model = MagicMock()
-        self.status_callback = None
-        self.stats_callback = None
-_bge_stub.BaseGraphEditor = _FakeBaseGraphEditor
-sys.modules["ui.editors.base_graph_editor"] = _bge_stub
+    _sge_stub = types.ModuleType("ui.editors.simple_graph_editor")
+    class _FakeSimpleGraphEditor(_FakeBaseGraphEditor): pass
+    _sge_stub.SimpleGraphEditor = _FakeSimpleGraphEditor
+    sys.modules["ui.editors.simple_graph_editor"] = _sge_stub
 
-_sge_stub = types.ModuleType("ui.editors.simple_graph_editor")
-class _FakeSimpleGraphEditor(_FakeBaseGraphEditor): pass
-_sge_stub.SimpleGraphEditor = _FakeSimpleGraphEditor
-sys.modules["ui.editors.simple_graph_editor"] = _sge_stub
+    _age_stub = types.ModuleType("ui.editors.advanced_graph_editor")
+    class _FakeAdvancedGraphEditor(_FakeBaseGraphEditor):
+        def set_mode(self, m): pass
+        def load_data(self, *a, **kw): return True
+        def save_graph(self, *a): return True
+        def undo(self): pass
+        def optimize_all_edges(self): return 0
+        def get_perpendicularity_stats(self): return {"good": 0, "total": 0, "avg_score": 0.0}
+    _age_stub.AdvancedGraphEditor = _FakeAdvancedGraphEditor
+    sys.modules["ui.editors.advanced_graph_editor"] = _age_stub
 
-_age_stub = types.ModuleType("ui.editors.advanced_graph_editor")
-class _FakeAdvancedGraphEditor(_FakeBaseGraphEditor):
-    def set_mode(self, m): pass
-    def load_data(self, *a, **kw): return True
-    def save_graph(self, *a): return True
-    def undo(self): pass
-    def optimize_all_edges(self): return 0
-    def get_perpendicularity_stats(self): return {"good": 0, "total": 0, "avg_score": 0.0}
-_age_stub.AdvancedGraphEditor = _FakeAdvancedGraphEditor
-sys.modules["ui.editors.advanced_graph_editor"] = _age_stub
+    # Stub other editor dependencies
+    _nld_stub = types.ModuleType("ui.editors.node_list_dialog")
+    _nld_stub.NodeListDialog = MagicMock()
+    sys.modules["ui.editors.node_list_dialog"] = _nld_stub
+    sys.modules["ui.editors.graph_data"] = MagicMock()
+    sys.modules["ui.editors.undo_manager"] = MagicMock()
+    sys.modules["ui.editors.resize_overlay"] = MagicMock()
+    for _m in [
+        "ui.editors.graph_geometry", "ui.editors.edge_routing",
+        "ui.editors.mode_handlers.base_handler",
+        "ui.editors.mode_handlers.simple_handlers",
+        "ui.editors.mode_handlers.advanced_handlers",
+        "ui.editors.commands.simple_commands",
+        "ui.editors.commands.advanced_commands",
+    ]:
+        sys.modules[_m] = MagicMock()
 
-# Stub other editor dependencies
-_nld_stub = types.ModuleType("ui.editors.node_list_dialog")
-_nld_stub.NodeListDialog = MagicMock()
-sys.modules["ui.editors.node_list_dialog"] = _nld_stub
-sys.modules["ui.editors.graph_data"] = MagicMock()
-sys.modules["ui.editors.undo_manager"] = MagicMock()
-sys.modules["ui.editors.resize_overlay"] = MagicMock()
-for _m in [
-    "ui.editors.graph_geometry", "ui.editors.edge_routing",
-    "ui.editors.mode_handlers.base_handler",
-    "ui.editors.mode_handlers.simple_handlers",
-    "ui.editors.mode_handlers.advanced_handlers",
-    "ui.editors.commands.simple_commands",
-    "ui.editors.commands.advanced_commands",
-]:
-    sys.modules[_m] = MagicMock()
+    # Block ui.windows.__init__ from importing MainWindow (pulls too many deps)
+    _win_stub = types.ModuleType("ui.windows")
+    _win_stub.__path__ = [str(PROJECT_ROOT / "ui" / "windows")]
+    sys.modules["ui.windows"] = _win_stub
+    # Block ui.editors.graph_editor (old module, should not be imported)
+    sys.modules["ui.editors.graph_editor"] = types.ModuleType("ui.editors.graph_editor")
+
 
 # Project path
 # Project path — работает и из tests/, и из корня проекта
@@ -234,12 +241,34 @@ else:
     PROJECT_ROOT = _here.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-# Block ui.windows.__init__ from importing MainWindow (pulls too many deps)
-_win_stub = types.ModuleType("ui.windows")
-_win_stub.__path__ = [str(PROJECT_ROOT / "ui" / "windows")]
-sys.modules["ui.windows"] = _win_stub
-# Block ui.editors.graph_editor (old module, should not be imported)
-sys.modules["ui.editors.graph_editor"] = types.ModuleType("ui.editors.graph_editor")
+
+# ---------------------------------------------------------------------------
+# Заглушки живут ТОЛЬКО на время этого модуля (пункт 0.0 дороги)
+# ---------------------------------------------------------------------------
+# Раньше _stub_qt() и заглушки ui.* исполнялись на уровне модуля и оставались
+# в sys.modules до конца сессии. Pytest импортирует все тест-модули на СБОРКЕ,
+# до первого теста, поэтому фальшивый PySide6.QtGui доставался всем модулям
+# после этого файла по алфавиту: tests/ui/test_bundled_fonts.py и
+# tests/ui/test_frame_crop_preview.py обрывали сбор на QTextLayout/QKeyEvent,
+# а tests/test_seat_contract.py в рантайме получал фальшивый
+# AdvancedGraphEditor вместо настоящего.
+#
+# Фикстура уровня модуля ставит заглушки после сбора и снимает их за собой
+# вместе со всем, что успело импортироваться поверх них.
+
+@pytest.fixture(scope="module", autouse=True)
+def _qt_and_ui_stubs():
+    saved = {n: m for n, m in sys.modules.items()
+             if n == "PySide6" or n == "ui" or n.startswith(("PySide6.", "ui."))}
+    _stub_qt()
+    _stub_ui()
+    yield
+    for name in [n for n in sys.modules
+                 if n in ("PySide6", "ui") or n.startswith(("PySide6.", "ui."))]:
+        if name in saved:
+            sys.modules[name] = saved[name]
+        else:
+            del sys.modules[name]
 
 
 # ---------------------------------------------------------------------------
