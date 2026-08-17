@@ -20,12 +20,33 @@ ERROR tests/ui/test_gamma.py::test_three - ValueError: not enough values
 """
 
 
-def test_parses_red_ids():
-    assert sb.parse_red(REPORT) == {
+BASE = {
+    "recorded": "2026-08-17",
+    "platform": "win32",
+    "collected": 738,
+    "min_collected": 706,
+    "totals": {"failed": 2, "passed": 661, "skipped": 13, "errors": 1},
+    "red": [
         "tests/test_alpha.py::test_one",
         "tests/test_beta.py::TestX::test_two",
         "tests/ui/test_gamma.py::test_three",
-    }
+    ],
+}
+
+
+def test_parses_red_ids():
+    assert sb.parse_red(REPORT) == set(BASE["red"])
+
+
+def test_parses_red_id_with_spaces_and_cyrillic():
+    """Пробел в id не обрывает разбор: в storage/ уже лежит «Новая папка»,
+    и параметр по корпусу приезжает в идентификатор как есть."""
+    line = "FAILED tests/test_corpus.py::test_pair[Новая папка 2/graph.json] - AssertionError: 1 != 2"
+    assert sb.parse_red(line) == {"tests/test_corpus.py::test_pair[Новая папка 2/graph.json]"}
+
+
+def test_parses_red_id_without_reason():
+    assert sb.parse_red("ERROR tests/test_x.py::test_y") == {"tests/test_x.py::test_y"}
 
 
 def test_parses_totals_including_single_error():
@@ -47,6 +68,56 @@ def test_compare_separates_regression_from_fix():
     new, fixed = sb.compare({"a::t1", "b::t2"}, {"b::t2", "c::t3"})
     assert new == ["c::t3"]
     assert fixed == ["a::t1"]
+
+
+def test_killed_run_is_a_failure_not_a_green_gate(monkeypatch, capsys):
+    """Дефект ревизии 0.3: гейт был ЗЕЛЁНЫМ при убитом прогоне.
+
+    `os._exit(77)` в первом тесте (класс §24.6 — access violation в этом же
+    наборе уже случался) обрывает вывод: итоговой строки нет, красных не
+    разобрано ни одного, и сравнение с базой читает это как «позеленело всё».
+    Проверяем именно `cmd_check`, а не отдельный предикат: сломана была
+    проводка кода возврата, а не арифметика.
+    """
+    killed = ("tests/test_alpha.py .\n", 77)
+
+    def fake_pytest(args):
+        return ("\n738 tests collected in 1.0s\n", 0) if "--collect-only" in args else killed
+
+    monkeypatch.setattr(sb, "_pytest", fake_pytest)
+    monkeypatch.setattr(sb, "_load_baseline", lambda: BASE)
+
+    assert sb.cmd_check() == 1
+    out = capsys.readouterr().out
+    assert "[ПРОВАЛ]" in out and "77" in out
+
+
+def test_run_without_summary_line_is_a_failure():
+    """Оборванный хвост при штатном коде возврата — тоже не «всё зелено»."""
+    assert sb.verdict(BASE, set(), {}, 738, 1)
+
+
+def test_partial_output_caught_by_counter_invariant():
+    """Счётчики говорят про 3 красных, а разобран один — вывод неполон."""
+    problems = sb.verdict(BASE, {"tests/test_alpha.py::test_one"}, BASE["totals"], 738, 1)
+    assert any("вывод неполон" in p for p in problems)
+
+
+def test_healthy_run_has_no_problems():
+    assert sb.verdict(BASE, set(BASE["red"]), BASE["totals"], 738, 1) == []
+    assert sb.verdict(BASE, set(), {"failed": 0, "passed": 700, "errors": 0}, 738, 0) == []
+
+
+def test_shrunken_suite_is_a_failure():
+    assert any("усох" in p for p in sb.verdict(BASE, set(BASE["red"]), BASE["totals"], 705, 1))
+
+
+def test_red_converted_to_skip_is_suspected():
+    grew = dict(BASE["totals"], skipped=14)
+    assert sb.skip_conversion_suspected(BASE, grew, ["tests/test_alpha.py::test_one"])
+    # порознь оба признака законны
+    assert not sb.skip_conversion_suspected(BASE, grew, [])
+    assert not sb.skip_conversion_suspected(BASE, BASE["totals"], ["tests/test_alpha.py::test_one"])
 
 
 def test_baseline_file_is_readable_and_consistent():
