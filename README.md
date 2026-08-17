@@ -118,3 +118,5 @@ UPLOADED → DETECTING → DETECTED → VALIDATING_BBOX → VALIDATED_BBOX
 | [ADR/](docs/ADR/) | 6 Architecture Decision Records (SAM2, LoRA r=8, 6ch input, smart snap и др.) |
 | [AUTO_LAYOUT.md](docs/AUTO_LAYOUT.md) | Раскладка графа на холсте: где живёт R&D, что нужно для запуска, чего нет в git |
 | [AUTO_LAYOUT_E2E_TESTPLAN.md](docs/AUTO_LAYOUT_E2E_TESTPLAN.md) | Проверки авто-раскладки, требующие поднятого стека: e2e и отказные сценарии |
+| [NAPRAVLENIE.md](docs/NAPRAVLENIE.md) | Класс `napravlenie` (стрелка на трубе): состояние фичи, цепочка direction-классификации, поля в артефактах |
+| [NAPRAVLENIE_E2E_CHECKLIST.md](docs/NAPRAVLENIE_E2E_CHECKLIST.md) | Сквозная приёмка `napravlenie` на поднятом стеке (пункт ВН1б) |

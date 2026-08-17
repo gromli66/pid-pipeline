@@ -122,3 +122,62 @@ def test_docs_do_not_contradict_ocr_flag(doc):
             f"{doc}:{line} — «OCR по умолчанию {word}», а "
             f"thermohydraulics.yaml → ocr.enabled: {str(enabled).lower()}"
         )
+
+
+# --------------------------------------------------------------------------- #
+# 3. napravlenie: исключение из node_mask и список классов классификатора
+#    (пункт ВН1а; сам дефект — docs/NAPRAVLENIE.md §1)
+# --------------------------------------------------------------------------- #
+
+# Оба генератора node_mask обязаны исключать napravlenie: вернётся хоть один —
+# бокс снова вырежется из pipe_mask и труба под ним пропадёт.
+_NODE_MASK_GENERATORS = (
+    "worker/tasks/segmentation.py",
+    "app/api/validation.py",
+)
+_EXCLUDED_BLOCK = re.compile(r"excluded_names\s*=\s*\{(.*?)\}", re.S)
+
+
+def _excluded_node_mask_names(py_path: str) -> set:
+    """Имена категорий из `excluded_names = {...}`, с раскрытием строковых констант."""
+    src = (ROOT / py_path).read_text(encoding="utf-8")
+    m = _EXCLUDED_BLOCK.search(src)
+    assert m, f"{py_path}: не найден блок excluded_names"
+    consts = dict(re.findall(r'^([A-Z][A-Z0-9_]*)\s*=\s*"([^"]+)"', src, re.M))
+    names = set()
+    for token in (t.strip() for t in m.group(1).split(",")):
+        if not token:
+            continue
+        if token.startswith(('"', "'")):
+            names.add(token.strip("\"'"))
+        elif token in consts:
+            names.add(consts[token])
+    return names
+
+
+@pytest.mark.parametrize("py_path", _NODE_MASK_GENERATORS)
+def test_node_mask_generators_exclude_napravlenie(py_path):
+    names = _excluded_node_mask_names(py_path)
+    assert {"truba", "annotation", "napravlenie"} <= names, (
+        f"{py_path}: node_mask исключает {sorted(names)} — без 'napravlenie' бокс "
+        f"стрелки вырезается из pipe_mask и труба под ним пропадает "
+        f"(docs/NAPRAVLENIE.md §1)"
+    )
+
+
+def test_napravlenie_doc_classes_match_config():
+    doc = (ROOT / "docs/NAPRAVLENIE.md").read_text(encoding="utf-8")
+    m = re.search(r"^\s*classes:\s*\[([^\]]+)\]", doc, re.M)
+    assert m, "docs/NAPRAVLENIE.md: не найдена строка `classes: [...]` в примере конфига"
+    doc_classes = [c.strip() for c in m.group(1).split(",")]
+
+    cfg = yaml.safe_load(
+        (ROOT / "configs/projects/thermohydraulics/thermohydraulics.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    cfg_classes = list(cfg["direction_classification"]["classes"])
+    assert doc_classes == cfg_classes, (
+        f"docs/NAPRAVLENIE.md обещает classes={doc_classes}, "
+        f"а thermohydraulics.yaml → {cfg_classes}"
+    )
