@@ -125,3 +125,69 @@ def test_baseline_file_is_readable_and_consistent():
     assert base["min_collected"] < base["collected"], "нижняя граница не ниже снятого числа"
     assert len(base["red"]) == base["totals"]["failed"] + base["totals"]["errors"]
     assert len(set(base["red"])) == len(base["red"]), "дубли в списке красных"
+
+
+# --- пол считается от git-видимой части сбора (пункт 0.3y) ---------------------
+
+COLLECT = """\
+tests/test_alpha.py::test_one
+tests/test_canvas_pipeline_golden.py::test_t10_corpus_chain[d74eb9f1]
+tests/test_canvas_pipeline_golden.py::test_t10_corpus_chain[0fc9d04c]
+tests/test_canvas_pipeline_golden.py::test_t10_corpus_chain[3263039b]
+tests/test_beta.py::test_matrix[3263039b-wide]
+
+5 tests collected in 0.42s
+"""
+
+# То же дерево тестов на раннере: локального storage там нет вовсе.
+RUNNER_COLLECT = """\
+tests/test_alpha.py::test_one
+tests/test_canvas_pipeline_golden.py::test_t10_corpus_chain[d74eb9f1]
+
+2 tests collected in 0.11s
+"""
+
+# d74eb9f1 лежит в git (tests/fixtures/graph), два других — только в storage.
+LOCAL = {"0fc9d04c", "3263039b"}
+
+
+def test_counts_only_corpus_absent_from_git():
+    """Фикстура из git в счёт не идёт — её собирает и раннер."""
+    assert sb.count_local_corpus(COLLECT, LOCAL) == 3
+
+
+def test_counts_nothing_when_storage_is_empty():
+    """Чистое дерево: локального корпуса нет, вычитать нечего."""
+    assert sb.count_local_corpus(COLLECT, set()) == 0
+
+
+def test_local_corpus_uids_never_include_git_fixtures():
+    """Фикстуры из git не должны попасть в вычитаемое: их видит и раннер."""
+    from tools import corpus
+
+    assert not (sb.local_corpus_uids() & set(corpus.fixture_paths()))
+
+
+def test_floor_ignores_new_diagrams_in_storage():
+    """⛔ Дефект 0.3x: пол ехал вверх от каждой новой диаграммы в storage/.
+
+    Машина разработки (5 собранных, из них 3 параметра по локальному корпусу) и
+    раннер (2 собранных) обязаны дать ОДНО число git-видимых и один вердикт по
+    полу — иначе гейт меряет содержимое `storage/`, а не потерю тестов.
+    """
+    dev = sb.parse_collected(COLLECT) - sb.count_local_corpus(COLLECT, LOCAL)
+    runner = sb.parse_collected(RUNNER_COLLECT) - sb.count_local_corpus(RUNNER_COLLECT, LOCAL)
+    assert dev == runner == 2
+
+    base = dict(BASE, collected=5, min_collected=2)
+    for visible in (dev, runner):
+        assert not any(
+            "усох" in p
+            for p in sb.verdict(base, set(BASE["red"]), BASE["totals"], visible, 1)
+        )
+
+
+def test_shrink_of_git_visible_part_is_still_caught():
+    """Потеря настоящих тестов сквозь новый счёт проходить не должна."""
+    problems = sb.verdict(BASE, set(BASE["red"]), BASE["totals"], 705, 1)
+    assert any("усох" in p and "git-видимой" in p for p in problems)

@@ -18,6 +18,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tools import suite_baseline
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 BASELINE = PROJECT_ROOT / "tools" / "bench" / "suite_baseline.json"
 
@@ -50,6 +52,11 @@ def test_suite_does_not_shrink():
     `collect_ignore`, снесённый модуль. Нижняя граница — из базовой линии
     набора (`min_collected`, пункт 0.3), в ней уже заложен запас на
     необязательные зависимости.
+
+    Сверяется не весь сбор, а его git-видимая часть (пункт 0.3y): параметры по
+    корпусу из локального `storage/` на чистом дереве не собираются, и если бы
+    они входили в счёт, пол зависел бы от числа диаграмм на машине. Разделение —
+    общее со стендом, чтобы два потребителя одного пола не разъехались.
     """
     assert BASELINE.exists(), f"нет базовой линии {BASELINE}: python tools/suite_baseline.py --write-baseline"
     floor = json.loads(BASELINE.read_text(encoding="utf-8"))["min_collected"]
@@ -58,7 +65,9 @@ def test_suite_does_not_shrink():
     m = re.search(r"^(\d+) tests? collected", out, re.MULTILINE)
     assert m, f"не нашёл число собранных в выводе:\n{out[-1000:]}"
     collected = int(m.group(1))
-    assert collected >= floor, (
-        f"собрано {collected} < {floor} — набор усох; если тесты убраны намеренно, "
-        f"пересними базу: python tools/suite_baseline.py --write-baseline"
+    git_visible = collected - suite_baseline.count_local_corpus(out)
+    assert git_visible >= floor, (
+        f"git-видимых {git_visible} из {collected} собранных < {floor} — набор усох; "
+        f"если тесты убраны намеренно, пересними базу: "
+        f"python tools/suite_baseline.py --write-baseline"
     )

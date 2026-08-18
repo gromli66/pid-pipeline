@@ -13,8 +13,11 @@
 
 Что считается провалом (`--check` → exit 1):
     * НОВЫЙ красный — тест, который в базе зелёный, а сейчас упал;
-    * усыхание набора — собрано меньше `min_collected` (тесты молча исчезли:
-      `importorskip`, `collect_ignore`, снесённый файл);
+    * усыхание набора — git-видимая часть сбора меньше `min_collected` (тесты
+      молча исчезли: `importorskip`, `collect_ignore`, снесённый файл). Пол
+      считается от собранного МИНУС параметры по корпусу, которого нет в git
+      (пункт 0.3y): иначе он зависит от числа диаграмм в локальном `storage/`
+      и уезжает вверх от каждого прогона конвейера, а на раннере краснеет;
     * прогон не состоялся — pytest вернул код вне {0, 1}, итоговой строки нет,
       или разобранных идентификаторов меньше, чем красных в счётчиках. Убитый
       прогон (`os._exit`, access violation §24.6) даёт ПУСТОЙ список красных,
@@ -37,6 +40,11 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
+from tools import corpus                                      # noqa: E402
+
 BASELINE = REPO / "tools" / "bench" / "suite_baseline.json"
 
 PYTEST_RUN = ["-q", "--tb=no", "-rEf", "-p", "no:cacheprovider"]
@@ -51,13 +59,16 @@ RUN_RC_OK = (0, 1)
 # такого объёма обязана пересъёмкой базы объяснить себя (Д6).
 MAX_FIXED = 10
 
-# Запас пола к числу собранных. База снимается на машине разработки, а
-# проверяется и на раннере, где корпусных параметров меньше, — запас обязан
-# перекрывать эту разницу и быть уже самой мелкой потери, которую ловим.
-# Замер 2026-08-18 (пункт 0.8, MEASUREMENTS §31): локально 775, в чистом клоне
-# 761, разница 14 (17 графов корпуса против 3 в git). 14 + 4 запаса = 18, и это
-# уже ниже 22 тестов раскладки, которые молча уходят без shapely.
-FLOOR_MARGIN = 18
+# Запас пола к числу собранных. Пол считается НЕ от всего сбора, а от той его
+# части, которую видит чистое дерево (см. count_local_corpus): корпусные
+# параметры машины разработки в него не входят, поэтому запас больше не обязан
+# перекрывать разницу «локально ↔ раннер» по корпусу. Замер 2026-08-18
+# (пункт 0.3y, MEASUREMENTS §38): git-видимая часть — 855 и здесь, и в CI,
+# разница 0; 5 — запас на дребезг окружения, и он вчетверо уже 22 тестов
+# раскладки, которые молча уходят без shapely (замерено: 855 → 833).
+# До 0.3y запас был 18 и включал в себя корпус (пункт 0.8): пол ехал вверх от
+# каждой новой диаграммы в storage/, и к 0.3x от него оставалось 2 теста.
+FLOOR_MARGIN = 5
 
 # Нежадно до « - » (после него причина) — идентификатор может содержать
 # пробелы и кириллицу: в storage/ уже лежит «Новая папка», и параметр теста
@@ -65,6 +76,9 @@ FLOOR_MARGIN = 18
 _RED = re.compile(r"^(?:FAILED|ERROR) (.+?)(?: - |\s*$)")
 _TOTAL = re.compile(r"(\d+) (failed|passed|skipped|errors|error|xfailed|xpassed)")
 _COLLECTED = re.compile(r"^(\d+) tests? collected")
+# Хвостовой параметр идентификатора: `…::test_x[6e7144d5]`, у многопараметрных —
+# `…[6e7144d5-case]`. uid8 шестнадцатеричный, дефиса внутри быть не может.
+_PARAM_TAIL = re.compile(r"\[([^\[\]]+)\]\s*$")
 
 
 def _pytest(args: list[str]) -> tuple[str, int]:
@@ -114,17 +128,44 @@ def parse_collected(text: str) -> int:
     return -1
 
 
+def local_corpus_uids() -> set[str]:
+    """uid8 корпуса, которых нет в git: их параметры видит только эта машина."""
+    return set(corpus.corpus_paths()) - set(corpus.corpus_paths(include_storage=False))
+
+
+def count_local_corpus(collect_text: str, local_uids: set[str] | None = None) -> int:
+    """Сколько собранных тестов параметризованы корпусом вне git.
+
+    Пол набора обязан быть одинаков на машине разработки и на раннере, иначе он
+    ловит не потерю тестов, а число диаграмм в `storage/`. Поэтому из числа
+    собранных вычитается ровно та часть, которой на чистом дереве не бывает.
+    """
+    uids = local_corpus_uids() if local_uids is None else local_uids
+    if not uids:
+        return 0
+    hits = 0
+    for line in collect_text.splitlines():
+        m = _PARAM_TAIL.search(line)
+        if m and any(part in uids for part in m.group(1).split("-")):
+            hits += 1
+    return hits
+
+
 def compare(base_red: set[str], cur_red: set[str]) -> tuple[list[str], list[str]]:
     """(новые красные — это регрессия, позеленевшие — повод пересъёмки базы)."""
     return sorted(cur_red - base_red), sorted(base_red - cur_red)
 
 
-def verdict(base: dict, red: set[str], totals: dict[str, int], collected: int, run_rc: int) -> list[str]:
+def verdict(base: dict, red: set[str], totals: dict[str, int], git_visible: int, run_rc: int) -> list[str]:
     """Причины провала (пустой список = гейт зелёный).
 
     Порядок проверок важен: сначала «прогон вообще состоялся», потом уже
     сравнение с базой. Убитый прогон даёт пустой список красных, и без
     этих проверок он читается как «всё починилось».
+
+    С полом сверяется `git_visible` — собранное МИНУС корпусные параметры вне
+    git (пункт 0.3y): иначе пол зависит от того, сколько диаграмм лежит в
+    локальном `storage/`, и растёт от чужих прогонов конвейера.
     """
     fail: list[str] = []
 
@@ -143,8 +184,11 @@ def verdict(base: dict, red: set[str], totals: dict[str, int], collected: int, r
                 f"вывод неполон: в итоговой строке {counted} красных, "
                 f"а идентификаторов разобрано {len(red)}"
             )
-    if collected < base["min_collected"]:
-        fail.append(f"набор усох: собрано {collected} < {base['min_collected']}")
+    if git_visible < base["min_collected"]:
+        fail.append(
+            f"набор усох: в git-видимой части {git_visible} < {base['min_collected']} "
+            "(корпусные параметры вне git в пол не входят)"
+        )
     return fail
 
 
@@ -164,20 +208,23 @@ def _load_baseline() -> dict:
     return json.loads(BASELINE.read_text(encoding="utf-8"))
 
 
-def _measure() -> tuple[set[str], dict[str, int], int, str, int]:
+def _measure() -> tuple[set[str], dict[str, int], int, int, str, int]:
     run_text, run_rc = _pytest(PYTEST_RUN)
     collect_text, collect_rc = _pytest(PYTEST_COLLECT)
     if collect_rc != 0:
         sys.exit(f"сбор pytest сломан (exit {collect_rc}) — это пункт 0.0, а не база")
-    return parse_red(run_text), parse_totals(run_text), parse_collected(collect_text), run_text, run_rc
+    collected = parse_collected(collect_text)
+    local = count_local_corpus(collect_text)
+    return parse_red(run_text), parse_totals(run_text), collected, local, run_text, run_rc
 
 
 def cmd_write() -> int:
-    red, totals, collected, run_text, run_rc = _measure()
+    red, totals, collected, local, run_text, run_rc = _measure()
     if run_rc not in RUN_RC_OK:
         sys.exit(f"прогон вернул {run_rc} — снимать базу с оборванного прогона нельзя:\n" + run_text[-2000:])
     if not totals:
         sys.exit("не разобрал итоговую строку pytest:\n" + run_text[-2000:])
+    git_visible = collected - local
     BASELINE.write_text(
         json.dumps(
             {
@@ -187,7 +234,9 @@ def cmd_write() -> int:
                 "env": "requirements/api.txt + ui.txt + dev.txt + shapely==2.1.2",
                 "totals": totals,
                 "collected": collected,
-                "min_collected": collected - FLOOR_MARGIN,
+                "corpus_local": local,
+                "collected_git_visible": git_visible,
+                "min_collected": git_visible - FLOOR_MARGIN,
                 "red": sorted(red),
             },
             ensure_ascii=False,
@@ -196,19 +245,23 @@ def cmd_write() -> int:
         + "\n",
         encoding="utf-8",
     )
-    print(f"база записана: {len(red)} красных, собрано {collected}, {totals}")
+    print(f"база записана: {len(red)} красных, собрано {collected} "
+          f"(git-видимых {git_visible}, корпус вне git {local}), {totals}")
     return 0
 
 
 def cmd_check() -> int:
     base = _load_baseline()
-    red, totals, collected, run_text, run_rc = _measure()
+    red, totals, collected, local, run_text, run_rc = _measure()
     new, fixed = compare(set(base["red"]), red)
+    git_visible = collected - local
 
-    print(f"сейчас:  собрано {collected}, {totals}, pytest exit {run_rc}")
-    print(f"база ({base['recorded']}, {base['platform']}): собрано {base['collected']}, {base['totals']}")
+    print(f"сейчас:  собрано {collected} (git-видимых {git_visible}, корпус вне git {local}), "
+          f"{totals}, pytest exit {run_rc}")
+    print(f"база ({base['recorded']}, {base['platform']}): собрано {base['collected']}, "
+          f"пол git-видимой части {base['min_collected']}, {base['totals']}")
 
-    problems = verdict(base, red, totals, collected, run_rc)
+    problems = verdict(base, red, totals, git_visible, run_rc)
     if len(fixed) > MAX_FIXED:
         problems.append(
             f"позеленело сразу {len(fixed)} тестов (порог {MAX_FIXED}) — так выглядит "
