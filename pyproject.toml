@@ -41,6 +41,7 @@ follow_imports = "silent"          # соседний нетипизирован
 files = [
     "modules/graph/core/contours_merge.py",
     "tools/corpus.py",
+    "tools/e2e_local.py",
     "tools/edit_bench.py",
     "tools/lint_gate.py",
     "tools/layout_determinism.py",

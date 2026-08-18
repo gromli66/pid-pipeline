@@ -679,3 +679,52 @@
 | 33.20 | ⭐ **Пустой прогон не может быть зелёным** | `python -X utf8 tools/pair_bench.py --storage <нет такого> --check` | 2026-08-18 | **exit 2**, «замер пуст: ни одной пары не найдено — данных корпуса нет». Так стенд выглядит на чистом клоне и в CI — поэтому в CI он и не стоит (класс дефекта — блокер 0.3) |
 | 33.21 | Д1: тесты бьют по существу (три инъекции) | `python -X utf8 -m pytest tests/test_pair_bench.py -q` после каждой правки кода | 2026-08-18 | шум округления, засчитанный как правка (`BOX_EPS = 0`) → красный `test_detection_counts_edits_and_ignores_rounding_noise`; один проход у OCR → красный `test_ocr_stretched_frame_is_an_edit_not_add_plus_remove`; «пустой замер = 0» → красный `test_empty_measurement_cannot_be_green`. В каждой инъекции **1 failed / 20 passed**, дерево восстановлено, итог — **21 passed** |
 | 33.22 | Набор не пострадал | `python -X utf8 tools/suite_baseline.py --check`; `pytest --collect-only -q` | 2026-08-18 | **exit 0**, «новых красных нет»; собрано **815** (было 794 без файлов пункта, +21 тест), красных **57 без изменений** (37 failed + 20 errors). Расхождение с журналом 0.10 («793») объясняется его же фикс-коммитом `9652557`, добавившим один тест |
+
+---
+
+## 34. Пункт 0.12 дороги — конвейер прошёл end-to-end на локальном стеке (2026-08-18)
+
+**Что проверялось.** Клейм плана «прогнать конвейер локально сегодня **нечем**»
+(вердикт аудита ❔ — чтением кода не проверяется) и гейт пункта «один uid
+проходит все этапы локально». Стенд — новый `tools/e2e_local.py`: ведёт одну
+диаграмму по тем же REST-эндпоинтам, что клиент, авто-приёмкой закрывая ручные
+этапы. Боевой код не тронут.
+
+### 34а. Клейм плана: чего именно не хватало
+
+| # | что | команда | дата | результат |
+|---|---|---|---|---|
+| 34.1 | ⭐ **«Нечем» опровергнуто: не хватало не компонентов, а способа** | `docker ps`; `curl /health`; `celery -A worker.celery_app inspect active_queues` | 2026-08-18 | стек **поднят и полон**: 15 сервисов из 15 в `Up`, `/health` = `{api, database, redis: healthy}`, воркеры слушают `default, gpu, sam2` (pid_worker) и `ocr` (pid_worker_ocr), веса в `models/` на месте. Не было **входа без клиента**: конвейер ведёт окно PySide6, и каждый ручной этап ждёт оператора |
+| 34.2 | **«5 сервисов» плана — это P&ID-часть compose-файла из 15** | `docker compose config --services` | 2026-08-18 | **15** сервисов: P&ID — `postgres, redis, api, worker, worker_ocr` (5), остальные 10 — CVAT+traefik. Ловушка аудита подтверждена; при этом CVAT для прогона **обязателен** — приёмка bbox идёт только через него (`app/api/cvat.py:264`) |
+| 34.3 | ⚠ **Локальный стек — на GPU, боевой — CPU-only** | `docker exec pid_worker python -c "import torch;print(torch.cuda.is_available())"` | 2026-08-18 | `True`; `.env` этой машины: `PID_DEVICE=cuda`, `YOLO_DEVICE=cuda` (файл в `.gitignore`, помечен «вернуть на cpu перед деплоем»). **Все секунды ниже к бою не переносятся** — это работа СТ2 (волна 2), здесь они только доказывают, что этап отработал |
+
+### 34б. Прогон: один uid прошёл все этапы
+
+| # | что | команда | дата | результат |
+|---|---|---|---|---|
+| 34.4 | ⭐ **Диаграмма дошла до `completed` за один запуск** | `python -X utf8 tools/e2e_local.py --check --run` | 2026-08-18 | uid `3263039b`, **14 шагов**, `uploaded → … → completed`, **39.4 с** стенных. Картинка — оригинал самой мелкой схемы корпуса 0.8 (`d74eb9f1`, 358 442 Б, 1978×1247) |
+| 34.5 | **Отработали все 13 стадий, ни одной FAILED** | `select stage_type, status, duration_seconds from processing_stages where diagram_uid=…` | 2026-08-18 | `frame_removal 0.0 · detection 5.9 · cvat_validation 2.2 · direction_classification 0.3 · segmentation 2.4 · skeletonization 0.8 · final_skeletonization 0.6 · junction_classification 2.5 · graph_building 1.2 · ocr 15.9 · contour_extraction 9.4 · layout 0.1 · fxml_generation 0.1` — **13 из 13 completed** |
+| 34.6 | **Второй прогон (uid `4c1c12fd`) — те же 13 стадий, дольше** | то же по первому uid | 2026-08-18 | `detection 11.6 · junction_classification 9.0 · ocr 47.8 · contour_extraction 17.7`, остальные — как у 34.5. Разница — прогрев весов в живых воркерах; **честного «холодного» замера здесь нет**, это предмет СТ2 (нужен рестарт воркеров + RSS) |
+| 34.7 | ⭐ **След на диске: 24 артефакта, все 16 обязательных** | `--run` (проверка `GET /download/{type}`); `select artifact_type from artifacts` | 2026-08-18 | **16/16** обязательных, всего в БД **24** строки. Содержательно: граф **65 узлов / 62 ребра** (36 боксов детекции, 36 после приёмки, 36 перекрёстков, 0 мостов), контуры SAM2 — **32 узла из 32 eligible**, `mean_confidence 0.95`, FXML **17 250 Б**: 58 `Line`, 18 `ValveControl`, 9 `ButtonControl`, 4 `Polyline` |
+| 34.8 | **Возобновление работает** | `tools/e2e_local.py --resume 4c1c12fd…` после обрыва на контурах | 2026-08-18 | подхватил со статуса `validated_graph`, доехал до `completed` за **19.6 с**; таблица `WAIT_STEPS` закрывает и промежуточные статусы (`detecting`, `building_graph`, `generating_fxml`), на которых стенд оставляет диаграмму при таймауте |
+
+### 34в. Что прогон вскрыл (расхождения кода с доками)
+
+| # | что | команда | дата | результат |
+|---|---|---|---|---|
+| 34.9 | ⭐ **SAM2 веером после перекрёстков НЕ запускается** | прогон встал на ожидании `contours_auto`; `docker logs pid_api` + `app/api/validation.py:666-669` | 2026-08-18 | в логе после `junctions/complete` диспатчатся только `task_build_graph` и `task_run_ocr`; в коде на месте авто-запуска SAM2 стоит комментарий «triggered on demand … via POST /api/contours/{uid}/extract» и `contour_task_id = None`. `STATUS_MACHINE.md:145` и `API.md §7` обещают авто-диспатч — **доки врут** (за правку отвечает не 0.12) |
+| 34.10 | **Детекция стартует с `frame_cleaned`, а не с `uploaded`** | `app/api/detection.py:40`; прогон без шага `frame` → 400 | 2026-08-18 | между загрузкой и детекцией стоит фаза очистки рамки (`/api/frame/{uid}/skip` — «рамки нет»). `STATUS_MACHINE.md §2` рисует `uploaded → detecting` |
+| 34.11 | **Молчаливой копии графа в validated больше нет** | `app/api/validation.py:728` | 2026-08-18 | `complete-simple` требует артефакт `GRAPH_VALIDATED` и отвечает 400 «Граф не сохранён», тогда как `STATUS_MACHINE.md §6` числит копию `graph.json → graph_validated.json` среди авто-приёмок. Стенд сохраняет граф явно |
+| 34.12 | ⚠ **`GET /api/projects/` и `/summary` отдают пустоту на всех вызовах после первого** | 3 подряд `curl /api/projects/summary`; `app/services/project_loader.py:579` | 2026-08-18 | первый вызов — `[{"code":"thermohydraulics"…}]`, второй и далее — `[]` (и `{"items":[],"total":0}`). Причина: `load_all()` пропускает подпапку, чей код уже лежит в `self._cache`, а лоадер — процессный синглтон (`@lru_cache`). Задето прямо: клиент, открытый вторым, списка проектов не увидит. **Чужой дефект, не правился** — `--check` спрашивает `/api/projects/{code}` (стабилен) |
+
+### 34г. Гейт и зонды
+
+| # | что | команда | дата | результат |
+|---|---|---|---|---|
+| 34.13 | Гейт стенда зелёный | `python -X utf8 tools/e2e_local.py --check` | 2026-08-18 | **exit 0**: health зелёный, проект найден, очереди `default, gpu, ocr, sam2`, картинка на месте |
+| 34.14 | ⭐ **Зонд: мёртвый API** | `--check --api http://localhost:9` | 2026-08-18 | **exit 1**, «ПЛОХО /health: ConnectError…», провалов 2 |
+| 34.15 | ⭐ **Зонд: мёртвый брокер** | `--check --broker redis://localhost:6399/0` | 2026-08-18 | **exit 1**, «ПЛОХО брокер …: OperationalError», «никто не слушает: default, gpu, sam2, ocr» |
+| 34.16 | **Зонд: чужой проект** | `--check --project net_takogo` | 2026-08-18 | **exit 1**, «проекта 'net_takogo' нет: /api/projects/net_takogo → 404» |
+| 34.17 | ⭐ **Д1: тесты бьют по существу (три инъекции)** | `python -X utf8 -m pytest tests/test_e2e_local.py -q` после каждой правки кода | 2026-08-18 | шаг контуров выкинут из `STEPS` → **5 failed** (цепочка, достижимость, прогон, отчёт); статус `error` перестал останавливать прогон → красный `test_error_status_stops_run_with_stage`; `--check` перестал судить очереди → красный `test_check_red_on_broken_stack[stack1]`. Дерево восстановлено, итог — **16 passed** |
+| 34.18 | Набор не пострадал | `python -X utf8 tools/suite_baseline.py --check`; `pytest --collect-only -q` | 2026-08-18 | **exit 0**, «новых красных нет»; собрано **833** (база 775 + 16 тестов пункта + 42 параметра корпусных тестов от двух новых диаграмм в `storage/`), красных **57 без изменений** (37 failed + 20 errors); сбор 833/0 ошибок |
+| 34.19 | Соседние стенды не сломались | `python -X utf8 tools/pair_bench.py --check`; `python -X utf8 tools/lint_gate.py --check` | 2026-08-18 | `pair_bench` **exit 0**, «рост правок: 0», новые uid помечены «диаграммы нет в эталоне — пропуск»; `lint_gate` **exit 0**, 199 нарушений в 73 файлах (эталон 199), mypy 0 ошибок — `tools/e2e_local.py` добавлен в его список `files` |

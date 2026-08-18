@@ -18,6 +18,7 @@
 7. [Миграции БД](#7-миграции-бд)
 8. [IDE setup](#8-ide-setup)
 9. [Типичные проблемы](#9-типичные-проблемы)
+10. [Прогон конвейера end-to-end локально](#10-прогон-конвейера-end-to-end-локально)
 
 ---
 
@@ -400,3 +401,62 @@ celery -A worker.celery_app inspect registered
 ```
 
 Убедиться, что worker запущен с правильными очередями: `-Q default,gpu,sam2` для основного, `-Q ocr` для OCR.
+
+---
+
+## 10. Прогон конвейера end-to-end локально
+
+Стенд `tools/e2e_local.py` (пункт 0.12 дороги рефакторинга) проводит ОДНУ
+диаграмму через все этапы без клиента: он дёргает те же REST-эндпоинты, что и
+`ui/services/api_client.py`, а ручные этапы закрывает авто-приёмкой, которая в
+API уже есть (`STATUS_MACHINE.md §6`). Правок оператора при этом ноль — прогон
+измеряет машину.
+
+Нужен полный P&ID-стек (это **5 сервисов из 15** в `docker-compose.yml`,
+остальные — CVAT; CVAT нужен: этап приёмки bbox идёт через него):
+
+```bash
+docker compose up -d postgres redis api worker worker_ocr cvat_db \
+  cvat_redis_inmem cvat_redis_ondisk cvat_server cvat_opa cvat_ui traefik
+```
+
+```bash
+# Готов ли стек: /health, проект, очереди воркеров, картинка. exit 1 — не готов
+python -X utf8 tools/e2e_local.py --check
+
+# Полный прогон: загрузить картинку и провести до completed
+python -X utf8 tools/e2e_local.py --run --report e2e.json
+
+# Продолжить прогон после таймаута/обрыва (в том числе с промежуточного статуса)
+python -X utf8 tools/e2e_local.py --resume <uid>
+```
+
+Прогон создаёт **новую** диаграмму в локальной БД и каталог в
+`storage/diagrams/` — это данные разработчика, в git не попадает ничего.
+
+### Цепочка, по которой идёт стенд
+
+| шаг | что дёргает | ждёт статус |
+|---|---|---|
+| `frame` | `POST /api/frame/{uid}/skip` | `frame_cleaned` |
+| `detection` | `POST /api/detection/{uid}/detect` | `detected` |
+| `cvat_open` | `create-task` + `open-validation` | `validating_bbox` |
+| `cvat_fetch` | `POST /api/cvat/{uid}/fetch-annotations` | `validated_bbox` |
+| `segmentation` | `POST /api/segmentation/{uid}/segment` | `skeletonized` |
+| `masks_start` / `masks_done` | `masks/start`, `masks/complete` | `detected_junctions` |
+| `junctions_start` / `junctions_done` | `junctions/start`, `junctions/complete` | `built` |
+| `graph_start` / `graph_done` | `graph/start`, `graph/save`, `graph/complete-simple` | `validated_graph` |
+| `contours` | `contours/extract` → ждёт `has_auto` → `contours/complete` | `contours_validated` |
+| `ocr_bind` | ждёт `has_ocr_result` → `binding/save`, `binding/apply` | `ocr_bound` |
+| `fxml` | `POST /api/validation/{uid}/graph/complete` | `completed` |
+
+⚠ Цепочка снята с кода 2026-08-18 и в трёх местах расходится с
+`STATUS_MACHINE.md`/`API.md` (там она описана по состоянию на 04-09):
+
+- детекция стартует с `frame_cleaned`, а не с `uploaded` (`app/api/detection.py:40`);
+- SAM2-контуры веером после перекрёстков **не запускаются**
+  (`app/api/validation.py:666-669`) — их считает вкладка контуров по требованию;
+- `complete-simple` больше не копирует `graph.json` в validated молча
+  (`app/api/validation.py:728`) — граф обязан быть сохранён явно.
+
+Числа прогона (13 стадий, состав артефактов, время) — `MEASUREMENTS.md §34`.
