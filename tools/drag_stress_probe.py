@@ -5,7 +5,7 @@
 каждый жест откатывается undo с проверкой побайтового восстановления):
 
 1. Стресс «все узлы ±STEP px» (по умолчанию STEP=2):
-     python -X utf8 tools/drag_stress_probe.py graph_edited971.json
+     python -X utf8 tools/drag_stress_probe.py tools/bench/edit_corpus/graph_edited971.json
    Каждый узел таскается жестом start/drag/end на ±STEP по каждой оси.
    Метрика приёмки — «труба на бокс МОЛЧА»: новые пары (ребро, узел)
    классов through/along судьи edit_checks ПОСЛЕ жеста, у чьего ребра НЕТ
@@ -13,7 +13,7 @@
    «молча»). База сравнения — вход файла (жесты откатываются).
 
 2. Покадровый зигзаг (именной кейс node_96/971, шаги 5px):
-     python -X utf8 tools/drag_stress_probe.py graph_edited971.json --zigzag node_96
+     python -X utf8 tools/drag_stress_probe.py tools/bench/edit_corpus/graph_edited971.json --zigzag node_96
    На каждом кадре протяжки: (а) полные пути инцидентных рёбер строго
    ортогональны (max_dev == 0), (б) колени едут за узлом (Э5: waypoints —
    кэш расчёта, флагов нет), (в) предпросмотр == итог (снимок последнего

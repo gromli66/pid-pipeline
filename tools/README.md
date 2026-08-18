@@ -11,5 +11,9 @@
 - export_fix.txt, export_method.txt — заметки
 - dn1_stage_cost.sql (SQL только на чтение), dn2_edit_diff.py — замеры ДН1/ДН2: цена схемы
   по `processing_stages` и разбор правок оператора на холсте (числа — `MEASUREMENTS.md` §29)
+- edit_bench.py (судья «Ручной правки», эталон `bench/edit_baseline.json` в git),
+  edit_render_probe.py, drag_stress_probe.py, dn2_edit_diff.py работают на общем корпусе
+  локальных сейвов холста — `tools/bench/edit_corpus/graph_edited*.json`. Корпус вне git
+  (данные заказчика, ~2.9 МБ); до пункта 0.2 он лежал в корне репозитория
 
 Для развёртывания и запуска приложения эти файлы не нужны.

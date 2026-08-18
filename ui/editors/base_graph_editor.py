@@ -10,6 +10,7 @@ Base Graph Editor — базовый класс редактора графа P&
 
 import logging
 import math
+import os
 from typing import Optional, Callable
 
 from PySide6.QtWidgets import (
@@ -282,11 +283,16 @@ class BaseGraphEditor(QGraphicsView):
     def save_graph(self, path: str = "") -> bool:
         """Сохранить граф в JSON."""
         if not path:
+            # Каталог обязателен: без него диалог открывается в CWD, а у клиента
+            # это корень репозитория — там и копились локальные сейвы (0.2).
+            start_dir = getattr(self, "_last_save_dir", None) or os.path.expanduser("~")
             path, _ = QFileDialog.getSaveFileName(
-                self, "Сохранить граф", "graph_edited.json", "JSON (*.json)"
+                self, "Сохранить граф",
+                os.path.join(start_dir, "graph_edited.json"), "JSON (*.json)"
             )
             if not path:
                 return False
+            self._last_save_dir = os.path.dirname(path)
         result = self.model.save(path)
         if result:
             self.update_status(f"Сохранено: {path}")

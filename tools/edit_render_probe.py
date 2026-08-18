@@ -9,7 +9,7 @@
     фиолетовый — ребро сквозь нутро чужого узла (+ контур узла).
 
 Запуск: python -X utf8 tools/edit_render_probe.py --all --outdir C:/tmp
-        python -X utf8 tools/edit_render_probe.py graph_edited_star.json
+        python -X utf8 tools/edit_render_probe.py tools/bench/edit_corpus/graph_edited_star.json
 Ничего не пишет в storage; выход — HTML в --outdir (по умолчанию %TEMP%).
 """
 from __future__ import annotations
@@ -24,6 +24,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
+
+CORPUS = REPO / "tools" / "bench" / "edit_corpus"
 
 from modules.graph.core import edit_checks  # noqa: E402
 from modules.graph.core.graph_access import edge_polyline, edges  # noqa: E402
@@ -195,7 +197,7 @@ def main() -> int:
     paths = [Path(f) for f in args.files]
     if args.all:
         paths += [Path(p) for p in
-                  sorted(glob.glob(str(REPO / "graph_edited*.json")))]
+                  sorted(glob.glob(str(CORPUS / "graph_edited*.json")))]
     if not paths:
         ap.error("нет входных файлов")
     args.outdir.mkdir(parents=True, exist_ok=True)

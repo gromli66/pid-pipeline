@@ -32,6 +32,12 @@ eggs/
 storage/diagrams/*
 !storage/diagrams/.gitkeep
 
+# Корпус судьи «Ручной правки» (0.2): локальные сейвы холста — данные, не код.
+# Эталон счётчиков по ним — tools/bench/edit_baseline.json, он в git.
+tools/bench/edit_corpus/
+# Сейв, упавший мимо корпуса (старая сборка клиента), в git не попадёт.
+/graph_edited*.json
+
 # Models (веса моделей)
 /models/
 *.pt

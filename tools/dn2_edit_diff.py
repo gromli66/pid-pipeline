@@ -17,7 +17,7 @@
 самого движка раскладки; такие пары в таблице помечены `!` и считаются отдельно.
 
 Запуск (из корня репо):
-    python -X utf8 tools/dn2_edit_diff.py                 # корпус из корня репо
+    python -X utf8 tools/dn2_edit_diff.py                 # tools/bench/edit_corpus/
     python -X utf8 tools/dn2_edit_diff.py --dir path/to   # корпус из папки
     python -X utf8 tools/dn2_edit_diff.py --json          # машинный вывод
 
@@ -31,6 +31,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+CORPUS = REPO / "tools" / "bench" / "edit_corpus"
 
 # Порог «изменилось» в пикселях холста 1920x1080. Полпикселя: меньше — шум
 # сериализации float, больше — потеря аккуратных доводок оператора.
@@ -221,7 +222,7 @@ def print_report(report: dict) -> None:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="ДН2: что оператор правит на холсте")
-    ap.add_argument("--dir", default=str(REPO), help="папка с graph_edited*.json")
+    ap.add_argument("--dir", default=str(CORPUS), help="папка с graph_edited*.json")
     ap.add_argument("--json", action="store_true", help="машинный вывод")
     args = ap.parse_args(argv)
 

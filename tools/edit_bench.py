@@ -4,11 +4,12 @@
 Меряет холст (canvas-json, координаты холста) предикатами
 `modules/graph/core/edit_checks.py` — теми же, что использует движок
 редактирования (сторож == судья). Корпус по умолчанию — файлы заказчика
-graph_edited*.json в корне репо (7 сохранений одного чертежа с дефектами).
+graph_edited*.json в tools/bench/edit_corpus/ (локальные сохранения «Ручной
+правки»; вне git, как и остальные данные корпуса).
 
 Запуск (из корня репо):
     python -X utf8 tools/edit_bench.py --all                # таблица корпуса
-    python -X utf8 tools/edit_bench.py graph_edited_star.json --top 5
+    python -X utf8 tools/edit_bench.py tools/bench/edit_corpus/graph_edited_star.json --top 5
     python -X utf8 tools/edit_bench.py --all --write-baseline
     python -X utf8 tools/edit_bench.py --all --check        # против базы, exit 1
 
@@ -31,6 +32,7 @@ if str(REPO) not in sys.path:
 from modules.graph.core import edit_checks  # noqa: E402
 
 BASELINE = REPO / "tools" / "bench" / "edit_baseline.json"
+CORPUS = REPO / "tools" / "bench" / "edit_corpus"
 
 # колонки: (заголовок, ключ counts, дефект?)
 COLS = [
@@ -116,7 +118,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("files", nargs="*", help="canvas-json файлы")
     ap.add_argument("--all", action="store_true",
-                    help="graph_edited*.json из корня репо")
+                    help=f"graph_edited*.json из {CORPUS.relative_to(REPO)}")
     ap.add_argument("--top", type=int, default=0,
                     help="печатать топ-N находок по каждому файлу")
     ap.add_argument("--json", type=Path, default=None,
@@ -129,7 +131,7 @@ def main() -> int:
 
     paths = [Path(f) for f in args.files]
     if args.all:
-        paths += [Path(p) for p in sorted(glob.glob(str(REPO / "graph_edited*.json")))]
+        paths += [Path(p) for p in sorted(glob.glob(str(CORPUS / "graph_edited*.json")))]
     if not paths:
         ap.error("нет входных файлов (--all или список)")
 
