@@ -50,5 +50,6 @@ files = [
     "tools/layout_determinism.py",
     "tools/napravlenie_audit.py",
     "tools/pair_bench.py",
+    "tools/redelivery_bench.py",
     "tools/suite_baseline.py",
 ]

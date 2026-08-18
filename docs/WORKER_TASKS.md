@@ -64,10 +64,19 @@ task_routes = {
 | `task_serializer` | `json` | Все данные — JSON-сериализуемые |
 | `task_time_limit` | 3600 (1 час) | Глобальный hard limit |
 | `task_soft_time_limit` | 3300 (55 мин) | Глобальный soft limit |
+| `broker_transport_options.visibility_timeout` | 7200 (2 часа) | Окно невидимости выданного сообщения у Redis: до его истечения брокер не выдаёт задачу второй раз |
 | `task_acks_late` | `True` | Подтверждение после выполнения (не теряем task при crash) |
 | `task_reject_on_worker_lost` | `True` | Возврат в очередь при гибели worker'а |
 | `worker_prefetch_multiplier` | 1 | Для GPU: не берём лишних задач |
 | `worker_concurrency` | 2 | По умолчанию; GPU worker'ы обычно 1 |
+
+**Правило про `visibility_timeout` (пункт 1.2 · Б10).** Окно обязано быть **длиннее самого
+длинного `time_limit`** (сейчас 5400 у детекции). При `task_acks_late=True` подтверждение уходит
+брокеру только по завершении задачи, поэтому окно короче задачи означает гарантированную
+повторную выдачу — две одинаковые задачи по одной диаграмме. Дефолт kombu — 3600, то есть был
+в 1.5 раза короче детекции и ровно на границе у сегментации и OCR. Заводя задачу с бо́льшим
+лимитом, поднимать и окно: инвариант заперт `tests/test_worker/test_broker_visibility.py`,
+живая проверка на брокере — `tools/redelivery_bench.py --check`.
 
 ---
 
