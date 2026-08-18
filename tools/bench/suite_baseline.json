@@ -1,18 +1,18 @@
 {
-  "recorded": "2026-08-18",
+  "recorded": "2026-08-19",
   "command": "python -m pytest -q --tb=no -rEf -p no:cacheprovider",
   "platform": "win32 · CPython 3.11.9",
   "env": "requirements/api.txt + ui.txt + dev.txt + shapely==2.1.2",
   "totals": {
     "failed": 13,
-    "passed": 892,
+    "passed": 898,
     "skipped": 14,
     "errors": 9
   },
-  "collected": 928,
+  "collected": 934,
   "corpus_local": 16,
-  "collected_git_visible": 912,
-  "min_collected": 907,
+  "collected_git_visible": 918,
+  "min_collected": 913,
   "red": [
     "tests/test_cyrillic_load.py::test_cyrillic_load",
     "tests/test_refactoring.py::TestDefaultProjectCode::test_config_has_default_project_code",
