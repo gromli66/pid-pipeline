@@ -5,14 +5,14 @@
   "env": "requirements/api.txt + ui.txt + dev.txt + shapely==2.1.2",
   "totals": {
     "failed": 13,
-    "passed": 898,
+    "passed": 903,
     "skipped": 14,
     "errors": 9
   },
-  "collected": 934,
+  "collected": 939,
   "corpus_local": 16,
-  "collected_git_visible": 918,
-  "min_collected": 913,
+  "collected_git_visible": 923,
+  "min_collected": 918,
   "red": [
     "tests/test_cyrillic_load.py::test_cyrillic_load",
     "tests/test_refactoring.py::TestDefaultProjectCode::test_config_has_default_project_code",
