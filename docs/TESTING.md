@@ -146,9 +146,9 @@ Smoke-тесты совместимости OCR-стека. Запускаетс
 
 Сравнение `ConfigDrivenProfile(yaml)` с legacy `PidCyrillicProfile(python)`. Верифицирует, что YAML-профиль даёт идентичные результаты classify/noise/split для набора тестовых строк.
 
-### test_stage7_graph_flow.py (543 строки)
+### ui/test_workspace_graph_flow.py (6 тестов)
 
-Тесты Stage 7 UI: `GraphValidationWindow` (режимы, unsaved changes, undo stack) и `DiagramWorkspace` (two-phase graph flow: SimpleGraphTab → AdvancedGraphTab). Все тесты через MagicMock без Qt Application. Заглушки Qt/`ui.*` ставятся фикстурой уровня модуля со снятием за собой (`:259-271`) — образец из §6.
+Двухфазный графовый flow в `ui/widgets/diagram_workspace.py` — сверка по исходнику: фаза 1 открывает `SimpleGraphTab`, фаза 2 — `AdvancedGraphTab`, старый `GraphTab` не импортируется, `_on_graph_confirmed` вызывает `complete_graph_validation`. Ничего не импортирует из UI, поэтому обходится без Qt и без заглушек. Переехало из снесённого `test_stage7_graph_flow.py` (пункт 10.3): 13 его тестов держались за мёртвое окно `GraphValidationWindow` и ушли вместе с ним, ещё 5 требовали флаг `_simple_graph_done`, которого в `diagram_workspace.py` нет и не было.
 
 ### test_worker/test_imports.py (110 строк)
 
@@ -191,7 +191,7 @@ Smoke-тесты: все worker-задачи и утилиты импортир�
 | OCR domain profiles (кириллический) | `test_cyrillic_load.py`, `test_phase7_cyrillic.py` |
 | Binding (KKS + кириллический) | `test_refactoring_v2.py`, `test_cyrillic_binding.py` |
 | OCR stack compatibility (GPU) | `test_ocr_phase0.py` |
-| UI graph flow (mock) | `test_stage7_graph_flow.py` |
+| UI graph flow (сверка по исходнику) | `ui/test_workspace_graph_flow.py` |
 | B5 edge_key / connectors / OCR format | `test_b5_fixes.py` |
 
 ### Не покрыто (требует Docker/GPU или реального pipeline)
@@ -250,7 +250,8 @@ def test_my_new_task(self):
 `sys.modules.setdefault` в observability (аудит 2026-07-09, C3: 13 упавших тестов
 `test_direction_nodes.py`), `_stub_qt()` на уровне модуля в `test_stage7_graph_flow.py`
 (2026-08-14: `ImportError: cannot import name 'QTextLayout'` во всём `tests/ui/`; вылечено
-пунктом 0.0 — заглушки переехали в фикстуру, см. ниже).
+пунктом 0.0 — заглушки переехали в фикстуру; сам файл снесён пунктом 10.3 вместе с
+`ui/windows/`).
 
 Канон — фикстура с `monkeypatch.setitem` (функциональный скоуп → авто-восстановление);
 образцы: `tests/observability/test_graph_errors.py:40-51`, `test_contours_errors.py:45-56`.
@@ -264,7 +265,7 @@ def test_my_new_task(self):
 Если заглушки нужны **всему файлу**, а не отдельному тесту, — фикстура `scope="module",
 autouse=True`, которая сама снимает за собой: сохранить срез `sys.modules` по своим
 префиксам до, восстановить после (`monkeypatch` в модульном скоупе не работает). Образец —
-`tests/test_stage7_graph_flow.py:259-271`. Запрет выше это не ослабляет: нельзя оставлять
+`tests/ui/test_bundled_fonts.py:30-51`. Запрет выше это не ослабляет: нельзя оставлять
 заглушку после файла, а не «нельзя ставить её на весь файл».
 
 Отклонение закрыто пунктом 0.3x (2026-08-18): пять файлов `tests/observability/` держали

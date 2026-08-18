@@ -692,12 +692,12 @@ class TestDeadCodeRemoved:
             path = PROJECT_ROOT / fname
             assert not path.exists(), f"{fname} should be deleted"
 
-    def test_graph_validation_window_imports_from_advanced(self):
-        """graph_validation_window should import from advanced_graph_editor."""
-        source = (PROJECT_ROOT / "ui" / "windows" / "graph_validation_window.py").read_text()
-        assert "from ui.editors.advanced_graph_editor import" in source
-        assert "graph_validator_editor" not in source
-        assert "from ui.editors.graph_editor import" not in source
+    def test_dead_windows_deleted(self):
+        """Тройка окон-двойников снесена (пункт 10.3): живёт только MainWindow."""
+        for fname in ("graph_validation_window.py", "mask_validation_window.py",
+                      "cvat_window.py"):
+            path = PROJECT_ROOT / "ui" / "windows" / fname
+            assert not path.exists(), f"{fname} should be deleted"
 
     def test_new_editor_files_exist(self):
         """Новые файлы редактора должны существовать."""

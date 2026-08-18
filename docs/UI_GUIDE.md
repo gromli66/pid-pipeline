@@ -511,31 +511,15 @@ Ctrl+S в редакторе делегируется вкладке (`save_requ
 
 ## 10. Окна (Windows)
 
-### 10.1 GraphValidationWindow
+В пакете `ui/windows/` осталось одно живое окно — `MainWindow` (§2). Больше в
+приложении окон нет: всё остальное — вкладки внутри workspace (§5).
 
-Файл: `ui/windows/graph_validation_window.py`.
-
-Standalone `QMainWindow` для валидации графа. Использует `AdvancedGraphEditor`. Загружает graph_json и original_image из API, сохраняет graph_validated обратно.
-
-Toolbar: все режимы AdvancedGraphEditor + кнопки Save, Confirm.
-
-> **Примечание:** в текущей архитектуре валидация графа происходит через tabs (SimpleGraphTab → AdvancedGraphTab) в workspace. GraphValidationWindow сохранён для обратной совместимости.
-
-### 10.2 MaskValidationWindow
-
-Файл: `ui/windows/mask_validation_window.py`.
-
-Standalone `QMainWindow` с 2 вкладками: Junction/Bridge (SquareMaskEditor) и Pipe (PolylineMaskEditor).
-
-> **Примечание:** аналогично, основной путь — через PipeTab и JunctionTab в workspace.
-
-### 10.3 CVATWindow
-
-Файл: `ui/windows/cvat_window.py`.
-
-Standalone `QMainWindow` с встроенным `QWebEngineView` для CVAT.
-
-JS-инъекция `Ctrl+S` для принудительного сохранения перед экспортом. Signals: `validation_confirmed(uid)`, `window_closed(uid)`.
+Три standalone-`QMainWindow` — `GraphValidationWindow`, `MaskValidationWindow`,
+`CVATWindow` (1332 строки) — снесены 2026-08-18 пунктом 10.3 дороги. Это были
+двойники живых вкладок: `CVATWindow` ↔ `CvatTab` (§5.8), `MaskValidationWindow`
+↔ `PipeTab` + `JunctionTab` (§5.2–5.3), `GraphValidationWindow` ↔
+`SimpleGraphTab` + `AdvancedGraphTab` (§5.4–5.5). В рантайме их не открывал
+никто: единственными импортёрами были `ui/windows/__init__.py` и один тест-файл.
 
 ---
 

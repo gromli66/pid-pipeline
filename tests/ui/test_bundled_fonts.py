@@ -35,8 +35,7 @@ def _stub_main_window():
     На уровне модуля заглушка исполнялась бы на сборке pytest и осталась бы в
     сессии навсегда: следующий, кому нужен настоящий MainWindow, получил бы
     `object` (пункт 0.3x, канон docs/TESTING.md §6). monkeypatch в модульном
-    скоупе не работает — сохраняем срез сами, образец
-    `tests/test_stage7_graph_flow.py:259-271`. `ui.main` снимаем тоже: он
+    скоупе не работает — сохраняем срез сами. `ui.main` снимаем тоже: он
     импортируется под заглушкой и держит её MainWindow.
     """
     saved = {n: sys.modules[n] for n in _STUBBED if n in sys.modules}
