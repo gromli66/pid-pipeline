@@ -26,6 +26,11 @@
   не имеет права расти (`bench/lint_baseline.json` в git), плюс `mypy` на списке `files`
   из `pyproject.toml`. «Голый» `ruff check` красен по определению — весь долг сразу;
   судит храповик (docs/TESTING.md §8)
+- pair_bench.py (ДН4, пункт 0.11) — стенд диффов «до/после оператора»: семь пар артефактов
+  (детекция, сегментация, перекрёстки, граф, контуры, OCR, раскладка) и «объём правок» на
+  каждую. Эталон `bench/pair_baseline.json` в git, данные — локальный `storage/diagrams/`,
+  поэтому в CI стенда нет (там `--check` возвращает 2 «судить нечем»); числа первого замера —
+  `MEASUREMENTS.md` §33, разбор — docs/TESTING.md §9
 - layout_determinism.py (ПР1, пункт 0.10) — стенд воспроизводимости раскладки: каждый
   прогон отдельным процессом со своим `PYTHONHASHSEED`, сравнение sha256 выхода `layout()`.
   Эталон `bench/determinism_baseline.json` в git; ключ `--no-routing` локализует

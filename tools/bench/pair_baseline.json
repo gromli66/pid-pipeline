@@ -1,0 +1,1178 @@
+{
+ "06b938ec": {
+  "detection": {
+   "added": 0,
+   "after": 208,
+   "before": 208,
+   "moved": 0,
+   "removed": 0,
+   "retyped": 0
+  },
+  "graph": {
+   "after_edges": 456,
+   "after_nodes": 433,
+   "before_edges": 455,
+   "before_nodes": 432,
+   "bindings_delta": 0,
+   "edge_added": 1,
+   "edge_end_follow": 0,
+   "edge_end_own": 0,
+   "edge_removed": 0,
+   "edge_rerouted": 0,
+   "edge_rewired": 0,
+   "node_added": 1,
+   "node_moved": 0,
+   "node_removed": 0,
+   "node_resized": 0,
+   "node_retyped": 0,
+   "text_blocks_delta": 0
+  },
+  "junction": {
+   "added": 0,
+   "after": 182,
+   "before": 182,
+   "br_added": 0,
+   "br_after": 25,
+   "br_before": 25,
+   "br_moved": 0,
+   "br_removed": 0,
+   "moved": 0,
+   "origin_shift": 0,
+   "removed": 0
+  },
+  "layout": {
+   "edge_added": 0,
+   "edge_removed": 0,
+   "edge_rewired": 0,
+   "manual_edges": 47,
+   "manual_nodes": 35,
+   "node_added": 0,
+   "node_removed": 0,
+   "operator_saved": 1
+  },
+  "ocr": {
+   "added": 0,
+   "after": 178,
+   "before": 178,
+   "bindings": 0,
+   "box_edited": 0,
+   "removed": 0,
+   "text_fixed": 0
+  },
+  "segmentation": {
+   "changed_ppm": 4917,
+   "px_added": 43847,
+   "px_after": 238544,
+   "px_before": 205834,
+   "px_removed": 11137,
+   "shape_mismatch": 0
+  }
+ },
+ "089feca2": {
+  "contours": {
+   "approved": 4,
+   "auto": 5,
+   "edited": 0,
+   "not_reviewed": 0,
+   "skipped": 1,
+   "validated": 5
+  },
+  "detection": {
+   "added": 3,
+   "after": 45,
+   "before": 42,
+   "moved": 2,
+   "removed": 0,
+   "retyped": 0
+  },
+  "graph": {
+   "after_edges": 74,
+   "after_nodes": 72,
+   "before_edges": 66,
+   "before_nodes": 69,
+   "bindings_delta": 0,
+   "edge_added": 11,
+   "edge_end_follow": 18,
+   "edge_end_own": 0,
+   "edge_removed": 3,
+   "edge_rerouted": 0,
+   "edge_rewired": 0,
+   "node_added": 4,
+   "node_moved": 4,
+   "node_removed": 1,
+   "node_resized": 4,
+   "node_retyped": 0,
+   "text_blocks_delta": 0
+  },
+  "junction": {
+   "added": 0,
+   "after": 23,
+   "before": 23,
+   "br_added": 0,
+   "br_after": 7,
+   "br_before": 7,
+   "br_moved": 0,
+   "br_removed": 0,
+   "moved": 0,
+   "origin_shift": 0,
+   "removed": 0
+  },
+  "layout": {
+   "edge_added": 0,
+   "edge_removed": 0,
+   "edge_rewired": 0,
+   "manual_edges": 11,
+   "manual_nodes": 4,
+   "node_added": 0,
+   "node_removed": 0,
+   "operator_saved": 0
+  },
+  "ocr": {
+   "added": 0,
+   "after": 28,
+   "before": 28,
+   "bindings": 0,
+   "box_edited": 0,
+   "removed": 0,
+   "text_fixed": 0
+  },
+  "segmentation": {
+   "changed_ppm": 3318,
+   "px_added": 17462,
+   "px_after": 98519,
+   "px_before": 95417,
+   "px_removed": 14360,
+   "shape_mismatch": 0
+  }
+ },
+ "0aea61c0": {
+  "contours": {
+   "approved": 0,
+   "auto": 2,
+   "edited": 0,
+   "not_reviewed": 2,
+   "skipped": 0,
+   "validated": 0
+  },
+  "detection": {
+   "added": 0,
+   "after": 258,
+   "before": 258,
+   "moved": 1,
+   "removed": 0,
+   "retyped": 0
+  },
+  "graph": {
+   "after_edges": 541,
+   "after_nodes": 504,
+   "before_edges": 541,
+   "before_nodes": 504,
+   "bindings_delta": 0,
+   "edge_added": 0,
+   "edge_end_follow": 0,
+   "edge_end_own": 0,
+   "edge_removed": 0,
+   "edge_rerouted": 0,
+   "edge_rewired": 0,
+   "node_added": 0,
+   "node_moved": 0,
+   "node_removed": 0,
+   "node_resized": 0,
+   "node_retyped": 0,
+   "text_blocks_delta": 0
+  },
+  "junction": {
+   "added": 0,
+   "after": 235,
+   "before": 235,
+   "br_added": 0,
+   "br_after": 26,
+   "br_before": 26,
+   "br_moved": 0,
+   "br_removed": 0,
+   "moved": 0,
+   "origin_shift": 0,
+   "removed": 0
+  },
+  "layout": {
+   "edge_added": 0,
+   "edge_removed": 0,
+   "edge_rewired": 0,
+   "manual_edges": 54,
+   "manual_nodes": 15,
+   "node_added": 0,
+   "node_removed": 0,
+   "operator_saved": 0
+  },
+  "ocr": {
+   "added": 0,
+   "after": 175,
+   "before": 175,
+   "bindings": 0,
+   "box_edited": 0,
+   "removed": 0,
+   "text_fixed": 0
+  },
+  "segmentation": {
+   "changed_ppm": 7783,
+   "px_added": 93881,
+   "px_after": 465702,
+   "px_before": 390427,
+   "px_removed": 18606,
+   "shape_mismatch": 0
+  }
+ },
+ "13d1ef5f": {
+  "contours": {
+   "approved": 0,
+   "auto": 1,
+   "edited": 0,
+   "not_reviewed": 0,
+   "skipped": 1,
+   "validated": 1
+  },
+  "detection": {
+   "added": 1,
+   "after": 98,
+   "before": 97,
+   "moved": 0,
+   "removed": 0,
+   "retyped": 0
+  },
+  "graph": {
+   "after_edges": 162,
+   "after_nodes": 167,
+   "before_edges": 158,
+   "before_nodes": 166,
+   "bindings_delta": 4,
+   "edge_added": 8,
+   "edge_end_follow": 12,
+   "edge_end_own": 0,
+   "edge_removed": 4,
+   "edge_rerouted": 0,
+   "edge_rewired": 0,
+   "node_added": 2,
+   "node_moved": 1,
+   "node_removed": 1,
+   "node_resized": 1,
+   "node_retyped": 0,
+   "text_blocks_delta": 0
+  },
+  "layout": {
+   "edge_added": 0,
+   "edge_removed": 0,
+   "edge_rewired": 0,
+   "manual_edges": 8,
+   "manual_nodes": 2,
+   "node_added": 0,
+   "node_removed": 0,
+   "operator_saved": 1
+  },
+  "ocr": {
+   "added": 2,
+   "after": 68,
+   "before": 68,
+   "bindings": 4,
+   "box_edited": 1,
+   "removed": 2,
+   "text_fixed": 0
+  },
+  "segmentation": {
+   "changed_ppm": 5738,
+   "px_added": 66171,
+   "px_after": 238372,
+   "px_before": 206266,
+   "px_removed": 34065,
+   "shape_mismatch": 0
+  }
+ },
+ "302171b3": {
+  "detection": {
+   "added": 4,
+   "after": 109,
+   "before": 105,
+   "moved": 4,
+   "removed": 0,
+   "retyped": 0
+  },
+  "graph": {
+   "after_edges": 209,
+   "after_nodes": 196,
+   "before_edges": 209,
+   "before_nodes": 196,
+   "bindings_delta": 0,
+   "edge_added": 0,
+   "edge_end_follow": 0,
+   "edge_end_own": 0,
+   "edge_removed": 0,
+   "edge_rerouted": 0,
+   "edge_rewired": 0,
+   "node_added": 0,
+   "node_moved": 0,
+   "node_removed": 0,
+   "node_resized": 0,
+   "node_retyped": 0,
+   "text_blocks_delta": 0
+  },
+  "junction": {
+   "added": 0,
+   "after": 75,
+   "before": 75,
+   "br_added": 0,
+   "br_after": 14,
+   "br_before": 14,
+   "br_moved": 0,
+   "br_removed": 0,
+   "moved": 0,
+   "origin_shift": 0,
+   "removed": 0
+  },
+  "layout": {
+   "edge_added": 0,
+   "edge_removed": 0,
+   "edge_rewired": 0,
+   "manual_edges": 23,
+   "manual_nodes": 8,
+   "node_added": 0,
+   "node_removed": 0,
+   "operator_saved": 1
+  },
+  "ocr": {
+   "added": 11,
+   "after": 79,
+   "before": 84,
+   "bindings": 36,
+   "box_edited": 16,
+   "removed": 16,
+   "text_fixed": 6
+  },
+  "segmentation": {
+   "changed_ppm": 3772,
+   "px_added": 53455,
+   "px_after": 276918,
+   "px_before": 235897,
+   "px_removed": 12434,
+   "shape_mismatch": 0
+  }
+ },
+ "51b339ab": {
+  "detection": {
+   "added": 0,
+   "after": 558,
+   "before": 558,
+   "moved": 0,
+   "removed": 0,
+   "retyped": 0
+  },
+  "graph": {
+   "after_edges": 938,
+   "after_nodes": 938,
+   "before_edges": 847,
+   "before_nodes": 935,
+   "bindings_delta": 0,
+   "edge_added": 96,
+   "edge_end_follow": 0,
+   "edge_end_own": 0,
+   "edge_removed": 5,
+   "edge_rerouted": 0,
+   "edge_rewired": 0,
+   "node_added": 3,
+   "node_moved": 0,
+   "node_removed": 0,
+   "node_resized": 0,
+   "node_retyped": 0,
+   "text_blocks_delta": 312
+  },
+  "junction": {
+   "added": 0,
+   "after": 361,
+   "before": 361,
+   "br_added": 0,
+   "br_after": 1,
+   "br_before": 1,
+   "br_moved": 0,
+   "br_removed": 0,
+   "moved": 0,
+   "origin_shift": 0,
+   "removed": 0
+  },
+  "layout": {
+   "edge_added": 0,
+   "edge_removed": 0,
+   "edge_rewired": 0,
+   "manual_edges": 96,
+   "manual_nodes": 3,
+   "node_added": 0,
+   "node_removed": 0,
+   "operator_saved": 0
+  },
+  "ocr": {
+   "added": 0,
+   "after": 312,
+   "before": 312,
+   "bindings": 0,
+   "box_edited": 0,
+   "removed": 0,
+   "text_fixed": 0
+  },
+  "segmentation": {
+   "changed_ppm": 9869,
+   "px_added": 134098,
+   "px_after": 590787,
+   "px_before": 494976,
+   "px_removed": 38287,
+   "shape_mismatch": 0
+  }
+ },
+ "54a60fd1": {
+  "contours": {
+   "approved": 0,
+   "auto": 2,
+   "edited": 0,
+   "not_reviewed": 2,
+   "skipped": 0,
+   "validated": 0
+  },
+  "detection": {
+   "added": 12,
+   "after": 136,
+   "before": 129,
+   "moved": 0,
+   "removed": 5,
+   "retyped": 0
+  },
+  "graph": {
+   "after_edges": 296,
+   "after_nodes": 258,
+   "before_edges": 295,
+   "before_nodes": 258,
+   "bindings_delta": 0,
+   "edge_added": 1,
+   "edge_end_follow": 0,
+   "edge_end_own": 0,
+   "edge_removed": 0,
+   "edge_rerouted": 0,
+   "edge_rewired": 0,
+   "node_added": 0,
+   "node_moved": 0,
+   "node_removed": 0,
+   "node_resized": 0,
+   "node_retyped": 0,
+   "text_blocks_delta": 0
+  },
+  "junction": {
+   "added": 0,
+   "after": 110,
+   "before": 110,
+   "br_added": 0,
+   "br_after": 25,
+   "br_before": 25,
+   "br_moved": 0,
+   "br_removed": 0,
+   "moved": 0,
+   "origin_shift": 0,
+   "removed": 0
+  },
+  "layout": {
+   "edge_added": 0,
+   "edge_removed": 0,
+   "edge_rewired": 0,
+   "manual_edges": 54,
+   "manual_nodes": 21,
+   "node_added": 0,
+   "node_removed": 0,
+   "operator_saved": 1
+  },
+  "ocr": {
+   "added": 0,
+   "after": 74,
+   "before": 74,
+   "bindings": 0,
+   "box_edited": 0,
+   "removed": 0,
+   "text_fixed": 0
+  },
+  "segmentation": {
+   "changed_ppm": 7599,
+   "px_added": 77581,
+   "px_after": 327970,
+   "px_before": 272480,
+   "px_removed": 22091,
+   "shape_mismatch": 0
+  }
+ },
+ "620cc50d": {
+  "contours": {
+   "approved": 0,
+   "auto": 14,
+   "edited": 0,
+   "not_reviewed": 14,
+   "skipped": 0,
+   "validated": 0
+  },
+  "detection": {
+   "added": 0,
+   "after": 311,
+   "before": 311,
+   "moved": 0,
+   "removed": 0,
+   "retyped": 0
+  },
+  "graph": {
+   "after_edges": 541,
+   "after_nodes": 520,
+   "before_edges": 541,
+   "before_nodes": 520,
+   "bindings_delta": 0,
+   "edge_added": 0,
+   "edge_end_follow": 0,
+   "edge_end_own": 0,
+   "edge_removed": 0,
+   "edge_rerouted": 0,
+   "edge_rewired": 0,
+   "node_added": 0,
+   "node_moved": 0,
+   "node_removed": 0,
+   "node_resized": 0,
+   "node_retyped": 0,
+   "text_blocks_delta": 0
+  },
+  "junction": {
+   "added": 0,
+   "after": 231,
+   "before": 231,
+   "br_added": 0,
+   "br_after": 4,
+   "br_before": 4,
+   "br_moved": 0,
+   "br_removed": 0,
+   "moved": 0,
+   "origin_shift": 0,
+   "removed": 0
+  },
+  "layout": {
+   "edge_added": 0,
+   "edge_removed": 0,
+   "edge_rewired": 0,
+   "manual_edges": 29,
+   "manual_nodes": 2,
+   "node_added": 0,
+   "node_removed": 0,
+   "operator_saved": 1
+  },
+  "ocr": {
+   "added": 32,
+   "after": 199,
+   "before": 194,
+   "bindings": 161,
+   "box_edited": 138,
+   "removed": 27,
+   "text_fixed": 39
+  },
+  "segmentation": {
+   "changed_ppm": 6315,
+   "px_added": 63268,
+   "px_after": 261970,
+   "px_before": 208990,
+   "px_removed": 10288,
+   "shape_mismatch": 0
+  }
+ },
+ "6e7144d5": {
+  "detection": {
+   "added": 0,
+   "after": 97,
+   "before": 97,
+   "moved": 0,
+   "removed": 0,
+   "retyped": 0
+  },
+  "graph": {
+   "after_edges": 118,
+   "after_nodes": 123,
+   "before_edges": 118,
+   "before_nodes": 123,
+   "bindings_delta": 0,
+   "edge_added": 0,
+   "edge_end_follow": 0,
+   "edge_end_own": 0,
+   "edge_removed": 0,
+   "edge_rerouted": 0,
+   "edge_rewired": 0,
+   "node_added": 0,
+   "node_moved": 0,
+   "node_removed": 0,
+   "node_resized": 0,
+   "node_retyped": 0,
+   "text_blocks_delta": 0
+  },
+  "ocr": {
+   "added": 0,
+   "after": 82,
+   "before": 82,
+   "bindings": 0,
+   "box_edited": 0,
+   "removed": 0,
+   "text_fixed": 0
+  },
+  "segmentation": {
+   "changed_ppm": 2154,
+   "px_added": 8121,
+   "px_after": 164303,
+   "px_before": 185584,
+   "px_removed": 29402,
+   "shape_mismatch": 0
+  }
+ },
+ "751116c9": {
+  "detection": {
+   "added": 8,
+   "after": 119,
+   "before": 111,
+   "moved": 2,
+   "removed": 0,
+   "retyped": 0
+  },
+  "graph": {
+   "after_edges": 236,
+   "after_nodes": 218,
+   "before_edges": 213,
+   "before_nodes": 210,
+   "bindings_delta": 2,
+   "edge_added": 33,
+   "edge_end_follow": 0,
+   "edge_end_own": 0,
+   "edge_removed": 10,
+   "edge_rerouted": 0,
+   "edge_rewired": 0,
+   "node_added": 10,
+   "node_moved": 0,
+   "node_removed": 2,
+   "node_resized": 0,
+   "node_retyped": 0,
+   "text_blocks_delta": 63
+  },
+  "junction": {
+   "added": 0,
+   "after": 92,
+   "before": 92,
+   "br_added": 0,
+   "br_after": 8,
+   "br_before": 8,
+   "br_moved": 0,
+   "br_removed": 0,
+   "moved": 0,
+   "origin_shift": 0,
+   "removed": 0
+  },
+  "layout": {
+   "edge_added": 0,
+   "edge_removed": 0,
+   "edge_rewired": 0,
+   "manual_edges": 33,
+   "manual_nodes": 10,
+   "node_added": 0,
+   "node_removed": 0,
+   "operator_saved": 1
+  },
+  "ocr": {
+   "added": 1,
+   "after": 63,
+   "before": 62,
+   "bindings": 2,
+   "box_edited": 6,
+   "removed": 0,
+   "text_fixed": 4
+  },
+  "segmentation": {
+   "changed_ppm": 3241,
+   "px_added": 49076,
+   "px_after": 244364,
+   "px_before": 202826,
+   "px_removed": 7538,
+   "shape_mismatch": 0
+  }
+ },
+ "89ca7583": {
+  "contours": {
+   "approved": 0,
+   "auto": 1,
+   "edited": 0,
+   "not_reviewed": 0,
+   "skipped": 1,
+   "validated": 1
+  },
+  "detection": {
+   "added": 0,
+   "after": 145,
+   "before": 145,
+   "moved": 0,
+   "removed": 0,
+   "retyped": 0
+  },
+  "graph": {
+   "after_edges": 282,
+   "after_nodes": 264,
+   "before_edges": 252,
+   "before_nodes": 258,
+   "bindings_delta": 5,
+   "edge_added": 54,
+   "edge_end_follow": 24,
+   "edge_end_own": 0,
+   "edge_removed": 24,
+   "edge_rerouted": 0,
+   "edge_rewired": 0,
+   "node_added": 12,
+   "node_moved": 4,
+   "node_removed": 6,
+   "node_resized": 4,
+   "node_retyped": 0,
+   "text_blocks_delta": 112
+  },
+  "layout": {
+   "edge_added": 0,
+   "edge_removed": 0,
+   "edge_rewired": 0,
+   "manual_edges": 54,
+   "manual_nodes": 12,
+   "node_added": 0,
+   "node_removed": 0,
+   "operator_saved": 0
+  },
+  "ocr": {
+   "added": 3,
+   "after": 112,
+   "before": 112,
+   "bindings": 5,
+   "box_edited": 2,
+   "removed": 3,
+   "text_fixed": 0
+  },
+  "segmentation": {
+   "changed_ppm": 9449,
+   "px_added": 142603,
+   "px_after": 469657,
+   "px_before": 349504,
+   "px_removed": 22450,
+   "shape_mismatch": 0
+  }
+ },
+ "8d14cf73": {
+  "detection": {
+   "added": 7,
+   "after": 188,
+   "before": 181,
+   "moved": 1,
+   "removed": 0,
+   "retyped": 1
+  },
+  "graph": {
+   "after_edges": 431,
+   "after_nodes": 408,
+   "before_edges": 306,
+   "before_nodes": 337,
+   "bindings_delta": 0,
+   "edge_added": 226,
+   "edge_end_follow": 204,
+   "edge_end_own": 1,
+   "edge_removed": 101,
+   "edge_rerouted": 0,
+   "edge_rewired": 186,
+   "node_added": 98,
+   "node_moved": 310,
+   "node_removed": 27,
+   "node_resized": 217,
+   "node_retyped": 116,
+   "text_blocks_delta": 159
+  },
+  "junction": {
+   "added": 154,
+   "after": 154,
+   "before": 169,
+   "br_added": 13,
+   "br_after": 13,
+   "br_before": 12,
+   "br_moved": 0,
+   "br_removed": 12,
+   "moved": 0,
+   "origin_shift": 33,
+   "removed": 169
+  },
+  "layout": {
+   "edge_added": 99,
+   "edge_removed": 171,
+   "edge_rewired": 241,
+   "manual_edges": 70,
+   "manual_nodes": 29,
+   "node_added": 27,
+   "node_removed": 77,
+   "operator_saved": 1
+  },
+  "ocr": {
+   "added": 1,
+   "after": 150,
+   "before": 149,
+   "bindings": 0,
+   "box_edited": 0,
+   "removed": 0,
+   "text_fixed": 0
+  },
+  "segmentation": {
+   "changed_ppm": 10922,
+   "px_added": 138077,
+   "px_after": 419632,
+   "px_before": 301174,
+   "px_removed": 19619,
+   "shape_mismatch": 0
+  }
+ },
+ "8d517a35": {
+  "contours": {
+   "approved": 3,
+   "auto": 3,
+   "edited": 0,
+   "not_reviewed": 0,
+   "skipped": 0,
+   "validated": 3
+  },
+  "detection": {
+   "added": 24,
+   "after": 198,
+   "before": 174,
+   "moved": 0,
+   "removed": 0,
+   "retyped": 0
+  },
+  "graph": {
+   "after_edges": 513,
+   "after_nodes": 474,
+   "before_edges": 513,
+   "before_nodes": 474,
+   "bindings_delta": 0,
+   "edge_added": 0,
+   "edge_end_follow": 30,
+   "edge_end_own": 0,
+   "edge_removed": 0,
+   "edge_rerouted": 0,
+   "edge_rewired": 0,
+   "node_added": 0,
+   "node_moved": 3,
+   "node_removed": 0,
+   "node_resized": 3,
+   "node_retyped": 0,
+   "text_blocks_delta": 0
+  },
+  "junction": {
+   "added": 0,
+   "after": 235,
+   "before": 236,
+   "br_added": 0,
+   "br_after": 111,
+   "br_before": 111,
+   "br_moved": 0,
+   "br_removed": 0,
+   "moved": 0,
+   "origin_shift": 0,
+   "removed": 1
+  },
+  "layout": {
+   "edge_added": 3,
+   "edge_removed": 1,
+   "edge_rewired": 0,
+   "manual_edges": 89,
+   "manual_nodes": 24,
+   "node_added": 0,
+   "node_removed": 1,
+   "operator_saved": 1
+  },
+  "ocr": {
+   "added": 0,
+   "after": 164,
+   "before": 164,
+   "bindings": 0,
+   "box_edited": 0,
+   "removed": 0,
+   "text_fixed": 0
+  },
+  "segmentation": {
+   "changed_ppm": 11532,
+   "px_added": 191949,
+   "px_after": 724171,
+   "px_before": 541589,
+   "px_removed": 9367,
+   "shape_mismatch": 0
+  }
+ },
+ "a5264536": {
+  "contours": {
+   "approved": 8,
+   "auto": 11,
+   "edited": 0,
+   "not_reviewed": 0,
+   "skipped": 3,
+   "validated": 11
+  },
+  "detection": {
+   "added": 10,
+   "after": 78,
+   "before": 68,
+   "moved": 1,
+   "removed": 0,
+   "retyped": 0
+  },
+  "graph": {
+   "after_edges": 252,
+   "after_nodes": 208,
+   "before_edges": 235,
+   "before_nodes": 201,
+   "bindings_delta": 0,
+   "edge_added": 28,
+   "edge_end_follow": 40,
+   "edge_end_own": 0,
+   "edge_removed": 11,
+   "edge_rerouted": 0,
+   "edge_rewired": 0,
+   "node_added": 11,
+   "node_moved": 8,
+   "node_removed": 4,
+   "node_resized": 8,
+   "node_retyped": 0,
+   "text_blocks_delta": 0
+  },
+  "junction": {
+   "added": 0,
+   "after": 104,
+   "before": 104,
+   "br_added": 0,
+   "br_after": 23,
+   "br_before": 23,
+   "br_moved": 0,
+   "br_removed": 0,
+   "moved": 0,
+   "origin_shift": 0,
+   "removed": 0
+  },
+  "layout": {
+   "edge_added": 0,
+   "edge_removed": 0,
+   "edge_rewired": 0,
+   "manual_edges": 28,
+   "manual_nodes": 11,
+   "node_added": 0,
+   "node_removed": 0,
+   "operator_saved": 1
+  },
+  "ocr": {
+   "added": 0,
+   "after": 87,
+   "before": 87,
+   "bindings": 0,
+   "box_edited": 0,
+   "removed": 0,
+   "text_fixed": 0
+  },
+  "segmentation": {
+   "changed_ppm": 8582,
+   "px_added": 74067,
+   "px_after": 329840,
+   "px_before": 282809,
+   "px_removed": 27036,
+   "shape_mismatch": 0
+  }
+ },
+ "a6d28736": {
+  "contours": {
+   "approved": 6,
+   "auto": 6,
+   "edited": 0,
+   "not_reviewed": 0,
+   "skipped": 0,
+   "validated": 6
+  },
+  "detection": {
+   "added": 7,
+   "after": 212,
+   "before": 205,
+   "moved": 0,
+   "removed": 0,
+   "retyped": 0
+  },
+  "graph": {
+   "after_edges": 418,
+   "after_nodes": 402,
+   "before_edges": 403,
+   "before_nodes": 402,
+   "bindings_delta": 0,
+   "edge_added": 17,
+   "edge_end_follow": 0,
+   "edge_end_own": 0,
+   "edge_removed": 2,
+   "edge_rerouted": 0,
+   "edge_rewired": 0,
+   "node_added": 0,
+   "node_moved": 0,
+   "node_removed": 0,
+   "node_resized": 0,
+   "node_retyped": 0,
+   "text_blocks_delta": 176
+  },
+  "layout": {
+   "edge_added": 0,
+   "edge_removed": 0,
+   "edge_rewired": 0,
+   "manual_edges": 17,
+   "manual_nodes": 0,
+   "node_added": 0,
+   "node_removed": 0,
+   "operator_saved": 0
+  },
+  "ocr": {
+   "added": 0,
+   "after": 176,
+   "before": 176,
+   "bindings": 0,
+   "box_edited": 0,
+   "removed": 0,
+   "text_fixed": 0
+  },
+  "segmentation": {
+   "changed_ppm": 5264,
+   "px_added": 65864,
+   "px_after": 337959,
+   "px_before": 298183,
+   "px_removed": 26088,
+   "shape_mismatch": 0
+  }
+ },
+ "c2f79462": {
+  "contours": {
+   "approved": 0,
+   "auto": 1,
+   "edited": 0,
+   "not_reviewed": 0,
+   "skipped": 1,
+   "validated": 1
+  },
+  "detection": {
+   "added": 1,
+   "after": 79,
+   "before": 78,
+   "moved": 0,
+   "removed": 0,
+   "retyped": 0
+  },
+  "graph": {
+   "after_edges": 147,
+   "after_nodes": 149,
+   "before_edges": 147,
+   "before_nodes": 149,
+   "bindings_delta": 0,
+   "edge_added": 0,
+   "edge_end_follow": 21,
+   "edge_end_own": 0,
+   "edge_removed": 0,
+   "edge_rerouted": 0,
+   "edge_rewired": 0,
+   "node_added": 0,
+   "node_moved": 1,
+   "node_removed": 0,
+   "node_resized": 1,
+   "node_retyped": 0,
+   "text_blocks_delta": 51
+  },
+  "junction": {
+   "added": 0,
+   "after": 47,
+   "before": 47,
+   "br_added": 0,
+   "br_after": 6,
+   "br_before": 6,
+   "br_moved": 2,
+   "br_removed": 0,
+   "moved": 3,
+   "origin_shift": 0,
+   "removed": 0
+  },
+  "layout": {
+   "edge_added": 1,
+   "edge_removed": 0,
+   "edge_rewired": 0,
+   "manual_edges": 22,
+   "manual_nodes": 10,
+   "node_added": 0,
+   "node_removed": 0,
+   "operator_saved": 1
+  },
+  "ocr": {
+   "added": 0,
+   "after": 51,
+   "before": 51,
+   "bindings": 0,
+   "box_edited": 0,
+   "removed": 0,
+   "text_fixed": 0
+  },
+  "segmentation": {
+   "changed_ppm": 6422,
+   "px_added": 73828,
+   "px_after": 191786,
+   "px_before": 156312,
+   "px_removed": 38354,
+   "shape_mismatch": 0
+  }
+ },
+ "d74eb9f1": {
+  "contours": {
+   "approved": 0,
+   "auto": 2,
+   "edited": 0,
+   "not_reviewed": 2,
+   "skipped": 0,
+   "validated": 0
+  },
+  "detection": {
+   "added": 0,
+   "after": 36,
+   "before": 36,
+   "moved": 0,
+   "removed": 0,
+   "retyped": 0
+  },
+  "graph": {
+   "after_edges": 63,
+   "after_nodes": 66,
+   "before_edges": 63,
+   "before_nodes": 66,
+   "bindings_delta": 0,
+   "edge_added": 0,
+   "edge_end_follow": 0,
+   "edge_end_own": 0,
+   "edge_removed": 0,
+   "edge_rerouted": 0,
+   "edge_rewired": 0,
+   "node_added": 0,
+   "node_moved": 0,
+   "node_removed": 0,
+   "node_resized": 0,
+   "node_retyped": 0,
+   "text_blocks_delta": 0
+  },
+  "ocr": {
+   "added": 52,
+   "after": 58,
+   "before": 48,
+   "bindings": 11,
+   "box_edited": 5,
+   "removed": 42,
+   "text_fixed": 6
+  },
+  "segmentation": {
+   "changed_ppm": 7064,
+   "px_added": 12927,
+   "px_after": 70475,
+   "px_before": 62046,
+   "px_removed": 4498,
+   "shape_mismatch": 0
+  }
+ }
+}
