@@ -15,36 +15,17 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QVBoxLayout, QWidget, QPushButton, QLabel,
     QSpinBox, QMenu, QButtonGroup,
 )
-from PySide6.QtCore import Slot, Qt, QThread, QObject, Signal
+from PySide6.QtCore import Slot, Qt, QThread
 from PySide6.QtGui import QColor, QPixmap, QIcon
 
 from ui.services.api_client import APIClient
+from ui.services.recognize_worker import RecognizeWorker
 from ui.services.ui_settings import UISettings
 from ui.editors.advanced_graph_editor import AdvancedGraphEditor
 from ui.editors.base_graph_editor import BaseGraphEditor
 from ui.tabs.simple_graph_tab import SimpleGraphTab
 
 logger = logging.getLogger(__name__)
-
-
-class _RecognizeWorker(QObject):
-    """Фоновый OCR-распознаватель добавленных блоков (не блокирует UI)."""
-
-    finished = Signal(list)   # list[dict]: [{"text":..., "confidence":...}, ...]
-    error = Signal(str)
-
-    def __init__(self, api_client: APIClient, uid: str, boxes: list):
-        super().__init__()
-        self.api_client = api_client
-        self.uid = uid
-        self.boxes = boxes  # list[[x0,y0,x1,y1], ...]
-
-    def run(self):
-        try:
-            resp = self.api_client.recognize_boxes(self.uid, self.boxes)
-            self.finished.emit(resp.get("results", []))
-        except Exception as exc:  # noqa: BLE001
-            self.error.emit(str(exc))
 
 
 class AdvancedGraphTab(SimpleGraphTab):
@@ -487,7 +468,7 @@ class AdvancedGraphTab(SimpleGraphTab):
         self.btn_confirm.setEnabled(False)
 
         self._recog_thread = QThread()
-        self._recog_worker = _RecognizeWorker(self.api_client, self.uid, boxes)
+        self._recog_worker = RecognizeWorker(self.api_client, self.uid, boxes)
         self._recog_worker.moveToThread(self._recog_thread)
         self._recog_thread.started.connect(self._recog_worker.run)
         self._recog_worker.finished.connect(self._on_recognize_done)

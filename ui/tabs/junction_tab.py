@@ -13,9 +13,12 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QMessageBox, QSlider, QApplication, QSpinBox,
 )
-from PySide6.QtCore import Signal, Slot, Qt, QThread, QObject
+from PySide6.QtCore import Signal, Slot, Qt, QThread
 
-from ui.services.api_client import APIClient, APIError
+from ui.services.api_client import APIClient
+from ui.services.artifact_downloader import (
+    ArtifactDownloader, Job, artifact, one,
+)
 from ui.widgets.appearance_panel import AppearanceMixin
 from ui.widgets.toolbar_buttons import (
     make_undo_button, make_save_button, make_confirm_button,
@@ -24,98 +27,22 @@ from ui.widgets.toolbar_buttons import (
 logger = logging.getLogger(__name__)
 
 
-class _JunctionArtifactDownloader(QObject):
-    """Загрузчик артефактов для junction tab (параллельный)."""
-    finished = Signal(dict)
-    error = Signal(str)
-    progress = Signal(str)
-
-    def __init__(self, api_client: APIClient, uid: str, temp_dir: Path):
-        super().__init__()
-        self.api_client = api_client
-        self.uid = uid
-        self.temp_dir = temp_dir
-
-    def _dl(self, art_type: str, dest: Path) -> bool:
-        """Скачать артефакт, вернуть True при успехе."""
-        try:
-            self.api_client.download_artifact(self.uid, art_type, dest)
-            return True
-        except (APIError, Exception):
-            return False
-
-    def _dl_original(self):
-        dest = self.temp_dir / "original.png"
-        self.api_client.download_artifact(self.uid, "original_image", dest)
-        return ("original_image", dest)
-
-    def _dl_junction_mask(self):
-        dest = self.temp_dir / "junction_mask.png"
-        if not self._dl("junction_mask_validated", dest):
-            self.api_client.download_artifact(self.uid, "junction_mask", dest)
-        return ("junction_mask", dest)
-
-    def _dl_bridge_mask(self):
-        dest = self.temp_dir / "bridge_mask.png"
-        if self._dl("bridge_mask_validated", dest):
-            return ("bridge_mask", dest)
-        if self._dl("bridge_mask", dest):
-            return ("bridge_mask", dest)
-        return None
-
-    def _dl_skeleton(self):
-        dest = self.temp_dir / "skeleton.png"
-        if self._dl("skeleton_final", dest):
-            return ("skeleton", dest)
-        if self._dl("skeleton", dest):
-            return ("skeleton", dest)
-        return None
-
-    def _dl_coco(self):
-        dest = self.temp_dir / "coco_validated.json"
-        if self._dl("coco_validated", dest):
-            return ("coco_validated", dest)
-        return None
-
-    def _dl_points(self):
-        """Центры квадратов: правленые оператором → модельные.
-
-        Опционально с фолбэком: на старом сервере типов ещё нет, и вкладка от
-        этого падать не должна (центры доопределятся из масок экстрактором).
-        """
-        dest = self.temp_dir / "points.json"
-        if self._dl("junction_points_validated", dest):
-            return ("points", dest)
-        if self._dl("junction_points", dest):
-            return ("points", dest)
-        return None
-
-    def run(self):
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        try:
-            self.progress.emit("Загрузка артефактов...")
-            artifacts = {}
-
-            with ThreadPoolExecutor(max_workers=6) as pool:
-                futures = [
-                    pool.submit(self._dl_original),
-                    pool.submit(self._dl_junction_mask),
-                    pool.submit(self._dl_bridge_mask),
-                    pool.submit(self._dl_skeleton),
-                    pool.submit(self._dl_coco),
-                    pool.submit(self._dl_points),
-                ]
-                for future in as_completed(futures):
-                    result = future.result()
-                    if result:
-                        art_type, dest = result
-                        artifacts[art_type] = dest
-                        self.progress.emit(f"Загружен {art_type}")
-
-            self.finished.emit(artifacts)
-        except Exception as exc:
-            self.error.emit(str(exc))
+#: Что вкладка тянет с сервера: правленое оператором → модельное.
+#: Центры квадратов необязательны — на старом сервере типов ещё нет, и вкладка
+#: от этого падать не должна (доопределятся из масок экстрактором).
+_ARTIFACTS = (
+    one(artifact("original_image", "original.png"), required=True),
+    Job((artifact("junction_mask_validated", "junction_mask.png",
+                  key="junction_mask"),
+         artifact("junction_mask", "junction_mask.png")), required=True),
+    Job((artifact("bridge_mask_validated", "bridge_mask.png", key="bridge_mask"),
+         artifact("bridge_mask", "bridge_mask.png"))),
+    Job((artifact("skeleton_final", "skeleton.png", key="skeleton"),
+         artifact("skeleton", "skeleton.png"))),
+    one(artifact("coco_validated", "coco_validated.json")),
+    Job((artifact("junction_points_validated", "points.json", key="points"),
+         artifact("junction_points", "points.json", key="points"))),
+)
 
 
 class JunctionTab(AppearanceMixin, QWidget):
@@ -273,8 +200,8 @@ class JunctionTab(AppearanceMixin, QWidget):
 
     def _download_artifacts(self):
         self._download_thread = QThread()
-        self._downloader = _JunctionArtifactDownloader(
-            self.api_client, self.uid, self.temp_dir
+        self._downloader = ArtifactDownloader(
+            self.api_client, self.uid, self.temp_dir, _ARTIFACTS
         )
         self._downloader.moveToThread(self._download_thread)
         self._download_thread.started.connect(self._downloader.run)

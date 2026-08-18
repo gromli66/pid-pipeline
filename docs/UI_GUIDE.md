@@ -188,7 +188,9 @@ MainWindow (QMainWindow)
 
 Абстрактный базовый класс вкладок редактора графа. Реализует template method:
 
-1. **Download:** фоновая загрузка артефактов через `_GraphArtifactDownloader` в `QThread`.
+1. **Download:** фоновая загрузка артефактов через общий `ArtifactDownloader`
+   (`ui/services/artifact_downloader.py`) в `QThread`; что грузить — список `Job`
+   из `_graph_jobs(want_canvas)`.
 2. **Edit:** оператор работает в editor.
 3. **Save:** `_save_graph()` → `api_client.upload_validated_graph()`.
 4. **Confirm:** `confirmed` signal → workspace вызывает API complete endpoint.

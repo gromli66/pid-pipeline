@@ -20,9 +20,12 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QMessageBox, QApplication,
 )
-from PySide6.QtCore import Signal, Slot, Qt, QThread, QObject
+from PySide6.QtCore import Signal, Slot, Qt, QThread
 
 from ui.services.api_client import APIClient, APIError
+from ui.services.artifact_downloader import (
+    ArtifactDownloader, Job, artifact, one,
+)
 from ui.editors.base_graph_editor import BaseGraphEditor
 from ui.widgets.appearance_panel import AppearanceMixin
 from ui.widgets.toolbar_buttons import (
@@ -658,88 +661,41 @@ def _canvas_contours_stale(canvas_path: Path, contours_path,
     return stale
 
 
-class _GraphArtifactDownloader(QObject):
-    """Фоновый загрузчик артефактов для graph tab."""
+def _graph_jobs(want_canvas: bool) -> tuple[Job, ...]:
+    """Что вкладка редактора графа тянет с сервера.
 
-    finished = Signal(dict)
-    error = Signal(str)
-    progress = Signal(str)
-
-    def __init__(self, api_client: APIClient, uid: str, temp_dir: Path,
-                 want_canvas: bool = False):
-        super().__init__()
-        self.api_client = api_client
-        self.uid = uid
-        self.temp_dir = temp_dir
-        self.want_canvas = want_canvas
-
-    def run(self):
-        artifacts = {}
-        required = [
-            ("original_image", "original.png"),
+    ⛔ `swallow=(APIError,)` у необязательных — не косметика: не-APIError (диск,
+    прокси) обязан увести вкладку в ошибку, потому что тихо потерянный
+    `graph_canvas` = «холст пересобран заново, прежние правки не сохранятся»,
+    а тихо потерянные контуры = выброшенные правки оператора (см. `_on_downloaded`).
+    """
+    jobs = [
+        one(artifact("original_image", "original.png"), required=True),
+        # Граф: предпочитаем validated (сохранённый), fallback на оригинальный.
+        Job((artifact("graph_validated", "graph.json", key="graph_json"),
+             artifact("graph_json", "graph.json")), required=True),
+        one(artifact("coco_validated", "coco_validated.json"),
+            swallow=(APIError,)),
+    ]
+    # WYSIWYG-вкладка: свой артефакт-холст, если он уже сохранялся,
+    # плюс выбранные контуры — их вливает пересборка холста (фолбэк).
+    if want_canvas:
+        jobs += [
+            one(artifact("graph_canvas", "graph_canvas.json"),
+                swallow=(APIError,)),
+            one(artifact("contours_validated", "contours_validated.json"),
+                swallow=(APIError,),
+                failure_key="contours_download_failed"),
         ]
-        optional = [
-            ("coco_validated", "coco_validated.json"),
-        ]
-        # WYSIWYG-вкладка: свой артефакт-холст, если он уже сохранялся,
-        # плюс выбранные контуры — их вливает пересборка холста (фолбэк).
-        if self.want_canvas:
-            optional = optional + [
-                ("graph_canvas", "graph_canvas.json"),
-                ("contours_validated", "contours_validated.json"),
-            ]
+    return tuple(jobs)
 
-        try:
-            for art_type, filename in required:
-                self.progress.emit(f"Загрузка {art_type}...")
-                dest = self.temp_dir / filename
-                self.api_client.download_artifact(self.uid, art_type, dest)
-                artifacts[art_type] = dest
-
-            # Граф: предпочитаем validated (сохранённый), fallback на json (оригинальный)
-            graph_dest = self.temp_dir / "graph.json"
-            try:
-                self.progress.emit("Загрузка graph_validated...")
-                self.api_client.download_artifact(self.uid, "graph_validated", graph_dest)
-                artifacts["graph_json"] = graph_dest
-                logger.info("Loaded graph_validated")
-            except (APIError, Exception):
-                self.progress.emit("Загрузка graph_json...")
-                self.api_client.download_artifact(self.uid, "graph_json", graph_dest)
-                artifacts["graph_json"] = graph_dest
-                logger.info("Loaded graph_json (no validated version)")
-
-            for art_type, filename in optional:
-                try:
-                    self.progress.emit(f"Загрузка {art_type}...")
-                    dest = self.temp_dir / filename
-                    self.api_client.download_artifact(self.uid, art_type, dest)
-                    artifacts[art_type] = dest
-                except APIError as exc:
-                    # 404 = артефакта легитимно нет; всё прочее (сеть, 5xx) —
-                    # «неизвестно». Для контуров разница критична: спутать
-                    # сбой со «контуры сняты» = объявить холст устаревшим и
-                    # выбросить правки оператора.
-                    if art_type == "contours_validated" \
-                            and exc.status_code != 404:
-                        artifacts["contours_download_failed"] = True
-                        logger.warning(
-                            "contours_validated не скачался (%s) — контурная "
-                            "свежесть холста не проверяется", exc)
-                    else:
-                        logger.info("Optional artifact %s not available",
-                                    art_type)
-
-            self.finished.emit(artifacts)
-        except Exception as exc:
-            self.error.emit(str(exc))
 
 
 class BaseGraphTab(AppearanceMixin, QWidget):
     """Базовый класс вкладки редактора графа P&ID.
 
     Template method:
-      - скачивание артефактов через _GraphArtifactDownloader
+      - скачивание артефактов через ArtifactDownloader (список — _graph_jobs)
       - _setup_ui() → toolbar (из _setup_toolbar) + loading + status
       - _save_graph() → editor.save_graph + upload_validated_graph
       - _on_confirm() → безусловный save + emit confirmed
@@ -879,8 +835,9 @@ class BaseGraphTab(AppearanceMixin, QWidget):
 
     def _download_artifacts(self):
         self._download_thread = QThread()
-        self._downloader = _GraphArtifactDownloader(
-            self.api_client, self.uid, self.temp_dir, want_canvas=self.USE_CANVAS
+        self._downloader = ArtifactDownloader(
+            self.api_client, self.uid, self.temp_dir,
+            _graph_jobs(want_canvas=self.USE_CANVAS)
         )
         self._downloader.moveToThread(self._download_thread)
         self._download_thread.started.connect(self._downloader.run)

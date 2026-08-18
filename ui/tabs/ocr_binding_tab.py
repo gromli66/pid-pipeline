@@ -24,11 +24,15 @@ from PySide6.QtWidgets import (
     QPushButton, QLabel, QMessageBox, QApplication,
     QTabWidget, QTabBar,
 )
-from PySide6.QtCore import Signal, Slot, Qt, QThread, QObject, QTimer
+from PySide6.QtCore import Signal, Slot, Qt, QThread, QTimer
 from PySide6.QtGui import QColor
 from ui.widgets.appearance_panel import AppearanceMixin
 
 from ui.services.api_client import APIClient, APIError
+from ui.services.artifact_downloader import (
+    ArtifactDownloader, Job, artifact, endpoint, one,
+)
+from ui.services.recognize_worker import RecognizeWorker
 from ui.editors.ocr_binding_editor import OcrBindingEditor
 from ui.widgets.toolbar_buttons import (
     make_undo_button, make_save_button, make_confirm_button,
@@ -52,123 +56,26 @@ def _sorted_edge_key(ek: str) -> str:
     return ek
 
 
-# =====================================================================
-# Background downloader (unchanged logic)
-# =====================================================================
-
-class _OcrArtifactDownloader(QObject):
-    """Фоновый загрузчик артефактов для OCR tab (параллельный)."""
-
-    finished = Signal(dict)
-    error = Signal(str)
-    progress = Signal(str)
-
-    def __init__(self, api_client: APIClient, uid: str, temp_dir: Path):
-        super().__init__()
-        self.api_client = api_client
-        self.uid = uid
-        self.temp_dir = temp_dir
-
-    def _dl_original(self):
-        dest = self.temp_dir / "original.png"
-        self.api_client.download_artifact(self.uid, "original_image", dest)
-        return ("original_image", dest)
-
-    def _dl_ocr_result(self):
-        dest = self.temp_dir / "ocr_result.json"
-        self.api_client.download_ocr_result(self.uid, dest)
-        return ("ocr_result", dest)
-
-    def _dl_graph(self):
-        dest = self.temp_dir / "graph_validated.json"
-        try:
-            self.api_client.download_artifact(self.uid, "graph_validated", dest)
-        except (APIError, Exception):
-            self.api_client.download_artifact(self.uid, "graph_json", dest)
-        return ("graph", dest)
-
-    def _dl_coco(self):
-        dest = self.temp_dir / "coco_validated.json"
-        try:
-            self.api_client.download_artifact(self.uid, "coco_validated", dest)
-            return ("coco", dest)
-        except (APIError, Exception):
-            pass
-        try:
-            dest = self.temp_dir / "coco_predicted.json"
-            self.api_client.download_artifact(self.uid, "coco_predicted", dest)
-            return ("coco", dest)
-        except (APIError, Exception):
-            return None
-
-    def _dl_binding(self):
-        try:
-            dest = self.temp_dir / "ocr_binding.json"
-            self.api_client.download_ocr_binding(self.uid, dest)
-            return ("binding", dest)
-        except (APIError, Exception):
-            return None
-
-    def _dl_validation(self):
-        try:
-            dest = self.temp_dir / "ocr_validation.json"
-            self.api_client.download_ocr_validation(self.uid, dest)
-            return ("ocr_validation", dest)
-        except (APIError, Exception):
-            return None
-
-    def run(self):
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        try:
-            self.progress.emit("Загрузка артефактов...")
-            artifacts = {}
-
-            with ThreadPoolExecutor(max_workers=6) as pool:
-                futures = [
-                    pool.submit(self._dl_original),
-                    pool.submit(self._dl_ocr_result),
-                    pool.submit(self._dl_graph),
-                    pool.submit(self._dl_coco),
-                    pool.submit(self._dl_binding),
-                    pool.submit(self._dl_validation),
-                ]
-                for future in as_completed(futures):
-                    result = future.result()
-                    if result:
-                        art_type, dest = result
-                        artifacts[art_type] = dest
-                        self.progress.emit(f"Загружен {art_type}")
-
-            self.finished.emit(artifacts)
-        except Exception as exc:
-            self.error.emit(str(exc))
+#: Что вкладка тянет с сервера. OCR-артефакты идут своими эндпоинтами
+#: APIClient, а не общим download_artifact.
+_ARTIFACTS = (
+    one(artifact("original_image", "original.png"), required=True),
+    one(endpoint("download_ocr_result", "ocr_result.json", "ocr_result"),
+        required=True),
+    Job((artifact("graph_validated", "graph_validated.json", key="graph"),
+         artifact("graph_json", "graph_validated.json", key="graph")),
+        required=True),
+    Job((artifact("coco_validated", "coco_validated.json", key="coco"),
+         artifact("coco_predicted", "coco_predicted.json", key="coco"))),
+    one(endpoint("download_ocr_binding", "ocr_binding.json", "binding")),
+    one(endpoint("download_ocr_validation", "ocr_validation.json",
+                 "ocr_validation")),
+)
 
 
 # =====================================================================
 # Sub-tab toolbar widget (shared toolbar template)
 # =====================================================================
-
-class _RecognizeWorker(QObject):
-    """Фоновое распознавание вручную добавленных боксов (не блокирует UI)."""
-
-    finished = Signal(list)
-    error = Signal(str)
-
-    def __init__(self, api_client, uid, boxes):
-        super().__init__()
-        self.api_client = api_client
-        self.uid = uid
-        self.boxes = boxes
-
-    def run(self):
-        try:
-            resp = self.api_client.recognize_boxes(self.uid, self.boxes)
-            results = resp.get("results", []) if isinstance(resp, dict) else []
-            self.finished.emit(results)
-        except Exception as exc:
-            self.error.emit(str(exc))
-
 
 class _SubTabToolbar(QWidget):
     """Панель OCR: Добавить бокс | Распознать | ...инструкция... | Отменить | Сохранить | Подтвердить."""
@@ -497,7 +404,7 @@ class OcrBindingTab(AppearanceMixin, QWidget):
             f"Распознавание {len(boxes)} боксов в фоне… можно продолжать править")
 
         self._recog_thread = QThread()
-        self._recog_worker = _RecognizeWorker(self.api_client, self.uid, boxes)
+        self._recog_worker = RecognizeWorker(self.api_client, self.uid, boxes)
         self._recog_worker.moveToThread(self._recog_thread)
         self._recog_thread.started.connect(self._recog_worker.run)
         self._recog_worker.finished.connect(self._on_recognize_done)
@@ -690,8 +597,8 @@ class OcrBindingTab(AppearanceMixin, QWidget):
 
     def _start_download(self):
         self._download_thread = QThread()
-        self._downloader = _OcrArtifactDownloader(
-            self.api_client, self.uid, self.temp_dir
+        self._downloader = ArtifactDownloader(
+            self.api_client, self.uid, self.temp_dir, _ARTIFACTS
         )
         self._downloader.moveToThread(self._download_thread)
 

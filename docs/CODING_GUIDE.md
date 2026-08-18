@@ -92,7 +92,7 @@ BaseGraphTab             — download, save, confirm template, undo, stats
 
 - `_create_editor()` (abstract) — потомок возвращает конкретный editor
 - `_setup_toolbar()` (abstract) — потомок заполняет toolbar кнопками режимов
-- `_download_artifacts()` → фоновый `_GraphArtifactDownloader` (QThread) → `_on_downloaded()` → `_create_editor()` → `load_data()`
+- `_download_artifacts()` → фоновый `ArtifactDownloader` (QThread) со списком `_graph_jobs(want_canvas)` → `_on_downloaded()` → `_create_editor()` → `load_data()`
 - `_save_graph()` → `editor.save_graph()` → `api_client.upload_validated_graph()`
 - `_on_confirm()` → save (если unsaved) → emit `confirmed`
 - `has_unsaved_changes()` — сравнивает `undo_mgr.stack_depth` с `_saved_stack_depth`
@@ -780,6 +780,6 @@ overlay.get_draw_points()            # → list[(x, y)]
 2. **Migration:** Alembic-миграция для нового значения
 3. **Storage path:** определить паттерн пути: `artifacts/{uid}/{artifact_type}.{ext}`
 4. **API endpoint:** добавить endpoint для upload/download в API (см. API.md)
-5. **Download в Tab:** добавить в `_GraphArtifactDownloader.run()` (required или optional)
+5. **Download в Tab:** добавить `Job` в список артефактов вкладки (`_graph_jobs()` в `base_graph_tab.py`, `_ARTIFACTS` в остальных): `required=True`, необязательный, цепочка кандидатов `*_validated` → обычный
 6. **Save в Tab:** если артефакт редактируемый — добавить логику сохранения в `_save_graph()` override
 7. **Rollback:** определить поведение при откате — удалять или сохранять (флаги `preserve_*`)

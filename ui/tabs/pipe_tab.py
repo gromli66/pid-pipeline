@@ -13,9 +13,12 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QMessageBox, QSlider, QApplication,
 )
-from PySide6.QtCore import Signal, Slot, Qt, QThread, QObject
+from PySide6.QtCore import Signal, Slot, Qt, QThread
 
-from ui.services.api_client import APIClient, APIError
+from ui.services.api_client import APIClient
+from ui.services.artifact_downloader import (
+    ArtifactDownloader, Job, artifact, one,
+)
 from ui.widgets.appearance_panel import AppearanceMixin
 from ui.widgets.toolbar_buttons import (
     make_undo_button, make_save_button, make_confirm_button,
@@ -24,63 +27,15 @@ from ui.widgets.toolbar_buttons import (
 logger = logging.getLogger(__name__)
 
 
-class _PipeArtifactDownloader(QObject):
-    """Загрузчик артефактов для pipe tab (параллельный)."""
-    finished = Signal(dict)
-    error = Signal(str)
-    progress = Signal(str)
-
-    def __init__(self, api_client: APIClient, uid: str, temp_dir: Path):
-        super().__init__()
-        self.api_client = api_client
-        self.uid = uid
-        self.temp_dir = temp_dir
-
-    def _download_one(self, art_type: str, filename: str, required: bool):
-        """Скачать один артефакт. Возвращает (art_type, path) или None."""
-        dest = self.temp_dir / filename
-        try:
-            self.api_client.download_artifact(self.uid, art_type, dest)
-            return (art_type, dest)
-        except (APIError, Exception):
-            if required:
-                raise
-            return None
-
-    def _dl_mask(self):
-        """pipe_mask_validated → fallback skeleton_mask."""
-        dest = self.temp_dir / "mask.png"
-        try:
-            self.api_client.download_artifact(self.uid, "pipe_mask_validated", dest)
-            return ("pipe_mask_validated", dest)
-        except (APIError, Exception):
-            self.api_client.download_artifact(self.uid, "skeleton_mask", dest)
-            return ("skeleton_mask", dest)
-
-    def run(self):
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        try:
-            self.progress.emit("Загрузка артефактов...")
-            artifacts = {}
-
-            with ThreadPoolExecutor(max_workers=4) as pool:
-                futures = [
-                    pool.submit(self._download_one, "original_image", "original.png", True),
-                    pool.submit(self._dl_mask),
-                    pool.submit(self._download_one, "coco_validated", "coco_validated.json", False),
-                    pool.submit(self._download_one, "segmentation_mask", "segmentation_mask.png", False),
-                ]
-                for future in as_completed(futures):
-                    result = future.result()  # raises if required failed
-                    if result:
-                        art_type, dest = result
-                        artifacts[art_type] = dest
-                        self.progress.emit(f"Загружен {art_type}")
-
-            self.finished.emit(artifacts)
-        except Exception as exc:
-            self.error.emit(str(exc))
+#: Что вкладка тянет с сервера. У маски ключ = сработавший кандидат:
+#: `_on_downloaded` читает pipe_mask_validated, потом skeleton_mask.
+_ARTIFACTS = (
+    one(artifact("original_image", "original.png"), required=True),
+    Job((artifact("pipe_mask_validated", "mask.png"),
+         artifact("skeleton_mask", "mask.png")), required=True),
+    one(artifact("coco_validated", "coco_validated.json")),
+    one(artifact("segmentation_mask", "segmentation_mask.png")),
+)
 
 
 class PipeTab(AppearanceMixin, QWidget):
@@ -272,8 +227,8 @@ class PipeTab(AppearanceMixin, QWidget):
 
     def _download_artifacts(self):
         self._download_thread = QThread()
-        self._downloader = _PipeArtifactDownloader(
-            self.api_client, self.uid, self.temp_dir
+        self._downloader = ArtifactDownloader(
+            self.api_client, self.uid, self.temp_dir, _ARTIFACTS
         )
         self._downloader.moveToThread(self._download_thread)
         self._download_thread.started.connect(self._downloader.run)
