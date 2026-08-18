@@ -6,6 +6,14 @@
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
 
+# Auto-layout (modules/graph/core/layout) — нужен НАБОРУ, не клиенту: без него
+# 22 теста раскладки молча уходят из сбора через importorskip (замер 0.3,
+# docs/TESTING.md §7.1). Жил только в requirements/worker.txt, а CI ставил его
+# отдельной строкой в workflow — версия дублировалась в двух местах и могла
+# разъехаться. Пин обязан совпадать с worker.txt (сторож —
+# tests/test_requirements_pins.py); почему точный, а не >= — там же.
+shapely==2.1.2
+
 # Linting
 ruff>=0.2.0
 

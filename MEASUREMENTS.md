@@ -838,3 +838,46 @@
 | 36.25 | ⛔ **`DRAG_THRESHOLD` 5.0 → 0.0** (первая версия теста НЕ поймала) | 2026-08-18 | **18 passed, exit 0** — тест брал сдвиг как `DRAG_THRESHOLD / 2`, то есть ехал вместе с константой. Исправлено: порог пинится абсолютными числами с двух сторон (2 px — клик, 10 px — протяжка). После правки: `0.0` → красный `test_tremor_under_two_pixels_is_a_click_not_a_drag`; `50.0` → красные `test_deliberate_ten_pixel_move_is_a_drag`, `test_button_less_move_ends_drag_and_node_stops_following`, `test_focus_loss_mid_drag_finishes_gesture` |
 
 Дерево после каждой инъекции восстанавливалось (`git checkout -- <файл>`, `git status` чист).
+
+---
+
+## 37. Пункт 0.3x дороги — гигиена тестовой инфраструктуры (2026-08-18)
+
+**Что проверялось.** Пять хвостов ревизии 0.3: (1) модуль-уровневые моки `sys.modules`
+в `tests/observability/`, (2) спящий очаг `test_bundled_fonts.py`, (3) constraints-файл для
+CI, (4) перенос пина `shapely` из workflow в требования, (5) пол базовой линии. Боевой код
+не правился ни строкой: дифф — тесты, требования, workflow, доки.
+
+### 37а. Проверка адресов пункта (до первой строки кода)
+
+| # | что | команда | дата | результат |
+|---|---|---|---|---|
+| 37.1 | Очаги из ревизии 0.3 живы | `grep -rn "sys.modules" tests/observability/ tests/ui/test_bundled_fonts.py` | 2026-08-18 | все четыре адреса подтверждены построчно: `test_detection_errors.py:20`, `test_ocr_errors.py:26`, `test_postprocess_log_level.py:38`, `test_skeleton_extension_substeps.py:35`; `test_bundled_fonts.py:28-31` тоже жив |
+| 37.2 | ⛔ **РАСХОЖДЕНИЕ С QUEUE: файлов ПЯТЬ, а не четыре** | обход `tests/**` через `ast` (зонд `scan_sysmodules.py`) | 2026-08-18 | пятый — `tests/observability/test_segmentation_errors.py:32-33,39-46`: тот же мок `cv2` (плюс torch/tqdm и пять `pipe_segmentation.*`), но поставлен **циклом** `for _mod in (...): sys.modules.setdefault(_mod, ...)`, поэтому грепом по строке `"cv2"` не находился. Всего **13 записей в 6 файлах** |
+| 37.3 | ⛔ **Мок ставился поверх РЕАЛЬНОЙ зависимости** | `python -c "import cv2; print(cv2.__version__)"`; `grep -n opencv requirements/ui.txt` | 2026-08-18 | `cv2` **4.11.0** стоит; `opencv-python>=4.9.0` объявлен в `requirements/ui.txt:26`, то есть есть и на раннере. Комментарий «cv2 отсутствует в тест-среде (§9 #2)» во всех четырёх файлах — **протух**: заглушка не замещала недостающее, а закрывала собой настоящее. То же у `skimage` (`scikit-image` в `ui.txt`) |
+| 37.4 | Цена мины — прямой замер | `pytest tests/ui/test_square_size_ops.py -q` против `pytest tests/observability/test_detection_errors.py tests/ui/test_square_size_ops.py -q` | 2026-08-18 | в одиночку **12 passed**; в паре с ОДНИМ файлом-нарушителем — **6 passed, 11 errors** (`ValueError: not enough values to unpack (expected 4, got 0)` — `connectedComponentsWithStats` вернул `MagicMock`) |
+| 37.5 | ⛔ **РАСХОЖДЕНИЕ: зазор пола вырос втрое** | `python -c "json…['min_collected']"` + `pytest --collect-only -q` | 2026-08-18 | в QUEUE записано «собрано 793 при поле 757, зазор 36»; на входе в пункт — **собрано 866, пол 757, зазор 109**. База не пересъёмывалась с 0.8 (`3bd604c`), а после неё легли 0.10 (+18), 0.11 (+21), 0.12 (+16), ВН1б (+14), 0.4 (+19). Вывод пункта не меняется, лечится тем же пересъёмом |
+| 37.6 | Пин `shapely` действительно дублируется | `grep -rn "shapely==" requirements/ .github/` | 2026-08-18 | `worker.txt:38` (с обоснованием про API `STRtree`) и отдельная строка `pip install shapely==2.1.2` в workflow — два места, ни одно не сверяется с другим |
+
+### 37б. Гейты пункта
+
+| # | что | команда | дата | результат |
+|---|---|---|---|---|
+| 37.7 | База до правки | `python -X utf8 tools/suite_baseline.py --check` | 2026-08-18 | exit **0**: собрано 866, `37 failed / 796 passed / 13 skipped / 20 errors`, новых красных нет |
+| 37.8 | ⭐ **База после правки: 11 чужих красных позеленели** | та же команда | 2026-08-18 | собрано **869**, `37 failed / 809 passed / 14 skipped / **9 errors**` — ошибок 20 → 9, и все 11 ушедших из `tests/ui/test_square_size_ops.py`. Гейт при этом **краснеет** (exit 1, «позеленело сразу 11 > порога 10» + «skipped вырос на прогоне, где что-то позеленело») — ровно как задумано: такой объём починки обязан объяснить себя пересъёмом базы (Д6, §37в) |
+| 37.9 | ⭐ **Constraints воспроизводят базу** | тот же `--check`, но интерпретатором чистого venv (`api+ui+dev+shapely`, 76 пакетов) | 2026-08-18 | собрано **871**, `37 failed / 811 passed / 14 skipped / 9 errors` — счётчики и множество красных совпали с машиной разработки, разошлись только в числе собранных (то же дерево, замер сделан после +2 тестов пина). То есть окружение из `constraints-ci.txt` — не гипотеза: набор на нём даёт тот же цвет |
+| 37.10 | Сбор чист | `python -X utf8 -m pytest --collect-only -q` | 2026-08-18 | **871** собрано, 0 ошибок |
+| 37.11 | Долг линтеров не вырос | `python -X utf8 tools/lint_gate.py --check` | 2026-08-18 | exit **0**: ruff BLE001/E722 — 199 в 73 файлах (эталон 199), mypy 0 ошибок |
+| 37.12 | Сторож доков не задет | `pytest tests/test_docs_match_code.py -q` | 2026-08-18 | 16 passed (правки `TESTING.md` его не касаются) |
+| 37.13 | Тесты, чьи заглушки переехали | `pytest tests/observability tests/ui/test_bundled_fonts.py tests/ui/test_square_size_ops.py -q` | 2026-08-18 | 178 passed, 14 skipped (13 из них — `test_bundled_fonts` на Windows-offscreen, как и до правки) |
+| 37.14 | Откуда взялся +1 `skipped` (13 → 14) | `pytest -q -rs --tb=no` | 2026-08-18 | это мой же `test_declared_dependency_is_not_shadowed[**skimage**]`: «в этой сессии не импортирован — подменять нечего». Вариант `[cv2]` **проходит** (в сессии живёт настоящий 4.11.0). Ни один чужой тест в skip не превратился |
+
+### 37в. Д1 — сторожа проверены инъекциями (каждая красит своё)
+
+| # | инъекция | дата | что покраснело |
+|---|---|---|---|
+| 37.15 | Вернуть `sys.modules.setdefault("cv2", MagicMock())` на уровень модуля в `test_detection_errors.py` | 2026-08-18 | оба слоя: `test_no_module_level_sys_modules_stubs` (структурный, назвал адрес) **и** `test_declared_dependency_is_not_shadowed[cv2]` (рантайм: `sys.modules['cv2'] = <MagicMock>`) — 2 failed / 5 passed |
+| 37.16 | `requirements/dev.txt`: `shapely==2.1.2` → `2.1.1` | 2026-08-18 | `test_exact_pins_agree_between_worker_and_dev`: «пин разъехался … {'shapely': ('2.1.2', '2.1.1')}» — 1 failed / 2 passed |
+| 37.17 | Состояние ДО правки (13 записей в 6 файлах) | 2026-08-18 | структурный сторож красный с полным списком адресов; рантайм-слой красный по `cv2`. То есть оба теста «упали бы до правки» — Д1 показан не рассуждением, а прогоном |
+
+Дерево после каждой инъекции восстанавливалось (`git diff` пуст).

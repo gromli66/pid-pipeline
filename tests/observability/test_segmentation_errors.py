@@ -7,12 +7,18 @@ Fault-тесты Волны 4 (segmentation): типизация под-под-�
 как ensemble.py у detection): границы в логах + сбой инференса типизируется с
 проставленным ``step`` (доезжает до ``failed_step`` в /stages).
 
-Изоляция как в test_detection_errors (§9 #2): cv2/torch/tqdm → MagicMock ДО
-импорта движка; numpy — реальный; тяжёлые pipe_segmentation-листья замоканы
-monkeypatch'ем в namespace движка. Задачу (worker.tasks.segmentation) не тянем
-— её типизированные raise проверяются smoke'ом на стенде (как detection).
+ИЗОЛЯЦИЯ (канон docs/TESTING.md §6, пункт 0.3x): cv2/torch/tqdm и листья
+pipe_segmentation подменяются ФИКСТУРОЙ ``eng`` через monkeypatch.setitem, а НЕ на
+уровне модуля. Модуль-уровневый ``sys.modules.setdefault`` исполняется на сборке
+pytest и держит заглушки всю сессию — мок cv2 отсюда красил чужие тесты масок
+(MEASUREMENTS §37), а заглушки ``pipe_segmentation.inference.*`` уводили соседей
+от настоящего движка. Свежий импорт engine под заглушками + pop из кэша на
+teardown = ноль протечки. numpy — реальный; тяжёлые pipe_segmentation-листья
+замоканы monkeypatch'ем в namespace движка. Задачу (worker.tasks.segmentation) не
+тянем — её типизированные raise проверяются smoke'ом на стенде (как detection).
 """
 
+import importlib
 import logging
 import os
 import sys
@@ -28,22 +34,17 @@ _MODULES = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "
 if _MODULES not in sys.path:
     sys.path.insert(0, _MODULES)
 
-# Нативные зависимости отсутствуют в тест-среде (§9 #2) → подменяем ДО импорта.
-for _mod in ("cv2", "torch", "tqdm"):
-    sys.modules.setdefault(_mod, MagicMock())
-
-# Движок берёт из pipe_segmentation-листьев только функции, которые мы всё равно
-# подменяем monkeypatch'ем. Регистрируем заглушки ДО импорта движка — иначе их
-# __init__ тянут albumentations / segmentation_models_pytorch / torch.utils.data,
-# которых в тест-среде нет. Так тест остаётся про инструментовку, а не про ML-стек.
-for _mod in (
+# Движок берёт из этих листьев только функции, которые мы всё равно подменяем
+# monkeypatch'ем. Без заглушек их __init__ тянут albumentations /
+# segmentation_models_pytorch / torch.utils.data, которых в тест-среде нет: тест
+# остаётся про инструментовку, а не про ML-стек.
+_LEAVES = (
     "pipe_segmentation.data",
     "pipe_segmentation.data.tiling",
     "pipe_segmentation.inference.preprocessing",
     "pipe_segmentation.inference.postprocessing",
     "pipe_segmentation.inference.tta",
-):
-    sys.modules.setdefault(_mod, MagicMock())
+)
 
 from app.core.errors import (
     ArtifactMissingError,
@@ -53,8 +54,18 @@ from app.core.errors import (
     ModelLoadError,
     PipelineError,
 )
-import pipe_segmentation.inference.engine as engine_mod
-from pipe_segmentation.inference.engine import TiledInference
+
+
+@pytest.fixture
+def eng(monkeypatch):
+    """Изолированный свежий импорт движка под заглушками (см. докстринг)."""
+    for _mod in ("cv2", "torch", "tqdm", *_LEAVES):
+        monkeypatch.setitem(sys.modules, _mod, MagicMock())
+
+    sys.modules.pop("pipe_segmentation.inference.engine", None)
+    mod = importlib.import_module("pipe_segmentation.inference.engine")
+    yield mod
+    sys.modules.pop("pipe_segmentation.inference.engine", None)
 
 
 # --- 1. Листья ошибок, на которые опирается задача/движок ----------------------
@@ -77,21 +88,21 @@ def test_error_leaves_codes_and_hierarchy():
 _TILE = 4
 
 
-def _engine(monkeypatch):
+def _engine(eng, monkeypatch):
     """TiledInference с замоканными листьями pipe_segmentation (one-tile, cpu)."""
     # create_blending_mask зовётся в __init__ и участвует в numpy-блендинге stitch
-    monkeypatch.setattr(engine_mod, "create_blending_mask",
+    monkeypatch.setattr(eng, "create_blending_mask",
                         lambda *a, **k: np.ones((_TILE, _TILE), dtype=np.float32))
     # один тайл в позиции (0,0) — цикл инференса делает ровно 1 проход
-    monkeypatch.setattr(engine_mod, "calculate_tile_positions",
+    monkeypatch.setattr(eng, "calculate_tile_positions",
                         lambda *a, **k: [(0, 0)])
-    monkeypatch.setattr(engine_mod, "extract_tile",
+    monkeypatch.setattr(eng, "extract_tile",
                         lambda *a, **k: np.zeros((_TILE, _TILE, 3), dtype=np.uint8))
-    monkeypatch.setattr(engine_mod, "prepare_batch_from_tiles",
+    monkeypatch.setattr(eng, "prepare_batch_from_tiles",
                         lambda *a, **k: MagicMock())  # .to(device) → MagicMock
-    monkeypatch.setattr(engine_mod, "post_process_mask", lambda m, **k: m)
+    monkeypatch.setattr(eng, "post_process_mask", lambda m, **k: m)
 
-    return TiledInference(
+    return eng.TiledInference(
         model=MagicMock(), device="cpu",
         tile_size=_TILE, overlap=0, batch_size=8,
         threshold=0.5, use_tta=False, binarize=False, in_channels=4,
@@ -117,8 +128,8 @@ _NODE = np.zeros((_TILE, _TILE), dtype=np.uint8)
 
 # --- 2. inference: неожиданный сбой → InferenceError(step=inference) -----------
 
-def test_inference_failure_typed_with_step(monkeypatch, caplog):
-    inst = _engine(monkeypatch)
+def test_inference_failure_typed_with_step(eng, monkeypatch, caplog):
+    inst = _engine(eng, monkeypatch)
     monkeypatch.setattr(inst, "_run_inference",
                         MagicMock(side_effect=RuntimeError("boom")))
 
@@ -138,8 +149,8 @@ def test_inference_failure_typed_with_step(monkeypatch, caplog):
 
 # --- 3. inference: OOM → GpuOutOfMemoryError(step=inference) -------------------
 
-def test_oom_maps_to_gpu_oom(monkeypatch):
-    inst = _engine(monkeypatch)
+def test_oom_maps_to_gpu_oom(eng, monkeypatch):
+    inst = _engine(eng, monkeypatch)
     monkeypatch.setattr(inst, "_run_inference",
                         MagicMock(side_effect=RuntimeError("CUDA out of memory")))
 
@@ -152,8 +163,8 @@ def test_oom_maps_to_gpu_oom(monkeypatch):
 
 # --- 4. Уже типизированный сбой проходит насквозь (не двойная обёртка) ---------
 
-def test_pipeline_error_passthrough(monkeypatch):
-    inst = _engine(monkeypatch)
+def test_pipeline_error_passthrough(eng, monkeypatch):
+    inst = _engine(eng, monkeypatch)
     boom = PipelineError("domain-fail", step="inference")
     monkeypatch.setattr(inst, "_run_inference", MagicMock(side_effect=boom))
 
@@ -167,8 +178,8 @@ def test_pipeline_error_passthrough(monkeypatch):
 
 # --- 5. happy path: все три под-под-шага логируют start/end + duration ---------
 
-def test_substeps_log_start_end_duration(monkeypatch, caplog):
-    inst = _engine(monkeypatch)
+def test_substeps_log_start_end_duration(eng, monkeypatch, caplog):
+    inst = _engine(eng, monkeypatch)
     monkeypatch.setattr(
         inst, "_run_inference",
         lambda batch: _FakeTensor(np.zeros((1, 1, _TILE, _TILE), dtype=np.float32)),

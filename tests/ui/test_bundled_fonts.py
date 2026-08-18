@@ -24,11 +24,31 @@ EMOJI = "Noto Color Emoji"
 GENERIC = {"", "sans serif", "sans-serif", "serif", "monospace", "system"}
 
 
-# застабить тяжёлый ui.windows.main_window, чтобы импортировать только функцию шрифтов
-if "ui.windows.main_window" not in sys.modules:
-    _stub = types.ModuleType("ui.windows.main_window")
-    _stub.MainWindow = object
-    sys.modules["ui.windows.main_window"] = _stub
+_STUBBED = ("ui.windows.main_window", "ui.main")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _stub_main_window():
+    """Застабить тяжёлый ui.windows.main_window (`ui/main.py:34`), чтобы
+    импортировать только функцию шрифтов — но СО СНЯТИЕМ за собой.
+
+    На уровне модуля заглушка исполнялась бы на сборке pytest и осталась бы в
+    сессии навсегда: следующий, кому нужен настоящий MainWindow, получил бы
+    `object` (пункт 0.3x, канон docs/TESTING.md §6). monkeypatch в модульном
+    скоупе не работает — сохраняем срез сами, образец
+    `tests/test_stage7_graph_flow.py:259-271`. `ui.main` снимаем тоже: он
+    импортируется под заглушкой и держит её MainWindow.
+    """
+    saved = {n: sys.modules[n] for n in _STUBBED if n in sys.modules}
+    stub = types.ModuleType("ui.windows.main_window")
+    stub.MainWindow = object
+    sys.modules["ui.windows.main_window"] = stub
+    yield
+    for name in _STUBBED:
+        if name in saved:
+            sys.modules[name] = saved[name]
+        else:
+            sys.modules.pop(name, None)
 
 
 @pytest.fixture(scope="module")

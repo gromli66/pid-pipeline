@@ -11,8 +11,10 @@ smart_skeleton_connect до INFO — тайминги под-шагов долж
 pipe_segmentation.inference.__init__ (тот тянет engine→data.dataset→torch.utils.data)
 и БЕЗ записи заглушек в sys.modules["pipe_segmentation.inference.*"]. Это важно:
 модуль-уровневые заглушки текут в сессию pytest и ломают другие тесты волн
-(test_segmentation_errors стабает те же имена и ждёт НАСТОЯЩИЙ engine). Единственная
-общая заглушка — cv2 (совместима: тот же MagicMock, что у соседей). numpy —
+(test_segmentation_errors стабает те же имена и ждёт НАСТОЯЩИЙ engine). Заглушка
+cv2 по той же причине живёт в ФИКСТУРЕ ``pp`` (monkeypatch.setitem, канон
+docs/TESTING.md §6): на уровне модуля она исполнялась на сборке pytest и держала
+мок всю сессию — красила чужие тесты масок (пункт 0.3x, MEASUREMENTS §37). numpy —
 реальный; хелперы/скелетонизация замоканы monkeypatch'ем (тест про уровень лога,
 не про морфологию).
 """
@@ -33,16 +35,19 @@ _MODULES = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "
 if _MODULES not in sys.path:
     sys.path.insert(0, _MODULES)
 
-# postprocessing.py делает `import cv2` — в тест-среде его нет (§9 #2). Заглушка
-# cv2 совместима с другими тестами волн (тот же MagicMock).
-sys.modules.setdefault("cv2", MagicMock())
-
-# Грузим postprocessing.py по ФАЙЛОВОМУ пути под приватным именем: НЕ трогаем
-# sys.modules["pipe_segmentation.inference.*"] → ноль протечки в другие тесты.
 _PP_PATH = os.path.join(_MODULES, "pipe_segmentation", "inference", "postprocessing.py")
-_spec = importlib.util.spec_from_file_location("_wave13_postprocessing_under_test", _PP_PATH)
-pp = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(pp)
+
+
+@pytest.fixture
+def pp(monkeypatch):
+    """postprocessing.py по ФАЙЛОВОМУ пути под приватным именем и под заглушкой
+    cv2: sys.modules["pipe_segmentation.inference.*"] не трогаем вовсе, а cv2
+    возвращается на место на teardown (см. модульный докстринг)."""
+    monkeypatch.setitem(sys.modules, "cv2", MagicMock())
+    spec = importlib.util.spec_from_file_location("_wave13_postprocessing_under_test", _PP_PATH)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 _POST = "[POSTPROCESS]"
@@ -53,7 +58,7 @@ def _tagged(caplog, tag):
     return [r for r in caplog.records if tag in r.getMessage()]
 
 
-def test_postprocess_timing_logs_are_info(monkeypatch, caplog):
+def test_postprocess_timing_logs_are_info(pp, monkeypatch, caplog):
     """post_process_mask: Start / шаги / TOTAL — на INFO, ни одной WARNING."""
     # Чистые хелперы шагов → identity (обходим cv2/скелет; тест про уровень лога).
     monkeypatch.setattr(pp, "remove_small_components", lambda b, *a, **k: b)
@@ -82,7 +87,7 @@ def test_postprocess_timing_logs_are_info(monkeypatch, caplog):
     assert not offenders, f"[POSTPROCESS] не на INFO (регресс #13): {offenders}"
 
 
-def test_skeleton_connect_timing_logs_are_info(monkeypatch, caplog):
+def test_skeleton_connect_timing_logs_are_info(pp, monkeypatch, caplog):
     """smart_skeleton_connect: тайминги skeletonize/find_endpoints — на INFO."""
     # Скелетонизация/endpoints замоканы: ранний выход после двух тайминг-логов.
     monkeypatch.setattr(pp, "_fast_skeletonize", lambda m: np.ones((8, 8), dtype=np.uint8))

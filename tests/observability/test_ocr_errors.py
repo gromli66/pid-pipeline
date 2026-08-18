@@ -9,11 +9,16 @@ error_code/failed_step до /stages, (3) под-под-шаги text_detect/reco
 в pipeline_clean логируют start/end+duration_ms и типизируют сбой инференса в
 OcrError(step=…).
 
-Изоляция (§9 #2): cv2 / ultralytics / sibling-модули modules.ocr → MagicMock ДО
-импорта pipeline_clean; numpy реальный; obs — настоящий (app на PYTHONPATH), так
-что проверяем реальные границы под-шагов (start/end/duration_ms).
+Изоляция (§9 #2, канон docs/TESTING.md §6): cv2 / ultralytics / sibling-модули
+modules.ocr → MagicMock ФИКСТУРОЙ ``pc`` через monkeypatch.setitem, а НЕ на уровне
+модуля (пункт 0.3x: модуль-уровневая заглушка исполняется на сборке pytest и
+держит мок всю сессию — так и краснели чужие тесты масок, MEASUREMENTS §37).
+Свежий импорт pipeline_clean под заглушками + pop из кэша на teardown = ноль
+протечки. numpy реальный; obs — настоящий (app на PYTHONPATH), так что проверяем
+реальные границы под-шагов (start/end/duration_ms).
 """
 
+import importlib
 import logging
 import sys
 from unittest.mock import MagicMock
@@ -21,12 +26,6 @@ from unittest.mock import MagicMock
 import pytest
 
 np = pytest.importorskip("numpy")
-
-# Заглушки тяжёлых/нативных зависимостей ДО импорта pipeline_clean.
-sys.modules.setdefault("cv2", MagicMock())
-sys.modules.setdefault("ultralytics", MagicMock())
-for _sib in ("text_detect_yolo", "recognize_surya", "text_filter"):
-    sys.modules.setdefault(f"modules.ocr.{_sib}", MagicMock())
 
 from app.core.errors import (
     ArtifactMissingError,
@@ -37,9 +36,22 @@ from app.core.errors import (
 from app.core.logging import get_logger
 from app.models.stage import ProcessingStage, StageStatus
 from worker.utils.db_helpers import fail_stage
-import modules.ocr.pipeline_clean as pc
 
 logger = get_logger(__name__)
+
+
+@pytest.fixture
+def pc(monkeypatch):
+    """Изолированный свежий импорт pipeline_clean под заглушками (см. докстринг)."""
+    monkeypatch.setitem(sys.modules, "cv2", MagicMock())
+    monkeypatch.setitem(sys.modules, "ultralytics", MagicMock())
+    for _sib in ("text_detect_yolo", "recognize_surya", "text_filter"):
+        monkeypatch.setitem(sys.modules, f"modules.ocr.{_sib}", MagicMock())
+
+    sys.modules.pop("modules.ocr.pipeline_clean", None)
+    mod = importlib.import_module("modules.ocr.pipeline_clean")
+    yield mod
+    sys.modules.pop("modules.ocr.pipeline_clean", None)
 
 
 # --- 1. Листья ошибок, которыми типизируется OCR --------------------------------
@@ -65,7 +77,7 @@ def test_ocr_failure_reaches_stage_fields():
 
 # --- helpers для модульных тестов pipeline_clean --------------------------------
 
-def _wire_happy(monkeypatch):
+def _wire_happy(pc, monkeypatch):
     """Замокать вызовы run_ocr_pipeline_clean на минимально валидные возвраты."""
     monkeypatch.setattr(pc, "predict_tiled", lambda *a, **k: [[0, 0, 10, 10]])
     monkeypatch.setattr(pc, "merge_overlap", lambda boxes: boxes)
@@ -75,7 +87,7 @@ def _wire_happy(monkeypatch):
     monkeypatch.setattr(pc, "dedup", lambda items: (items, []))
 
 
-def _run(tmp_path):
+def _run(pc, tmp_path):
     img = tmp_path / "image.png"
     img.write_bytes(b"x")
     model = tmp_path / "best.pt"
@@ -85,10 +97,10 @@ def _run(tmp_path):
 
 # --- 3. happy path: 3 под-под-шага логируют start/end + duration_ms --------------
 
-def test_pipeline_substeps_log_start_end_duration(monkeypatch, caplog, tmp_path):
-    _wire_happy(monkeypatch)
+def test_pipeline_substeps_log_start_end_duration(pc, monkeypatch, caplog, tmp_path):
+    _wire_happy(pc, monkeypatch)
     with caplog.at_level(logging.INFO):
-        result = _run(tmp_path)
+        result = _run(pc, tmp_path)
     assert len(result["target"]) == 1
     ends = [r for r in caplog.records if getattr(r, "event", None) == "end"]
     names = {getattr(r, "step", None) for r in ends}
@@ -99,13 +111,13 @@ def test_pipeline_substeps_log_start_end_duration(monkeypatch, caplog, tmp_path)
 
 # --- 4. Сбой text_detect → OcrError(step=text_detect) ---------------------------
 
-def test_text_detect_failure_typed_with_step(monkeypatch, caplog, tmp_path):
-    _wire_happy(monkeypatch)
+def test_text_detect_failure_typed_with_step(pc, monkeypatch, caplog, tmp_path):
+    _wire_happy(pc, monkeypatch)
     monkeypatch.setattr(pc, "predict_tiled",
                         MagicMock(side_effect=RuntimeError("yolo boom")))
     with caplog.at_level(logging.INFO):
         with pytest.raises(OcrError) as ei:
-            _run(tmp_path)
+            _run(pc, tmp_path)
     assert ei.value.step == "text_detect"
     assert ei.value.code == "ocr_failed"
     assert isinstance(ei.value.cause, RuntimeError)
@@ -116,13 +128,13 @@ def test_text_detect_failure_typed_with_step(monkeypatch, caplog, tmp_path):
 
 # --- 5. Сбой recognize → OcrError(step=recognize); text_detect уже закрылся ------
 
-def test_recognize_failure_typed_with_step(monkeypatch, caplog, tmp_path):
-    _wire_happy(monkeypatch)
+def test_recognize_failure_typed_with_step(pc, monkeypatch, caplog, tmp_path):
+    _wire_happy(pc, monkeypatch)
     monkeypatch.setattr(pc, "recognize_boxes",
                         MagicMock(side_effect=RuntimeError("surya boom")))
     with caplog.at_level(logging.INFO):
         with pytest.raises(OcrError) as ei:
-            _run(tmp_path)
+            _run(pc, tmp_path)
     assert ei.value.step == "recognize"
     assert ei.value.code == "ocr_failed"
     events = {(getattr(r, "step", None), getattr(r, "event", None))
@@ -133,8 +145,8 @@ def test_recognize_failure_typed_with_step(monkeypatch, caplog, tmp_path):
 
 # --- 6. Предусловия: веса → ModelLoadError, образ → ArtifactMissingError ---------
 
-def test_missing_weights_raise_model_load_error(monkeypatch, tmp_path):
-    _wire_happy(monkeypatch)
+def test_missing_weights_raise_model_load_error(pc, monkeypatch, tmp_path):
+    _wire_happy(pc, monkeypatch)
     img = tmp_path / "image.png"
     img.write_bytes(b"x")
     with pytest.raises(ModelLoadError):
@@ -142,8 +154,8 @@ def test_missing_weights_raise_model_load_error(monkeypatch, tmp_path):
                                   tmp_path / "nonexistent.pt", device="cpu")
 
 
-def test_unreadable_image_raise_artifact_missing(monkeypatch, tmp_path):
-    _wire_happy(monkeypatch)
+def test_unreadable_image_raise_artifact_missing(pc, monkeypatch, tmp_path):
+    _wire_happy(pc, monkeypatch)
     monkeypatch.setattr(pc.cv2, "imread", lambda *a, **k: None)
     img = tmp_path / "image.png"
     img.write_bytes(b"x")

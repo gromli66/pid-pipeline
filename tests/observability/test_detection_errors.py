@@ -6,8 +6,16 @@ Fault-тесты Волны 3 (detection): типизация под-под-ша
 ``step`` (доезжает до ``failed_step`` в /stages). Тесты изолированы от cv2/torch:
 cv2 подменяется MagicMock (RUNBOOK §9 #2), numpy — реальный; sahi/ensemble_boxes
 не нужны (ленивы / замоканы).
+
+ИЗОЛЯЦИЯ (канон docs/TESTING.md §6, пункт 0.3x): заглушка cv2 ставится ФИКСТУРОЙ
+``ens`` через monkeypatch.setitem (функц. скоуп → авто-восстановление), а НЕ на
+уровне модуля. Модуль-уровневый ``sys.modules.setdefault`` исполняется на сборке
+pytest и держит мок всю сессию: замерено — этот файл в одиночку красил 11 тестов
+tests/ui/test_square_size_ops.py (MEASUREMENTS §37). Свежий импорт ensemble под
+заглушкой + pop из кэша на teardown = ноль протечки.
 """
 
+import importlib
 import logging
 import sys
 from unittest.mock import MagicMock
@@ -16,11 +24,17 @@ import pytest
 
 np = pytest.importorskip("numpy")
 
-# cv2 отсутствует в тест-среде (§9 #2) → подменяем ДО импорта модуля детектора.
-sys.modules.setdefault("cv2", MagicMock())
-
 from app.core.errors import ConfigError, InferenceError, PipelineError
-from modules.yolo_detector.ensemble import EnsembleDetector
+
+
+@pytest.fixture
+def ens(monkeypatch):
+    """Изолированный свежий импорт ensemble под заглушкой cv2 (см. докстринг)."""
+    monkeypatch.setitem(sys.modules, "cv2", MagicMock())
+    sys.modules.pop("modules.yolo_detector.ensemble", None)
+    mod = importlib.import_module("modules.yolo_detector.ensemble")
+    yield mod
+    sys.modules.pop("modules.yolo_detector.ensemble", None)
 
 
 # --- 1. Новый лист ошибки (config_invalid) ------------------------------------
@@ -34,9 +48,9 @@ def test_config_error_leaf():
 
 # --- helpers -------------------------------------------------------------------
 
-def _ensemble(merge_strategy="wbf"):
+def _ensemble(ens, merge_strategy="wbf"):
     """EnsembleDetector с одной моделью и БЕЗ реальной загрузки весов."""
-    return EnsembleDetector(
+    return ens.EnsembleDetector(
         models=[{"weights": "fake.pt", "tile_size": 640,
                  "weight": 1.0, "confidence": 0.5, "sahi_overlap": 0.25}],
         merge_strategy=merge_strategy,
@@ -71,8 +85,8 @@ _ONE_DET = {
 
 # --- 2. inference: неожиданный сбой → InferenceError(step=inference) -----------
 
-def test_inference_error_carries_step(caplog):
-    det = _ensemble()
+def test_inference_error_carries_step(ens, caplog):
+    det = _ensemble(ens)
     _inject(det, _FakeDetector(exc=RuntimeError("cuda blew up")))
 
     with caplog.at_level(logging.INFO):
@@ -88,8 +102,8 @@ def test_inference_error_carries_step(caplog):
 
 # --- 3. fusion: неизвестная стратегия → ConfigError(step=fusion) --------------
 
-def test_unknown_merge_strategy_raises_config_error():
-    det = _ensemble(merge_strategy="bogus")
+def test_unknown_merge_strategy_raises_config_error(ens):
+    det = _ensemble(ens, merge_strategy="bogus")
     _inject(det, _FakeDetector(result=[]))
 
     with pytest.raises(ConfigError) as ei:
@@ -101,8 +115,8 @@ def test_unknown_merge_strategy_raises_config_error():
 
 # --- 4. fusion: неожиданный сбой merge → PipelineError(step=fusion) ------------
 
-def test_fusion_error_wrapped_with_step():
-    det = _ensemble(merge_strategy="wbf")
+def test_fusion_error_wrapped_with_step(ens):
+    det = _ensemble(ens, merge_strategy="wbf")
     _inject(det, _FakeDetector(result=[dict(_ONE_DET)]))
     det._merge_wbf = MagicMock(side_effect=RuntimeError("boom in wbf"))
 
@@ -117,8 +131,8 @@ def test_fusion_error_wrapped_with_step():
 
 # --- 5. happy path: обе границы под-шагов в логах (start+end+duration) ---------
 
-def test_substeps_log_start_end_duration(caplog):
-    det = _ensemble(merge_strategy="wbf")
+def test_substeps_log_start_end_duration(ens, caplog):
+    det = _ensemble(ens, merge_strategy="wbf")
     _inject(det, _FakeDetector(result=[]))
     det._merge_wbf = MagicMock(return_value=[])  # без реального ensemble_boxes
 
