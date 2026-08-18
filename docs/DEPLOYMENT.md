@@ -64,6 +64,7 @@ docker run --rm --gpus all nvidia/cuda:12.4.0-runtime-ubuntu22.04 nvidia-smi
 | `api` | Dockerfile.api | 8000 | — | pid_network, cvat |
 | `worker` | Dockerfile.worker | — | ✅ 1 GPU | pid_network, cvat |
 | `worker_ocr` | Dockerfile.worker_ocr | — | ✅ 1 GPU | pid_network |
+| `flower` | mher/flower:2.0 | 5555 (**только 127.0.0.1**) | — | pid_network |
 | `cvat_db` | postgres:15-alpine | — | — | cvat |
 | `cvat_redis_inmem` | redis:7.2-alpine | — | — | cvat |
 | `cvat_redis_ondisk` | apache/kvrocks:latest | — | — | cvat |
@@ -298,6 +299,7 @@ CVAT доступен через traefik на порту 8080. API pipeline по
 |--------|--------|-----------|
 | `pid_postgres_data` | postgres | Данные PostgreSQL P&ID |
 | `pid_redis_data` | redis | AOF persistence Redis |
+| `pid_flower_data` | flower | История задач Flower (`--persistent`) |
 | `cvat_db` | cvat_db | Данные PostgreSQL CVAT |
 | `cvat_redis_inmem` | cvat_redis_inmem | Redis CVAT (in-memory) |
 | `cvat_redis_ondisk` | cvat_redis_ondisk | Kvrocks CVAT |
@@ -475,7 +477,43 @@ docker exec pid_worker celery -A worker.celery_app inspect reserved
 docker exec pid_worker celery -A worker.celery_app inspect stats
 ```
 
-[TODO: добавить Celery Flower сервис в docker-compose для web-мониторинга]
+#### Flower — web-мониторинг Celery
+
+Сервис `flower` в `docker-compose.yml` (образ `mher/flower:2.0`, контейнер `pid_flower`).
+Открывается на `http://127.0.0.1:5555`: вкладка **Broker** — глубина очередей
+(`default`, `gpu`, `ocr`, `sam2`), **Workers** — живые воркеры и их активные задачи,
+**Tasks** — история задач с `uuid`, состоянием и временем.
+
+```bash
+docker compose up -d --no-deps flower     # поднять, не трогая остальной стек
+docker logs pid_flower --tail 20
+```
+
+Зачем: **повторная выдача задачи брокером видна глазами** — та самая задача приходит
+воркеру второй раз (дефект закрыт в `worker/celery_app.py` опцией
+`visibility_timeout=7200`, но следить за ним больше неоткуда).
+
+⛔ **Порт публикуется только на loopback.** У Flower по умолчанию нет аутентификации,
+а в UI есть управление: отозвать задачу, снять воркера. С сервера смотреть через
+SSH-туннель (`ssh -L 5555:127.0.0.1:5555 …`); публиковать наружу — только добавив
+`--basic-auth=user:pass`. По той же причине включена `FLOWER_UNAUTHENTICATED_API=true`:
+экспозиции она не добавляет (UI на том же порту и так открыт), но без неё `/api/*`
+не отвечает.
+
+События задач Flower включает воркерам сам, периодической командой `enable_events`
+(`worker_send_task_events` в конфиге Celery не задан — при остановленном Flower
+воркеры событий не шлют, и это нормально: смотреть их некому).
+
+Проверка, что мониторинг действительно работает (кладёт в очередь `default` безобидную
+встроенную `celery.accumulate` и требует увидеть её в Flower):
+
+```bash
+python -X utf8 tools/flower_gate.py --check
+```
+
+Коды выхода: `0` — Flower показывает очереди и задачи; `1` — не показывает (не поднят,
+не отвечает, задачи не видит); `2` — судить нечем (нет брокера или очередь `default`
+никто не слушает).
 
 ### 10.4 GPU мониторинг
 
