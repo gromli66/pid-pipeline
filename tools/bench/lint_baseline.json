@@ -4,7 +4,7 @@
    "BLE001",
    "E722"
   ],
-  "total": 199,
+  "total": 191,
   "per_file": {
    "app/api/contours.py": 2,
    "app/api/cvat.py": 2,
@@ -72,9 +72,7 @@
    "ui/widgets/diagram_workspace.py": 12,
    "ui/widgets/responsive_toolbar.py": 1,
    "ui/widgets/upload_dialog.py": 1,
-   "ui/windows/graph_validation_window.py": 4,
    "ui/windows/main_window.py": 1,
-   "ui/windows/mask_validation_window.py": 4,
    "worker/tasks/detection.py": 1,
    "worker/test_clean_ocr.py": 2,
    "worker/utils/db_helpers.py": 2,

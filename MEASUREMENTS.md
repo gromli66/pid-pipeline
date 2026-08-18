@@ -938,3 +938,57 @@ CI, (4) перенос пина `shapely` из workflow в требования,
 | 38.16 | Пересъём под новую семантику пола | `python -X utf8 tools/suite_baseline.py --write-baseline` | 2026-08-18 | множество красных **не изменилось** (46 = 37 failed + 9 errors); собрано 871 → **876** (+5 тестов стенда), в базе появились `corpus_local` **16** и `collected_git_visible` **860**; пол `min_collected` **853 → 855** — теперь это «860 git-видимых минус запас 5», а не «876 минус 18» |
 | 38.17 | Гейт после пересъёма | `python -X utf8 tools/suite_baseline.py --check` | 2026-08-18 | exit **0**, «новых красных нет» |
 | 38.18 | Что теперь значит пол на раннере | сверка с прогоном CI пункта 0.3x | 2026-08-18 | CI собирает ровно git-видимую часть: в 0.3x это было 855 при локальных 871. Значит запас между полом 855 и раннером — те самые **5**, и от числа диаграмм в `storage/` он больше не зависит: добавление трёх диаграмм оставило git-видимое число тем же (§38.7–38.8) |
+
+## 39. Пункт 10.3 дороги — снос мёртвой тройки `ui/windows/` (2026-08-18)
+
+**Что проверялось.** Три standalone-`QMainWindow` (`graph_validation_window.py` 524 +
+`mask_validation_window.py` 555 + `cvat_window.py` 253 = 1332 строки) — двойники живых
+вкладок. Пункт переносился из волны 10 в волну 0, чтобы убрать вечные красные из базовой
+линии до 0.5. Живым в пакете остаётся только `main_window.py` (279).
+
+### 39а. Проверка адресов и утверждений пункта (до первой строки кода)
+
+| # | что | команда | дата | результат |
+|---|---|---|---|---|
+| 39.1 | Объём сноса | `wc -l ui/windows/*.py` | 2026-08-18 | 253 + 524 + 555 = **1332**, `main_window.py` **279**, `__init__.py` 4 — числа пункта подтверждены |
+| 39.2 | Внешних импортёров нет (пересъём §7.2) | греп `ui\.windows\|CVATWindow\|MaskValidationWindow\|GraphValidationWindow` по репо без `_scratch/.claude/storage/models/dist` | 2026-08-18 | тройку импортируют только `ui/windows/__init__.py:2-4` и `tests/test_stage7_graph_flow.py`. Формы `from ui.windows import X` в коде **0**. `MainWindow` живёт своим прямым импортом `ui/main.py:34` |
+| 39.3 | PyInstaller-спека | чтение `deploy_ready/pid_client_windows.spec` | 2026-08-18 | ссылок на `ui.windows` нет; пакет попадает в сборку через `collect_submodules('ui')` (`:18`) — снос модулей просто убирает их из обхода |
+| 39.4 | Базовая линия файла тестов | `python -m pytest tests/test_stage7_graph_flow.py -q` | 2026-08-18 | **24 failed** — совпадает с §24.5 (2026-08-17) |
+| 39.5 | Состав 24 тестов | разбор файла | 2026-08-18 | 13 держатся за `GraphValidationWindow` (3 импорт-проверки + 8 логики + 2 кросс-модульных), 11 — «грепы по исходнику» `ui/widgets/diagram_workspace.py` |
+| 39.6 | ⛔ **Из 11 «чистых грепов» переезжают только 6** | прогон 11 утверждений по живому `ui/widgets/diagram_workspace.py` | 2026-08-18 | **6 верны, 5 ложны**: `_simple_graph_done` (флаг + сброс в `load_diagram` + установка в `_on_simple_graph_confirmed` + переоткрытие + ветвление в `_open_graph_validation`). Фаз две, но они разведены по методам `_open_graph_validation` (`:1905`, SimpleGraphTab) и `_open_graph_editor` (`:1937`, AdvancedGraphTab), порядок ведёт цепочка бусин |
+| 39.7 | ⭐ **Флага не было никогда** | `git log --all -S"_simple_graph_done" -- ui/widgets/diagram_workspace.py` | 2026-08-18 | **пусто**. Строка встречается в истории только в самом тест-файле (`058aba9`, `7904c18`) — 5 проверок были красны с рождения, а не протухли |
+| 39.8 | Почему красны и остальные 6 | чтение `tests/test_stage7_graph_flow.py:236` | 2026-08-18 | `PROJECT_ROOT` берётся как «каталог, в котором есть `ui/`», а `tests/ui/` существует → корень уезжает в `tests/`, и `read_text` бьёт `FileNotFoundError`. В новом файле корень — `parents[2]`, как у соседа `tests/ui/test_save_dialog_dir.py:24` |
+
+### 39б. Д1 — переехавшие проверки красят на инъекции в `diagram_workspace.py`
+
+Инъекция — правка живого файла с восстановлением `git checkout` (дерево чистое после каждой).
+
+| # | инъекция | дата | результат |
+|---|---|---|---|
+| 39.9 | `SimpleGraphTab`→`SimpleGraphPanel`, `AdvancedGraphTab`→`AdvGraphPanel`, `def _on_simple_graph_confirmed`→`…_ok` | 2026-08-18 | **3 failed** — по одному на свою проверку |
+| 39.10 | дописан `from ui.tabs.graph_tab import GraphTab`; из docstring `_open_graph_validation` убран `SimpleGraphTab` | 2026-08-18 | **2 failed** — запрет старого таба и docstring |
+| 39.11 | ⭐ **Первая инъекция «переименованием с суффиксом» ничего не покрасила** | 2026-08-18 | `…TabZZ` содержит `…Tab` как префикс, и подстрочный `in` остаётся истинным. Проверки подстрокой ловят удаление, но не переименование — инъекция обязана убирать подстроку, а не удлинять её |
+| 39.12 | ⛔ **`complete_graph_validation` в теле метода — ложная проверка** | 2026-08-18 | подмена вызова на `finish_graph_validation` оставила тест **зелёным**: имя есть в самом docstring метода (`:2183`). Проверка переписана на вызов `self.api_client.complete_graph_validation(` — та же инъекция стала **1 failed** |
+
+### 39в. Гейты пункта (класс «снос мёртвого кода»)
+
+| # | что | команда | дата | результат |
+|---|---|---|---|---|
+| 39.13 | Импорт боевого API | `python -c "import app.main"` | 2026-08-18 | OK |
+| 39.14 | Реэкспорт пакета | `python -c "from ui.windows import MainWindow"` | 2026-08-18 | OK, `MainWindow.__module__ = ui.windows.main_window` |
+| 39.15 | Сбор pytest | `python -m pytest --collect-only -q` | 2026-08-18 | **858 собрано, 0 ошибок** (876 − 24 снесённых + 6 переехавших) |
+| 39.16 | Все модули `ui.*` импортируются | обход `pkgutil.walk_packages(ui.__path__)` под `QT_QPA_PLATFORM=offscreen` | 2026-08-18 | **53 из 54**. Единственный отказ — `ui/editors/test_editors.py` (`No module named 'square_mask_editor'`): дев-скрипт от 2026-04-07 с топ-левел импортами, к сносу отношения не имеет, чужой долг |
+| 39.17 | ⭐ **Все вкладки открываются** | зонд «класс на процесс» (`show()` + `processEvents()`), offscreen, MagicMock-клиент | 2026-08-18 | **8 из 8**: SimpleGraphTab, AdvancedGraphTab, ContourTab, CvatTab, FrameTab, JunctionTab, OcrBindingTab, PipeTab. Плюс `MainWindow` открывается отдельно. Один процесс на вкладку обязателен: часть вкладок держит фоновые QThread и сама не завершается; `CvatTab` берёт `cvat_url`, а не `api_client`; `FrameTab` в `__init__` грузит `original_image` и на ошибке открывает МОДАЛЬНЫЙ `QMessageBox` — под offscreen он висит вечно (в зонде подложен настоящий PNG) |
+| 39.18 | ⭐ **Сборка клиента PyInstaller** | `python -m PyInstaller --noconfirm --clean --distpath <scratch> deploy_ready/pid_client_windows.spec` | 2026-08-18 | exit **0**, `PID-Client.exe` собран, 699 с, 5.3 ГБ. В TOC сборки от пакета остались ровно `ui.windows` и `ui.windows.main_window`; предупреждений о ненайденных `ui.windows.*` в warn-файле нет |
+| 39.19 | Долг линтеров | `python -X utf8 tools/lint_gate.py --check` | 2026-08-18 | до пересъёма exit **0** с сообщением «долг оплачен»: `graph_validation_window.py` 4 → 0, `mask_validation_window.py` 4 → 0, всего **199 → 191** |
+| 39.20 | ⛔ **Три новых красных на первом прогоне** | `python -X utf8 tools/suite_baseline.py --check` | 2026-08-18 | exit 1. Два — про сами эталоны (`test_collection_clean::test_suite_does_not_shrink` — пол 855 против 842 git-видимых; `test_lint_gate::test_baseline_holds_only_tracked_files` — эталон линтера называл снесённые файлы), лечатся пересъёмом. Третий — настоящая находка, см. §39.21 |
+| 39.21 | ⭐ **Что пропустил греп адресов** | `tests/test_refactoring.py:695` | 2026-08-18 | `TestDeadCodeRemoved::test_graph_validation_window_imports_from_advanced` читал снесённый файл, но собирал путь из кусков — `PROJECT_ROOT / "ui" / "windows" / "graph_validation_window.py"`. Ни `ui/windows`, ни `ui.windows`, ни `GraphValidationWindow` в строке нет, поэтому греп §39.2 его не увидел. **Урок: путь, собранный по частям, не ловится грепом по литералу пути** — искать ещё и по basename модуля. Тест заменён на `test_dead_windows_deleted` (идиома класса: `assert not path.exists()` для всех трёх файлов), Д1 — инъекция возвратом `cvat_window.py` красит его |
+
+### 39г. Пересъём эталонов (Д6, отдельный коммит)
+
+| # | что | команда | дата | результат |
+|---|---|---|---|---|
+| 39.22 | Эталон линтера | `python -X utf8 tools/lint_gate.py --write-baseline` | 2026-08-18 | 199 → **191** нарушений, из `per_file` ушли две строки снесённых окон (4 + 4) |
+| 39.23 | Эталон набора | `python -X utf8 tools/suite_baseline.py --write-baseline` | 2026-08-18 | красных **46 → 22** (13 failed + 9 errors), **ушли 24, новых 0**; собрано 876 → **858**, git-видимых 860 → **842**, пол `min_collected` 855 → **837** |
+| 39.24 | ⚠ Пересъём набора пришлось делать ДВАЖДЫ | тот же `--write-baseline` | 2026-08-18 | первый прогон записал 24 красных — в их числе два, красных лишь из-за старых эталонов (§39.20). Порядок обязателен: сначала эталон линтера, потом эталон набора, иначе набор консервирует чужую красноту. После второго прогона — 22 |
+| 39.25 | Гейт после пересъёма | `python -X utf8 tools/suite_baseline.py --check` + `lint_gate.py --check` | 2026-08-18 | обе exit **0**: «новых красных нет» (858 собрано, git-видимых 842, пол 837), «долг не вырос» (191 при эталоне 191) |
