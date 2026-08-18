@@ -22,5 +22,13 @@
   storage сами — их эталоны всё равно лежат в `_scratch/`, которого в git нет
 - suite_baseline.py — базовая линия набора тестов (`bench/suite_baseline.json` в git),
   гейт «ни одного нового красного» (docs/TESTING.md §7)
+- lint_gate.py (ПР5, пункт 0.10) — храповик линтеров: счётчик широких `except` по файлам
+  не имеет права расти (`bench/lint_baseline.json` в git), плюс `mypy` на списке `files`
+  из `pyproject.toml`. «Голый» `ruff check` красен по определению — весь долг сразу;
+  судит храповик (docs/TESTING.md §8)
+- layout_determinism.py (ПР1, пункт 0.10) — стенд воспроизводимости раскладки: каждый
+  прогон отдельным процессом со своим `PYTHONHASHSEED`, сравнение sha256 выхода `layout()`.
+  Эталон `bench/determinism_baseline.json` в git; ключ `--no-routing` локализует
+  недетерминизм (docs/TESTING.md §8)
 
 Для развёртывания и запуска приложения эти файлы не нужны.

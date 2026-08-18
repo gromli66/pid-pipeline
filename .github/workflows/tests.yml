@@ -7,6 +7,11 @@
 #      (tools/bench/suite_baseline.json) — набор красный не весь, и «ноль
 #      красных» гейтом быть не может, пока 58 падений не разобраны.
 #
+# Пункт 0.10 добавил два храповика той же формы (эталон в git, --check → exit 1):
+#   3. долг широких except не растёт (tools/lint_gate.py);
+#   4. воспроизводимость раскладки не деградирует (tools/layout_determinism.py)
+#      на трёх графах корпуса из git.
+#
 # Раннер windows-latest: база снята на Windows, обе машины разработки — Windows.
 # Linux-прогон (боевой воркер живёт в Linux-контейнере) потребует своей базы —
 # это отдельная работа, не этот пункт.
@@ -51,3 +56,9 @@ jobs:
 
       - name: Базовая линия набора — новых красных нет
         run: python tools/suite_baseline.py --check
+
+      - name: Линтеры — долг широких except не вырос
+        run: python tools/lint_gate.py --check
+
+      - name: Воспроизводимость раскладки — регресса нет
+        run: python tools/layout_determinism.py --git-only --runs 10 --check

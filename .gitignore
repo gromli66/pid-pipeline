@@ -63,6 +63,10 @@ Thumbs.db
 .coverage
 htmlcov/
 
+# Линтеры (кеши ruff/mypy, пункт 0.10)
+.ruff_cache/
+.mypy_cache/
+
 # Alembic
 alembic/versions/*.pyc
 
