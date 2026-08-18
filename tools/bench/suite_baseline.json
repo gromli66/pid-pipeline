@@ -5,12 +5,12 @@
   "env": "requirements/api.txt + ui.txt + dev.txt + shapely==2.1.2",
   "totals": {
     "failed": 37,
-    "passed": 705,
-    "skipped": 13,
-    "errors": 20
+    "passed": 811,
+    "skipped": 14,
+    "errors": 9
   },
-  "collected": 775,
-  "min_collected": 757,
+  "collected": 871,
+  "min_collected": 853,
   "red": [
     "tests/test_cyrillic_load.py::test_cyrillic_load",
     "tests/test_refactoring.py::TestDefaultProjectCode::test_config_has_default_project_code",
@@ -57,17 +57,6 @@
     "tests/test_stage7_graph_flow.py::TestGraphValidationWindowLogic::test_save_updates_saved_stack_depth",
     "tests/test_stage7_graph_flow.py::TestGraphValidationWindowLogic::test_set_mode_checks_correct_button",
     "tests/test_stage7_graph_flow.py::TestGraphValidationWindowLogic::test_set_mode_delegates_string",
-    "tests/test_stage7_graph_flow.py::TestGraphValidationWindowLogic::test_update_perp_stats",
-    "tests/ui/test_square_size_ops.py::test_points_roundtrip_keeps_applied_size",
-    "tests/ui/test_square_size_ops.py::test_t8_centers_survive_grow",
-    "tests/ui/test_square_size_ops.py::test_t8_centers_survive_shrink",
-    "tests/ui/test_square_size_ops.py::test_t8_erase_is_by_component_not_bbox",
-    "tests/ui/test_square_size_ops.py::test_t8_other_class_untouched",
-    "tests/ui/test_square_size_ops.py::test_t8_selection_limits_the_operation",
-    "tests/ui/test_square_size_ops.py::test_t8_shrink_splits_merged_back",
-    "tests/ui/test_square_size_ops.py::test_t9_operation_is_one_undo_step",
-    "tests/ui/test_square_size_ops.py::test_t9_undo_restores_both_masks_bytewise",
-    "tests/ui/test_square_size_ops.py::test_t9_undo_restores_centers_and_applied_size",
-    "tests/ui/test_square_size_ops.py::test_t9_undo_restores_fresh_square_geometry"
+    "tests/test_stage7_graph_flow.py::TestGraphValidationWindowLogic::test_update_perp_stats"
   ]
 }
