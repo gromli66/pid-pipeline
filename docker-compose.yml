@@ -116,6 +116,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.worker
+      # Стадия воркера. У образа есть вторая стадия `flower` (пункт 3.x1) —
+      # без target сборка доходила бы до неё и клала в pid_worker лишний пакет.
+      target: worker
     container_name: pid_worker
     logging: *default-logging
     environment:
@@ -212,24 +215,38 @@ services:
 
   # Flower - веб-мониторинг Celery (пункт 3.x1 дороги)
   # Читает брокер и опрашивает воркеров; в конвейер ничего не пишет.
+  # ⛔ Собирается СТАДИЕЙ образа воркера и поднимается с нашим приложением
+  # (`-A worker.celery_app`, команда в Dockerfile.worker). На голом URL канал
+  # Flower взял бы дефолтное окно невидимости 3600 и restore-цикл возвращал бы
+  # в очереди чужие unacked, которые воркер держит под окном 7200 — то есть
+  # отменял бы фикс пункта 1.2. Гейт: tools/flower_gate.py --check.
   # ⛔ Порт только на loopback: у Flower по умолчанию НЕТ аутентификации, а в UI
   # есть управление (отозвать задачу, снять воркера). Наружу — только через
   # SSH-туннель или после --basic-auth.
   flower:
-    image: mher/flower:2.0
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+      target: flower
     container_name: pid_flower
     logging: *default-logging
-    command: >
-      celery --broker=redis://redis:6379/0 flower
-      --persistent=True
-      --db=/data/flower.db
-      --port=5555
     environment:
+      # Те же адреса, что у воркера: приложение читает их при импорте.
+      - DATABASE_URL=postgresql://${DB_USER:-pid_user}:${DB_PASSWORD:-changeme}@postgres:5432/${DB_NAME:-pid_pipeline}
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - STORAGE_PATH=/storage/diagrams
+      - PROJECTS_CONFIG_DIR=/app/configs/projects
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
       # Без этого Flower 2.x отдаёт на /api/* «...variable is required...» — а гейт
       # пункта читается именно через API. Экспозиции не добавляет: UI на том же
       # порту и так открыт, порт — loopback.
       - FLOWER_UNAUTHENTICATED_API=true
     volumes:
+      - ./worker:/app/worker
+      - ./modules:/app/modules
+      - ./app:/app/app
+      - ./configs:/app/configs
       - flower_data:/data
     ports:
       - "127.0.0.1:5555:5555"

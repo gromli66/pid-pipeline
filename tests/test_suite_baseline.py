@@ -7,6 +7,8 @@ CI. Тесты чистые — на синтетическом выводе, py
 """
 import json
 
+import pytest
+
 from tools import suite_baseline as sb
 
 REPORT = """\
@@ -191,3 +193,110 @@ def test_shrink_of_git_visible_part_is_still_caught():
     """Потеря настоящих тестов сквозь новый счёт проходить не должна."""
     problems = sb.verdict(BASE, set(BASE["red"]), BASE["totals"], 705, 1)
     assert any("усох" in p and "git-видимой" in p for p in problems)
+
+
+# --- пересъём не легализует новых красных (пункт 1-26) -------------------------
+
+# Тот же прогон плюс один упавший тест, которого в базе нет. Счётчики сходятся с
+# числом разобранных id — значит вывод полон и отличается ровно состав красных.
+REPORT_GREW = """\
+....F..E..F
+=========================== short test summary info ============================
+FAILED tests/test_alpha.py::test_one - AssertionError: assert 1 == 2
+FAILED tests/test_beta.py::TestX::test_two - ValueError
+FAILED tests/test_delta.py::test_four - AssertionError: подложенный красный
+ERROR tests/ui/test_gamma.py::test_three - ValueError: not enough values
+3 failed, 660 passed, 13 skipped, 5 warnings, 1 error in 19.11s
+"""
+
+# Один из красных починили — законный повод пересъёма.
+REPORT_FIXED = """\
+....F..E...
+=========================== short test summary info ============================
+FAILED tests/test_beta.py::TestX::test_two - ValueError
+ERROR tests/ui/test_gamma.py::test_three - ValueError: not enough values
+1 failed, 662 passed, 13 skipped, 5 warnings, 1 error in 19.11s
+"""
+
+
+def _stand(tmp_path, monkeypatch, report, collected=738, base=BASE):
+    """Стенд пересъёма: своя база во временном файле, pytest подменён выводом."""
+    path = tmp_path / "suite_baseline.json"
+    if base is not None:
+        path.write_text(json.dumps(base, ensure_ascii=False), encoding="utf-8")
+
+    def fake_pytest(args):
+        if "--collect-only" in args:
+            return (f"tests/test_alpha.py::test_one\n\n{collected} tests collected in 1.0s\n", 0)
+        return (report, 1)
+
+    monkeypatch.setattr(sb, "BASELINE", path)
+    monkeypatch.setattr(sb, "_pytest", fake_pytest)
+    return path
+
+
+def test_write_refuses_when_red_set_grew(tmp_path, monkeypatch):
+    """⛔ Дыра 1-26: `--write-baseline` не загружал предыдущую базу вовсе.
+
+    Пересъём идёт ОТДЕЛЬНЫМ коммитом (так требует Д6), поэтому красный флаг №4
+    протокола («эталон изменён тем же коммитом, что и код») его не видит: без
+    этой сверки любой пересъём молча узаконивал новый красный.
+    """
+    path = _stand(tmp_path, monkeypatch, REPORT_GREW)
+    before = path.read_text(encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        sb.cmd_write()
+
+    assert "tests/test_delta.py::test_four" in str(exc.value)
+    assert path.read_text(encoding="utf-8") == before, "база переписана вопреки отказу"
+
+
+def test_write_accepts_when_red_turned_green(tmp_path, monkeypatch):
+    """Законный путь №1: красные ушли — пересъём и есть способ это записать."""
+    path = _stand(tmp_path, monkeypatch, REPORT_FIXED)
+
+    assert sb.cmd_write() == 0
+    assert json.loads(path.read_text(encoding="utf-8"))["red"] == [
+        "tests/test_beta.py::TestX::test_two",
+        "tests/ui/test_gamma.py::test_three",
+    ]
+
+
+def test_write_accepts_same_red_set(tmp_path, monkeypatch):
+    """Законный путь №2: состав тот же, выросло собранное (новые зелёные тесты).
+
+    Это и есть рядовой Д6-пересъём дороги: пункт принёс тесты, красные не
+    тронуты, база переезжает на новое `collected`.
+    """
+    path = _stand(tmp_path, monkeypatch, REPORT, collected=750)
+
+    assert sb.cmd_write() == 0
+    written = json.loads(path.read_text(encoding="utf-8"))
+    assert written["red"] == sorted(BASE["red"])
+    assert written["collected"] == 750
+
+
+def test_write_bootstraps_without_previous_baseline(tmp_path, monkeypatch):
+    """Первого снимка сверять не с чем — отказ обязан молчать."""
+    path = _stand(tmp_path, monkeypatch, REPORT_GREW, base=None)
+
+    assert sb.cmd_write() == 0
+    assert len(json.loads(path.read_text(encoding="utf-8"))["red"]) == 4
+
+
+def test_write_refuses_on_incomplete_output(tmp_path, monkeypatch):
+    """Сверка на неполном списке ничего не значит: счётчики против числа id.
+
+    Иначе отказ обходится оборванным хвостом: разобрано меньше красных, чем
+    было на самом деле, — и «рост» не виден.
+    """
+    truncated = "FAILED tests/test_alpha.py::test_one - X\n2 failed, 661 passed, 1 error in 1.0s\n"
+    path = _stand(tmp_path, monkeypatch, truncated)
+    before = path.read_text(encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        sb.cmd_write()
+
+    assert "вывод неполон" in str(exc.value)
+    assert path.read_text(encoding="utf-8") == before

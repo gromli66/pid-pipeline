@@ -64,7 +64,7 @@ docker run --rm --gpus all nvidia/cuda:12.4.0-runtime-ubuntu22.04 nvidia-smi
 | `api` | Dockerfile.api | 8000 | — | pid_network, cvat |
 | `worker` | Dockerfile.worker | — | ✅ 1 GPU | pid_network, cvat |
 | `worker_ocr` | Dockerfile.worker_ocr | — | ✅ 1 GPU | pid_network |
-| `flower` | mher/flower:2.0 | 5555 (**только 127.0.0.1**) | — | pid_network |
+| `flower` | Dockerfile.worker (стадия `flower`) | 5555 (**только 127.0.0.1**) | — | pid_network |
 | `cvat_db` | postgres:15-alpine | — | — | cvat |
 | `cvat_redis_inmem` | redis:7.2-alpine | — | — | cvat |
 | `cvat_redis_ondisk` | apache/kvrocks:latest | — | — | cvat |
@@ -479,12 +479,15 @@ docker exec pid_worker celery -A worker.celery_app inspect stats
 
 #### Flower — web-мониторинг Celery
 
-Сервис `flower` в `docker-compose.yml` (образ `mher/flower:2.0`, контейнер `pid_flower`).
-Открывается на `http://127.0.0.1:5555`: вкладка **Broker** — глубина очередей
-(`default`, `gpu`, `ocr`, `sam2`), **Workers** — живые воркеры и их активные задачи,
-**Tasks** — история задач с `uuid`, состоянием и временем.
+Сервис `flower` в `docker-compose.yml` (контейнер `pid_flower`) собирается **стадией
+`flower` образа воркера** (`Dockerfile.worker`) и стартует командой
+`celery -A worker.celery_app flower`. Открывается на `http://127.0.0.1:5555`:
+вкладка **Broker** — глубина очередей (`default`, `gpu`, `ocr`, `sam2`), **Workers** —
+живые воркеры и их активные задачи, **Tasks** — история задач с `uuid`, состоянием
+и временем.
 
 ```bash
+docker compose build flower               # слои общие с воркером, ставится только сам flower
 docker compose up -d --no-deps flower     # поднять, не трогая остальной стек
 docker logs pid_flower --tail 20
 ```
@@ -492,6 +495,18 @@ docker logs pid_flower --tail 20
 Зачем: **повторная выдача задачи брокером видна глазами** — та самая задача приходит
 воркеру второй раз (дефект закрыт в `worker/celery_app.py` опцией
 `visibility_timeout=7200`, но следить за ним больше неоткуда).
+
+⛔ **Flower обязан подниматься с приложением проекта (`-A worker.celery_app`), а не
+на голом `--broker=<url>`.** Окно невидимости у kombu — свойство КАНАЛА, а
+`restore_visible` режет по окну сканирующего канала и работает с общим ключом
+`unacked_index` (одним на всю базу, не по очередям). Flower на голом URL получает
+дефолтные 3600 с и возвращает в очередь сообщения, которые воркер держит под окном
+7200, то есть своими руками воспроизводит тот самый дубль. С приложением проекта окна
+совпадают. Инвариант заперт тестом `tests/test_flower_service.py` и ногой C гейта.
+
+По той же причине образ — стадия воркера, а не отдельный лёгкий: Flower вызывает
+`import_default_modules()` и импортирует все `worker.tasks.*`. Цена невелика —
+контейнер держит ~60 МБ RSS (ML-веса при импорте не грузятся).
 
 ⛔ **Порт публикуется только на loopback.** У Flower по умолчанию нет аутентификации,
 а в UI есть управление: отозвать задачу, снять воркера. С сервера смотреть через
@@ -504,16 +519,22 @@ SSH-туннель (`ssh -L 5555:127.0.0.1:5555 …`); публиковать н
 (`worker_send_task_events` в конфиге Celery не задан — при остановленном Flower
 воркеры событий не шлют, и это нормально: смотреть их некому).
 
-Проверка, что мониторинг действительно работает (кладёт в очередь `default` безобидную
-встроенную `celery.accumulate` и требует увидеть её в Flower):
+Проверка, что мониторинг работает и не вредит:
 
 ```bash
 python -X utf8 tools/flower_gate.py --check
 ```
 
-Коды выхода: `0` — Flower показывает очереди и задачи; `1` — не показывает (не поднят,
-не отвечает, задачи не видит); `2` — судить нечем (нет брокера или очередь `default`
-никто не слушает).
+Четыре ноги: **A** — сканер с коротким окном возвращает чужой unacked (механизм
+дефекта, база Redis 15); **B** — при равных окнах не возвращает; **C** — контейнер
+Flower поднят с `-A worker.celery_app` и несёт окно 7200 > самой длинной задачи;
+**D** — Flower показывает очереди и видит зондовую задачу (в очередь `default`
+кладётся безобидная встроенная `celery.accumulate`, `ignore_result`). Очередь и брокер
+параметризуются: `--queue`, `--broker`, `--container`.
+
+Коды выхода: `0` — доказано; `1` — опровергнуто (Flower не поднят, не показывает,
+поднят мимо приложения проекта); `2` — судить нечем (нет брокера, нет воркера
+на очереди зонда, нет docker или контейнера).
 
 ### 10.4 GPU мониторинг
 

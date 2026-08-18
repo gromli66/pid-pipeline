@@ -2,7 +2,7 @@
 # Dockerfile.worker - Celery Worker с GPU поддержкой
 # =============================================================================
 
-FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04
+FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04 AS worker
 
 LABEL maintainer="P&ID Pipeline"
 LABEL description="Celery worker with GPU support for ML tasks"
@@ -114,3 +114,27 @@ CMD ["celery", "-A", "worker.celery_app", "worker", \
      "--concurrency=2", \
      "--pool=prefork", \
      "-Q", "default,gpu,sam2"]
+
+# =============================================================================
+# Стадия мониторинга: Flower на слоях воркера (пункт 3.x1)
+# =============================================================================
+# ⛔ Flower ОБЯЗАН подниматься с нашим приложением (`-A worker.celery_app`).
+# На голом URL его kombu-канал берёт дефолтное окно невидимости 3600 с, а
+# restore-цикл режет по окну СКАНИРУЮЩЕГО и работает с общим ключом
+# `unacked_index` (kombu/transport/redis.py: restore_visible:415, ключ :640,
+# дефолт :644) — то есть возвращал бы в очередь сообщения, которые воркер
+# держит под окном 7200 (пункт 1.2 · Б10). С нашим приложением окна совпадают.
+#
+# Отдельного лёгкого образа не выйдет: Flower зовёт import_default_modules()
+# (flower/app.py:50) и импортирует все `worker.tasks.*` — ему нужна ровно та же
+# среда, что воркеру. Поэтому стадия, а не свой Dockerfile: слои общие,
+# сервис `worker` собирается с `target: worker` и этой стадии не видит.
+FROM worker AS flower
+RUN pip install --no-cache-dir "flower>=2.0,<3"
+
+# --persistent: история задач переживает перезапуск самого Flower.
+# Порт публикуется только на loopback (см. docker-compose.yml).
+CMD ["celery", "-A", "worker.celery_app", "flower", \
+     "--persistent=True", \
+     "--db=/data/flower.db", \
+     "--port=5555"]
