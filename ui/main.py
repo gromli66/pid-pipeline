@@ -17,15 +17,10 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-# === Настройка логирования ===
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
-    stream=sys.stdout,
-)
-
 # Добавляем корень проекта в path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from ui.services.client_logging import install_excepthook, setup_client_logging
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
@@ -97,6 +92,12 @@ def _load_bundled_fonts(app):
 
 def main():
     """Запуск приложения."""
+    # === Логи клиента: консоль + файл с ротацией + перехват падений ===
+    # Ставится первым: в собранном .exe console=False (спека :82), stdout идёт
+    # в никуда, и необработанное исключение в слоте не оставляет следа.
+    setup_client_logging()
+    install_excepthook()
+
     # Высокое DPI
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough

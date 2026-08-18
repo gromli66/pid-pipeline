@@ -23,6 +23,7 @@ from PySide6.QtCore import Qt, Signal, Slot, QTimer
 from PySide6.QtGui import QAction, QFont
 
 from ui.services.api_client import APIClient, APIError, DiagramStatus
+from ui.services.client_logging import bind_uid
 from ui.services.status_provider import StatusProvider
 from ui.widgets.progress_beads import ProgressBeads, BeadInfo, BeadState
 from ui.widgets.bead_gif_player import BeadGifPlayer
@@ -645,6 +646,8 @@ class DiagramWorkspace(QWidget):
     def load_diagram(self, uid: str, name: str):
         """Загрузить диаграмму в workspace."""
         self._uid = uid
+        # Дальше каждая строка лога клиента несёт uid= — сшивается с серверной.
+        bind_uid(uid)
         self._diagram_name = name
         self._junction_confirmed = False
         self._pipe_confirmed = False

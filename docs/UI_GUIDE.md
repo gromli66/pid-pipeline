@@ -1,8 +1,8 @@
 # UI_GUIDE.md — Руководство по UI приложения
 
 **Аудитория:** DEV  
-**Версия:** 1.3  
-**Обновлено:** 2026-08-03  
+**Версия:** 1.4  
+**Обновлено:** 2026-08-18  
 **Связанные документы:** ARCHITECTURE.md, STATUS_MACHINE.md, CODING_GUIDE.md, API.md
 
 ---
@@ -595,6 +595,22 @@ Singleton обёртка над `QSettings` (реестр Windows / `~/.config` 
 | `bridge_gap_factor` | float | 3.0 | Ручная правка (уходит в FXML-генерацию) |
 
 Размерные регуляторы — **только визуал**: в граф и FXML ничего не уходит. Хранится множитель в процентах от базы, а не абсолютный размер: редактор применяет его от собственной базы внутри `_apply_visuals`, поэтому значение переживает переключение системы координат (растр/холст) и не накапливается. Под множитель попадают только адресные ключи (`SIZE_FACTOR_KEYS`); геометрия (`CONNECTOR_MARKER_RADIUS`), hit-test (`CLICK_THRESHOLD`) и толщина трубы (`EDGE_WIDTH`, обязана совпадать с `graph_to_fxml.LINE_STROKE_WIDTH`) в него не входят.
+
+### 11.5 Логи клиента
+
+Файл: `ui/services/client_logging.py`. Ставится в `main()` (`ui/main.py`) первым делом, до создания `QApplication`.
+
+| Функция | Что делает |
+|---------|-----------|
+| `setup_client_logging()` | консоль (как раньше) + `RotatingFileHandler`; возвращает путь файла или `None`, если каталог недоступен |
+| `install_excepthook()` | необработанное исключение → запись `CRITICAL` с трассировкой, затем прежний `sys.excepthook` |
+| `bind_uid(uid)` | uid открытой диаграммы в корреляционный контекст (зовётся из `DiagramWorkspace.load_diagram`) |
+
+**Где лежит лог:** `%LOCALAPPDATA%\PID-Client\logs\client.log` (Windows), `~/.local/state/pid-client/logs/client.log` (Linux). Переопределяется переменной `PID_LOG_DIR`, уровень — `PID_LOG_LEVEL` (default `INFO`). Ротация: 5 МБ × 5 файлов.
+
+Формат и корреляционные поля — общие с сервером (`app/core/logging.py`: `LOG_FORMAT`, `ContextFilter`), поэтому строка клиента читается так же, как серверная, и сшивается с ней по `uid=`. Контекст живёт в `contextvars`: в фоновых потоках вкладок (QThread) он свой, там `uid=-`.
+
+Почему файл, а не stdout: в собранном `.exe` `console=False` (`deploy_ready/pid_client_windows.spec:82`) — у процесса нет ни `stdout`, ни `stderr`, и весь вывод пропадал. Файл открывается с `encoding="utf-8", errors="replace"`: эмодзи в сообщениях (💾 ✅ 🔄) иначе роняют запись на cp1251-машине.
 
 ---
 
