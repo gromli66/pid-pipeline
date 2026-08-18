@@ -4,7 +4,7 @@
    "BLE001",
    "E722"
   ],
-  "total": 200,
+  "total": 199,
   "per_file": {
    "app/api/contours.py": 2,
    "app/api/cvat.py": 2,
@@ -48,7 +48,6 @@
    "tools/fxml_preview.py": 1,
    "tools/normalize_existing_coco.py": 2,
    "tools/run_junction_editor.py": 3,
-   "tools/tz_lint.py": 1,
    "ui/editors/advanced_graph_editor.py": 4,
    "ui/editors/contour_editor.py": 3,
    "ui/editors/endpoint_overlay.py": 3,

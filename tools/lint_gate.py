@@ -41,6 +41,23 @@ def _run(args: list[str]) -> subprocess.CompletedProcess:
                           text=True, encoding="utf-8", errors="replace")
 
 
+def tracked() -> set[str]:
+    """Файлы под git — только они могут быть в эталоне.
+
+    Иначе счётчик зависит от мусора в рабочем дереве: замерено 2026-08-18 —
+    локально 200 нарушений в 74 файлах, на раннере 199 в 73, разница ровно
+    в одном нетрекнутом `tools/tz_lint.py`. Хуже того, его строка в эталоне
+    заранее прощала бы долг файлу, которого в git ещё нет.
+    """
+    proc = subprocess.run(["git", "ls-files", "*.py"], cwd=str(REPO),
+                          capture_output=True, text=True, encoding="utf-8",
+                          errors="replace")
+    if proc.returncode != 0:
+        raise RuntimeError(f"git ls-files вернул {proc.returncode}: "
+                           f"{(proc.stderr or '').strip()[-200:]}")
+    return {line.strip() for line in proc.stdout.splitlines() if line.strip()}
+
+
 def ruff_counts() -> dict[str, int]:
     """{путь от корня репо: сколько нарушений}. RuntimeError на убитом прогоне."""
     proc = _run(["ruff", "check", "--output-format", "json"])
@@ -52,9 +69,12 @@ def ruff_counts() -> dict[str, int]:
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"вывод ruff не разбирается: {exc}; "
                            f"хвост: {proc.stdout[-200:]!r}") from exc
+    under_git = tracked()
     counts: dict[str, int] = {}
     for item in found:
         rel = Path(item["filename"]).resolve().relative_to(REPO).as_posix()
+        if rel not in under_git:
+            continue
         counts[rel] = counts.get(rel, 0) + 1
     return counts
 

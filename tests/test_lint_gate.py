@@ -88,3 +88,16 @@ def test_abnormal_linter_exit_is_loud(monkeypatch, rc):
     monkeypatch.setattr(lint_gate, "_run", lambda args: _Proc())
     with pytest.raises(RuntimeError, match=str(rc)):
         lint_gate.ruff_counts()
+
+
+def test_baseline_holds_only_tracked_files():
+    """Мусор рабочего дерева в эталон не попадает.
+
+    Замер 2026-08-18: нетрекнутый `tools/tz_lint.py` давал 200/74 локально
+    против 199/73 на раннере, а его строка в эталоне заранее прощала бы долг
+    файлу, которого в git ещё нет.
+    """
+    base = json.loads(lint_gate.BASELINE.read_text(encoding="utf-8"))
+    under_git = lint_gate.tracked()
+    stray = sorted(set(base["ruff"]["per_file"]) - under_git)
+    assert not stray, f"в эталоне файлы вне git: {stray}"
