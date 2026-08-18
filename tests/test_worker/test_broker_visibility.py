@@ -12,6 +12,8 @@
 сканер лимитов вообще что-то нашёл: сломанный сканер («задач нет») иначе
 проходил бы приёмку.
 """
+import os
+
 import pytest
 
 from tools.redelivery_bench import task_time_limits
@@ -66,3 +68,20 @@ def test_acks_late_still_on():
     """Без acks_late окно бессмысленно: подтверждение уходит до работы."""
     assert celery_app.conf.task_acks_late is True
     assert celery_app.conf.task_reject_on_worker_lost is True
+
+
+def test_bench_import_does_not_touch_broker_env():
+    """Импорт стенда ради хелпера не имеет права уводить процесс в базу 15.
+
+    Возврат ревизора 2026-08-19: стенд пиннил `CELERY_BROKER_URL` на уровне
+    модуля, поэтому этот самый импорт перепиливал окружение процесса pytest и
+    затирал осознанный `tests/conftest.py:27` — боевой `celery_app` строился на
+    тестовой базе. Числа абсолютные: база из conftest — 0, база стенда — 15.
+    """
+    import tools.redelivery_bench as bench
+
+    assert os.environ["CELERY_BROKER_URL"].endswith("/0")
+    assert os.environ.get("CELERY_RESULT_BACKEND", "").endswith("/0") or \
+        "CELERY_RESULT_BACKEND" not in os.environ
+    assert bench.app is None, "приложение стенда не строится при импорте ради хелперов"
+    assert celery_app.conf.broker_url.endswith("/0")

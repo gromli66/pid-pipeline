@@ -51,6 +51,10 @@ Redis нужен живой, поэтому в CI стенда нет — там
     python -X utf8 tools/redelivery_bench.py --check      # A + B + C
     python -X utf8 tools/redelivery_bench.py --leg A      # только воспроизведение дубля
     python -X utf8 tools/redelivery_bench.py --leg C      # только конфиг (брокер не нужен)
+
+⛔ Воркер стенда руками не поднимают: приложение `app` строится только при
+запуске скриптом или при `PROBE_LOG` в окружении (его ставит `run_leg`) —
+см. гвард пина внизу файла.
 """
 from __future__ import annotations
 
@@ -94,40 +98,55 @@ def probe_broker_url() -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Приложение стенда. Импортируется и родителем, и воркером (celery -A ...).
+# Приложение стенда. Строится и родителем, и воркером (celery -A ...).
 # --------------------------------------------------------------------------- #
 
-# ⛔ Переменная окружения `CELERY_BROKER_URL` СИЛЬНЕЕ аргумента конструктора: в
-# контейнере она задана как redis://redis:6379/0, и воркер стенда, запущенный
-# там через `celery -A tools.redelivery_bench`, сел на БОЕВУЮ базу 0 (замерено
-# 2026-08-18 по строке «Connected to redis://redis:6379/0» в его логе). Поэтому
-# окружение пиннится здесь, до создания приложения, и любой запуск стенда —
-# хоть свой, хоть руками — гарантированно уходит в базу 15.
-os.environ["CELERY_BROKER_URL"] = probe_broker_url()
-os.environ["CELERY_RESULT_BACKEND"] = probe_broker_url()
+def _build_app() -> Celery:
+    """Приложение стенда; попутно пиннит окружение ПРОЦЕССА на базу 15.
 
-app = Celery("redelivery_bench", broker=probe_broker_url(),
-             backend=probe_broker_url())
-app.conf.update(
-    # Те же три настройки, что делают дубль возможным в бою (celery_app.py:53,54,66).
-    task_acks_late=True,
-    task_reject_on_worker_lost=True,
-    worker_prefetch_multiplier=1,
-    task_default_queue=PROBE_QUEUE,
-    broker_transport_options={"visibility_timeout": int(os.getenv("PROBE_VT", "5"))},
-)
+    ⛔ Переменная окружения `CELERY_BROKER_URL` СИЛЬНЕЕ аргумента конструктора:
+    в контейнере она задана как redis://redis:6379/0, и воркер стенда,
+    запущенный там через `celery -A tools.redelivery_bench`, сел на БОЕВУЮ базу
+    0 (замерено 2026-08-18 по строке «Connected to redis://redis:6379/0» в его
+    логе). Без пина одного аргумента конструктора мало.
+    """
+    os.environ["CELERY_BROKER_URL"] = probe_broker_url()
+    os.environ["CELERY_RESULT_BACKEND"] = probe_broker_url()
+
+    built = Celery("redelivery_bench", broker=probe_broker_url(),
+                   backend=probe_broker_url())
+    built.conf.update(
+        # Те же три настройки, что делают дубль возможным в бою
+        # (celery_app.py:53,54,66).
+        task_acks_late=True,
+        task_reject_on_worker_lost=True,
+        worker_prefetch_multiplier=1,
+        task_default_queue=PROBE_QUEUE,
+        broker_transport_options={"visibility_timeout": int(os.getenv("PROBE_VT", "5"))},
+    )
+
+    @built.task(name=TASK_NAME, bind=True)
+    def probe_task(self, uid: str) -> str:
+        """Заглушка под именем боевой детекции: записать доставку и поспать."""
+        path = Path(os.environ["PROBE_LOG"])
+        record = {"uid": uid, "task_id": self.request.id, "pid": os.getpid(),
+                  "at": time.time()}
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        time.sleep(float(os.getenv("PROBE_SLEEP", "150")))
+        return "ok"
+
+    return built
 
 
-@app.task(name=TASK_NAME, bind=True)
-def probe_task(self, uid: str) -> str:
-    """Заглушка под именем боевой детекции: записать факт доставки и поспать."""
-    path = Path(os.environ["PROBE_LOG"])
-    record = {"uid": uid, "task_id": self.request.id, "pid": os.getpid(),
-              "at": time.time()}
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(record, ensure_ascii=False) + "\n")
-    time.sleep(float(os.getenv("PROBE_SLEEP", "150")))
-    return "ok"
+# ⛔ Пин правит окружение ПРОЦЕССА, поэтому он под гвардом (возврат ревизора
+# 2026-08-19): при библиотечном импорте (`from tools.redelivery_bench import
+# task_time_limits` в тесте) он уводил боевой `celery_app` процесса pytest в
+# базу 15 и затирал осознанный `tests/conftest.py:27`. Приложение строится
+# только когда стенд РАБОТАЕТ: как скрипт (`__main__`) или как приложение
+# воркера, которого поднимает `run_leg` — в его окружении есть `PROBE_LOG`.
+# Импорт ради хелперов (`task_time_limits`) окружения не касается вовсе.
+app = _build_app() if (__name__ == "__main__" or os.getenv("PROBE_LOG")) else None
 
 
 # --------------------------------------------------------------------------- #
