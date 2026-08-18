@@ -19,3 +19,7 @@
 *.pt binary
 *.pth binary
 *.zip binary
+
+# Корпус-фикстура графов (пункт 0.8): байты не трогать — на них сняты
+# эталоны стендов, sha256 в tests/fixtures/graph/README.md
+tests/fixtures/graph/*.json -text

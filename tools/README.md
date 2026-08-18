@@ -15,5 +15,12 @@
   edit_render_probe.py, drag_stress_probe.py, dn2_edit_diff.py работают на общем корпусе
   локальных сейвов холста — `tools/bench/edit_corpus/graph_edited*.json`. Корпус вне git
   (данные заказчика, ~2.9 МБ); до пункта 0.2 он лежал в корне репозитория
+- corpus.py (КД7) — общий вход к корпусу `graph_validated.json` для стендов и тестов:
+  сначала три графа из git (`tests/fixtures/graph/`, пункт 0.8), потом локальный
+  `storage/diagrams/`. На него переведены layout_bench.py и корпусная цепочка
+  `tests/test_canvas_pipeline_golden.py`; cmp_bitexact.py и corner_probe.py пока ищут
+  storage сами — их эталоны всё равно лежат в `_scratch/`, которого в git нет
+- suite_baseline.py — базовая линия набора тестов (`bench/suite_baseline.json` в git),
+  гейт «ни одного нового красного» (docs/TESTING.md §7)
 
 Для развёртывания и запуска приложения эти файлы не нужны.

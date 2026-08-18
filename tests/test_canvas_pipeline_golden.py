@@ -15,18 +15,18 @@
   • граф холста идемпотентен (повторный pretransform его не трогает);
   • из холста собирается валидный FXML.
 
-Корпус (storage/) не под git — на его отсутствии тесты по корпусу скипаются,
-а синтетический прогон работает везде.
+Источник корпуса — загрузчик `tools/corpus.py` (КД7, пункт 0.8): три графа
+лежат в git и проходят везде, остальные добавляются из локального `storage/`
+этой машины. Синтетический прогон работает и без корпуса вовсе.
 """
 import json
 import xml.etree.ElementTree as ET
-from pathlib import Path
 
 import pytest
 
-REPO = Path(__file__).resolve().parents[1]
-CORPUS = sorted((REPO / "storage" / "diagrams").glob("*/graph/graph_validated.json")) \
-    if (REPO / "storage" / "diagrams").is_dir() else []
+from tools.corpus import corpus_paths
+
+CORPUS = corpus_paths()
 
 CANVAS_W, CANVAS_H = 1920, 1080
 
@@ -163,8 +163,7 @@ def test_t10_pretransform_is_idempotent():
     assert again["links"] == canvas["links"]
 
 
-@pytest.mark.skipif(not CORPUS, reason="корпус storage/ недоступен (не под git)")
-@pytest.mark.parametrize("path", CORPUS, ids=lambda p: p.parts[-3][:8])
+@pytest.mark.parametrize("path", CORPUS.values(), ids=list(CORPUS))
 def test_t10_corpus_chain(path):
     """Та же цепочка на реальных графах корпуса."""
     from modules.graph.core.pretransform import pretransform

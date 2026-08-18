@@ -2,7 +2,9 @@
 """layout_bench.py — приёмка раскладки на корпусе: метрики + список регрессий.
 
 Порт `_scratch/layout_align/check_result.py` на прод-модуль, плюс метрики по
-тексту (§3.9 плана). Гоняется руками — данных корпуса нет ни в git, ни на бою.
+тексту (§3.9 плана). Гоняется руками. Вход берётся загрузчиком `tools/corpus.py`
+(КД7): `d74eb9f1` и `6e7144d5` лежат в git (`tests/fixtures/graph/`, пункт 0.8),
+остальные графы корпуса — только в локальном `storage/` этой машины.
 
 Судья по перестановкам — `order_broken_local` (локальные пары), а НЕ глобальный
 `order_broken` из гейта: на 51b339ab они дают 0 и 1096, потому что глобальный
@@ -37,7 +39,10 @@ from modules.graph.core.graph_access import (edge_ends,            # noqa: E402
                                              is_connector, nodes_by_id)
 from modules.graph.core.canvas_input import to_canvas               # noqa: E402
 from modules.graph.core import pretransform                         # noqa: E402
+from tools import corpus                                            # noqa: E402
 
+# Состав корпуса стенда: uid8 -> каталог в storage/diagrams (справочно, файл
+# ищет tools/corpus.py); None = сырого входа не существует.
 CORPUS = {
     "51b339ab": "51b339ab-3e4c-429c-ac5f-49c44cb9c755",
     "a6d28736": "a6d28736-5039-4f40-9f7a-37b476f6fafb",
@@ -398,11 +403,10 @@ def _load_input(uid8, canvas_dir):
         p = Path(canvas_dir) / f"{uid8}.json"
         if p.exists():
             return json.loads(p.read_text(encoding="utf-8"))
-    full = CORPUS[uid8]
-    if full is None:
+    if CORPUS[uid8] is None:          # сырой вход потерян (5137af27, см. Э0)
         return None
-    src = REPO / "storage" / "diagrams" / full / "graph" / "graph_validated.json"
-    if not src.exists():
+    src = corpus.graph_path(uid8)
+    if src is None:
         return None
     g, _t = to_canvas(json.loads(src.read_text(encoding="utf-8")))
     return g
