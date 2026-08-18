@@ -14,10 +14,14 @@
 
 Контракт (как у `suite_baseline.py` и `edit_bench.py`):
     python -X utf8 tools/layout_determinism.py                # отчёт
-    python -X utf8 tools/layout_determinism.py --check        # exit 1 при регрессе
+    python -X utf8 tools/layout_determinism.py --check        # 0 · 1 · 2
     python -X utf8 tools/layout_determinism.py --write-baseline
-Провал `--check` — граф, который был воспроизводим, перестал им быть (или
-новый граф корпуса неповторим). Обратное движение — печатается, exit 0.
+Провал `--check` (exit 1) — граф, который был воспроизводим, перестал им быть
+(или новый граф корпуса неповторим). Обратное движение — печатается, exit 0.
+⚠ **exit 2 — «судить нечем»** (`PROTOCOL §5`): часть графов эталона не
+измерена. Так выглядит чистый клон и CI — в git лежат 3 графа из 17, а 8
+известных неповторимых среди невидимых. Вердикт по корпусу даёт только
+локальный прогон; в CI шаг обязан различать 1 и 2 (`.github/workflows/tests.yml`).
 
 Ключ `--no-routing` выключает этап роутинга (`LayoutParams.routing`): им
 недетерминизм и локализуется — расстановка с раздвиганием отдельно от обхода
@@ -121,10 +125,34 @@ def stability(shas: list[str]) -> bool:
     return len(set(shas)) == 1
 
 
-def verdict(result: dict[str, list[str]], base: dict) -> tuple[bool, list[str]]:
-    """-> (гейт пройден, строки отчёта). Отделено от печати, чтобы проверялось
-    тестом, а не глазами."""
+def report_lines(result: dict[str, list[str]]) -> list[str]:
+    """Что именно померили — строка на граф."""
+    out = []
+    for uid8, shas in sorted(result.items()):
+        mark = "воспроизводим" if stability(shas) else \
+            f"НЕПОВТОРИМ ({len(set(shas))} исхода из {len(shas)})"
+        out.append(f"  {uid8}  {mark}  {shas[0][:16]}")
+    return out
+
+
+def verdict(result: dict[str, list[str]], base: dict) -> tuple[int, list[str]]:
+    """-> (код возврата, строки отчёта). Отделено от печати, чтобы проверялось
+    тестом, а не глазами.
+
+    Три исхода (`PROTOCOL §5`), а не два:
+    0 — регресса воспроизводимости нет, и весь эталон при этом измерен;
+    1 — опровергнуто: воспроизводимый граф сломался или новый неповторим;
+    2 — СУДИТЬ НЕЧЕМ: эталона нет, или часть его графов не измерена. Так
+        выглядит усечённый корпус — в git лежат 3 графа из 17, остальные
+        только в локальном `storage/`, и среди неизмеренных 8 известных
+        неповторимых. Раньше такой прогон печатал «регресса нет» и exit 0.
+    Доказанный регресс сильнее неполноты: если сломался измеренный граф, это 1.
+    """
     known = base.get("stable", {})
+    if not known:
+        return 2, report_lines(result) + [
+            "[СУДИТЬ НЕЧЕМ] эталона нет или он пуст — сначала --write-baseline"]
+
     broke, fixed, fresh = [], [], []
     for uid8, shas in sorted(result.items()):
         now = stability(shas)
@@ -137,20 +165,25 @@ def verdict(result: dict[str, list[str]], base: dict) -> tuple[bool, list[str]]:
         elif not was and now:
             fixed.append(uid8)
 
-    lines = []
-    for uid8, shas in sorted(result.items()):
-        mark = "воспроизводим" if stability(shas) else \
-            f"НЕПОВТОРИМ ({len(set(shas))} исхода из {len(shas)})"
-        lines.append(f"  {uid8}  {mark}  {shas[0][:16]}")
+    lines = report_lines(result)
     if broke:
         lines.append(f"[ПРОВАЛ] перестали воспроизводиться: {', '.join(broke)}")
     if fresh:
         lines.append(f"[ПРОВАЛ] новый граф корпуса неповторим: {', '.join(fresh)}")
     if fixed:
         lines.append(f"[стало лучше] воспроизводятся впервые: {', '.join(fixed)}")
-    if not broke and not fresh:
-        lines.append("[OK] регресса воспроизводимости нет")
-    return (not broke and not fresh), lines
+
+    unmeasured = sorted(set(known) - set(result))
+    if unmeasured:
+        lines.append(f"[СУДИТЬ НЕЧЕМ] не измерено {len(unmeasured)} графов "
+                     f"эталона из {len(known)} — корпус усечён: "
+                     f"{', '.join(unmeasured)}")
+    if broke or fresh:
+        return 1, lines
+    if unmeasured:
+        return 2, lines
+    lines.append("[OK] регресса воспроизводимости нет")
+    return 0, lines
 
 
 def read_baseline() -> dict:
@@ -204,14 +237,14 @@ def main() -> int:
         print(f"эталон переснят: {BASELINE}")
         return 0
 
-    base = read_baseline() if args.check else {}
-    ok, lines = verdict(shas(result), base)
+    if args.check:
+        code, lines = verdict(shas(result), read_baseline())
+    else:
+        code, lines = 0, report_lines(shas(result))
     print("\n".join(lines))
     print("качество (гуляет ли вместе с геометрией):")
     print("\n".join(defect_lines(result)))
-    if not args.check:
-        return 0
-    return 0 if ok else 1
+    return code
 
 
 if __name__ == "__main__":

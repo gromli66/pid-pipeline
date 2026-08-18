@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Стенд воспроизводимости раскладки (пункт 0.10, ПР1).
+"""Стенд воспроизводимости раскладки (пункт 0.10, ПР1; ГЕЙТ-1).
 
 Дефект уровня стенда: гейт, зелёный на графе, который перестал быть
 воспроизводимым, — именно такой молчаливый регресс и делает `cmp_bitexact`
 ложно-красным. Плюс убитый дочерний прогон не имеет права выглядеть удачным.
+
+ГЕЙТ-1 добавил третий исход: корпус усечён (в git 3 графа из 17) — вердикт
+не «регресса нет», а «судить нечем».
 """
 from __future__ import annotations
 
@@ -24,8 +27,8 @@ BASE = {"runs": 6, "routing": True,
 
 
 def _lines(result, base=BASE):
-    ok, lines = det.verdict(result, base)
-    return ok, "\n".join(lines)
+    code, lines = det.verdict(result, base)
+    return code, "\n".join(lines)
 
 
 def test_stability_needs_all_runs_equal():
@@ -34,28 +37,69 @@ def test_stability_needs_all_runs_equal():
 
 
 def test_known_stable_graph_that_broke_fails():
-    ok, text = _lines({"aaaaaaaa": ["x", "y"], "bbbbbbbb": ["z", "z"]})
-    assert not ok
+    code, text = _lines({"aaaaaaaa": ["x", "y"], "bbbbbbbb": ["z", "z"]})
+    assert code == 1
     assert "перестали воспроизводиться: aaaaaaaa" in text
 
 
 def test_known_unstable_graph_stays_green():
-    """Неповторимость роутинга записана в эталон — гейт на ней не валится."""
-    ok, text = _lines({"aaaaaaaa": ["x", "x"], "bbbbbbbb": ["z", "w"]})
-    assert ok
+    """Неповторимость роутинга записана в эталон — гейт на ней не валится.
+
+    Обратная сторона ГЕЙТ-1: весь эталон измерен, значит вердикт выносится —
+    «судить нечем» тут ложным быть не имеет права.
+    """
+    code, text = _lines({"aaaaaaaa": ["x", "x"], "bbbbbbbb": ["z", "w"]})
+    assert code == 0
     assert "НЕПОВТОРИМ" in text
+    assert "СУДИТЬ НЕЧЕМ" not in text
+    assert "[OK] регресса воспроизводимости нет" in text
 
 
 def test_unstable_graph_that_settled_is_reported_but_green():
-    ok, text = _lines({"aaaaaaaa": ["x", "x"], "bbbbbbbb": ["z", "z"]})
-    assert ok
+    code, text = _lines({"aaaaaaaa": ["x", "x"], "bbbbbbbb": ["z", "z"]})
+    assert code == 0
     assert "воспроизводятся впервые: bbbbbbbb" in text
 
 
 def test_new_unstable_graph_fails():
-    ok, text = _lines({"aaaaaaaa": ["x", "x"], "cccccccc": ["p", "q"]})
-    assert not ok
+    code, text = _lines({"aaaaaaaa": ["x", "x"], "cccccccc": ["p", "q"]})
+    assert code == 1
     assert "новый граф корпуса неповторим: cccccccc" in text
+
+
+# ───────────────── третий исход: судить нечем (ГЕЙТ-1) ─────────────────
+
+def test_unmeasured_baseline_graph_is_not_green():
+    """Дыра ГЕЙТ-1: uid эталона не измерен — это НЕ «регресса нет».
+
+    Так выглядит чистый клон и CI: меряются 3 графа из 17, а среди
+    неизмеренных 8 известных неповторимых.
+    """
+    code, text = _lines({"aaaaaaaa": ["x", "x"]})
+    assert code == 2
+    assert "СУДИТЬ НЕЧЕМ" in text
+    assert "bbbbbbbb" in text
+    assert "регресса воспроизводимости нет" not in text
+
+
+@pytest.mark.parametrize("result", [
+    {"aaaaaaaa": ["x", "x"]},                      # всё воспроизводимо
+    {"aaaaaaaa": ["x", "y"]},                      # неповторим
+])
+def test_missing_baseline_is_not_green(result):
+    """Эталона нет — сравнивать не с чем ни в ту, ни в другую сторону:
+    неповторимый граф здесь не «опровергнуто», а всё то же «судить нечем»."""
+    code, text = _lines(result, base={})
+    assert code == 2
+    assert "СУДИТЬ НЕЧЕМ" in text
+
+
+def test_proven_regression_beats_unmeasured():
+    """Доказанный регресс важнее неполноты: 1 (опровергнуто), не 2."""
+    code, text = _lines({"aaaaaaaa": ["x", "y"]})
+    assert code == 1
+    assert "перестали воспроизводиться: aaaaaaaa" in text
+    assert "СУДИТЬ НЕЧЕМ" in text
 
 
 def test_baseline_in_git_covers_the_fixtures():

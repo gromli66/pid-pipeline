@@ -11,11 +11,15 @@ graph_edited*.json в tools/bench/edit_corpus/ (локальные сохран�
     python -X utf8 tools/edit_bench.py --all                # таблица корпуса
     python -X utf8 tools/edit_bench.py tools/bench/edit_corpus/graph_edited_star.json --top 5
     python -X utf8 tools/edit_bench.py --all --write-baseline
-    python -X utf8 tools/edit_bench.py --all --check        # против базы, exit 1
+    python -X utf8 tools/edit_bench.py --all --check        # против базы: 0 · 1 · 2
 
 Колонки-ДЕФЕКТЫ (в --check не могут расти): diag, near, along_own, along_frn,
 through, corner, corner4, conn_off, poly_off, adrift.
 Справочные: max_dev, mid, side, manual.
+
+⚠ **exit 2 — «судить нечем»** (`PROTOCOL §5`): корпус вне git (`.gitignore:37`),
+и на чистом дереве сравнивать не с чем. Замер части корпуса — не «дефекты не
+выросли»: судится ровно тот набор файлов, что записан в эталоне.
 """
 from __future__ import annotations
 
@@ -95,7 +99,16 @@ def _print_top(name: str, res: dict, top: int):
 
 
 def _compare(rows: dict[str, dict], base: dict) -> int:
-    """Сравнение с базой: дефектные колонки не могут расти. 0 = ок."""
+    """Сравнение с базой: дефектные колонки не могут расти.
+
+    Три исхода (`PROTOCOL §5`), а не два:
+    0 — не хуже базы, и при этом измерен ВЕСЬ её корпус;
+    1 — опровергнуто: дефектная колонка выросла;
+    2 — СУДИТЬ НЕЧЕМ: база пуста или часть её файлов не измерена. Корпус
+        лежит вне git (`.gitignore:37`), поэтому на чистом дереве мерить
+        нечего — а раньше такой прогон печатал «рост дефектов: 0» и exit 0.
+    Доказанный рост сильнее неполноты: если что-то выросло, это 1.
+    """
     bad = 0
     for name, res in rows.items():
         b = base.get(name)
@@ -111,7 +124,18 @@ def _compare(rows: dict[str, dict], base: dict) -> int:
                 bad += 1
             elif now < was:
                 print(f"лучше {name}: {key} {was} -> {now}")
-    return bad
+    print(f"\nрост дефектов: {bad}")
+    if bad:
+        return 1
+    if not base:
+        print("судить нечем: эталон пуст — сначала --write-baseline")
+        return 2
+    missing = sorted(set(base) - set(rows))
+    if missing:
+        print(f"судить нечем: не измерено {len(missing)} файлов эталона "
+              f"из {len(base)} — корпус усечён: {', '.join(missing)}")
+        return 2
+    return 0
 
 
 def main() -> int:
@@ -131,7 +155,12 @@ def main() -> int:
 
     paths = [Path(f) for f in args.files]
     if args.all:
-        paths += [Path(p) for p in sorted(glob.glob(str(CORPUS / "graph_edited*.json")))]
+        found = sorted(glob.glob(str(CORPUS / "graph_edited*.json")))
+        if not found and not paths:
+            print(f"судить нечем: в {CORPUS.relative_to(REPO)} нет ни одного "
+                  f"graph_edited*.json — корпус вне git (.gitignore:37)")
+            return 2
+        paths += [Path(p) for p in found]
     if not paths:
         ap.error("нет входных файлов (--all или список)")
 
@@ -164,9 +193,7 @@ def main() -> int:
             print("базы нет — сначала --write-baseline")
             return 2
         base = json.loads(BASELINE.read_text(encoding="utf-8"))
-        bad = _compare(rows, base)
-        print(f"\nрост дефектов: {bad}")
-        return 1 if bad else 0
+        return _compare(rows, base)
     return 0
 
 
