@@ -45,6 +45,7 @@ files = [
     "tools/edit_bench.py",
     "tools/lint_gate.py",
     "tools/layout_determinism.py",
+    "tools/napravlenie_audit.py",
     "tools/pair_bench.py",
     "tools/suite_baseline.py",
 ]
