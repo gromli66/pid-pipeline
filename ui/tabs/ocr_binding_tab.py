@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, Slot, Qt, QThread, QTimer
 from PySide6.QtGui import QColor
+from ui.tabs.save_mode import NonInteractiveSaveMixin
 from ui.widgets.appearance_panel import AppearanceMixin
 
 from ui.services.api_client import APIClient, APIError
@@ -174,7 +175,7 @@ class _SubTabToolbar(QWidget):
 # Main OcrBindingTab
 # =====================================================================
 
-class OcrBindingTab(AppearanceMixin, QWidget):
+class OcrBindingTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
     """
     Вкладка привязки OCR текста к узлам графа.
 
@@ -1622,11 +1623,20 @@ class OcrBindingTab(AppearanceMixin, QWidget):
 
         «Да» снимает запрет насовсем: решение принял оператор. «Нет» его
         оставляет, и вопрос вернётся при следующей попытке записи.
+
+        ⛔ Сохранение ПО ТАЙМЕРУ вопроса не задаёт (пункт 1-38): «Да» вслепую
+        снял бы запрет насовсем, то есть автосохранение отменило бы защиту
+        без оператора. Тик отказывается и говорит об этом строкой; запрет
+        при этом остаётся взведённым, и ручной заход спросит снова.
         """
         allowed = []
         for artifact in ("ocr_binding", "graph_validated"):
             if artifact not in self._unreadable_on_server:
                 continue
+            if not self._save_interactive:
+                self._refuse_save("⚠️ Автосохранение отменено: серверная копия "
+                                  "не прочитана — сохраните вручную")
+                return False
             reply = QMessageBox.question(
                 self, "Сохранение затрёт серверную копию",
                 f"{self._BLIND_WRITE_WARNING[artifact]}\n\nСохранить всё равно?",
@@ -1822,10 +1832,14 @@ class OcrBindingTab(AppearanceMixin, QWidget):
             # Единственный след ошибки — файл лога клиента: в собранном .exe
             # sys.stderr = None, и печать трассировки в консоль пропадает.
             logger.error("Не удалось сохранить привязки OCR: %s", exc, exc_info=True)
-            QMessageBox.warning(
-                self, "Ошибка",
-                f"Не удалось сохранить привязки:\n{exc}"
-            )
+            # По таймеру — строкой, а не модалкой посреди работы (1-38).
+            if self._save_interactive:
+                QMessageBox.warning(
+                    self, "Ошибка",
+                    f"Не удалось сохранить привязки:\n{exc}"
+                )
+            else:
+                self._refuse_save(f"⚠️ Автосохранение не удалось: {exc}")
             return False
         finally:
             QApplication.restoreOverrideCursor()

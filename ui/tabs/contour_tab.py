@@ -408,10 +408,15 @@ class ContourTab(BaseGraphTab):
             return True
         except Exception as exc:
             logger.error("Failed to save contours: %s", exc)
-            QMessageBox.warning(
-                self, "Ошибка",
-                f"Граф сохранён, но контуры не сохранены:\n{exc}",
-            )
+            # По таймеру — строкой, а не модалкой посреди работы (1-38).
+            if self._save_interactive:
+                QMessageBox.warning(
+                    self, "Ошибка",
+                    f"Граф сохранён, но контуры не сохранены:\n{exc}",
+                )
+            else:
+                self._refuse_save(
+                    f"⚠️ Автосохранение: граф сохранён, контуры — нет ({exc})")
             return True  # graph saved OK, contours failed
 
     def _save_contours_validated(self):
