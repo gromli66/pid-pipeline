@@ -26,6 +26,9 @@
 Те же три исхода у `--write-baseline` (пункт 1-28): 0 — эталон переснят,
 1 — ОТКАЗ (пересъём узаконил бы поломку), 2 — СУДИТЬ НЕЧЕМ (корпус усечён,
 пересъём вычеркнул бы неизмеренное). См. `write_blocked()`.
+⚠ Пересъём обязан быть не слабее эталона (пункт 1-29): `--runs` меньше
+эталонных или другой ключ роутинга — тоже «судить нечем». Иначе одна удачная
+выборка молча вычёркивает графы из списка неповторимых (§49.27).
 
 Ключ `--no-routing` выключает этап роутинга (`LayoutParams.routing`): им
 недетерминизм и локализуется — расстановка с раздвиганием отдельно от обхода
@@ -190,8 +193,8 @@ def verdict(result: dict[str, list[str]], base: dict) -> tuple[int, list[str]]:
     return 0, lines
 
 
-def write_blocked(result: dict[str, list[str]],
-                  base: dict) -> tuple[list[str], list[str]]:
+def write_blocked(result: dict[str, list[str]], base: dict,
+                  runs: int, routing: bool) -> tuple[list[str], list[str]]:
     """-> (причины «судить нечем», причины отказа). Обе пустые = пересъём законен.
 
     Пересъём — единственный путь, которым эталон вообще меняется, и по Д6 он
@@ -203,15 +206,39 @@ def write_blocked(result: dict[str, list[str]],
     восемь известных неповторимых.
 
     Те же три исхода, что у `verdict()`:
-    2 — СУДИТЬ НЕЧЕМ: часть эталона не измерена, пересъём вычеркнул бы её;
+    2 — СУДИТЬ НЕЧЕМ: замер не годен в замену эталону — часть эталона не
+        измерена (корпус усечён), либо снят он слабее эталонного: прогонов
+        меньше, чем у эталона, или другим ключом роутинга (пункт 1-29);
     1 — ОТКАЗ: воспроизводимый граф сломался, пересъём записал бы поломку нормой;
     0 — законно (в том числе первый снимок: сверять не с чем).
+
+    ⚠ Почему число прогонов — это «судить нечем», а не мелочь: гейт по своей
+    природе выборочный, «воспроизводим» читается как «за N прогонов не поймали»
+    (`TESTING §8.2`). Замер 2026-08-19 (§49.27): пересъём при `--runs 2` назвал
+    воспроизводимыми ЧЕТЫРЕ из восьми известных неповторимых графов, а эталон
+    снят при `runs 6`. Отказ по сломавшемуся графу этого не ловит по замыслу —
+    `false -> true` законное «стало лучше», — поэтому стережётся сам замер.
     """
     known = base.get("stable", {})
     if not known:
         return [], []
 
     unjudged, refused = [], []
+    base_runs = base.get("runs")
+    if base_runs and runs < base_runs:
+        unjudged.append(f"замер слабее эталона: прогонов {runs} против "
+                        f"{base_runs} — при малой выборке неповторимый граф "
+                        f"выходит воспроизводимым (§49.27: 4 из 8 известных "
+                        f"при --runs 2), и эталон ослаб бы молча. Переснимать "
+                        f"при --runs не меньше {base_runs}")
+    base_routing = base.get("routing")
+    if base_routing is not None and routing is not base_routing:
+        unjudged.append(f"замер снят другим ключом: роутинг "
+                        f"{'вкл' if routing else 'выкл'} против "
+                        f"{'вкл' if base_routing else 'выкл'} у эталона — "
+                        "это замер другой величины (без роутинга раскладка "
+                        "воспроизводима вся, замер 0.10), и пересъём стёр бы "
+                        "список неповторимых разом")
     unmeasured = sorted(set(known) - set(result))
     if unmeasured:
         unjudged.append(f"не измерено {len(unmeasured)} графов эталона из "
@@ -268,7 +295,8 @@ def main() -> int:
     result = measure(uids, args.runs, routing)
 
     if args.write_baseline:
-        unjudged, refused = write_blocked(shas(result), read_baseline())
+        unjudged, refused = write_blocked(shas(result), read_baseline(),
+                                          args.runs, routing)
         for msg in unjudged:
             print(f"[СУДИТЬ НЕЧЕМ] {msg}")
         for msg in refused:

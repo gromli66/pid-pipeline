@@ -129,11 +129,16 @@ def test_killed_child_is_loud(monkeypatch, stdout, rc, match):
 
 # ───────── путь ЗАПИСИ: пересъём тоже обязан судить (пункт 1-28) ─────────
 
-def _write_stand(tmp_path, monkeypatch, measured, base=BASE):
+def _write_stand(tmp_path, monkeypatch, measured, base=BASE, argv=("--runs", "6")):
     """Стенд пересъёма: свой эталон, свой корпус, замер подменён.
 
     `measured` — {uid8: [sha прогона 1, sha прогона 2, ...]}: и корпус, и то,
     что по нему намерилось, задаются одним словарём.
+
+    `argv` по умолчанию несёт `--runs 6` — ровно столько, сколько записано
+    в `BASE`: с пункта 1-29 пересъём слабее эталона отказывает, и без этого
+    ключа любой из тестов ниже мерил бы отказ по числу прогонов вместо
+    своей ветки (`DEFAULT_RUNS` = 2).
     """
     path = tmp_path / "determinism_baseline.json"
     if base is not None:
@@ -143,7 +148,8 @@ def _write_stand(tmp_path, monkeypatch, measured, base=BASE):
                         lambda include_storage=True: dict.fromkeys(measured))
     monkeypatch.setattr(det, "measure", lambda uids, runs, routing: {
         uid: [{"sha": sha, "defects": [1, 0]} for sha in measured[uid]] for uid in uids})
-    monkeypatch.setattr(sys, "argv", ["layout_determinism.py", "--write-baseline"])
+    monkeypatch.setattr(sys, "argv",
+                        ["layout_determinism.py", "--write-baseline", *argv])
     return path
 
 
@@ -197,3 +203,83 @@ def test_write_of_the_first_snapshot_has_nothing_to_compare(tmp_path, monkeypatc
 
     assert det.main() == 0
     assert json.loads(path.read_text(encoding="utf-8"))["stable"] == {"aaaaaaaa": False}
+
+
+# ───── пересъём не имеет права быть слабее эталона (пункт 1-29) ─────
+
+def test_write_with_fewer_runs_than_the_baseline_is_not_a_snapshot(
+        tmp_path, monkeypatch, capsys):
+    """⛔ Дыра 1-29 (§49.27): при малом `--runs` неповторимый граф выходит `true`.
+
+    Замерено 2026-08-19 на живом корпусе: пересъём при `--runs 2` записал
+    `true` ЧЕТЫРЁМ из восьми известных неповторимых графов (`54a60fd1`,
+    `620cc50d`, `6e7144d5`, `751116c9`), а действующий эталон снят при
+    `runs 6`. Отказ 1-28 этого не ловит по замыслу: `false -> true` — законное
+    «стало лучше», так же судит и `--check` с 1-25. Значит стеречь надо сам
+    замер: слабее эталона — судить нечем, а не «эталон переснят».
+    """
+    path = _write_stand(tmp_path, monkeypatch,
+                        {"aaaaaaaa": ["x", "x"], "bbbbbbbb": ["z", "z"]},
+                        argv=("--runs", "5"))
+    before = path.read_text(encoding="utf-8")
+
+    assert det.main() == 2
+    out = capsys.readouterr().out
+    assert "СУДИТЬ НЕЧЕМ" in out
+    assert "прогонов 5 против 6" in out
+    assert path.read_text(encoding="utf-8") == before, "эталон переписан вопреки отказу"
+
+
+@pytest.mark.parametrize("runs", ["6", "7"])
+def test_write_at_or_above_the_baseline_runs_is_legal(tmp_path, monkeypatch, runs):
+    """Порог заперт с двух сторон АБСОЛЮТНЫМИ числами (урок 0.4).
+
+    Эталон снят при 6 прогонах: 5 — отказ (тест выше), 6 и 7 — законный
+    пересъём. Ни одно из чисел не вычисляется из проверяемого поля, иначе тест
+    остался бы зелёным при любом его значении. Больше прогонов — храповик:
+    в эталон уезжает новое число, и следующий пересъём судится уже по нему.
+    """
+    path = _write_stand(tmp_path, monkeypatch,
+                        {"aaaaaaaa": ["x", "x"], "bbbbbbbb": ["z", "z"]},
+                        argv=("--runs", runs))
+
+    assert det.main() == 0
+    assert json.loads(path.read_text(encoding="utf-8"))["runs"] == int(runs)
+
+
+def test_write_with_another_routing_key_is_not_a_snapshot(
+        tmp_path, monkeypatch, capsys):
+    """Тот же класс, что малый `--runs`: замер снят не тем ключом, что эталон.
+
+    Без роутинга раскладка воспроизводима вся (замер 0.10: недетерминизм
+    целиком в vendored libavoid, `--no-routing` даёт один исход из 30), поэтому
+    `--no-routing --write-baseline` записал бы «стабильны все» и стёр бы список
+    неповторимых разом — молча, одной командой, отдельным коммитом по Д6.
+    """
+    path = _write_stand(tmp_path, monkeypatch,
+                        {"aaaaaaaa": ["x", "x"], "bbbbbbbb": ["z", "z"]},
+                        argv=("--runs", "6", "--no-routing"))
+    before = path.read_text(encoding="utf-8")
+
+    assert det.main() == 2
+    out = capsys.readouterr().out
+    assert "СУДИТЬ НЕЧЕМ" in out
+    assert "роутинг" in out
+    assert path.read_text(encoding="utf-8") == before, "эталон переписан вопреки отказу"
+
+
+def test_broken_graph_outranks_a_weak_sample(tmp_path, monkeypatch, capsys):
+    """Приоритет 1-28 сохранён: доказанная поломка сильнее неполноты.
+
+    Две причины разом — воспроизводимый граф сломался И прогонов меньше
+    эталонных — дают 1, а не 2: поломка наблюдается двумя РАЗНЫМИ исходами
+    и от числа прогонов не зависит (малая выборка её прячет, а не выдумывает).
+    """
+    _write_stand(tmp_path, monkeypatch,
+                 {"aaaaaaaa": ["x", "y"], "bbbbbbbb": ["z", "z"]},
+                 argv=("--runs", "5"))
+
+    assert det.main() == 1
+    out = capsys.readouterr().out
+    assert "перестали воспроизводиться: aaaaaaaa" in out
+    assert "прогонов 5 против 6" in out
