@@ -13,10 +13,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import obs
+from app.core.logging import get_logger
 from app.db import get_async_db
 from app.models import Diagram, DiagramStatus, Artifact, ArtifactType
 
 router = APIRouter()
+
+logger = get_logger(__name__)
 
 
 @router.post("/{uid}/build")
@@ -100,6 +104,7 @@ async def start_graph_building(
     # отправка задачи упадёт, вернуть надо всё, что переход записал, а не один
     # статус — иначе диаграмма останется в ERROR с пустым error_stage, и клиент
     # погасит ВСЕ кнопки (ui/widgets/diagram_workspace.py: _error_key).
+    obs.bind(uid=str(uid), phase="graph_build")
     previous_state = (diagram.status, diagram.error_stage, diagram.error_message)
     diagram.status = DiagramStatus.BUILDING_GRAPH
     diagram.error_message = None
@@ -125,6 +130,10 @@ async def start_graph_building(
         # кроме исходной точки.
         diagram.status, diagram.error_stage, diagram.error_message = previous_state
         await db.commit()
+        logger.warning(
+            "Отправка сборки графа не удалась (%s) — состояние возвращено в '%s'",
+            exc, previous_state[0].value, extra={"event": "dispatch_failed"},
+        )
         raise HTTPException(
             status_code=503,
             detail=f"Worker unavailable: {exc}",

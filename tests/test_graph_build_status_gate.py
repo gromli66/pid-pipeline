@@ -414,6 +414,48 @@ def test_missing_skeleton_survives_dead_broker(broker_down):
     assert db.commits == 0
 
 
+def test_dead_broker_leaves_a_trace_with_uid(broker_down):
+    """Д2: отказ отправки больше не молчит — строка в логе с `uid` и точкой возврата.
+
+    До пункта 1.14 сервер не оставлял об этом ничего: 503 уходил клиенту, а
+    диаграмма тихо оказывалась в статусе, из которого нет выхода. `uid` судится
+    настоящим механизмом — `ContextFilter` тянет его из `obs.bind`, — и фильтр
+    обязан отработать ВНУТРИ задачи: `asyncio.run` копирует контекст, и наружу
+    его правки не возвращаются.
+    """
+    import logging
+
+    from app.core.logging import ContextFilter
+
+    class _Capture(logging.Handler):
+        def __init__(self):
+            super().__init__(level=logging.DEBUG)
+            self.records = []
+            self.addFilter(ContextFilter())
+
+        def emit(self, record):
+            self.records.append(record)
+
+    handler = _Capture()
+    api_logger = logging.getLogger("app.api.graph")
+    previous_level = api_logger.level
+    api_logger.addHandler(handler)
+    api_logger.setLevel(logging.DEBUG)
+    try:
+        db = FakeDB(_diagram(DiagramStatus.VALIDATED_JUNCTIONS), skeleton=_skeleton())
+        with pytest.raises(HTTPException):
+            asyncio.run(start_graph_building(UID, db=db))
+    finally:
+        api_logger.removeHandler(handler)
+        api_logger.setLevel(previous_level)
+
+    trace = [r for r in handler.records if getattr(r, "event", None) == "dispatch_failed"]
+    assert len(trace) == 1, "отказ отправки не оставил следа"
+    assert trace[0].uid == str(UID)
+    assert trace[0].phase == "graph_build"
+    assert "validated_junctions" in trace[0].getMessage(), "точка возврата не названа"
+
+
 def test_missing_diagram_is_404(dispatched):
     """Нет диаграммы — 404, а не 400 гейта."""
     db = FakeDB(None)
