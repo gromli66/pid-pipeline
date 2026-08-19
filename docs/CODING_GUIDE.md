@@ -483,7 +483,7 @@ self.set_mode("add_edge")
 | `AddConnectorHandler` | simple_handlers.py | `add_connector` | Клик на ребро → split; клик мимо → isolated; move → connector preview |
 | `DeleteNodeHandler` | simple_handlers.py | `delete_node` | Клик → delete_node; move → hover |
 | `AddNodeFromListHandler` | simple_handlers.py | `add_node_from_list` | Клик → add_equipment_node (из `_pending_node_class`) |
-| `ResizeNodeHandler` | simple_handlers.py | `resize_node` | Клик на handle → drag; клик на другой equipment → переключить overlay; клик мимо → выйти |
+| `ResizeNodeHandler` | simple_handlers.py | `resize_node` | Клик на handle → drag; клик на другой equipment **с рамкой** → переключить overlay; клик мимо (и по узлу, чья форма — контур) → выйти |
 | `ApplyContourHandler` | contour_handler.py | `apply_contour` | Клик на equipment → toggle SAM2 contour (ToggleContourCommand) |
 | `EditPolygonHandler` | polygon_handlers.py | `edit_polygon` | State machine IDLE→EDIT→DRAW (см. ниже) |
 | `AddEdgeWithWaypointsHandler` | advanced_handlers.py | `add_edge` (override) | Клик A → select; Ctrl+Click промежуточные → waypoints; клик B → add_edge_with_waypoints |

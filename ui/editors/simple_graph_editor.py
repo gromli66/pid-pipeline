@@ -273,7 +273,11 @@ class SimpleGraphEditor(BaseGraphEditor):
 
     def _enter_resize_mode(self, node_id: str):
         """Переключиться в resize_node и показать overlay."""
-        self._mode_before_resize = self._current_mode or "add_edge"
+        # Вход из самого resize_node (повторный двойной клик, добавление узла
+        # поверх открытых ручек) не имеет права стать «предыдущим режимом»:
+        # иначе выход возвращает в resize_node, и инструмент теряется навсегда.
+        if self._current_mode != "resize_node":
+            self._mode_before_resize = self._current_mode or "add_edge"
         self.set_mode("resize_node")
         self._start_resize(node_id)
 
@@ -477,6 +481,12 @@ class SimpleGraphEditor(BaseGraphEditor):
             if clicked:
                 node = self.nodes.get(clicked)
                 if node and node.get('type') == 'equipment' and node.get('bbox'):
+                    # Форма узла = контур → рамка ему не хозяйка: ручки правят
+                    # bbox и центроид, а segmentation остаётся на месте.
+                    if self._node_has_polygon(node):
+                        self.update_status(
+                            f"{clicked}: форма задана контуром — размер рамкой не меняется")
+                        return
                     self._enter_resize_mode(clicked)
                     return
         super().mouseDoubleClickEvent(event)

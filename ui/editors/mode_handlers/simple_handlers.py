@@ -162,9 +162,12 @@ class ResizeNodeHandler(ModeHandler):
             # Клик на тот же узел — игнорировать (не пересоздавать overlay)
             if clicked == ed._resizing_node:
                 return True
-            # Клик на другой equipment → переключить overlay
+            # Клик на другой equipment с РАМКОЙ → переключить overlay.
+            # Узел, чья форма — контур, рамкой не правится (та же развилка, что
+            # в двойном клике): для него это клик мимо, то есть выход из режима.
             node = ed.nodes.get(clicked)
-            if node and node.get('type') == 'equipment' and node.get('bbox'):
+            if node and node.get('type') == 'equipment' and node.get('bbox') \
+                    and not ed._node_has_polygon(node):
                 ed._stop_resize()
                 ed._enter_resize_mode(clicked)
                 return True
