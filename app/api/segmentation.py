@@ -119,12 +119,14 @@ async def start_segmentation(
     except Exception as exc:
         # Брокер недоступен — возвращаем состояние, каким оно было до вызова:
         # работа не начиналась, откатывать некуда, кроме исходной точки.
-        diagram.status, diagram.error_stage, diagram.error_message = previous_state
-        await db.commit()
+        # След — ДО коммита возврата: на бою БД падает вместе с брокером, и тогда
+        # исключение коммита унесло бы наружу единственную запись об отказе ОТПРАВКИ.
         logger.exception(
-            "Отправка сегментации не удалась (%s) — состояние возвращено в '%s'",
+            "Отправка сегментации не удалась (%s) — возвращаю состояние в '%s'",
             exc, previous_state[0].value, extra={"event": "dispatch_failed"},
         )
+        diagram.status, diagram.error_stage, diagram.error_message = previous_state
+        await db.commit()
         raise HTTPException(
             status_code=503,
             detail=f"Worker unavailable: {exc}",

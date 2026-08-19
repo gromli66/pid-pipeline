@@ -36,15 +36,18 @@
 осталось бы зелёным при любом значении проверяемого).
 """
 import asyncio
+import logging
 import uuid
 
 import pytest
 from fastapi import HTTPException
+from kombu.exceptions import OperationalError
 
 from app.api.detection import retry_detection, start_detection
 from app.api.junction import start_junction_detection
 from app.api.segmentation import start_segmentation
 from app.api.skeleton import start_skeletonization
+from app.core.logging import ContextFilter
 from app.models import Diagram, DiagramStatus
 
 UID = uuid.UUID("d74eb9f1-5555-6666-7777-888899990000")
@@ -298,10 +301,9 @@ def dispatched(monkeypatch):
 def broker_down(monkeypatch):
     """Брокер лёг: `send_task` бросает — ровно то, что происходит на бою.
 
-    Замер §79.2: настоящий `send_task` на мёртвый брокер бросает
-    `kombu.exceptions.OperationalError` через 4.27 с (отказ соединения).
-    Здесь берётся `OSError` — тот же класс исхода для вызывающего; настоящий
-    `OperationalError` проверяется отдельным тестом ниже.
+    Здесь берётся `OSError` — тот же класс исхода для вызывающего. Настоящие
+    исключения проверяются отдельным тестом ниже, и их ДВА: какое прилетит,
+    решает то, что именно мертво (замер §87д/§91), — см. его докстроку.
     """
     from worker.celery_app import celery_app
 
@@ -503,20 +505,46 @@ def test_dispatch_failure_over_every_status(endpoint, status, broker_down):
         assert [c["name"] for c in broker_down] == [task], cell
 
 
-def test_real_broker_exception_class_is_not_special(monkeypatch):
-    """Настоящее исключение kombu ловится тем же швом, что `OSError` из фикстуры.
+# Оба настоящих исключения отказа отправки, перемеренные четырьмя точками
+# (§87д, перемер ревизии; сводка — §91). Какое прилетит, решает то, ЧТО мертво:
+#
+#   брокер И result-бэкенд (на бою это ОДИН Redis)   RuntimeError      ≈ 64 с
+#   только брокер, бэкенд жив                        OperationalError  ≈ 4 с
+#
+# 64 с набирает retry-цикл БЭКЕНДА внутри `send_task` — он отрабатывает ДО
+# публикации в брокер. Первая строка и есть боевая: узкий `except
+# OperationalError` промахнулся бы мимо неё и оставил бы тупик ровно там,
+# где его чинят. Числа — литералы замера, кодом не вычисляются.
+REAL_DISPATCH_FAILURES = [
+    pytest.param(
+        RuntimeError,
+        "Retry limit exceeded while trying to reconnect to the Celery"
+        " result store backend: Error 111 connecting to redis:6379.",
+        id="dead-result-backend",
+    ),
+    pytest.param(
+        OperationalError,
+        "Error 111 connecting to redis:6379.",
+        id="dead-broker-live-backend",
+    ),
+]
 
-    Иначе таблица судила бы синтетический класс, а бой отдавал бы другой:
-    `send_task` на мёртвый брокер бросает `kombu.exceptions.OperationalError`
-    (замер §79.2 — 4.27 с до отказа). До правки это исключение уходило наружу
-    как есть — оператору 500 и диаграмма в `detecting` навсегда.
+
+@pytest.mark.parametrize("exc_class, message", REAL_DISPATCH_FAILURES)
+def test_real_broker_exception_class_is_not_special(exc_class, message, monkeypatch):
+    """Оба настоящих исключения ловятся тем же швом, что `OSError` из фикстуры.
+
+    Иначе таблица судила бы синтетический класс, а бой отдавал бы другой —
+    и хуже того, боевой класс тут не тот, которого ждёшь: не `OperationalError`
+    брокера, а `RuntimeError` мёртвого result-бэкенда (таблица выше). Поэтому
+    в коде ловится `Exception`, и этот тест — единственное, что держит широту
+    шва осмысленной. До правки оба уходили наружу как есть: оператору 500
+    и диаграмма в `detecting` навсегда.
     """
-    from kombu.exceptions import OperationalError
-
     from worker.celery_app import celery_app
 
     def _send_task(name, args=None, kwargs=None, **rest):
-        raise OperationalError("Error 111 connecting to redis:6379.")
+        raise exc_class(message)
 
     monkeypatch.setattr(celery_app, "send_task", _send_task)
 
@@ -629,49 +657,99 @@ LOG = {
 }
 
 
-@pytest.mark.parametrize("endpoint", ENDPOINTS)
-def test_dead_broker_leaves_a_trace_with_uid(endpoint, broker_down):
-    """Д2: отказ отправки больше не молчит — строка с `uid` и точкой возврата.
+class _Capture(logging.Handler):
+    """Приёмник записей эндпоинта с настоящим `ContextFilter` на входе."""
 
-    До правки сервер не оставлял об этом ничего: наружу уходило исключение, а
-    диаграмма тихо оказывалась в статусе, из которого нет выхода. `uid` судится
-    настоящим механизмом — `ContextFilter` тянет его из `obs.bind`, — и фильтр
-    обязан отработать ВНУТРИ задачи: `asyncio.run` копирует контекст, и наружу
-    его правки не возвращаются.
+    def __init__(self):
+        super().__init__(level=logging.DEBUG)
+        self.records = []
+        self.addFilter(ContextFilter())
+
+    def emit(self, record):
+        self.records.append(record)
+
+
+def _dispatch_traces(endpoint, db, expected_exc):
+    """Прогнать эндпоинт с ловушкой на его логгере и вернуть следы `dispatch_failed`.
+
+    `uid` судится настоящим механизмом — `ContextFilter` тянет его из `obs.bind`, —
+    и фильтр обязан отработать ВНУТРИ задачи: `asyncio.run` копирует контекст,
+    и наружу его правки не возвращаются.
     """
-    import logging
-
-    from app.core.logging import ContextFilter
-
-    class _Capture(logging.Handler):
-        def __init__(self):
-            super().__init__(level=logging.DEBUG)
-            self.records = []
-            self.addFilter(ContextFilter())
-
-        def emit(self, record):
-            self.records.append(record)
-
-    logger_name, phase = LOG[endpoint]
-    entry = SCENARIO_ENTRY[endpoint]
-
     handler = _Capture()
-    api_logger = logging.getLogger(logger_name)
+    api_logger = logging.getLogger(LOG[endpoint][0])
     previous_level = api_logger.level
     api_logger.addHandler(handler)
     api_logger.setLevel(logging.DEBUG)
     try:
-        db = FakeDB(_diagram(DiagramStatus(entry[0]), entry[1], entry[2]))
-        with pytest.raises(HTTPException):
+        with pytest.raises(expected_exc):
             asyncio.run(CALL[endpoint](db))
     finally:
         api_logger.removeHandler(handler)
         api_logger.setLevel(previous_level)
 
-    trace = [r for r in handler.records if getattr(r, "event", None) == "dispatch_failed"]
+    return [r for r in handler.records if getattr(r, "event", None) == "dispatch_failed"]
+
+
+@pytest.mark.parametrize("endpoint", ENDPOINTS)
+def test_dead_broker_leaves_a_trace_with_uid(endpoint, broker_down):
+    """Д2: отказ отправки больше не молчит — строка с `uid` и точкой возврата.
+
+    До правки сервер не оставлял об этом ничего: наружу уходило исключение, а
+    диаграмма тихо оказывалась в статусе, из которого нет выхода.
+    """
+    entry = SCENARIO_ENTRY[endpoint]
+    db = FakeDB(_diagram(DiagramStatus(entry[0]), entry[1], entry[2]))
+
+    trace = _dispatch_traces(endpoint, db, HTTPException)
+
     assert len(trace) == 1, "отказ отправки не оставил следа"
     assert trace[0].uid == str(UID)
-    assert trace[0].phase == phase
+    assert trace[0].phase == LOG[endpoint][1]
+    assert entry[0] in trace[0].getMessage(), "точка возврата не названа"
+
+
+class _DBGone(RuntimeError):
+    """БД недоступна: коммит ВОЗВРАТА состояния не проходит."""
+
+
+class _DeadDB(FakeDB):
+    """БД легла вместе с брокером — падает второй `commit`, тот, что возвращает.
+
+    Первый коммит (переход в `*ING`) уже прошёл, поэтому диаграмма в БД остаётся
+    в рабочем статусе — ровно то состояние, в котором её застаёт оператор.
+    """
+
+    async def commit(self):
+        self.commits += 1
+        if self.commits == 2:
+            raise _DBGone("connection already closed")
+
+
+@pytest.mark.parametrize("endpoint", ENDPOINTS)
+def test_dispatch_failed_trace_survives_a_dead_db(endpoint, broker_down):
+    """Д2 в САМОЙ тяжёлой ветке: БД легла ВМЕСТЕ с брокером — след всё равно есть.
+
+    Брокер и БД на бою падают вместе (одна машина, одна сеть, один рестарт).
+    Тогда `send_task` бросает, возврат состояния записать не удаётся: второй
+    `commit` падает следом и уносит исключение из обработчика наружу. След,
+    стоящий ПОСЛЕ этого коммита, не ляжет НИКОГДА — в логе останется только
+    traceback БД от глобального хендлера, и разобрать, почему диаграмма
+    застряла в `*ING`, будет нечем: об отказе ОТПРАВКИ не сказано ни слова.
+
+    Состояние диаграммы здесь не судится намеренно: возврат не записан, она
+    остаётся в `*ING` ровно как до пункта — не хуже, чем было. Судится СЛЕД,
+    потому что в этой ветке он единственное, что вообще остаётся.
+    """
+    entry = SCENARIO_ENTRY[endpoint]
+    db = _DeadDB(_diagram(DiagramStatus(entry[0]), entry[1], entry[2]))
+
+    trace = _dispatch_traces(endpoint, db, _DBGone)
+
+    assert db.commits == 2, "возврат состояния даже не попытались записать"
+    assert len(trace) == 1, "отказ отправки не оставил следа: БД унесла его с собой"
+    assert trace[0].uid == str(UID)
+    assert trace[0].phase == LOG[endpoint][1]
     assert entry[0] in trace[0].getMessage(), "точка возврата не названа"
 
 
