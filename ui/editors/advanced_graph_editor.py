@@ -4110,30 +4110,70 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self._resize_preview_geom = {}
 
     @staticmethod
-    def _preview_geom_key(node: dict) -> tuple:
-        """Отпечаток геометрии узла — им сверяется, что превью ещё в модели."""
-        return (tuple(node['centroid']),
-                tuple(node.get('bbox') or ()),
-                tuple(node.get('segmentation') or ()),
-                node.get('area'))
+    def _preview_geom_key(node: dict) -> dict:
+        """Отпечаток геометрии узла — им сверяется, что превью ещё в модели.
+
+        ПО ПОЛЯМ, а не одним кортежем: чужой откат возвращает узлу не всё
+        сразу. `DragNodeCommand.undo` кладёт назад centroid/bbox/segmentation
+        и не трогает `area` — превью в непокрытом поле пережило бы откат
+        навсегда (замер §97.3: `area` 1428 → 8100 доезжала до сервера).
+        """
+        return {'centroid': tuple(node['centroid']),
+                'bbox': tuple(node.get('bbox') or ()),
+                'segmentation': tuple(node.get('segmentation') or ()),
+                'area': node.get('area')}
+
+    def _preview_live_fields(self) -> dict:
+        """Где ещё лежит вписанное превью: `{узел → множество полей}`.
+
+        ⛔ Сторож, отвечающий одним «да/нет» на МНОЖЕСТВО объектов, обязан
+        отвечать ПОЭЛЕМЕНТНО (`PROTOCOL §3`, третий возврат пункта). Агрегат
+        выглядел верным ровно пока набор ОДНОРОДЕН: чужой Ctrl+Z по переносу
+        возвращает ОДНОМУ узлу его геометрию и честно стирает превью только
+        на нём — а вердикт «базлайн мёртв» выключал лечение для всех 17,
+        и превью остальных вваривалось в схему (замер §97.1: `node_11` уезжал
+        на сервер как `[-10, 188, 80, 278]` при стеке 0).
+
+        Отсюда же вторая ось: у ТОГО САМОГО узла превью остаётся в полях,
+        которых чужой откат не касался, — их снимать можно и нужно, это не
+        воскрешение превью, а уборка за собой (граница §48 держится тем, что
+        поля, которые откат вернул, в ответе не значатся).
+        """
+        if self._resize_model_base is None:
+            return {}
+        if self._resize_model_rev == self.undo_mgr.revision:
+            # Стек не двигался — тронуть превью было некому.
+            return {nid: set(self._preview_geom_key(self.nodes[nid]))
+                    for nid in self._resize_base if nid in self.nodes}
+        live = {}
+        for nid, key in self._resize_preview_geom.items():
+            node = self.nodes.get(nid)
+            if node is None:
+                continue
+            cur = self._preview_geom_key(node)
+            fields = {name for name, val in key.items() if cur[name] == val}
+            if fields:
+                live[nid] = fields
+        return live
 
     def _preview_still_in_model(self) -> bool:
-        """Превью, вписанное последним `_apply_sizes_from_base`, ещё в модели.
+        """Превью, вписанное последним `_apply_sizes_from_base`, ещё в модели
+        ЦЕЛИКОМ — у каждого узла набора и в каждом поле.
 
-        Прямой ответ вместо косвенного: у каждого узла набора сверяется
-        геометрия с той, что вписало превью. `model.restore` пересобирает
-        словари и кладёт в них состояние ДО превью — отпечатки расходятся,
-        и мы честно уходим в ветку «бросить без отката». Правка НА МЕСТЕ
-        чужого узла отпечатков набора не трогает — превью наше, его можно
-        и нужно снять.
+        Прямой ответ вместо косвенного: `model.restore` пересобирает словари
+        и кладёт в них состояние ДО превью — отпечатки расходятся, и базлайн
+        переиспользовать нельзя. Правка НА МЕСТЕ чужого узла отпечатков набора
+        не трогает — базлайн цел.
+
+        Агрегат остаётся ровно там, где вопрос ДЕЙСТВИТЕЛЬНО про весь набор:
+        «можно ли взять базлайн как есть». Что именно откатывать, решается
+        поэлементно — `_preview_live_fields()`.
         """
         if not self._resize_preview_geom:
             return False
-        for nid, key in self._resize_preview_geom.items():
-            node = self.nodes.get(nid)
-            if node is None or self._preview_geom_key(node) != key:
-                return False
-        return True
+        live = self._preview_live_fields()
+        return all(len(live.get(nid, ())) == len(key)
+                   for nid, key in self._resize_preview_geom.items())
 
     def _resize_baseline_alive(self) -> bool:
         """Базлайн снят и всё ещё описывает текущее состояние схемы.
@@ -4157,6 +4197,12 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         кнопки, воронка OCR, путь записи). Поэтому у сторожа есть второе,
         ПРЯМОЕ мнение — `_preview_still_in_model()`: превью снимается, пока
         оно наше, независимо от того, сколько чужих шагов легло в стек.
+
+        ⚠ Ответ здесь — про ВЕСЬ набор, и это законно: спрашивают, годится ли
+        базлайн к переиспользованию целиком. Ответ «нет» больше не означает
+        «превью бросить» — что снимать, решает `_preview_live_fields()`
+        поэлементно, а зовущие сначала снимают своё и только потом пересобирают
+        базлайн (третий возврат пункта, `PROTOCOL §3`).
         """
         if self._resize_model_base is None:
             return False
@@ -4201,6 +4247,52 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self._resize_model_rev = None
         self._resize_preview_geom = {}
 
+    def _rollback_owned_preview(self) -> dict:
+        """Снять превью ТАМ, где оно ещё наше, и забыть базлайн.
+
+        Решение — поэлементное (`_preview_live_fields`), а не «всё или ничего»:
+        узлу, чью геометрию уже вернул чужой откат, базлайн не возвращается
+        (это отменило бы сам откат — граница §48), а его соседям по набору
+        возвращается, потому что их превью никто не трогал.
+        """
+        live = self._preview_live_fields()
+        if not live:
+            # Превью не осталось ни у кого: модель пересобрали (undo/redo
+            # снимочной команды) либо его и не вписывали. Возвращать нечего —
+            # базлайн больше не про эту модель (замер §83б: раньше в эту ветку
+            # уходила ЛЮБАЯ правка на месте, и превью оставалось молча).
+            self._drop_resize_baseline()
+            return {}
+        # Пины — базлайном целиком, а не по `live`: `rescale_edge_pins`
+        # домножает dx/dy НА МЕСТЕ, и чужой откат геометрии их не касается.
+        # Оставить их — значит держать конец трубы по рамке 90×90 при рамке
+        # 20×36 у узла, которому откат вернул размер (замер §48: dx 10 → 45).
+        self._restore_resize_pins()
+        for nid, fields in live.items():
+            n = self.nodes.get(nid)
+            base = self._resize_base.get(nid)
+            if not n or not base:
+                continue
+            if 'centroid' in fields:
+                n['centroid'] = list(base['centroid'])
+            if 'bbox' in fields and base['bbox']:
+                n['bbox'] = list(base['bbox'])
+            if 'segmentation' in fields and base['segmentation']:
+                n['segmentation'] = list(base['segmentation'])
+            if 'area' in fields and base['area'] is not None:
+                n['area'] = base['area']
+        poly_edit_in_base = self._poly_edit_node in self._resize_base
+        self._drop_resize_baseline()
+        for nid in live:
+            self._refresh_node_visual(nid)
+        if poly_edit_in_base:
+            # Оверлей вершин построен из `segmentation` узла, то есть из
+            # ПРЕВЬЮ. Без пересборки следующая же запись контура
+            # (`_poly_write_node`) вписала бы превью обратно — уже отдельным
+            # шагом undo. Та же пересборка, что после undo/redo.
+            self._poly_resync_overlay()
+        return live
+
     def _revert_resize_preview(self):
         """Откатить брошенное превью: набор сменили или вышли из режима.
 
@@ -4208,43 +4300,14 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         изменённая геометрия оставалась на схеме при пустом стеке отмены —
         вернуть её оператору было нечем (замер §48).
         """
-        if not self._resize_baseline_alive():
-            # Модель пересобрали под превью (undo/redo снимочной команды) —
-            # базлайн больше не про неё, а превью физически исчезло вместе
-            # с ней; вернуть по нему значило бы отменить чужой откат.
-            # ⚠ Ветка верна ТОЛЬКО при этом условии, и проверяет его теперь
-            # сам сторож (`_preview_still_in_model`), а не счётчик мутаций:
-            # раньше сюда уходила любая правка НА МЕСТЕ, и превью оставалось
-            # в модели молча (замер §83б — шесть потребителей разом).
-            self._drop_resize_baseline()
+        reverted = self._rollback_owned_preview()
+        if not reverted:
             return
-        touched = list(self._resize_base)
-        self._restore_resize_pins()
-        for nid, base in self._resize_base.items():
-            n = self.nodes.get(nid)
-            if not n:
-                continue
-            n['centroid'] = list(base['centroid'])
-            if base['bbox']:
-                n['bbox'] = list(base['bbox'])
-            if base['segmentation']:
-                n['segmentation'] = list(base['segmentation'])
-            if base['area'] is not None:
-                n['area'] = base['area']
-        self._drop_resize_baseline()
-        for nid in touched:
-            self._refresh_node_visual(nid)
-        if self._poly_edit_node in touched:
-            # Оверлей вершин построен из `segmentation` узла, то есть из
-            # ПРЕВЬЮ. Без пересборки следующая же запись контура
-            # (`_poly_write_node`) вписала бы превью обратно — уже отдельным
-            # шагом undo. Та же пересборка, что после undo/redo.
-            self._poly_resync_overlay()
         # Штатное событие, не сбой: оператор увидит, почему рамки «вернулись».
         import logging
         logging.getLogger(__name__).info(
             "resize preview: превью не применено — набор (%d) возвращён к исходным "
-            "размерам", len(touched))
+            "размерам", len(reverted))
 
     def drop_uncommitted_preview(self) -> None:
         """Снять незафиксированное превью «Размеров». Два зовущих:
@@ -4348,6 +4411,11 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         if kind in ('mixed', 'empty'):
             return
         if not self._resize_baseline_alive():
+            # Базлайн целиком не годится — но у части набора превью ещё наше,
+            # и пересъём ПОВЕРХ него сделал бы превью новой «нормой»
+            # (на полигонах это масштаб в квадрате, §97.2). Снять своё,
+            # и только потом снимать базлайн заново.
+            self._rollback_owned_preview()
             self._capture_resize_base()
         self._apply_sizes_from_base(width, height, scale, kind)
         for nid in self._resize_sel:
@@ -4525,6 +4593,11 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         from ui.editors.undo_manager import SnapshotCommand
         # Базлайн = состояние ДО живого превью (чтобы Ctrl+Z вернул и размеры тоже).
         if not self._resize_baseline_alive():
+            # То же, что в `preview_resize`: пересъём поверх живого превью
+            # вмуровал бы его И в размер, И в точку возврата `cmd._before`
+            # (замер §97.2: полигон 605×75 → ×2 → «Применить» ×2 → 2420×300,
+            # и 605×75 недостижимы никаким числом Ctrl+Z).
+            self._rollback_owned_preview()
             self._capture_resize_base()
         cmd = SnapshotCommand(self.model, self._redraw_all)
         cmd._before = self._resize_model_base

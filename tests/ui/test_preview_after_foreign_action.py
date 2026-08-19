@@ -32,6 +32,19 @@
      и фиксация призрака вставки (Ctrl+V в базовом → «Размеры» → Ctrl+ЛКМ:
      призрак переживает смену инструмента, §86.13).
 
+  В. ТРЕТЬЯ доработка (§90.15, §90.16): сторож отвечал «ВСЁ ИЛИ НИЧЕГО» на
+     МНОЖЕСТВО узлов. Чужой Ctrl+Z по переносу возвращает ОДНОМУ узлу набора
+     centroid+bbox+segmentation и честно стирает превью только на нём — а
+     базлайн объявлялся мёртвым для ВСЕХ 17, и превью остальных вваривалось.
+     Те же три действия, что в А, только перенесённый узел — ИЗ набора:
+     на сервер уезжал `node_11` = `[-10.0, 188.0, 80.0, 278.0]` при стеке 0,
+     а на полигонах «Применить» ×2 давало 2420×300 при недостижимых 605×75.
+     Обстановка та же, что у А, поэтому тесты живут здесь, а не отдельно;
+     ⛔ отличие в ОДНОМ: набор СМЕШАННЫЙ — часть элементов тронута чужим
+     действием, часть нет (`PROTOCOL §3`). Половина А перебирала только
+     однородный случай («узел ВНЕ набора»), и агрегатный вердикт выглядел
+     верным ровно поэтому.
+
 ⛔ На ПОЛИГОНАХ вторая половина — не потеря отмены, а ПОРЧА ДАННЫХ:
 `_resize_node_poly` масштабирует ОТНОСИТЕЛЬНО базлайна, а `_resize_node_box`
 задаёт размер АБСОЛЮТНО. Пересъём базлайна поверх живого превью даёт
@@ -74,7 +87,16 @@ BOX_BBOX = [25, 215, 45, 251]
 BOX_W, BOX_H = 20, 36
 SIDE = 90                                     # цель превью: квадрат 90×90
 BOX_PREVIEW = [-10.0, 188.0, 80.0, 278.0]
+BOX_AREA = 720                                # area узла-свидетеля до превью
 FOREIGN = "node_20"         # узел ВНЕ набора — «чужое действие оператора»
+# ⛔ ГРАНИЦА (третий возврат, §90.15): «вне набора» — только ОДНА клетка.
+# Ниже — вторая: чужое действие по узлу ИЗ набора. `set_resize_class` даёт
+# 17 экземпляров `armatura_ruchn`, и `node_14` — один из них.
+INSIDE = "node_14"          # узел ИЗ набора — его касается чужой откат
+INSIDE_BBOX = [1258, 251, 1309, 279]          # 51×28
+INSIDE_CENTROID = [265, 1283]                 # [y, x] — центроиды в этой оси
+INSIDE_AREA = 1428
+INSIDE_PREVIEW_AREA = 8100.0                  # 90×90 — след превью в `area`
 
 # ── корпус полигонов: четыре настоящих полигона (требование ревизора) ────
 POLY_UID = "089feca2"       # 72 узла, 4 узла с segmentation
@@ -87,6 +109,12 @@ POLY_BOX_PREVIEW = [1992.0, 1354.0, 2192.0, 1554.0]
 POLY_NID = "node_30"        # полигон 605×75, 8 вершин
 POLY_W, POLY_H = 605.0, 75.0
 POLY_FOREIGN = "node_50"    # узел для чужого переноса на этом корпусе
+# ⛔ Та же граница на полигонах: набор ЧЕТЫРЁХ полигонов, чужой откат
+# по одному из них. Класс `unknow` — 7 узлов, из них 4 с контуром.
+POLY_SET_CLASS = "unknow"
+POLY_SET = {"node_4", "node_6", "node_29", "node_30"}
+POLY_INSIDE = "node_29"     # полигон ИЗ набора: 1247×314
+POLY_INSIDE_W, POLY_INSIDE_H = 1247.0, 314.0
 
 TOL = 1e-6
 
@@ -240,6 +268,10 @@ def _foreign_move(editor, nid, dx=7.0):
 
     Именно она (`DragNodeCommand.undo` → `_apply_state`) двигает `revision`,
     не пересобирая модель, и делает сторож протухания лжецом.
+
+    «Чужое» здесь про инструмент, а не про узел: жест одинаково законен и по
+    узлу ВНЕ набора (`FOREIGN`), и по узлу ИЗ него (`INSIDE`) — вторая клетка
+    и оказалась неперебранной (§90.15).
     """
     editor.set_mode("idle")
     cy, cx = editor.nodes[nid]["centroid"]
@@ -762,3 +794,244 @@ def test_empty_paste_buffer_keeps_the_preview_alive(box_tab, dialogs):
     assert dialogs == []
     assert ed.undo_mgr.stack_depth == depth0
     assert ed.nodes[BOX_NID]["bbox"] == pytest.approx(BOX_PREVIEW, abs=TOL)
+
+
+# =========================================================================
+# ПОЛОВИНА В — СМЕШАННОЕ состояние набора: чужой откат коснулся ОДНОГО
+#              его узла, остальных не трогал. Сторож обязан отвечать
+#              ПОЭЛЕМЕНТНО, а не одним «да/нет» на всё множество
+#              (`PROTOCOL §3`, третий возврат пункта)
+# =========================================================================
+
+def _sent_geom(tab):
+    """Геометрия ВСЕХ узлов в последнем графе, ушедшем серверу.
+
+    Сверяется целиком, а не по одному узлу: цена дефекта — превью у 16 узлов
+    из 17, и проверка «свидетель вернулся» одна прошла бы мимо остальных.
+    """
+    uploads = tab.api_client.uploads
+    assert uploads, "на сервер не ушло ничего — сверять нечего"
+    return {n["id"]: [n.get("bbox"), n.get("centroid"),
+                      n.get("segmentation"), n.get("area")]
+            for n in uploads[-1][2]["nodes"]}
+
+
+def _model_geom(editor):
+    """То же по модели — ключи те же, что у `_sent_geom`."""
+    return {nid: [nd.get("bbox"), nd.get("centroid"),
+                  nd.get("segmentation"), nd.get("area")]
+            for nid, nd in editor.nodes.items()}
+
+
+def _open_poly_set(editor):
+    """Штатный полигонный набор: класс целиком → кнопка «только полигоны»."""
+    editor.set_mode("resize_objects")
+    editor.set_resize_class(POLY_SET_CLASS)      # 7 узлов, набор смешанный
+    editor.resize_filter("poly")                 # кнопка панели → 4 полигона
+    assert editor._resize_kind() == "poly", "набор не полигонный — тест бессмыслен"
+    assert editor._resize_sel == POLY_SET, "состав набора сдвинулся"
+
+
+def test_save_after_undo_of_a_move_inside_the_set_sends_no_preview_at_all(
+        box_tab, dialogs):
+    """§90.15 — минимальная форма третьего возврата: три штатных действия.
+
+    Перенос узла ИЗ набора → «Размеры» + превью → Ctrl+Z → «Сохранить».
+    Откат честно стирает превью на перенесённом узле, и агрегатный сторож
+    объявлял базлайн мёртвым для всех 17 — превью ОСТАЛЬНЫХ уезжало серверу.
+    """
+    ed = box_tab._editor
+    geom0 = _model_geom(ed)
+    _foreign_move(ed, INSIDE)
+    _open_resize(ed, BOX_CLASS)
+    assert INSIDE in ed._resize_sel, "перенесённый узел не попал в набор"
+    assert len(ed._resize_sel) == 17, "набор класса сдвинулся — тест бессмыслен"
+    _box_preview(box_tab._editor)
+
+    ed.undo()                                   # Ctrl+Z по переносу ИЗ набора
+
+    assert box_tab._save_graph() is True
+    assert dialogs == []
+    assert ed.undo_mgr.stack_depth == 0
+    assert ed.undo_mgr.can_undo is False
+
+    sent = _sent_geom(box_tab)
+    assert sent[BOX_NID][0] == pytest.approx(BOX_BBOX, abs=TOL)
+    assert sent[BOX_NID][0] != pytest.approx(BOX_PREVIEW, abs=TOL)
+    # Ни у одного узла набора, а не только у свидетеля.
+    assert [nid for nid in geom0 if sent[nid] != geom0[nid]] == []
+
+
+def test_area_of_the_node_the_undo_touched_is_not_left_at_the_preview_value(
+        box_tab, dialogs):
+    """Вторая ось того же дефекта: откат вернул узлу НЕ ВСЕ поля.
+
+    `DragNodeCommand.undo` кладёт назад centroid/bbox/segmentation и не
+    трогает `area` — превью в непокрытом поле пережило бы откат навсегда
+    и уехало на сервер (замер §97.3: 1428 → 8100 у самого перенесённого).
+    Поэтому сторож сверяет отпечаток ПО ПОЛЯМ, а не одним кортежем.
+    """
+    ed = box_tab._editor
+    _foreign_move(ed, INSIDE)
+    _open_resize(ed, BOX_CLASS)
+    _box_preview(ed)
+    assert ed.nodes[INSIDE]["area"] == pytest.approx(INSIDE_PREVIEW_AREA, abs=TOL), \
+        "превью не тронуло area — тест бессмыслен"
+
+    ed.undo()
+
+    assert box_tab._save_graph() is True
+    assert dialogs == []
+
+    sent = _sent_geom(box_tab)
+    assert sent[INSIDE][3] == pytest.approx(INSIDE_AREA, abs=TOL)
+    assert sent[INSIDE][3] != pytest.approx(INSIDE_PREVIEW_AREA, abs=TOL)
+    assert sent[BOX_NID][3] == pytest.approx(BOX_AREA, abs=TOL)
+
+
+def test_the_node_the_undo_touched_keeps_what_its_own_undo_left(
+        box_tab, dialogs):
+    """Граница §48 на смешанном наборе: чужой откат НЕ отменяется.
+
+    Два переноса подряд, отмена одного: перенесённый узел обязан остаться
+    там, куда его вернул ОПЕРАТОР, — не на исходном месте и не в превью.
+    Без второго переноса «после отката» и «исходное» совпадают, и тест не
+    отличил бы возврат по базлайну от правильного поведения.
+    """
+    ed = box_tab._editor
+    _foreign_move(ed, INSIDE, dx=7.0)
+    _foreign_move(ed, INSIDE, dx=11.0)
+    assert ed.undo_mgr.stack_depth == 2, "два переноса — не два шага стека"
+    _open_resize(ed, BOX_CLASS)
+    _box_preview(ed)
+
+    ed.undo()                                   # отменён ТОЛЬКО второй перенос
+    after_undo = list(ed.nodes[INSIDE]["centroid"])
+    assert after_undo != INSIDE_CENTROID, "отмена вернула узел на исходное место"
+
+    assert box_tab._save_graph() is True
+    assert dialogs == []
+
+    sent = _sent_geom(box_tab)
+    assert sent[INSIDE][1] == pytest.approx(after_undo, abs=TOL)
+    assert sent[INSIDE][1] != pytest.approx(INSIDE_CENTROID, abs=TOL)
+    assert (sent[INSIDE][0][2] - sent[INSIDE][0][0]) == pytest.approx(
+        INSIDE_BBOX[2] - INSIDE_BBOX[0], abs=TOL), "у перенесённого узла превью"
+    assert sent[BOX_NID][0] == pytest.approx(BOX_BBOX, abs=TOL)
+
+
+_MIXED_COMMANDS = {
+    "auto_fix": lambda tab: tab._auto_fix(),
+    "optimize_all": lambda tab: tab._optimize_all_edges(),
+    "batch_delete": lambda tab: tab._batch_delete(),
+    "ocr_funnel": lambda tab: tab._editor._ocr_commit(
+        tab._editor._ocr_push_snapshot("Проба OCR-команды")),
+}
+
+
+@pytest.mark.parametrize("action", sorted(_MIXED_COMMANDS))
+def test_command_after_undo_of_a_move_inside_the_set_does_not_weld_the_preview(
+        box_tab, dialogs, action):
+    """П. 3 объёма: четыре кнопки и воронка OCR на СМЕШАННОМ наборе.
+
+    Все они ходят через `drop_uncommitted_preview()`, поэтому агрегатный
+    вердикт выключал их все разом — здесь каждая проверена своим прогоном.
+    """
+    ed = box_tab._editor
+    geom0 = _model_geom(ed)
+    _foreign_move(ed, INSIDE)
+    _open_resize(ed, BOX_CLASS)
+    if action == "batch_delete":
+        ed.selected_nodes.add("node_30")         # жертва ВНЕ набора «Размеров»
+    _box_preview(ed)
+
+    ed.undo()                                    # чужой откат по узлу ИЗ набора
+    assert ed.undo_mgr.stack_depth == 0
+    _MIXED_COMMANDS[action](box_tab)
+
+    assert dialogs == []
+    assert ed.undo_mgr.stack_depth >= 1, "команда не построила шаг — тест бессмыслен"
+    assert _size(ed, BOX_NID) == pytest.approx((BOX_W, BOX_H), abs=TOL)
+    assert _size(ed, BOX_NID) != pytest.approx((SIDE, SIDE), abs=TOL)
+
+    while ed.undo_mgr.can_undo:
+        ed.undo()
+
+    assert _model_geom(ed) == geom0
+
+
+def test_smooth_after_undo_of_a_move_inside_the_set_does_not_weld_the_preview(
+        box_layout_tab, dialogs):
+    """Вторая ветка той же кнопки (холст после раскладки → сглаживание)."""
+    ed = box_layout_tab._editor
+    geom0 = _model_geom(ed)
+    _foreign_move(ed, INSIDE)
+    _open_resize(ed, BOX_CLASS)
+    _box_preview(ed)
+
+    ed.undo()
+    box_layout_tab._auto_fix()
+
+    assert dialogs == []
+    assert _last_step(ed) == "Сглаживание", "ушли не в ту ветку кнопки"
+    assert _size(ed, BOX_NID) == pytest.approx((BOX_W, BOX_H), abs=TOL)
+
+    while ed.undo_mgr.can_undo:
+        ed.undo()
+
+    assert _model_geom(ed) == geom0
+
+
+def test_polygon_apply_after_undo_of_a_move_inside_the_set_is_not_squared(
+        poly_tab, dialogs):
+    """§90.16 — цена дефекта на полигонах: масштаб в квадрате.
+
+    Набор из четырёх полигонов, чужой откат по ОДНОМУ из них. Пересъём
+    базлайна поверх живого превью остальных давал 605×75 → ×2 → «Применить»
+    ×2 → 2420×300, и исходные 605×75 не достижимы никаким числом Ctrl+Z.
+    """
+    ed = poly_tab._editor
+    _foreign_move(ed, POLY_INSIDE)
+    _open_poly_set(ed)
+
+    ed.preview_resize(scale=2.0)
+    assert _size(ed, POLY_NID) == pytest.approx((2 * POLY_W, 2 * POLY_H), abs=TOL), \
+        "превью ничего не изменило — тест бессмыслен"
+
+    ed.undo()                                    # чужой откат по узлу ИЗ набора
+    ed.apply_resize(scale=2.0)
+
+    assert dialogs == []
+    assert _size(ed, POLY_NID) == pytest.approx((2 * POLY_W, 2 * POLY_H), abs=TOL)
+    assert _size(ed, POLY_NID) != pytest.approx((4 * POLY_W, 4 * POLY_H), abs=TOL)
+
+    while ed.undo_mgr.can_undo:
+        ed.undo()
+
+    assert _size(ed, POLY_NID) == pytest.approx((POLY_W, POLY_H), abs=TOL)
+    assert _size(ed, POLY_INSIDE) == pytest.approx(
+        (POLY_INSIDE_W, POLY_INSIDE_H), abs=TOL)
+
+
+def test_polygon_preview_repeated_after_undo_of_a_move_inside_the_set_is_not_squared(
+        poly_tab, dialogs):
+    """Тот же квадрат на СОСЕДНЕМ пути: второе превью вместо «Применить».
+
+    Пересъём базлайна живёт и в `preview_resize`, и в `apply_resize` — путь
+    «бегунок дёрнули ещё раз» достижим тем же жестом и той же ценой.
+    """
+    ed = poly_tab._editor
+    _foreign_move(ed, POLY_INSIDE)
+    _open_poly_set(ed)
+
+    ed.preview_resize(scale=2.0)
+    ed.undo()
+    ed.preview_resize(scale=2.0)                 # второй тик бегунка
+
+    assert dialogs == []
+    assert _size(ed, POLY_NID) == pytest.approx((2 * POLY_W, 2 * POLY_H), abs=TOL)
+    assert _size(ed, POLY_NID) != pytest.approx((4 * POLY_W, 4 * POLY_H), abs=TOL)
+
+    ed._exit_resize_objects()                    # Esc — превью брошено
+
+    assert _size(ed, POLY_NID) == pytest.approx((POLY_W, POLY_H), abs=TOL)
