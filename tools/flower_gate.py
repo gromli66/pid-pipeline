@@ -15,7 +15,7 @@ Flower поднимается с нашим приложением (`-A worker.c
 |---|---|---|---|
 | A | сканер с КОРОТКИМ окном против чужого unacked | сообщение восстановлено | механизм реален — так Flower на голом URL отменял бы 1.2 |
 | B | сканер с окном ЖЕРТВЫ (парность) | не восстановлено | порог заперт с двух сторон: стенд не красит всегда |
-| C | боевой контейнер Flower | окно **7200** на канале и > самого длинного `time_limit` | `-A worker.celery_app` доехал до kombu, а не лежит в тексте |
+| C | боевой контейнер Flower **и живой флот** | окно **7200** и у Flower, и у каждого ответившего воркера, и > самого длинного `time_limit` | `-A worker.celery_app` доехал до kombu; окно флота = минимум по живым, поэтому спрашиваем всех |
 | D | Flower показывает очереди и задачи | зондовая задача видна | собственно польза сервиса |
 
 Ноги A и B — зонд друг другу: одна и та же машинерия, разница только в окне
@@ -39,13 +39,22 @@ Flower поднимается с нашим приложением (`-A worker.c
 |---|---|---|
 | доказано | 0 | все запрошенные ноги отработали как ожидалось |
 | опровергнуто | 1 | Flower не поднят / не показывает / несёт чужое окно; порог не заперт |
-| судить нечем | 2 | нет брокера, нет воркера на очереди зонда, нет docker/контейнера |
+| судить нечем | 2 | нет брокера, нет воркера на очереди зонда, нет docker/контейнера, нет `FLOWER_BASIC_AUTH` |
 
 ⛔ «Flower не поднят» — это КРАСНЫЙ исход, а не «судить нечем»: ровно это гейт
 и обязан ловить.
 
 ⛔ `CELERY_BROKER_URL` сильнее аргумента `Celery(broker=...)` (замер 1.2) —
 поэтому зонд пинит окружение сам и печатает адрес, на который сел.
+
+⛔ Сам гейт — тоже потребитель брокера, и на него распространяется то же правило
+флота (`WORKER_TASKS.md §1`): его приложение в ноге D поднимается с окном 7200,
+иначе стенд, который охраняет правило, нарушал бы его дефолтом kombu 3600.
+
+⛔ API Flower закрыт basic-auth (`FLOWER_BASIC_AUTH`, `user:pass` в `.env`, в git
+секрета нет): с приложением проекта в реестре Flower лежат все 12 боевых задач,
+а `POST /api/task/async-apply/<name>` запускает любую. Без переменной нога D
+отдаёт «судить нечем», а не красное — представиться нечем, а не сломано.
 
 Запуск (из корня репо, локальный стек поднят):
     python -X utf8 tools/flower_gate.py --check
@@ -55,8 +64,10 @@ Flower поднимается с нашим приложением (`-A worker.c
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -65,9 +76,11 @@ import urllib.request
 import uuid
 
 DEFAULT_BROKER = "redis://localhost:6380/0"      # порт хоста из docker-compose.yml
-DEFAULT_FLOWER = "http://127.0.0.1:5555"         # loopback: у Flower нет аутентификации
+DEFAULT_FLOWER = "http://127.0.0.1:5555"         # loopback + basic-auth (см. AUTH_ENV)
 DEFAULT_QUEUE = "default"                        # слушает pid_worker (-Q default,gpu,sam2)
 DEFAULT_CONTAINER = "pid_flower"
+DEFAULT_WORKER_CONTAINER = "pid_worker"
+AUTH_ENV = "FLOWER_BASIC_AUTH"                   # `user:pass`, живёт в .env, не в git
 PROBE_TASK = "celery.accumulate"                 # встроенная чистая задача celery
 TASK_WAIT_S = 30                                 # событие долетает за ~1 с, запас на CI
 
@@ -82,10 +95,31 @@ EXPECTED_WINDOW = 7200                           # то же число, что 
 PROVEN, REFUTED, NO_VERDICT = 0, 1, 2
 
 
-def _get_json(url: str, timeout: float = 10.0):
-    """GET с разбором JSON. Возвращает (данные, None) или (None, причина)."""
+def _credentials() -> str | None:
+    """`user:pass` для Flower. Берём из окружения и из .env — секрета в git нет."""
+    value = os.environ.get(AUTH_ENV)
+    if value:
+        return value.strip()
+    env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
+        with open(env_file, encoding="utf-8") as handle:
+            for line in handle:
+                name, _, rest = line.partition("=")
+                if name.strip() == AUTH_ENV and rest.strip():
+                    return rest.strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return None
+
+
+def _get_json(url: str, timeout: float = 10.0, auth: str | None = None):
+    """GET с разбором JSON. Возвращает (данные, None) или (None, причина)."""
+    request = urllib.request.Request(url)
+    if auth:
+        token = base64.b64encode(auth.encode("utf-8")).decode("ascii")
+        request.add_header("Authorization", f"Basic {token}")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as resp:
             if resp.status != 200:
                 return None, f"HTTP {resp.status}"
             return json.loads(resp.read().decode("utf-8")), None
@@ -221,8 +255,44 @@ def _container_cmdline(container: str) -> tuple[str | None, str]:
     return done.stdout.strip(), ""
 
 
-def leg_c(container: str) -> int:
-    print(f"[нога C] окно невидимости в контейнере {container}")
+FLEET_CMD = ["celery", "-A", "worker.celery_app", "inspect", "conf", "--json"]
+
+
+def _window_of(conf) -> int | None:
+    """visibility_timeout из конфига воркера: он приезжает и словарём, и строкой."""
+    options = conf.get("broker_transport_options") if isinstance(conf, dict) else None
+    if isinstance(options, dict):
+        value = options.get("visibility_timeout")
+        return int(value) if value is not None else None
+    if isinstance(options, str):                      # celery сериализует repr() словаря
+        found = re.search(r"'visibility_timeout':\s*(\d+)", options)
+        return int(found.group(1)) if found else None
+    return None
+
+
+def _fleet_windows(worker_container: str) -> tuple[dict[str, int | None] | None, str]:
+    """Окна ЖИВЫХ потребителей — спрашиваем сам флот, а не файл конфига."""
+    try:
+        done = subprocess.run(
+            ["docker", "exec", "-w", "/app", worker_container, *FLEET_CMD],
+            capture_output=True, text=True, timeout=180,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, f"docker недоступен: {exc}"
+    if done.returncode != 0 or not done.stdout.strip():
+        tail = (done.stderr or done.stdout).strip().splitlines()[-1:] or ["без вывода"]
+        return None, f"флот не ответил на `{' '.join(FLEET_CMD)}`: {tail[0]}"
+    try:
+        replies = json.loads(done.stdout)
+    except json.JSONDecodeError as exc:
+        return None, f"ответ флота не разбирается: {exc}"
+    if not replies:
+        return None, "ни один воркер не ответил"
+    return {name: _window_of(conf) for name, conf in replies.items()}, ""
+
+
+def leg_c(container: str, worker_container: str) -> int:
+    print(f"[нога C] окно невидимости в контейнере {container} и у живого флота")
     cmdline, why = _container_cmdline(container)
     if cmdline is None:
         print(f"[судить нечем] {why}")
@@ -256,7 +326,24 @@ def leg_c(container: str) -> int:
     if window <= longest:
         print(f"[ОПРОВЕРГНУТО] окно {window} не длиннее самой длинной задачи {longest}")
         return REFUTED
-    print("[ДОКАЗАНО] Flower несёт то же окно, что воркер, и переживает самую длинную задачу")
+
+    # Вторая половина: то же самое, но спросив ЖИВОЙ флот, а не файл конфига.
+    # Инвариант «окно флота = минимум по живым потребителям» иначе заперт с одной
+    # стороны: Flower мог бы нести 7200 при воркере, оставшемся на 3600 в памяти.
+    fleet, why = _fleet_windows(worker_container)
+    if fleet is None:
+        print(f"[судить нечем] {why}")
+        return NO_VERDICT
+    print("[флот] " + ", ".join(f"{name}: {value}" for name, value in sorted(fleet.items())))
+    odd = {name: value for name, value in fleet.items() if value != EXPECTED_WINDOW}
+    if odd:
+        known = [value for value in odd.values() if value]
+        when = f"на {min(known) + 1}-й секунде" if known else "как только окно истечёт"
+        print(f"[ОПРОВЕРГНУТО] у живых потребителей окно не {EXPECTED_WINDOW}: {odd} — "
+              f"решает минимум по флоту, дубль вернётся {when}")
+        return REFUTED
+    print(f"[ДОКАЗАНО] Flower и все {len(fleet)} живых потребителей несут окно {window} с, "
+          f"оно переживает самую длинную задачу ({longest} с)")
     return PROVEN
 
 
@@ -276,12 +363,30 @@ def _live_queues(app) -> tuple[set[str] | None, str]:
     return names, f"воркеров {len(active)}, очередей {len(names)}"
 
 
-def leg_d(broker: str, flower_url: str, queue: str) -> int:
-    print(f"[нога D] Flower {flower_url}, очередь зонда {queue!r}")
+def probe_app(broker: str):
+    """Приложение самого гейта.
+
+    ⛔ Гейт не имеет права быть потребителем с коротким окном: `inspect`
+    открывает канал на боевом брокере, а по правилу флота (`WORKER_TASKS.md §1`)
+    окно флота — минимум по живым каналам. Без этой строки стенд, который
+    охраняет правило, сам бы его нарушал дефолтом kombu 3600.
+    """
     os.environ["CELERY_BROKER_URL"] = broker      # env сильнее аргумента (замер 1.2)
     from celery import Celery
 
     app = Celery(broker=broker)
+    app.conf.broker_transport_options = {"visibility_timeout": EXPECTED_WINDOW}
+    return app
+
+
+def leg_d(broker: str, flower_url: str, queue: str) -> int:
+    print(f"[нога D] Flower {flower_url}, очередь зонда {queue!r}")
+    auth = _credentials()
+    if not auth:
+        print(f"[судить нечем] нет {AUTH_ENV} (`user:pass`) — API Flower закрыт "
+              f"аутентификацией, зонду нечем представиться")
+        return NO_VERDICT
+    app = probe_app(broker)
 
     live, note = _live_queues(app)
     if live is None:
@@ -292,7 +397,7 @@ def leg_d(broker: str, flower_url: str, queue: str) -> int:
         print(f"[судить нечем] очередь {queue!r} никто не слушает — зонд некуда класть")
         return NO_VERDICT
 
-    data, err = _get_json(f"{flower_url}/api/queues/length")
+    data, err = _get_json(f"{flower_url}/api/queues/length", auth=auth)
     if err:
         print(f"[ОПРОВЕРГНУТО] Flower не отвечает на /api/queues/length — {err}")
         return REFUTED
@@ -313,7 +418,7 @@ def leg_d(broker: str, flower_url: str, queue: str) -> int:
     last = "Flower о задаче ничего не знает"
     while time.monotonic() < deadline:
         time.sleep(1.0)
-        info, err = _get_json(f"{flower_url}/api/task/info/{task_id}")
+        info, err = _get_json(f"{flower_url}/api/task/info/{task_id}", auth=auth)
         if err:
             last = f"/api/task/info — {err}"
             continue
@@ -333,7 +438,8 @@ def leg_d(broker: str, flower_url: str, queue: str) -> int:
 LEGS = ("A", "B", "C", "D")
 
 
-def run(legs, broker: str, flower_url: str, queue: str, container: str) -> int:
+def run(legs, broker: str, flower_url: str, queue: str,
+        container: str, worker_container: str) -> int:
     print(f"[гейт] брокер {broker}, стенд {_bench_url(broker)}, ноги {','.join(legs)}")
     results = {}
     for leg in legs:
@@ -342,7 +448,7 @@ def run(legs, broker: str, flower_url: str, queue: str, container: str) -> int:
         elif leg == "B":
             results[leg] = leg_b(broker)
         elif leg == "C":
-            results[leg] = leg_c(container)
+            results[leg] = leg_c(container, worker_container)
         else:
             results[leg] = leg_d(broker, flower_url, queue)
         print()
@@ -363,6 +469,8 @@ def main() -> int:
     parser.add_argument("--flower-url", default=DEFAULT_FLOWER, help=f"по умолчанию {DEFAULT_FLOWER}")
     parser.add_argument("--queue", default=DEFAULT_QUEUE,
                         help=f"очередь зонда ноги D, по умолчанию {DEFAULT_QUEUE}")
+    parser.add_argument("--worker-container", default=DEFAULT_WORKER_CONTAINER,
+                        help=f"через него спрашиваем флот, по умолчанию {DEFAULT_WORKER_CONTAINER}")
     parser.add_argument("--container", default=DEFAULT_CONTAINER,
                         help=f"контейнер Flower для ноги C, по умолчанию {DEFAULT_CONTAINER}")
     args = parser.parse_args()
@@ -370,7 +478,8 @@ def main() -> int:
         parser.print_help()
         return NO_VERDICT
     return run(args.leg or list(LEGS), args.broker,
-               args.flower_url.rstrip("/"), args.queue, args.container)
+               args.flower_url.rstrip("/"), args.queue, args.container,
+               args.worker_container)
 
 
 if __name__ == "__main__":

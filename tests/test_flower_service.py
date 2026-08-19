@@ -73,6 +73,34 @@ def test_flower_starts_with_the_project_app(dockerfile):
     assert '"celery", "-A", "worker.celery_app", "flower"' in command
 
 
+def test_compose_does_not_override_the_project_app_command(flower):
+    """⛔ Д1 уровня дефекта: голая команда в compose перебивает CMD образа.
+
+    Именно так пункт вернули в первый раз — `celery --broker=… flower` без `-A`.
+    Проверка стадии образа этого не ловит: `command:` в compose сильнее.
+    """
+    override = flower.get("command") or flower.get("entrypoint")
+    if override is None:
+        return
+    text = " ".join(override) if isinstance(override, list) else " ".join(override.split())
+    assert "-A worker.celery_app" in text, (
+        "compose перебивает команду образа и поднимает Flower мимо приложения проекта: "
+        "его канал возьмёт дефолт kombu 3600 и будет возвращать чужие unacked"
+    )
+
+
+def test_api_is_not_open_without_auth(flower):
+    """⛔ С приложением проекта открытый API = запуск боевых задач по HTTP."""
+    env = dict(item.split("=", 1) for item in flower["environment"])
+    assert "FLOWER_UNAUTHENTICATED_API" not in env, (
+        "открытый API вместе с реестром боевых задач даёт "
+        "POST /api/task/async-apply/<name> без авторизации"
+    )
+    assert env["FLOWER_BASIC_AUTH"] == "${FLOWER_BASIC_AUTH:-}", (
+        "пароль Flower берётся из .env и не имеет дефолта в git"
+    )
+
+
 def test_worker_image_does_not_include_flower_stage(compose):
     """Сборка воркера обязана останавливаться на своей стадии."""
     assert compose["services"]["worker"]["build"]["target"] == "worker"
@@ -98,6 +126,18 @@ def test_gate_expects_the_configured_window():
     """Сторож самого гейта: его число не разъехалось с конфигом приложения."""
     assert EXPECTED_WINDOW == VISIBILITY_TIMEOUT
     assert celery_app.conf.broker_transport_options["visibility_timeout"] == VISIBILITY_TIMEOUT
+
+
+def test_gate_itself_is_not_a_short_window_consumer():
+    """⛔ Стенд, охраняющий правило флота, обязан ему подчиняться сам.
+
+    `inspect` в ноге D открывает канал на боевом брокере; на дефолте kombu это
+    3600 — то есть гейт своими руками вернул бы Б10, который стережёт.
+    """
+    from tools.flower_gate import probe_app
+
+    app = probe_app("redis://localhost:6380/0")
+    assert app.conf.broker_transport_options["visibility_timeout"] == VISIBILITY_TIMEOUT
 
 
 def test_gate_targets_the_published_port_and_a_served_queue():

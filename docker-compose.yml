@@ -238,10 +238,12 @@ services:
       - STORAGE_PATH=/storage/diagrams
       - PROJECTS_CONFIG_DIR=/app/configs/projects
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      # Без этого Flower 2.x отдаёт на /api/* «...variable is required...» — а гейт
-      # пункта читается именно через API. Экспозиции не добавляет: UI на том же
-      # порту и так открыт, порт — loopback.
-      - FLOWER_UNAUTHENTICATED_API=true
+      # ⛔ Аутентификация обязательна: с приложением проекта в реестре Flower лежат
+      # все боевые задачи, а POST /api/task/async-apply/<name> запускает любую.
+      # Открытый API = запуск конвейера по HTTP без авторизации. Значение — `user:pass`
+      # из .env (в git его нет); пустое значение оставляет API ЗАКРЫТЫМ, и гейт
+      # честно отдаёт «судить нечем».
+      - FLOWER_BASIC_AUTH=${FLOWER_BASIC_AUTH:-}
     volumes:
       - ./worker:/app/worker
       - ./modules:/app/modules
