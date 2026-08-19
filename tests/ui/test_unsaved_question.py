@@ -526,7 +526,15 @@ def test_autosave_tick_reaches_the_tab_save_method(qapp, monkeypatch):
     service = AutoSaveService()
     service.start(tab)
     service._timer.setInterval(10)      # 120 с боевого интервала не ждут
-    deadline = time.monotonic() + 5
+    # ЗАПАС, А НЕ ОЖИДАНИЕ: тик приходит сразу, но только в чистом процессе.
+    # Замер 1.x11 (§85и): после тяжёлых UI-файлов набора первое срабатывание
+    # свежего 10-мс таймера в этом же процессе занимает 1.4–1.9 с локально
+    # (`test_direction_retry_deadend.py` — 1.78 с в одиночку, мой файл — 0.06 с),
+    # и на раннере CI прежние 5 с кончались раньше тика: тест краснел не на
+    # автосохранении, а на бюджете. Порог поднят до 30 с — зелёный прогон от
+    # этого не удлиняется (цикл выходит по первому тику), а красный по-прежнему
+    # означает «тик не дошёл».
+    deadline = time.monotonic() + 30
     while not saves and time.monotonic() < deadline:
         qapp.processEvents()
     service.stop()
