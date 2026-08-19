@@ -28,6 +28,14 @@
 ⚠ `QMessageBox` подменён с утверждением о ФАКТЕ вызова, а не таймаутом:
 модальный диалог в пути инъекции подвешивает набор вместо падения
 (`PROTOCOL §5`, замеры 1.5, 1.3 и 1.4).
+
+── Пункт 1.x10 (нижняя половина файла) ──────────────────────────────────
+Второй слой той же вкладки: политика `swallow` у НЕОБЯЗАТЕЛЬНЫХ заданий.
+1.x8 запер её здесь характеризационным тестом КАК ФАКТ («у этой вкладки
+`swallow` шире, чем у графовой») и передал архитектору строкой. 1.x10 этот
+замок снял и заменил приёмкой: у необязательных заданий стоит `(APIError,)`,
+как решил 0.5, — отказ ЛОКАЛЬНОГО диска обязан уводить вкладку в ошибку,
+а отказ сервера по-прежнему глотается молча.
 """
 import json
 import logging
@@ -76,6 +84,28 @@ GRAPH_SAVED = json.dumps(_graph(N_SAVED)).encode()
 GRAPH_RAW = json.dumps(_graph(N_RAW)).encode()
 OCR_RESULT = json.dumps({"target": [], "secondary": []}).encode()
 
+# ── сохранённая работа оператора в `ocr_binding` (пункт 1.x10) ────────────
+# Формат v2: подписи + отредактированные оператором блоки. Блоки приезжают
+# ИМЕННО отсюда (`_on_download_finished`: `edited_blocks` перекрывает
+# `ocr_result`), поэтому потеря этого артефакта = потеря обеих половин работы.
+N_BINDINGS = 2                  # привязок в сохранённой работе оператора
+
+_BLOCKS = [
+    {"bbox": [48.0, 30.0, 112.0, 52.0], "text": "10LBA10", "confidence": 0.98,
+     "source": "ocr", "origin": "ocr"},
+    {"bbox": [148.0, 30.0, 212.0, 52.0], "text": "DN100", "confidence": 0.95,
+     "source": "ocr", "origin": "ocr"},
+]
+BINDING_SAVED = json.dumps({
+    "version": 2,
+    "bindings": [
+        {"ocr_block_idx": i, "text": b["text"], "bbox": b["bbox"],
+         "node_id": f"n{i}"}
+        for i, b in enumerate(_BLOCKS)
+    ],
+    "edited_blocks": _BLOCKS,
+}).encode()
+
 
 @pytest.fixture(scope="module")
 def qapp():
@@ -104,6 +134,7 @@ class FakeAPI:
         self.blobs = dict(blobs)
         self.failures = dict(failures or {})
         self.calls = []
+        self.saves = []
 
     def _put(self, name, dest_path):
         self.calls.append(name)
@@ -130,14 +161,35 @@ class FakeAPI:
     def download_ocr_validation(self, uid, dest_path):
         return self._put("ocr_validation", dest_path)
 
+    # -- запись (пункт 1.x10) ---------------------------------------------
+    # Боевой сервер кладёт сохранённое ТУДА ЖЕ, откуда вкладка потом читает,
+    # поэтому и подставной пишет в те же блобы: только так видно, что первое
+    # сохранение сделало с работой оператора.
 
-def _server(raster, *, saved=True, raw=True, failures=None):
+    def _store(self, name, path):
+        self.blobs[name] = Path(path).read_bytes()
+        self.saves.append(name)
+        return {}
+
+    def save_ocr_binding(self, uid, path):
+        return self._store("ocr_binding", path)
+
+    def save_ocr_validation(self, uid, path):
+        return self._store("ocr_validation", path)
+
+    def upload_validated_graph(self, uid, path):
+        return self._store("graph_validated", path)
+
+
+def _server(raster, *, saved=True, raw=True, binding=None, failures=None):
     """Сервер по описанию: что на нём лежит и что из этого отказывает."""
     blobs = {"original_image": raster, "ocr_result": OCR_RESULT}
     if saved:
         blobs["graph_validated"] = GRAPH_SAVED
     if raw:
         blobs["graph_json"] = GRAPH_RAW
+    if binding is not None:
+        blobs["ocr_binding"] = binding
     return FakeAPI(blobs, failures)
 
 
@@ -183,16 +235,24 @@ def open_tab(qapp, monkeypatch):
 
     opened = []
 
-    def _open(api):
+    def _open(api, *, allow_error=False):
+        """`allow_error=True` → вернуть `(вкладка_или_None, error)`.
+
+        Пункт 1.x10: отказ загрузки — законный исход, и проверять надо ровно
+        то, что вкладка при нём НЕ открывается; поэтому сессия обязана уметь
+        пережить `error`, а не падать на нём своим `assert`.
+        """
         monkeypatch.setattr(
             OcrBindingTab, "_start_download",
             lambda self: setattr(self, "_download_thread", QThread(self)))
         tab = OcrBindingTab(UID, "проба 1.x8", api)
         opened.append(tab)
         artifacts, error = _download(api, tab.temp_dir)
+        if allow_error and error is not None:
+            return None, error
         assert error is None, f"загрузчик увёл вкладку в ошибку: {error}"
         tab._on_download_finished(artifacts)
-        return tab
+        return (tab, None) if allow_error else tab
 
     yield _open
     for tab in opened:
@@ -292,24 +352,163 @@ def test_both_candidates_gone_still_drives_the_tab_to_error(raster, tmp_path):
     assert error is not None
 
 
-def test_swallow_of_optional_jobs_is_untouched(raster, tmp_path):
-    """Характеризация, НЕ приёмка: у этой вкладки `swallow` шире, чем у графовой.
+# =========================================================================
+# Пункт 1.x10 — политика `swallow` у необязательных заданий этой вкладки
+# =========================================================================
+# ⛔ Здесь стоял характеризационный `test_swallow_of_optional_jobs_is_untouched`
+# (1.x8): он запирал КАК ФАКТ то, что у необязательных заданий этой вкладки
+# `swallow` дефолтный `(Exception,)`, и сам требовал переписать себя тем
+# пунктом, который возьмётся за различение 0.5. Это он и есть.
+#
+# Инвариант 0.5, к которому приводится вкладка: отказ СЕРВЕРА у необязательного
+# артефакта терпим (его может законно не быть), отказ ЛОКАЛЬНОГО ДИСКА — нет.
+# Граница проходит ровно по `APIError`: `APIClient._request_raw` заворачивает
+# в него и HTTP-коды, и сетевые сбои (`api_client.py:199-204`), а `write_bytes`
+# в `dest` лежит ЗА этой обёрткой (`:387-389`, `:673-676`, `:697-700`) — то есть
+# не-`APIError` здесь означает «локальная запись не удалась».
 
-    ⛔ Замерено, а не выведено (§73д). У необязательных заданий здесь стоит
-    ДЕФОЛТНЫЙ `swallow=(Exception,)`, а не `(APIError,)`, как у графовой вкладки
-    после 0.5. Значит `OSError` (диск, права) на `ocr_binding` глотается молча
-    и без флага: привязки оператора не приезжают, а вкладка об этом не говорит.
-    Это НЕ адрес пункта 1.x8 (пункт правит цепочку графа), поэтому поведение
-    здесь ЗАПЕРТО КАК ФАКТ — чтобы правка 1.x8 не сдвинула его случайно, — и
-    вынесено архитектору строкой в журнал доски. Тест обязан быть переписан
-    тем пунктом, который возьмётся за различение 0.5 в этой вкладке.
+
+def _bindings_on_server(api) -> int:
+    """Сколько привязок сейчас лежит на сервере — по ним видно, чья это работа."""
+    stored = json.loads(api.blobs["ocr_binding"].decode())
+    return len(stored["bindings"])
+
+
+# ── половина 1: цена отказа (сценарий, уровень дефекта) ──────────────────
+
+def test_a_save_reaches_the_server_and_the_reader_sees_it(
+        raster, open_tab, dialogs):
+    """Контроль честности следующего теста: запись ДОХОДИТ и ВИДНА.
+
+    ⛔ Первая редакция проверяла «после сохранения на сервере 2 привязки» —
+    и была ДЕКОРАТИВНОЙ: столько же лежало там до сохранения, поэтому зонд
+    «обезвредить запись в подставном сервере» её не покрасил (родня §76.7).
+    Экзамен сдаёт только РАЗНИЦА: оператор снимает одну привязку, и она
+    обязана исчезнуть у читателя.
     """
-    api = _server(raster)
+    api = _server(raster, binding=BINDING_SAVED)
+    tab = open_tab(api)
+
+    assert len(tab._bindings) == N_BINDINGS, "вкладка не подняла работу оператора"
+    tab.editor.set_bindings(tab._bindings[:1])        # оператор снял одну
+    assert tab._save_binding() is True
+    assert "ocr_binding" in api.saves, "сохранение до сервера не дошло"
+    assert _bindings_on_server(api) == 1, \
+        "запись не видна читателю — на таком стенде «работа цела» ничего не значит"
+
+
+def test_disk_failure_never_costs_the_operator_the_saved_binding(
+        raster, open_tab, dialogs):
+    """Сценарий целиком: отказ диска → работа оператора на сервере цела.
+
+    До правки: `OSError` глотался, вкладка открывалась с ПУСТЫМИ привязками,
+    и первое же сохранение писало эту пустоту поверх работы оператора
+    (`_save_binding` зовёт `save_ocr_binding` БЕЗУСЛОВНО, `:1573`). Путь
+    достижим и без оператора: `ui/services/autosave.py:_SAVE_METHODS` зовёт
+    у этой вкладки тот же `_save_binding` по таймеру (120 с, включено
+    по умолчанию).
+    """
+    api = _server(raster, binding=BINDING_SAVED)
+    api.failures["ocr_binding"] = OSError("диск отвалился")
+
+    tab, error = open_tab(api, allow_error=True)
+    if tab is not None:                       # вкладка всё же открылась —
+        tab._save_binding()                   # ... вот чем кончается её работа
+
+    assert _bindings_on_server(api) == N_BINDINGS, (
+        "сохранённые привязки оператора затёрты из-за отказа ЛОКАЛЬНОГО диска")
+    assert error is not None, "вкладка обязана уйти в отказ, а не работать вслепую"
+
+
+# ── половина 2: политика на каждом необязательном задании ────────────────
+
+def test_disk_failure_on_binding_drives_the_tab_to_error(raster, tmp_path):
+    """`ocr_binding`: не-`APIError` не глотается — вкладка уходит в ошибку."""
+    api = _server(raster, binding=BINDING_SAVED)
     api.failures["ocr_binding"] = OSError("диск отвалился")
 
     artifacts, error = _download(api, tmp_path / "e")
 
-    assert error is None, "поведение изменилось — см. докстроку, это находка §73д"
-    assert "binding" not in artifacts, "привязки не приехали"
+    assert artifacts is None
+    assert error is not None and "диск отвалился" in error
+
+
+def test_disk_failure_on_validation_drives_the_tab_to_error(raster, tmp_path):
+    """`ocr_validation`: та же политика — задание необязательное, диск нет."""
+    api = _server(raster)
+    api.blobs["ocr_validation"] = json.dumps({"classifications": []}).encode()
+    api.failures["ocr_validation"] = OSError("нет места на диске")
+
+    artifacts, error = _download(api, tmp_path / "f")
+
+    assert artifacts is None
+    assert error is not None and "нет места на диске" in error
+
+
+def test_disk_failure_on_the_whole_coco_chain_drives_the_tab_to_error(
+        raster, tmp_path):
+    """Цепочка coco: политику судит ПОСЛЕДНИЙ кандидат — валить обоих.
+
+    ⚠ Свойство общего `_run_job` (0.5), не этой вкладки: `swallow` сверяется
+    с исключением ПОСЛЕДНЕГО кандидата цепочки, поэтому отказ диска у
+    предпочтённого, прикрытый 404 у фолбэка, остаётся глотаемым. Здесь это
+    зафиксировано как известная граница, а не как требование.
+    """
+    api = _server(raster)
+    api.blobs["coco_validated"] = b"{}"
+    api.blobs["coco_predicted"] = b"{}"
+    api.failures["coco_validated"] = OSError("диск отвалился")
+    api.failures["coco_predicted"] = OSError("диск отвалился")
+
+    artifacts, error = _download(api, tmp_path / "g")
+
+    assert artifacts is None
+    assert error is not None
+
+
+def test_every_optional_job_carries_the_policy(raster):
+    """Политика не теряется при копировании задания — это и есть её замок.
+
+    Абсолютное требование ко ВСЕМ необязательным заданиям вкладки, а не к трём
+    известным сегодня: `swallow` копируется вместе с заданием, и потерять его
+    в четвёртом — ровно тот дефект, который чинит этот пункт.
+    """
+    from ui.tabs.ocr_binding_tab import _ARTIFACTS
+
+    optional = [j for j in _ARTIFACTS if not j.required]
+    assert len(optional) == 3, "изменился состав заданий — политику пересмотреть"
+    assert all(j.swallow == (APIError,) for j in optional), \
+        [j.fetches[0].source for j in optional if j.swallow != (APIError,)]
+
+
+# ── граница пункта: отказ СЕРВЕРА по-прежнему глотается молча ────────────
+
+def test_absent_binding_is_still_swallowed_silently(raster, open_tab, dialogs):
+    """404 = привязок законно нет (первый заход) — ни ошибки, ни модалки."""
+    tab = open_tab(_server(raster))
+
+    assert tab._bindings == []
+    assert dialogs == [], "404 — законный первый заход, пугать оператора нечем"
+
+
+def test_server_failure_on_binding_is_still_swallowed_silently(
+        raster, open_tab, dialogs):
+    """5xx: тоже глотается — это ГРАНИЦА пункта, названная в строке очереди.
+
+    ⛔ Осадок назван прямо: сохранённые привязки могли лежать на сервере, и
+    вкладка откроется без них так же молча, как при 404. Лечится это не
+    `swallow`, а `failure_key` (механизм 1.23/1.x8) — то есть отдельным
+    пунктом; здесь поведение заперто, чтобы правка его не сдвинула тихо.
+    """
+    api = _server(raster, binding=BINDING_SAVED,
+                  failures={"ocr_binding": APIError("gateway timeout", 504)})
+    tab = open_tab(api)
+
+    assert tab._bindings == []
+    assert dialogs == []
+
+    artifacts, error = _download(api, tab.temp_dir / "again")
+    assert error is None
+    assert "binding" not in artifacts
     assert not [k for k, v in artifacts.items() if v is True], \
-        "флага отказа нет — вкладка не отличает «привязок нет» от «не отдались»"
+        "флага отказа у привязки нет — это остаток, адресованный отдельному пункту"

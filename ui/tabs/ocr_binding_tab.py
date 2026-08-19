@@ -64,6 +64,15 @@ def _sorted_edge_key(ek: str) -> str:
 #: она могла быть. Молча взять фолбэк здесь дороже, чем кажется: `_save_binding`
 #: кладёт `_graph_data` обратно в `graph_validated`, то есть первое же
 #: «Сохранить» (или тик автосохранения) затрёт сохранённый граф исходным.
+#:
+#: ⛔ `swallow=(APIError,)` у необязательных (пункт 1.x10, решение 0.5) — то же
+#: правило, что у графовой вкладки: отказ СЕРВЕРА терпим (артефакта может
+#: законно не быть), отказ ЛОКАЛЬНОГО ДИСКА — нет. Граница проходит по
+#: `APIError`: сетевые сбои и коды HTTP в него завёрнуты, а запись в файл лежит
+#: за обёрткой, поэтому не-`APIError` = «скачанное не легло на диск». Молча
+#: проглоченный `ocr_binding` = вкладка открыта с ПУСТЫМИ привязками, а
+#: `_save_binding` пишет их обратно безусловно — работа оператора стирается
+#: и без его участия (автосохранение зовёт тот же метод по таймеру).
 _ARTIFACTS = (
     one(artifact("original_image", "original.png"), required=True),
     one(endpoint("download_ocr_result", "ocr_result.json", "ocr_result"),
@@ -72,10 +81,13 @@ _ARTIFACTS = (
          artifact("graph_json", "graph_validated.json", key="graph")),
         required=True, failure_key="saved_graph_download_failed"),
     Job((artifact("coco_validated", "coco_validated.json", key="coco"),
-         artifact("coco_predicted", "coco_predicted.json", key="coco"))),
-    one(endpoint("download_ocr_binding", "ocr_binding.json", "binding")),
+         artifact("coco_predicted", "coco_predicted.json", key="coco")),
+        swallow=(APIError,)),
+    one(endpoint("download_ocr_binding", "ocr_binding.json", "binding"),
+        swallow=(APIError,)),
     one(endpoint("download_ocr_validation", "ocr_validation.json",
-                 "ocr_validation")),
+                 "ocr_validation"),
+        swallow=(APIError,)),
 )
 
 
