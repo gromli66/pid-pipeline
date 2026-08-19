@@ -96,22 +96,22 @@ def test_killed_run_is_a_failure_not_a_green_gate(monkeypatch, capsys):
 
 def test_run_without_summary_line_is_a_failure():
     """Оборванный хвост при штатном коде возврата — тоже не «всё зелено»."""
-    assert sb.verdict(BASE, set(), {}, 738, 1)
+    assert sb.verdict(set(), {}, 1)
 
 
 def test_partial_output_caught_by_counter_invariant():
     """Счётчики говорят про 3 красных, а разобран один — вывод неполон."""
-    problems = sb.verdict(BASE, {"tests/test_alpha.py::test_one"}, BASE["totals"], 738, 1)
+    problems = sb.verdict({"tests/test_alpha.py::test_one"}, BASE["totals"], 1)
     assert any("вывод неполон" in p for p in problems)
 
 
 def test_healthy_run_has_no_problems():
-    assert sb.verdict(BASE, set(BASE["red"]), BASE["totals"], 738, 1) == []
-    assert sb.verdict(BASE, set(), {"failed": 0, "passed": 700, "errors": 0}, 738, 0) == []
+    assert sb.verdict(set(BASE["red"]), BASE["totals"], 1) == []
+    assert sb.verdict(set(), {"failed": 0, "passed": 700, "errors": 0}, 0) == []
 
 
 def test_shrunken_suite_is_a_failure():
-    assert any("усох" in p for p in sb.verdict(BASE, set(BASE["red"]), BASE["totals"], 705, 1))
+    assert any("усох" in p for p in sb.floor_problems(BASE, {"tests/test_alpha.py": 705})[0])
 
 
 def test_red_converted_to_skip_is_suspected():
@@ -127,6 +127,10 @@ def test_baseline_file_is_readable_and_consistent():
     assert base["min_collected"] < base["collected"], "нижняя граница не ниже снятого числа"
     assert len(base["red"]) == base["totals"]["failed"] + base["totals"]["errors"]
     assert len(set(base["red"])) == len(base["red"]), "дубли в списке красных"
+    if "per_file" in base:      # базы до 1-27 карты файлов не несут
+        assert sum(n for n, _ in base["per_file"].values()) == base["collected_git_visible"], (
+            "карта файлов и git-видимое число разошлись"
+        )
 
 
 # --- пол считается от git-видимой части сбора (пункт 0.3y) ---------------------
@@ -183,16 +187,23 @@ def test_floor_ignores_new_diagrams_in_storage():
 
     base = dict(BASE, collected=5, min_collected=2)
     for visible in (dev, runner):
-        assert not any(
-            "усох" in p
-            for p in sb.verdict(base, set(BASE["red"]), BASE["totals"], visible, 1)
-        )
+        assert not sb.floor_problems(base, {"tests/test_alpha.py": visible})[0]
 
 
 def test_shrink_of_git_visible_part_is_still_caught():
     """Потеря настоящих тестов сквозь новый счёт проходить не должна."""
-    problems = sb.verdict(BASE, set(BASE["red"]), BASE["totals"], 705, 1)
+    problems = sb.floor_problems(BASE, {"tests/test_alpha.py": 705})[0]
     assert any("усох" in p and "git-видимой" in p for p in problems)
+
+
+def test_split_collected_maps_files_and_corpus():
+    """Карта файлов и счёт корпуса вне git — из одного разбора."""
+    per_file, local = sb.split_collected(COLLECT, LOCAL)
+    assert local == 3
+    assert per_file == {
+        "tests/test_alpha.py": 1,
+        "tests/test_canvas_pipeline_golden.py": 1,
+    }
 
 
 # --- пересъём не легализует новых красных (пункт 1-26) -------------------------
@@ -220,7 +231,14 @@ ERROR tests/ui/test_gamma.py::test_three - ValueError: not enough values
 
 
 def _stand(tmp_path, monkeypatch, report, collected=738, base=BASE):
-    """Стенд пересъёма: своя база во временном файле, pytest подменён выводом."""
+    """Стенд пересъёма: своё дерево и своя база, pytest подменён выводом.
+
+    Дерево настоящее: пересъём кладёт в базу отпечаток каждого файла карты,
+    поэтому файл из подменённого сбора обязан существовать.
+    """
+    (tmp_path / "tests").mkdir(exist_ok=True)
+    (tmp_path / "tests" / "test_alpha.py").write_text("def test_one(): pass\n", encoding="utf-8")
+    monkeypatch.setattr(sb, "REPO", tmp_path)
     path = tmp_path / "suite_baseline.json"
     if base is not None:
         path.write_text(json.dumps(base, ensure_ascii=False), encoding="utf-8")
@@ -285,6 +303,17 @@ def test_write_bootstraps_without_previous_baseline(tmp_path, monkeypatch):
     assert len(json.loads(path.read_text(encoding="utf-8"))["red"]) == 4
 
 
+def test_write_records_the_file_map(tmp_path, monkeypatch):
+    """Пересъём кладёт в базу карту файлов — без неё `--check` судит одним числом."""
+    path = _stand(tmp_path, monkeypatch, REPORT_FIXED)
+
+    assert sb.cmd_write() == 0
+    written = json.loads(path.read_text(encoding="utf-8"))
+    assert written["per_file"] == {
+        "tests/test_alpha.py": [1, sb.file_digest(tmp_path / "tests" / "test_alpha.py")]
+    }
+
+
 def test_write_refuses_on_incomplete_output(tmp_path, monkeypatch):
     """Сверка на неполном списке ничего не значит: счётчики против числа id.
 
@@ -300,3 +329,124 @@ def test_write_refuses_on_incomplete_output(tmp_path, monkeypatch):
 
     assert "вывод неполон" in str(exc.value)
     assert path.read_text(encoding="utf-8") == before
+
+
+# --- откат пункта — не усыхание набора (пункт 1-27) ----------------------------
+
+TWO_TESTS = "def test_a(): pass\ndef test_b(): pass\n"
+
+
+def _tree(tmp_path, monkeypatch, files, tracked=()):
+    """Временное дерево из настоящих файлов + подменённый ответ git про пропавшие."""
+    for name, text in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    monkeypatch.setattr(sb, "REPO", tmp_path)
+    monkeypatch.setattr(sb, "tracked_by_git", lambda paths: (set(paths) & set(tracked), ""))
+
+
+def _base(per_file):
+    return dict(BASE, per_file={path: list(value) for path, value in per_file.items()})
+
+
+def test_rollback_of_an_item_is_not_a_shrink(tmp_path, monkeypatch):
+    """⛔ Дефект 1-27: гейт краснел от ЛЕГАЛЬНОГО отката пункта.
+
+    Пункты дороги приносят по 5–53 теста при допуске 5, поэтому `git revert`
+    по тегу — обещанная `PROTOCOL §6` точка возврата — ронял git-видимую часть
+    ниже пола, и стенд печатал «набор усох». Файл ушёл вместе с записью о нём
+    в git: потеря видна в диффе и судится ревизором, а не полом набора.
+    """
+    _tree(tmp_path, monkeypatch, {"tests/test_alpha.py": "def test_one(): pass\n"})
+    base = _base({
+        "tests/test_alpha.py": (1, sb.file_digest(tmp_path / "tests/test_alpha.py")),
+        "tests/test_item.py": (20, "0" * 12),          # снят откатом пункта
+    })
+
+    problems, notes = sb.floor_problems(base, {"tests/test_alpha.py": 1})
+
+    assert problems == []
+    assert any("tests/test_item.py: 20 → 0" in note for note in notes), notes
+
+
+def test_untouched_file_losing_tests_is_still_a_shrink(tmp_path, monkeypatch):
+    """Обратная полярность: файл байт-в-байт тот же, а тестов из него меньше.
+
+    Так уходят `importorskip` без установленной зависимости и `collect_ignore`
+    каталога — в диффе не видно ничего, и ловит это только пол набора. Правка
+    1-27 обязана оставить этот путь красным, иначе она односторонняя.
+    """
+    _tree(tmp_path, monkeypatch, {"tests/test_layout.py": TWO_TESTS})
+    base = _base({"tests/test_layout.py": (22, sb.file_digest(tmp_path / "tests/test_layout.py"))})
+
+    problems, _ = sb.floor_problems(base, {"tests/test_layout.py": 0})
+
+    assert any("усох" in p and "тихо потеряно 22" in p for p in problems), problems
+
+
+def test_silent_loss_is_judged_against_an_absolute_margin(tmp_path, monkeypatch):
+    """Допуск заперт с двух сторон: 5 тихо потерянных прощаются, 6 — уже нет.
+
+    Числа абсолютные, из проверяемой константы не вычисляются: иначе тест
+    остался бы зелёным при любом её значении, и допуск можно было бы
+    расширить до размера отката (пункт 1-27).
+    """
+    _tree(tmp_path, monkeypatch, {"tests/test_layout.py": TWO_TESTS})
+    base = _base({"tests/test_layout.py": (30, sb.file_digest(tmp_path / "tests/test_layout.py"))})
+
+    assert sb.floor_problems(base, {"tests/test_layout.py": 25})[0] == []
+    assert sb.floor_problems(base, {"tests/test_layout.py": 24})[0]
+
+
+def test_file_erased_past_git_is_a_shrink(tmp_path, monkeypatch):
+    """Файла в дереве нет, а git его числит — это пропажа, а не откат."""
+    _tree(tmp_path, monkeypatch, {}, tracked={"tests/test_item.py"})
+    base = _base({"tests/test_item.py": (20, "0" * 12)})
+
+    problems, _ = sb.floor_problems(base, {})
+
+    assert any("усох" in p and "tests/test_item.py: 20 → 0" in p for p in problems), problems
+
+
+def test_edited_file_losing_tests_is_explained(tmp_path, monkeypatch):
+    """Файл правили — потеря видна в диффе; стенд её печатает и не краснеет."""
+    _tree(tmp_path, monkeypatch, {"tests/test_layout.py": TWO_TESTS})
+    base = _base({"tests/test_layout.py": (22, "0" * 12)})   # отпечаток разошёлся
+
+    problems, notes = sb.floor_problems(base, {"tests/test_layout.py": 0})
+
+    assert problems == []
+    assert any("в диффе" in note for note in notes), notes
+
+
+def test_git_silence_is_not_a_green_gate(tmp_path, monkeypatch):
+    """git не ответил про пропавшие файлы — «судить нечем» громче «всё чисто»."""
+    _tree(tmp_path, monkeypatch, {})
+    monkeypatch.setattr(sb, "tracked_by_git", lambda paths: (set(paths), "fatal: not a git repository"))
+    base = _base({"tests/test_item.py": (20, "0" * 12)})
+
+    problems, _ = sb.floor_problems(base, {})
+
+    assert any("git не ответил" in p for p in problems), problems
+
+
+def test_old_baseline_without_map_is_judged_by_the_number():
+    """База, снятая до 1-27, карты не несёт — судится прежним полом."""
+    assert sb.floor_problems(BASE, {"tests/test_alpha.py": 705})[0]
+    assert sb.floor_problems(BASE, {"tests/test_alpha.py": 706})[0] == []
+
+
+def test_digest_ignores_line_endings(tmp_path):
+    """CRLF у машины разработки против LF у раннера — отпечаток обязан совпасть.
+
+    Иначе в CI «изменённым» выглядел бы каждый файл эталона, а изменённому
+    файлу потеря тестов прощается — пол ослеп бы целиком.
+    """
+    crlf, lf, other = tmp_path / "crlf.py", tmp_path / "lf.py", tmp_path / "other.py"
+    crlf.write_bytes(b"def test_a():\r\n    pass\r\n")
+    lf.write_bytes(b"def test_a():\n    pass\n")
+    other.write_bytes(b"def test_b():\n    pass\n")
+
+    assert sb.file_digest(crlf) == sb.file_digest(lf)
+    assert sb.file_digest(other) != sb.file_digest(lf)

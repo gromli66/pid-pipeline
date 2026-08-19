@@ -13,11 +13,17 @@
 
 Что считается провалом (`--check` → exit 1):
     * НОВЫЙ красный — тест, который в базе зелёный, а сейчас упал;
-    * усыхание набора — git-видимая часть сбора меньше `min_collected` (тесты
-      молча исчезли: `importorskip`, `collect_ignore`, снесённый файл). Пол
-      считается от собранного МИНУС параметры по корпусу, которого нет в git
-      (пункт 0.3y): иначе он зависит от числа диаграмм в локальном `storage/`
-      и уезжает вверх от каждого прогона конвейера, а на раннере краснеет;
+    * усыхание набора — тесты пропали у файлов, которые в диффе не менялись
+      (`importorskip` без установленной зависимости, `collect_ignore`,
+      сломанный `conftest`). Считается по КАРТЕ ФАЙЛОВ из базы, а не одним
+      числом (пункт 1-27): одно число не отличало тихую пропажу от штатного
+      отката пункта, и `git revert` по тегу красил гейт законным возвратом,
+      то есть тег переставал быть точкой возврата (`PROTOCOL §6`). Файл,
+      который правили, и файл, снятый вместе с записью о нём в git, — это
+      не усыхание: их видно в диффе и судит ревизор, а стенд их печатает
+      и вычитает из счёта. В карту идёт git-видимая часть сбора — без
+      параметров по корпусу, которого нет в git (пункт 0.3y): иначе счёт
+      зависел бы от числа диаграмм в локальном `storage/`;
     * прогон не состоялся — pytest вернул код вне {0, 1}, итоговой строки нет,
       или разобранных идентификаторов меньше, чем красных в счётчиках. Убитый
       прогон (`os._exit`, access violation §24.6) даёт ПУСТОЙ список красных,
@@ -41,6 +47,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import platform
@@ -69,13 +76,14 @@ RUN_RC_OK = (0, 1)
 # такого объёма обязана пересъёмкой базы объяснить себя (Д6).
 MAX_FIXED = 10
 
-# Запас пола к числу собранных. Пол считается НЕ от всего сбора, а от той его
-# части, которую видит чистое дерево (см. count_local_corpus): корпусные
-# параметры машины разработки в него не входят, поэтому запас больше не обязан
-# перекрывать разницу «локально ↔ раннер» по корпусу. Замер 2026-08-18
-# (пункт 0.3y, MEASUREMENTS §38): git-видимая часть — 855 и здесь, и в CI,
-# разница 0; 5 — запас на дребезг окружения, и он вчетверо уже 22 тестов
-# раскладки, которые молча уходят без shapely (замерено: 855 → 833).
+# Допуск на ТИХУЮ потерю тестов — у файлов, которые в диффе не менялись.
+# Замер 2026-08-18 (пункт 0.3y, MEASUREMENTS §38): git-видимая часть — 855
+# и здесь, и в CI, разница 0; 5 — запас на дребезг окружения, и он вчетверо
+# уже 22 тестов раскладки, которые молча уходят без shapely (855 → 833).
+# ⛔ Расширять этот допуск, чтобы «пропустить откат пункта», нельзя: пункты
+# дороги приносят по 5–53 теста, и запас, перекрывающий откат, ослепил бы
+# гейт ровно на ту величину (пункт 1-27). Откат считается отдельно — по
+# карте файлов, см. shrinkage().
 # До 0.3y запас был 18 и включал в себя корпус (пункт 0.8): пол ехал вверх от
 # каждой новой диаграммы в storage/, и к 0.3x от него оставалось 2 теста.
 FLOOR_MARGIN = 5
@@ -89,6 +97,9 @@ _COLLECTED = re.compile(r"^(\d+) tests? collected")
 # Хвостовой параметр идентификатора: `…::test_x[6e7144d5]`, у многопараметрных —
 # `…[6e7144d5-case]`. uid8 шестнадцатеричный, дефиса внутри быть не может.
 _PARAM_TAIL = re.compile(r"\[([^\[\]]+)\]\s*$")
+# Строка сбора `--collect-only -q`: `tests/ui/test_x.py::TestY::test_z[param]`.
+# Путь нежадно до первого `::` — дальше в идентификаторе бывает что угодно.
+_TEST_ID = re.compile(r"^(.+?\.py)::")
 
 
 def _pytest(args: list[str]) -> tuple[str, int]:
@@ -143,22 +154,145 @@ def local_corpus_uids() -> set[str]:
     return set(corpus.corpus_paths()) - set(corpus.corpus_paths(include_storage=False))
 
 
-def count_local_corpus(collect_text: str, local_uids: set[str] | None = None) -> int:
-    """Сколько собранных тестов параметризованы корпусом вне git.
+def split_collected(collect_text: str, local_uids: set[str]) -> tuple[dict[str, int], int]:
+    """Разбор `--collect-only -q`: (git-видимые тесты по файлам, параметров по корпусу вне git).
 
-    Пол набора обязан быть одинаков на машине разработки и на раннере, иначе он
-    ловит не потерю тестов, а число диаграмм в `storage/`. Поэтому из числа
-    собранных вычитается ровно та часть, которой на чистом дереве не бывает.
+    Набор обязан считаться одинаково на машине разработки и на раннере, иначе
+    счёт ловит не потерю тестов, а число диаграмм в `storage/`. Поэтому та
+    часть сбора, которой на чистом дереве не бывает, в карту файлов не идёт
+    и считается отдельным числом.
     """
+    per_file: dict[str, int] = {}
+    local = 0
+    for raw in collect_text.splitlines():
+        line = raw.rstrip()
+        m = _TEST_ID.match(line)
+        if not m:
+            continue
+        tail = _PARAM_TAIL.search(line)
+        if local_uids and tail and any(part in local_uids for part in tail.group(1).split("-")):
+            local += 1
+        else:
+            per_file[m.group(1)] = per_file.get(m.group(1), 0) + 1
+    return per_file, local
+
+
+def count_local_corpus(collect_text: str, local_uids: set[str] | None = None) -> int:
+    """Сколько собранных тестов параметризованы корпусом вне git."""
     uids = local_corpus_uids() if local_uids is None else local_uids
-    if not uids:
-        return 0
-    hits = 0
-    for line in collect_text.splitlines():
-        m = _PARAM_TAIL.search(line)
-        if m and any(part in uids for part in m.group(1).split("-")):
-            hits += 1
-    return hits
+    return split_collected(collect_text, uids)[1]
+
+
+def file_digest(path: Path) -> str:
+    """Отпечаток файла с нормализованными переводами строк.
+
+    Нормализация обязательна: у машины разработки checkout с CRLF, у раннера
+    с LF. Без неё каждый файл выглядел бы изменённым, и пол ослеп бы в CI
+    целиком — «изменённому» файлу потеря тестов прощается.
+    """
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()[:12]
+
+
+def tracked_by_git(paths: set[str]) -> tuple[set[str], str]:
+    """Какие из исчезнувших файлов git всё ещё числит за деревом (+ ошибка git).
+
+    Индекс — ответ самого git на вопрос «этот файл ещё часть дерева?».
+    `git revert` пункта снимает файл вместе с записью о нём, а стёртый,
+    переименованный или забытый мимо git в индексе остаётся: первое — откат,
+    второе — тихая пропажа. Git не ответил — считаем числящимися всеми
+    (осторожная сторона: потеря пойдёт в счёт) и говорим об этом вслух.
+    """
+    if not paths:
+        return set(), ""
+    proc = subprocess.run(
+        ["git", "ls-files", "-z", "--", *sorted(paths)],
+        cwd=str(REPO),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if proc.returncode != 0:
+        return set(paths), (proc.stderr or "").strip() or f"git ls-files вернул {proc.returncode}"
+    return {p for p in proc.stdout.split("\0") if p}, ""
+
+
+def shrinkage(base: dict, per_file: dict[str, int]) -> tuple[dict[str, int], dict[str, int], str]:
+    """Разложить потерю тестов на тихую и объяснённую диффом.
+
+    Гейт умеет судить ровно об одном: файл байт-в-байт тот же, что в базе,
+    а тестов из него выходит меньше. В диффе такого не видно ничем — так
+    уходят `importorskip` без установленной зависимости, `collect_ignore`,
+    сломанный `conftest`, потерянная зависимость окружения.
+
+    Всё остальное в диффе видно, и судит это ревизор, а не пол набора:
+    файл правили (отпечаток разошёлся) или файл сняли вместе с записью о нём
+    в git. Иначе штатный откат пункта — `git revert` по тегу, `PROTOCOL §6` —
+    красил гейт законным возвратом: пункты дороги приносят по 5–53 теста
+    при допуске 5 (пункт 1-27).
+
+    Возвращает ({файл: тихо потеряно}, {файл: потеряно явно}, ошибка git).
+    """
+    base_per: dict[str, list] = base["per_file"]
+    absent = {path for path in base_per if not (REPO / path).exists()}
+    tracked, git_error = tracked_by_git(absent)
+
+    silent: dict[str, int] = {}
+    explained: dict[str, int] = {}
+    for path, (was, digest) in base_per.items():
+        delta = was - per_file.get(path, 0)
+        if delta <= 0:
+            continue
+        if path in absent:
+            # снят вместе с записью в git — откат; остался в индексе — пропажа
+            (silent if path in tracked else explained)[path] = delta
+        else:
+            (silent if file_digest(REPO / path) == digest else explained)[path] = delta
+    return silent, explained, git_error
+
+
+def floor_problems(base: dict, per_file: dict[str, int]) -> tuple[list[str], list[str]]:
+    """(причины провала по усыханию набора, что сказать вслух при зелёном).
+
+    Пол один на двоих: второй его потребитель — сторож сбора
+    `tests/test_collection_clean.py`. Считается здесь, чтобы они не разъехались.
+    """
+    if "per_file" not in base:                     # база снята до пункта 1-27
+        git_visible = sum(per_file.values())
+        if git_visible < base["min_collected"]:
+            return ([
+                f"набор усох: в git-видимой части {git_visible} < {base['min_collected']} "
+                "(база без карты файлов — карта появится с ближайшим пересъёмом)"
+            ], [])
+        return ([], [])
+
+    silent, explained, git_error = shrinkage(base, per_file)
+    problems: list[str] = []
+    if git_error:
+        problems.append(f"git не ответил про исчезнувшие файлы ({git_error}) — об откате судить нечем")
+
+    def _lines(where: dict[str, int]) -> str:
+        return "\n".join(
+            f"    {path}: {base['per_file'][path][0]} → {per_file.get(path, 0)}"
+            for path in sorted(where)
+        )
+
+    lost = sum(silent.values())
+    if lost > FLOOR_MARGIN:
+        problems.append(
+            f"набор усох: тихо потеряно {lost} тестов (допуск {FLOOR_MARGIN}) — "
+            f"эти файлы в диффе не менялись, а тестов из них выходит меньше:\n{_lines(silent)}"
+        )
+    notes: list[str] = []
+    if silent and not problems:
+        notes.append(f"[в допуске] тихо потеряно {lost} из {FLOOR_MARGIN}:\n{_lines(silent)}")
+    if explained:
+        notes.append(
+            f"[в диффе] {len(explained)} файлов эталона отдали меньше тестов "
+            f"(−{sum(explained.values())}) — файл правили или сняли вместе с записью в git:\n"
+            f"{_lines(explained)}"
+        )
+    return problems, notes
 
 
 def compare(base_red: set[str], cur_red: set[str]) -> tuple[list[str], list[str]]:
@@ -166,16 +300,14 @@ def compare(base_red: set[str], cur_red: set[str]) -> tuple[list[str], list[str]
     return sorted(cur_red - base_red), sorted(base_red - cur_red)
 
 
-def verdict(base: dict, red: set[str], totals: dict[str, int], git_visible: int, run_rc: int) -> list[str]:
-    """Причины провала (пустой список = гейт зелёный).
+def verdict(red: set[str], totals: dict[str, int], run_rc: int) -> list[str]:
+    """Причины провала самого прогона (пустой список = прогон состоялся).
 
     Порядок проверок важен: сначала «прогон вообще состоялся», потом уже
     сравнение с базой. Убитый прогон даёт пустой список красных, и без
     этих проверок он читается как «всё починилось».
 
-    С полом сверяется `git_visible` — собранное МИНУС корпусные параметры вне
-    git (пункт 0.3y): иначе пол зависит от того, сколько диаграмм лежит в
-    локальном `storage/`, и растёт от чужих прогонов конвейера.
+    Состав набора считает `floor_problems` — у него второй потребитель.
     """
     fail: list[str] = []
 
@@ -194,11 +326,6 @@ def verdict(base: dict, red: set[str], totals: dict[str, int], git_visible: int,
                 f"вывод неполон: в итоговой строке {counted} красных, "
                 f"а идентификаторов разобрано {len(red)}"
             )
-    if git_visible < base["min_collected"]:
-        fail.append(
-            f"набор усох: в git-видимой части {git_visible} < {base['min_collected']} "
-            "(корпусные параметры вне git в пол не входят)"
-        )
     return fail
 
 
@@ -256,18 +383,18 @@ def _load_baseline() -> dict:
     return json.loads(BASELINE.read_text(encoding="utf-8"))
 
 
-def _measure() -> tuple[set[str], dict[str, int], int, int, str, int]:
+def _measure() -> tuple[set[str], dict[str, int], int, dict[str, int], int, str, int]:
     run_text, run_rc = _pytest(PYTEST_RUN)
     collect_text, collect_rc = _pytest(PYTEST_COLLECT)
     if collect_rc != 0:
         sys.exit(f"сбор pytest сломан (exit {collect_rc}) — это пункт 0.0, а не база")
     collected = parse_collected(collect_text)
-    local = count_local_corpus(collect_text)
-    return parse_red(run_text), parse_totals(run_text), collected, local, run_text, run_rc
+    per_file, local = split_collected(collect_text, local_corpus_uids())
+    return parse_red(run_text), parse_totals(run_text), collected, per_file, local, run_text, run_rc
 
 
 def cmd_write() -> int:
-    red, totals, collected, local, run_text, run_rc = _measure()
+    red, totals, collected, per_file, local, run_text, run_rc = _measure()
     if run_rc not in RUN_RC_OK:
         sys.exit(f"прогон вернул {run_rc} — снимать базу с оборванного прогона нельзя:\n" + run_text[-2000:])
     if not totals:
@@ -277,7 +404,7 @@ def cmd_write() -> int:
         print(f"базы {BASELINE.name} нет — первый снимок, сверять не с чем")
     if blocked := write_blocked(base, red, totals):
         sys.exit("\n".join(f"[ОТКАЗ] {msg}" for msg in blocked))
-    git_visible = collected - local
+    git_visible = sum(per_file.values())
     BASELINE.write_text(
         json.dumps(
             {
@@ -290,6 +417,12 @@ def cmd_write() -> int:
                 "corpus_local": local,
                 "collected_git_visible": git_visible,
                 "min_collected": git_visible - FLOOR_MARGIN,
+                # {файл: [сколько git-видимых тестов, отпечаток файла]} — по этой
+                # карте `--check` отличает тихую пропажу от видимой в диффе.
+                "per_file": {
+                    path: [count, file_digest(REPO / path)]
+                    for path, count in sorted(per_file.items())
+                },
                 "red": sorted(red),
             },
             ensure_ascii=False,
@@ -299,22 +432,27 @@ def cmd_write() -> int:
         encoding="utf-8",
     )
     print(f"база записана: {len(red)} красных, собрано {collected} "
-          f"(git-видимых {git_visible}, корпус вне git {local}), {totals}")
+          f"(git-видимых {git_visible} в {len(per_file)} файлах, корпус вне git {local}), {totals}")
     return 0
 
 
 def cmd_check() -> int:
     base = _load_baseline()
-    red, totals, collected, local, run_text, run_rc = _measure()
+    red, totals, collected, per_file, local, run_text, run_rc = _measure()
     new, fixed = compare(set(base["red"]), red)
-    git_visible = collected - local
+    git_visible = sum(per_file.values())
 
-    print(f"сейчас:  собрано {collected} (git-видимых {git_visible}, корпус вне git {local}), "
-          f"{totals}, pytest exit {run_rc}")
+    print(f"сейчас:  собрано {collected} (git-видимых {git_visible} в {len(per_file)} файлах, "
+          f"корпус вне git {local}), {totals}, pytest exit {run_rc}")
     print(f"база ({base['recorded']}, {base['platform']}): собрано {base['collected']}, "
-          f"пол git-видимой части {base['min_collected']}, {base['totals']}")
+          f"git-видимых {base.get('collected_git_visible', '?')} "
+          f"в {len(base.get('per_file') or ())} файлах, {base['totals']}")
 
-    problems = verdict(base, red, totals, git_visible, run_rc)
+    problems = verdict(red, totals, run_rc)
+    floor, notes = floor_problems(base, per_file)
+    problems += floor
+    for note in notes:
+        print(f"\n{note}")
     if len(fixed) > MAX_FIXED:
         problems.append(
             f"позеленело сразу {len(fixed)} тестов (порог {MAX_FIXED}) — так выглядит "
