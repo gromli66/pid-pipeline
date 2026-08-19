@@ -33,15 +33,20 @@
 Единичный позеленевший тест провалом НЕ считается — печатается и требует
 пересъёма базы.
 
-Что считается провалом (`--write-baseline` → отказ, exit 1, пункт 1-26):
-    * множество красных ВЫРОСЛО против текущей базы. Пересъём идёт отдельным
-      коммитом (так требует Д6), поэтому красный флаг №4 протокола («эталон
-      изменён тем же коммитом, что и код») его не видит: пока сверка жила
-      только в `--check`, пересъём легализовал любой новый красный;
-    * вывод неполон (счётчики против числа разобранных id) — на оборванном
-      хвосте рост состава невидим.
-Законны обе стороны: красные ушли и состав тот же. Первый снимок (базы в дереве
-нет) сверять не с чем — он проходит, и стенд об этом говорит.
+У `--write-baseline` тоже ТРИ исхода, а не два (`PROTOCOL §5`, пункт 1-28):
+    * ОТКАЗ (exit 1) — замер годен и говорит, что пересъём узаконил бы
+      регрессию: множество красных ВЫРОСЛО против текущей базы (пункт 1-26)
+      или набор тихо потерял тесты, то есть уехал бы вниз ПОЛ (пункт 1-28).
+      Пересъём идёт отдельным коммитом (так требует Д6), поэтому красный флаг
+      №4 протокола («эталон изменён тем же коммитом, что и код») его не видит:
+      пока сверка жила только в `--check`, пересъём легализовал и новый красный,
+      и потерянные тесты;
+    * СУДИТЬ НЕЧЕМ (exit 2) — мерить было нечем: сбор сломан, прогон убит,
+      вывод неполон (счётчики против числа разобранных id). Не то же самое,
+      что отказ: тут чинят обстановку, а не код.
+Законны: красные ушли, состав тот же, потеря видна в диффе (откат пункта).
+Первый снимок (базы в дереве нет) сверять не с чем — он проходит, и стенд
+об этом говорит.
 """
 from __future__ import annotations
 
@@ -87,6 +92,13 @@ MAX_FIXED = 10
 # До 0.3y запас был 18 и включал в себя корпус (пункт 0.8): пол ехал вверх от
 # каждой новой диаграммы в storage/, и к 0.3x от него оставалось 2 теста.
 FLOOR_MARGIN = 5
+
+# Коды возврата ПУТИ ЗАПИСИ — три исхода, а не два (`PROTOCOL §5`, пункт 1-28).
+# До него «судить нечем» (сломанный сбор, убитый прогон, оборванный хвост) и
+# «отказ» (пересъём узаконил бы регрессию) отдавали одинаковую единицу, и
+# вызывающий не мог отличить «чини обстановку» от «чини код».
+WRITE_REFUSED = 1
+WRITE_UNJUDGED = 2
 
 # Нежадно до « - » (после него причина) — идентификатор может содержать
 # пробелы и кириллицу: в storage/ уже лежит «Новая папка», и параметр теста
@@ -329,42 +341,56 @@ def verdict(red: set[str], totals: dict[str, int], run_rc: int) -> list[str]:
     return fail
 
 
-def write_blocked(base: dict | None, red: set[str], totals: dict[str, int]) -> list[str]:
-    """Причины отказать в пересъёме базы (пустой список = пересъём законен).
+def write_blocked(base: dict | None, red: set[str], totals: dict[str, int],
+                  per_file: dict[str, int]) -> tuple[list[str], list[str]]:
+    """-> (причины «судить нечем», причины отказа). Обе пустые = пересъём законен.
 
-    Пересъём — единственный путь, которым состав красных вообще меняется, и по
-    Д6 он идёт ОТДЕЛЬНЫМ коммитом; поэтому красный флаг №4 протокола («эталон
-    изменён тем же коммитом, что и код») его не видит. До пункта 1-26 сверка с
-    базой жила только в `--check`, а `--write-baseline` перезаписывал `red` тем,
-    что красно сейчас, — то есть любой Д6-пересъём легализовал выросшее
-    множество красных.
+    Пересъём — единственный путь, которым база вообще меняется, и по Д6 он идёт
+    ОТДЕЛЬНЫМ коммитом; поэтому красный флаг №4 протокола («эталон изменён тем
+    же коммитом, что и код») его не видит. До пункта 1-26 сверка с базой жила
+    только в `--check`, а `--write-baseline` перезаписывал `red` тем, что красно
+    сейчас, — то есть любой Д6-пересъём легализовал выросшее множество красных.
 
-    Законны обе стороны: красные ушли (тесты починили) и состав тот же
-    (пересъём ради `collected`/`totals` после новых зелёных тестов). Незаконен
-    ровно рост: идентификатор, которого в базе нет.
+    Пункт 1-28 закрыл вторую половину: пересъём не смотрел на ПОЛ набора.
+    Замер 2026-08-19 — `collect_ignore` каталога унёс 147 тестов, стенд отдал
+    exit 0 и записал пол 952 → 811 с картой 89 → 64 файлов; красные при этом
+    не тронулись, поэтому сверка 1-26 промолчала, а следующий `--check` на
+    здоровом дереве был зелёным: потеря стала нормой. Судим тем же
+    `floor_problems`, что и `--check`, — третий потребитель одного пола.
+
+    Три исхода (`PROTOCOL §5`), а не два:
+    2 — СУДИТЬ НЕЧЕМ: вывод неполон, сверять состав с базой не на чем;
+    1 — ОТКАЗ: замер годен и говорит, что пересъём узаконил бы регрессию —
+        новый красный или тихо потерянные тесты;
+    0 — законно. Законны: красные ушли (починили), состав тот же (пересъём ради
+        `collected` после новых зелёных), потеря видна в диффе (откат пункта),
+        и первый снимок — сверять не с чем.
     """
-    fail: list[str] = []
+    unjudged: list[str] = []
+    refused: list[str] = []
 
     # Сверка на неполном списке ничего не значит: оборванный хвост даёт красных
     # меньше, чем их было, и рост состава становится невидим.
     counted = totals.get("failed", 0) + totals.get("errors", 0)
     if counted != len(red):
-        fail.append(
+        unjudged.append(
             f"вывод неполон: в итоговой строке {counted} красных, а идентификаторов "
             f"разобрано {len(red)} — сверять состав с базой не на чем"
         )
     if base is None:
-        return fail
+        return unjudged, refused
 
     new, _ = compare(set(base["red"]), red)
     if new:
-        fail.append(
+        refused.append(
             f"множество красных выросло против базы ({base['recorded']}): "
             f"{len(base['red'])} → {len(red)}, новых {len(new)}:\n"
             + "\n".join(f"    + {nid}" for nid in new)
             + "\n  Новый красный чинят или откатывают — пересъём его не легализует."
         )
-    return fail
+    for problem in floor_problems(base, per_file)[0]:
+        refused.append(problem + "\n  Пересъём записал бы эту потерю нормой.")
+    return unjudged, refused
 
 
 def skip_conversion_suspected(base: dict, totals: dict[str, int], fixed: list[str]) -> bool:
@@ -383,27 +409,46 @@ def _load_baseline() -> dict:
     return json.loads(BASELINE.read_text(encoding="utf-8"))
 
 
-def _measure() -> tuple[set[str], dict[str, int], int, dict[str, int], int, str, int]:
+def _measure(unjudged: int = 1) -> tuple[set[str], dict[str, int], int, dict[str, int], int, str, int]:
+    """Замер набора. `unjudged` — код возврата, когда мерить оказалось нечем.
+
+    У `--check` это 1 (CI на этом шаге 1 и 2 не различает — менять его код
+    значило бы править чужой пункт), у пересъёма — 2 «судить нечем» (1-28).
+    """
     run_text, run_rc = _pytest(PYTEST_RUN)
     collect_text, collect_rc = _pytest(PYTEST_COLLECT)
     if collect_rc != 0:
-        sys.exit(f"сбор pytest сломан (exit {collect_rc}) — это пункт 0.0, а не база")
+        mark = "[СУДИТЬ НЕЧЕМ] " if unjudged == WRITE_UNJUDGED else ""
+        print(f"{mark}сбор pytest сломан (exit {collect_rc}) — это пункт 0.0, а не база",
+              file=sys.stderr)
+        sys.exit(unjudged)
     collected = parse_collected(collect_text)
     per_file, local = split_collected(collect_text, local_corpus_uids())
     return parse_red(run_text), parse_totals(run_text), collected, per_file, local, run_text, run_rc
 
 
 def cmd_write() -> int:
-    red, totals, collected, per_file, local, run_text, run_rc = _measure()
+    red, totals, collected, per_file, local, run_text, run_rc = _measure(WRITE_UNJUDGED)
     if run_rc not in RUN_RC_OK:
-        sys.exit(f"прогон вернул {run_rc} — снимать базу с оборванного прогона нельзя:\n" + run_text[-2000:])
+        print(f"[СУДИТЬ НЕЧЕМ] прогон вернул {run_rc} — снимать базу с оборванного "
+              f"прогона нельзя:\n" + run_text[-2000:], file=sys.stderr)
+        return WRITE_UNJUDGED
     if not totals:
-        sys.exit("не разобрал итоговую строку pytest:\n" + run_text[-2000:])
+        print("[СУДИТЬ НЕЧЕМ] не разобрал итоговую строку pytest:\n" + run_text[-2000:],
+              file=sys.stderr)
+        return WRITE_UNJUDGED
     base = _load_baseline() if BASELINE.exists() else None
     if base is None:
         print(f"базы {BASELINE.name} нет — первый снимок, сверять не с чем")
-    if blocked := write_blocked(base, red, totals):
-        sys.exit("\n".join(f"[ОТКАЗ] {msg}" for msg in blocked))
+    unjudged, refused = write_blocked(base, red, totals, per_file)
+    for msg in unjudged:
+        print(f"[СУДИТЬ НЕЧЕМ] {msg}", file=sys.stderr)
+    for msg in refused:
+        print(f"[ОТКАЗ] {msg}", file=sys.stderr)
+    if refused:                      # доказанная регрессия сильнее неполноты (1-25)
+        return WRITE_REFUSED
+    if unjudged:
+        return WRITE_UNJUDGED
     git_visible = sum(per_file.values())
     BASELINE.write_text(
         json.dumps(

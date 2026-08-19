@@ -230,7 +230,7 @@ ERROR tests/ui/test_gamma.py::test_three - ValueError: not enough values
 """
 
 
-def _stand(tmp_path, monkeypatch, report, collected=738, base=BASE):
+def _stand(tmp_path, monkeypatch, report, collected=738, base=BASE, was=1):
     """Стенд пересъёма: своё дерево и своя база, pytest подменён выводом.
 
     Дерево настоящее: пересъём кладёт в базу отпечаток каждого файла карты,
@@ -241,6 +241,12 @@ def _stand(tmp_path, monkeypatch, report, collected=738, base=BASE):
     monkeypatch.setattr(sb, "REPO", tmp_path)
     path = tmp_path / "suite_baseline.json"
     if base is not None:
+        # Карта файлов обязана сходиться с подменённым сбором: с пункта 1-28
+        # пересъём смотрит и на пол набора, и рассогласованная фикстура ловила
+        # бы отказ там, где тест проверяет совсем другое. `was` — сколько тестов
+        # база числит за файлом; сбор всегда отдаёт один.
+        base = dict(base, per_file={
+            "tests/test_alpha.py": [was, sb.file_digest(tmp_path / "tests" / "test_alpha.py")]})
         path.write_text(json.dumps(base, ensure_ascii=False), encoding="utf-8")
 
     def fake_pytest(args):
@@ -253,7 +259,7 @@ def _stand(tmp_path, monkeypatch, report, collected=738, base=BASE):
     return path
 
 
-def test_write_refuses_when_red_set_grew(tmp_path, monkeypatch):
+def test_write_refuses_when_red_set_grew(tmp_path, monkeypatch, capsys):
     """⛔ Дыра 1-26: `--write-baseline` не загружал предыдущую базу вовсе.
 
     Пересъём идёт ОТДЕЛЬНЫМ коммитом (так требует Д6), поэтому красный флаг №4
@@ -263,10 +269,10 @@ def test_write_refuses_when_red_set_grew(tmp_path, monkeypatch):
     path = _stand(tmp_path, monkeypatch, REPORT_GREW)
     before = path.read_text(encoding="utf-8")
 
-    with pytest.raises(SystemExit) as exc:
-        sb.cmd_write()
-
-    assert "tests/test_delta.py::test_four" in str(exc.value)
+    # Код 1 — именно ОТКАЗ: замер сделан, и он говорит «пересъём узаконил бы
+    # регрессию». «Судить нечем» отдаёт 2 и живёт отдельно (пункт 1-28).
+    assert sb.cmd_write() == 1
+    assert "tests/test_delta.py::test_four" in capsys.readouterr().err
     assert path.read_text(encoding="utf-8") == before, "база переписана вопреки отказу"
 
 
@@ -314,20 +320,19 @@ def test_write_records_the_file_map(tmp_path, monkeypatch):
     }
 
 
-def test_write_refuses_on_incomplete_output(tmp_path, monkeypatch):
+def test_write_on_incomplete_output_is_unjudgeable(tmp_path, monkeypatch, capsys):
     """Сверка на неполном списке ничего не значит: счётчики против числа id.
 
     Иначе отказ обходится оборванным хвостом: разобрано меньше красных, чем
-    было на самом деле, — и «рост» не виден.
+    было на самом деле, — и «рост» не виден. Код 2, а не 1 (пункт 1-28): тут
+    не доказана регрессия, а нечем судить — разница видна вызывающему скрипту.
     """
     truncated = "FAILED tests/test_alpha.py::test_one - X\n2 failed, 661 passed, 1 error in 1.0s\n"
     path = _stand(tmp_path, monkeypatch, truncated)
     before = path.read_text(encoding="utf-8")
 
-    with pytest.raises(SystemExit) as exc:
-        sb.cmd_write()
-
-    assert "вывод неполон" in str(exc.value)
+    assert sb.cmd_write() == 2
+    assert "вывод неполон" in capsys.readouterr().err
     assert path.read_text(encoding="utf-8") == before
 
 
@@ -450,3 +455,102 @@ def test_digest_ignores_line_endings(tmp_path):
 
     assert sb.file_digest(crlf) == sb.file_digest(lf)
     assert sb.file_digest(other) != sb.file_digest(lf)
+
+
+# --- путь ЗАПИСИ: пол набора и три исхода (пункт 1-28) ------------------------
+
+def test_write_refuses_when_the_floor_dropped(tmp_path, monkeypatch, capsys):
+    """⛔ Дыра 1-28 (в): пересъём не смотрел на пол набора вовсе.
+
+    Замер до правки на живом дереве: `collect_ignore` каталога — файлы при этом
+    байт-в-байт те же — унёс 147 тестов, `--write-baseline` отдал exit 0 и
+    записал пол 952 → 811, карту 89 → 64 файлов; состав красных не изменился,
+    поэтому сверка 1-26 ничего не заметила. Следующий `--check` на ЗДОРОВОМ
+    дереве после этого зелёный: потеря стала нормой.
+    ⚠ Сторож `test_suite_does_not_shrink` тут не замена стенду: он сам из
+    набора и уходит вместе с тем, что его съело (замер §48.5).
+    """
+    path = _stand(tmp_path, monkeypatch, REPORT, was=30)
+    before = path.read_text(encoding="utf-8")
+
+    assert sb.cmd_write() == 1
+    assert "тихо потеряно 29" in capsys.readouterr().err
+    assert path.read_text(encoding="utf-8") == before, "база переписана вопреки отказу"
+
+
+def test_write_after_a_rollback_of_an_item_is_legal(tmp_path, monkeypatch):
+    """Положительный контроль: потерю видно в диффе — пересъём проходит.
+
+    Иначе правка односторонняя. Штатный `git revert` по тегу (`PROTOCOL §6`)
+    снимает тест-файл вместе с записью о нём в git, и Д6-пересъём после отката
+    обязан оставаться законным — ровно то, что разводил пункт 1-27.
+    """
+    path = _stand(tmp_path, monkeypatch, REPORT)
+    monkeypatch.setattr(sb, "tracked_by_git", lambda paths: (set(), ""))
+    base = json.loads(path.read_text(encoding="utf-8"))
+    base["per_file"]["tests/test_item.py"] = [20, "0" * 12]   # снят откатом пункта
+    path.write_text(json.dumps(base, ensure_ascii=False), encoding="utf-8")
+
+    assert sb.cmd_write() == 0
+    assert "tests/test_item.py" not in json.loads(path.read_text(encoding="utf-8"))["per_file"]
+
+
+def test_write_tolerates_a_loss_inside_the_margin(tmp_path, monkeypatch):
+    """Допуск заперт с двух сторон абсолютными числами, как и у `--check`.
+
+    30 → 25 (тихо потеряно 5) пересъём пропускает, 30 → 24 отказывает: числа
+    не вычисляются из `FLOOR_MARGIN`, иначе тест остался бы зелёным при любом
+    её значении (урок пункта 0.4).
+    """
+    _tree(tmp_path, monkeypatch, {"tests/test_layout.py": TWO_TESTS})
+    base = _base({"tests/test_layout.py": (30, sb.file_digest(tmp_path / "tests/test_layout.py"))})
+    red, totals = set(BASE["red"]), BASE["totals"]
+
+    assert sb.write_blocked(base, red, totals, {"tests/test_layout.py": 25})[1] == []
+    assert sb.write_blocked(base, red, totals, {"tests/test_layout.py": 24})[1]
+
+
+def test_broken_collection_on_write_is_unjudgeable(tmp_path, monkeypatch):
+    """⛔ Дыра 1-28 (г): «судить нечем» и «отказ» отдавали один и тот же код 1.
+
+    Замер до правки: сломанный сбор → exit 1 «сбор pytest сломан (exit 4)»,
+    выросшие красные → exit 1 «[ОТКАЗ] …». Вызывающий скрипт различить их
+    не мог, а это два разных решения: чинить обстановку или чинить код.
+    """
+    _stand(tmp_path, monkeypatch, REPORT)
+    monkeypatch.setattr(sb, "_pytest",
+                        lambda args: ("", 4) if "--collect-only" in args else (REPORT, 1))
+
+    with pytest.raises(SystemExit) as exc:
+        sb.cmd_write()
+
+    assert exc.value.code == 2
+
+
+def test_broken_collection_on_check_still_exits_one(tmp_path, monkeypatch):
+    """Обратная сторона: у `--check` код не менялся — правка 1-28 про запись.
+
+    CI зовёт `--check` и не различает 1 и 2 на этом шаге; смена кода тут была
+    бы правкой чужого пункта.
+    """
+    _stand(tmp_path, monkeypatch, REPORT)
+    monkeypatch.setattr(sb, "_pytest",
+                        lambda args: ("", 4) if "--collect-only" in args else (REPORT, 1))
+
+    with pytest.raises(SystemExit) as exc:
+        sb.cmd_check()
+
+    assert exc.value.code == 1
+
+
+def test_killed_run_on_write_is_unjudgeable(tmp_path, monkeypatch, capsys):
+    """Убитый прогон — тоже «судить нечем» (2), а не отказ."""
+    path = _stand(tmp_path, monkeypatch, REPORT)
+    monkeypatch.setattr(sb, "_pytest", lambda args: (
+        ("tests/test_alpha.py::test_one\n\n738 tests collected in 1.0s\n", 0)
+        if "--collect-only" in args else (REPORT, 77)))
+    before = path.read_text(encoding="utf-8")
+
+    assert sb.cmd_write() == 2
+    assert "СУДИТЬ НЕЧЕМ" in capsys.readouterr().err
+    assert path.read_text(encoding="utf-8") == before
