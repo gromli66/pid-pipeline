@@ -144,6 +144,7 @@ stateDiagram-v2
 | `detected_junctions → validating_junctions` | API | `app/api/validation.py`: `start_junction_validation()` |
 | `validating_junctions → validated_junctions` | API | `app/api/validation.py`: `complete_junction_validation()` |
 | `validated_junctions → building_graph` | API | auto-dispatch из `complete_junction_validation()` |
+| `validated_junctions \| built \| error → building_graph` | API | `app/api/graph.py`: `start_graph_building()` — ручной запуск и оба повтора |
 | `validated_junctions → extracting_contours` | API | auto-dispatch (параллельно), queue `sam2` |
 | `validated_junctions → ocr_processing` | API | auto-dispatch (параллельно), queue `ocr` |
 | `building_graph → built` | Worker | `worker/tasks/graph.py`: `task_build_graph()` |
@@ -156,6 +157,13 @@ stateDiagram-v2
 | `* → generating_fxml` | API | `app/api/validation.py`: `complete_graph_validation()` |
 | `generating_fxml → completed` | Worker | `worker/tasks/graph.py`: `task_generate_fxml()` |
 | `* → error` | Worker | `worker/utils/db_helpers.py`: `set_diagram_error()` |
+
+**Отказ отправки — не переход.** API-эндпоинт коммитит статус этапа ДО `send_task`, поэтому
+упавшая отправка обязана вернуть состояние, каким оно было до вызова: статус и оба поля
+ошибки (`error_message`, `error_stage`). Это не откат из §4 — этапа не было, откатывать
+нечего. Точка возврата обязана лежать внутри `Precondition` самого эндпоинта, иначе повтор
+отвечает 400 навсегда: так и было в `start_graph_building()` до пункта 1.14 дороги — откат
+ставил `validated_masks`, которого нет в его же списке допустимых статусов.
 
 ---
 

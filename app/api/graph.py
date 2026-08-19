@@ -2,7 +2,8 @@
 Graph API — построение графа P&ID (Phase 5).
 
 Endpoints:
-- POST /{uid}/build        — запустить построение графа (VALIDATED_MASKS → BUILDING_GRAPH)
+- POST /{uid}/build        — запустить построение графа
+                             (VALIDATED_JUNCTIONS | BUILT | ERROR → BUILDING_GRAPH)
 - GET  /{uid}/result       — получить результат построения (node/edge count, artifacts)
 """
 
@@ -95,7 +96,11 @@ async def start_graph_building(
             "uid": str(uid),
         }
 
-    # Переводим в BUILDING_GRAPH
+    # Переводим в BUILDING_GRAPH. Состояние до перехода держим целиком: если
+    # отправка задачи упадёт, вернуть надо всё, что переход записал, а не один
+    # статус — иначе диаграмма останется в ERROR с пустым error_stage, и клиент
+    # погасит ВСЕ кнопки (ui/widgets/diagram_workspace.py: _error_key).
+    previous_state = (diagram.status, diagram.error_stage, diagram.error_message)
     diagram.status = DiagramStatus.BUILDING_GRAPH
     diagram.error_message = None
     diagram.error_stage = None
@@ -112,8 +117,13 @@ async def start_graph_building(
         )
         task_id = async_result.id
     except Exception as exc:
-        # Worker недоступен — откатываем статус
-        diagram.status = DiagramStatus.VALIDATED_MASKS
+        # Worker недоступен — возвращаем состояние, каким оно было до вызова.
+        # Прежний откат ставил VALIDATED_MASKS, которого нет в allowed_statuses
+        # этого же эндпоинта: повторная сборка отвечала 400 навсегда, а кнопка
+        # «Сборка схемы» при таком статусе даже не нажимается (порог доступности —
+        # VALIDATED_JUNCTIONS). Работа не начиналась, значит и откатывать некуда,
+        # кроме исходной точки.
+        diagram.status, diagram.error_stage, diagram.error_message = previous_state
         await db.commit()
         raise HTTPException(
             status_code=503,

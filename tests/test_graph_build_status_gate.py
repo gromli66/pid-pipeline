@@ -14,11 +14,18 @@
 живой брокер и БД не нужны.
 
 Тупик, ради которого таблица снята (пункт 1.14). Отправка задачи упала — эндпоинт
-откатывает статус в `validated_masks`, которого НЕТ в его же `allowed_statuses`
-(`graph.py:54-58`). Дальше оператор заперт дважды: повторный `/build` отвечает 400,
+откатывал статус в `validated_masks`, которого НЕТ в его же `allowed_statuses`
+(`graph.py:54-58`). Дальше оператор был заперт дважды: повторный `/build` отвечал 400,
 а кнопка «Сборка схемы» при этом статусе даже не нажимается — её порог доступности
 `validated_junctions` (индекс 15) против индекса 9 у отката. Оба замка проверяются
 здесь, второй — на инварианте ДАННЫХ (`_buttons_for_status`), без живого виджета.
+
+Пункт 1.14 переписывает в этой таблице ровно три клетки отката: состояние ДО
+вызова возвращается целиком — статус и оба поля ошибки. Возврата одного статуса
+мало: вход `error` вернулся бы с пустым `error_stage`, а на таком сочетании клиент
+гасит ВСЕ кнопки (`_error_key`), то есть правка завела бы новый тупик класса 1.12.
+Обе редакции таблицы лежат рядом (`ROLLBACK_BEFORE` и `ROLLBACK`), и их разницу
+стережёт отдельный тест.
 
 Числа абсолютные, ожидания — литералы. `ALLOWED` и `ROLLBACK` не вычисляются из
 проверяемого кода: иначе набор остался бы зелёным при любом его значении
@@ -75,12 +82,22 @@ ERROR_STAGES = [
 # ПОСЛЕ отказа отправки: (status, error_stage, error_message). Перечислены все
 # входы из `ALLOWED` — других путей до отката нет.
 #
-# Читается так: чем бы диаграмма ни была, отказ отправки сваливает её в один
-# и тот же `validated_masks` и стирает поля ошибки.
-ROLLBACK = {
+# ДО пункта 1.14 (зафиксировано коммитом 4feb0d6, 83 теста зелёные на нетронутом
+# коде). Читается так: чем бы диаграмма ни была, отказ отправки сваливает её
+# в один и тот же `validated_masks` и стирает поля ошибки.
+ROLLBACK_BEFORE = {
     ("validated_junctions", None, None): ("validated_masks", None, None),
     ("built", None, None): ("validated_masks", None, None),
     ("error", "building_graph", "boom"): ("validated_masks", None, None),
+}
+
+# ПОСЛЕ пункта 1.14: откат возвращает состояние, каким оно было до вызова —
+# работа не начиналась, откатывать некуда, кроме исходной точки. Разница
+# с прежней редакцией обязана быть ровно в этих трёх клетках — сторож ниже.
+ROLLBACK = {
+    ("validated_junctions", None, None): ("validated_junctions", None, None),
+    ("built", None, None): ("built", None, None),
+    ("error", "building_graph", "boom"): ("error", "building_graph", "boom"),
 }
 
 
@@ -195,14 +212,33 @@ def test_table_keys_name_real_statuses():
     """Сторож набора: ключ таблицы — существующий статус, а не опечатка."""
     for value in ALLOWED | SHORTCIRCUIT:
         assert DiagramStatus(value).value == value
-    for (before, _stage, _msg), (after, _s2, _m2) in ROLLBACK.items():
-        assert DiagramStatus(before).value == before
-        assert DiagramStatus(after).value == after
+    for table in (ROLLBACK, ROLLBACK_BEFORE):
+        for (before, _stage, _msg), (after, _s2, _m2) in table.items():
+            assert DiagramStatus(before).value == before
+            assert DiagramStatus(after).value == after
 
 
 def test_rollback_table_covers_every_allowed_status():
     """До отката доходит ровно то, что пропустил гейт, — ни больше, ни меньше."""
     assert {before for before, _stage, _msg in ROLLBACK} == set(ALLOWED)
+
+
+def test_rollback_changed_by_exactly_the_declared_cells():
+    """Пункт 1.14 переписал ровно три клетки отката и не завёл ни одной новой.
+
+    Обе редакции — независимые литералы, поэтому правка одной без другой краснит
+    этот сторож: «переход вне зафиксированного набора» (`PROTOCOL §Гейты`)
+    ловится здесь, а не глазами ревизора.
+    """
+    assert set(ROLLBACK) == set(ROLLBACK_BEFORE), "у отката появился новый вход"
+
+    changed = {key for key in ROLLBACK if ROLLBACK[key] != ROLLBACK_BEFORE[key]}
+    assert changed == set(ROLLBACK_BEFORE), "изменились не все три клетки"
+
+    for key, value in ROLLBACK_BEFORE.items():
+        assert value == ("validated_masks", None, None)
+    for key, value in ROLLBACK.items():
+        assert value == key, "откат обязан вернуть пред-вызовное состояние целиком"
 
 
 # ── POST /{uid}/build, брокер жив — полный перебор статусов ──────────────
@@ -286,15 +322,15 @@ def test_build_rollback_over_every_status(status, broker_down):
 
 
 @pytest.mark.parametrize("entry", sorted(ROLLBACK), ids=lambda e: e[0])
-def test_second_build_after_dead_broker(entry, broker_down):
-    """Что остаётся оператору после отката: повторная «Сборка схемы».
+def test_second_build_after_dead_broker(entry, broker_down, monkeypatch):
+    """Выход из отката: брокер поднялся — «Сборка схемы» работает.
 
-    Тупик пункта 1.14 при исходной редакции: откат оставляет `validated_masks`,
-    гейт его не знает — повтор отвечает 400, и так навсегда. Вперёд из этого
-    статуса не ведёт ничто: `/junctions/start` и `/junctions/complete` его не
-    принимают, а единственный принимающий эндпоинт `/api/skeleton/{uid}/skeletonize`
-    из клиента не вызывается ни разу (`api_client.start_skeletonization` без
-    единого вызывающего — родня находки 1.3 про `skip_frame_removal`).
+    Тупик пункта 1.14 при исходной редакции: откат оставлял `validated_masks`,
+    гейт его не знает — повтор отвечал 400, и так навсегда. Вперёд из того статуса
+    не вело ничто: `/junctions/start` и `/junctions/complete` его не принимают,
+    а единственный принимающий эндпоинт `/api/skeleton/{uid}/skeletonize` из
+    клиента не вызывается ни разу (`api_client.start_skeletonization` без единого
+    вызывающего — родня находки 1.3 про `skip_frame_removal`).
     """
     value, stage, message = entry
     diagram = _diagram(DiagramStatus(value), error_stage=stage, error_message=message)
@@ -303,31 +339,52 @@ def test_second_build_after_dead_broker(entry, broker_down):
     with pytest.raises(HTTPException) as first:
         asyncio.run(start_graph_building(UID, db=db))
     assert first.value.status_code == 503
+    assert _state(diagram) == ROLLBACK[entry]
 
-    rolled_back, _stage, _msg = ROLLBACK[entry]
-    assert diagram.status is DiagramStatus(rolled_back)
+    # Брокер поднялся — оператор жмёт кнопку ещё раз.
+    from worker.celery_app import celery_app
 
-    with pytest.raises(HTTPException) as second:
-        asyncio.run(start_graph_building(UID, db=db))
-    assert second.value.status_code == 400, "повтор после отката больше не отказ"
+    sent = []
+
+    class _AsyncResult:
+        id = "task-0002"
+
+    def _send_task(name, args=None, kwargs=None, **rest):
+        sent.append(name)
+        return _AsyncResult()
+
+    monkeypatch.setattr(celery_app, "send_task", _send_task)
+
+    result = asyncio.run(start_graph_building(UID, db=db))
+
+    assert result["status"] == "building_graph"
+    assert result["task_id"] == "task-0002"
+    assert sent == [BUILD_TASK]
+    assert diagram.status is DiagramStatus.BUILDING_GRAPH
 
 
 @pytest.mark.parametrize("entry", sorted(ROLLBACK), ids=lambda e: e[0])
-def test_rolled_back_status_leaves_graph_button_dead(entry):
+def test_rolled_back_status_keeps_graph_button_alive(entry):
     """Второй замок тупика — кнопка «Сборка схемы» после отката.
 
-    Инвариант ДАННЫХ, без живого виджета: `_buttons_for_status` считает доступность
-    по порогам `_BEAD_DEFS`. При исходной редакции откат уводит диаграмму ниже
-    порога кнопки, и до 400 оператор даже не добирается — кнопка серая.
+    Инвариант ДАННЫХ, без живого виджета. При исходной редакции откат уводил
+    диаграмму ниже порога кнопки (`validated_masks` — индекс 9 против порога
+    `validated_junctions` — 15), и до 400 оператор даже не добирался: кнопка серая.
     """
     from ui.widgets.diagram_workspace import _buttons_for_status
 
-    rolled_back, _stage, _msg = ROLLBACK[entry]
+    rolled_back, stage, _msg = ROLLBACK[entry]
     available, completed, processing = _buttons_for_status(DiagramStatus(rolled_back))
 
-    assert "graph" not in available
-    assert "graph" not in completed
-    assert "graph" not in processing
+    if rolled_back == "error":
+        # У `error` порогов нет вовсе (его нет в `_STATUS_ORDER`) — кнопку красит
+        # `error_stage` через `_error_key`. Поэтому здесь судится он: пустой
+        # `error_stage` гасит В КЛИЕНТЕ все кнопки разом, и это был бы новый
+        # тупик класса 1.12, заведённый самой правкой.
+        assert stage == "building_graph"
+        assert (available, completed, processing) == (set(), set(), set())
+    else:
+        assert "graph" in (available | completed), "кнопка «Сборка схемы» серая"
 
 
 # ── прочие ветки того же эндпоинта ───────────────────────────────────────
