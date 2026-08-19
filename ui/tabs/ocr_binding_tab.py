@@ -1650,10 +1650,10 @@ class OcrBindingTab(AppearanceMixin, QWidget):
                 }
                 with open(val_path, "w", encoding="utf-8") as f:
                     json.dump(val_data, f, ensure_ascii=False, indent=2)
-                try:
-                    self.api_client.save_ocr_validation(self.uid, val_path)
-                except Exception as exc:
-                    logger.warning("Failed to upload ocr_validation: %s", exc)
+                # Отказ этого шага — такой же отказ сохранения, как и любого
+                # другого: раньше он глотался предупреждением, и вкладка ниже
+                # объявляла «✅ Сохранено» при непрошедшей записи (пункт 1.9).
+                self.api_client.save_ocr_validation(self.uid, val_path)
 
             self._saved = True
             parts = [
@@ -1668,6 +1668,9 @@ class OcrBindingTab(AppearanceMixin, QWidget):
             return True
 
         except Exception as exc:
+            # Единственный след ошибки — файл лога клиента: в собранном .exe
+            # sys.stderr = None, и печать трассировки в консоль пропадает.
+            logger.error("Не удалось сохранить привязки OCR: %s", exc, exc_info=True)
             QMessageBox.warning(
                 self, "Ошибка",
                 f"Не удалось сохранить привязки:\n{exc}"
