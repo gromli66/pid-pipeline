@@ -58,13 +58,19 @@ def _sorted_edge_key(ek: str) -> str:
 
 #: Что вкладка тянет с сервера. OCR-артефакты идут своими эндпоинтами
 #: APIClient, а не общим download_artifact.
+#:
+#: ⛔ `failure_key` у графа (пункт 1.x8, механизм 1.23) — различение 404/прочее:
+#: 404 = сохранённой работы законно нет (первый заход), любой другой отказ =
+#: она могла быть. Молча взять фолбэк здесь дороже, чем кажется: `_save_binding`
+#: кладёт `_graph_data` обратно в `graph_validated`, то есть первое же
+#: «Сохранить» (или тик автосохранения) затрёт сохранённый граф исходным.
 _ARTIFACTS = (
     one(artifact("original_image", "original.png"), required=True),
     one(endpoint("download_ocr_result", "ocr_result.json", "ocr_result"),
         required=True),
     Job((artifact("graph_validated", "graph_validated.json", key="graph"),
          artifact("graph_json", "graph_validated.json", key="graph")),
-        required=True),
+        required=True, failure_key="saved_graph_download_failed"),
     Job((artifact("coco_validated", "coco_validated.json", key="coco"),
          artifact("coco_predicted", "coco_predicted.json", key="coco"))),
     one(endpoint("download_ocr_binding", "ocr_binding.json", "binding")),
@@ -615,6 +621,20 @@ class OcrBindingTab(AppearanceMixin, QWidget):
     def _on_download_finished(self, artifacts: dict):
         self._download_thread.quit()
         self._download_thread.wait()
+
+        if artifacts.get("saved_graph_download_failed"):
+            # Сохранённый граф МОГ лежать на сервере и просто не отдался (5xx,
+            # сеть, диск): открыт исходный, а `_save_binding` пишет обратно
+            # в graph_validated — прежняя работа была бы затёрта молча.
+            logger.warning("graph_validated не скачался — открыт исходный граф")
+            QMessageBox.warning(
+                self, "Сохранённый граф не загружен",
+                "Не удалось скачать сохранённый граф — открыт ИСХОДНЫЙ, "
+                "без ваших прежних правок.\n\n"
+                "Сохранение из этой вкладки затрёт сохранённый граф на "
+                "сервере. Закройте вкладку и откройте её заново, когда связь "
+                "восстановится.",
+            )
 
         try:
             # Загрузить OCR данные

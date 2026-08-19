@@ -4454,33 +4454,41 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         cmd._before = self._resize_model_base
         cmd.description = "Размер объектов"
 
-        # Применить размеры из базлайна (идемпотентно — итог совпадает с превью).
-        self._apply_sizes_from_base(width, height, scale, kind)
-        grower_ids = [nid for nid in self._resize_sel if self.nodes.get(nid)]
+        try:
+            # Применить размеры из базлайна (идемпотентно — итог совпадает с превью).
+            self._apply_sizes_from_base(width, height, scale, kind)
+            grower_ids = [nid for nid in self._resize_sel if self.nodes.get(nid)]
 
-        # развести наслоившихся соседей, затем довести рёбра до ортогональности
-        pushed = self._spread_overlaps(grower_ids)
-        # Э2d: рёбра всех затронутых узлов пересаживаются движком (только
-        # ближние концы); раньше на layout-холсте концы сдвинутых соседей
-        # оставались висеть (auto_fix ниже заперт замком Э4-00)
-        for nid in dict.fromkeys(list(grower_ids) + pushed):
-            self._reseat_after_resize(nid)
-        # Э4-00: на холсте после авто-раскладки полнографный auto_fix даёт
-        # регрессию (замер §1.1 EDITOR_AFTER_LAYOUT_PLAN) — тот же инструмент,
-        # что заперт кнопкой «Авто-выравнивание»; расталкивание выше остаётся
-        # локальным вокруг изменённых узлов.
-        from modules.graph.core import canvas_state
-        if not canvas_state.has_layout(self.graph_data or {}):
-            auto_fix_graph(
-                self.nodes, self.edges_data,
-                equip_max_shift=self.EQUIP_MAX_SHIFT,
-                conn_max_shift=self.CONN_MAX_SHIFT,
-            )
-
-        self._redraw_all()
-        self.model.rebuild_edge_data_index()
-        cmd.finalize()
-        self.undo_mgr.push_executed(cmd)
+            # развести наслоившихся соседей, затем довести рёбра до ортогональности
+            pushed = self._spread_overlaps(grower_ids)
+            # Э2d: рёбра всех затронутых узлов пересаживаются движком (только
+            # ближние концы); раньше на layout-холсте концы сдвинутых соседей
+            # оставались висеть (auto_fix ниже заперт замком Э4-00)
+            for nid in dict.fromkeys(list(grower_ids) + pushed):
+                self._reseat_after_resize(nid)
+            # Э4-00: на холсте после авто-раскладки полнографный auto_fix даёт
+            # регрессию (замер §1.1 EDITOR_AFTER_LAYOUT_PLAN) — тот же инструмент,
+            # что заперт кнопкой «Авто-выравнивание»; расталкивание выше остаётся
+            # локальным вокруг изменённых узлов.
+            from modules.graph.core import canvas_state
+            if not canvas_state.has_layout(self.graph_data or {}):
+                auto_fix_graph(
+                    self.nodes, self.edges_data,
+                    equip_max_shift=self.EQUIP_MAX_SHIFT,
+                    conn_max_shift=self.CONN_MAX_SHIFT,
+                )
+        finally:
+            # Закрытие шага undo — в finally (пункт 1.x8, третий носитель формы
+            # 1.1/1.x7). Все четыре мутатора выше правят узлы и рёбра НА МЕСТЕ,
+            # и падение любого из них оставляло оператора с изменённым холстом,
+            # без Ctrl+Z и без роста revision — вкладка считала, что
+            # несохранённого нет, и закрывалась без вопроса (замер §73в).
+            # Перерисовка здесь же: иначе сцена показывает прежнюю рамку поверх
+            # уже изменённой модели. Порядок тот же, что на зелёном пути.
+            self._redraw_all()
+            self.model.rebuild_edge_data_index()
+            cmd.finalize()
+            self.undo_mgr.push_executed(cmd)
 
         # Превью зафиксировано командой — базлайн больше не точка возврата.
         # Снять его ДО сброса панели: та откатывает незафиксированное превью
