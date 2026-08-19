@@ -256,6 +256,23 @@ curl -X POST "http://localhost:8000/api/detection/{uid}/detect?model_id=yolov8m_
 | GET | `/{uid}/result` | Результат: node_count, edge_count, артефакты |
 | POST | `/{uid}/generate-fxml` | Запустить генерацию FXML |
 
+### Build Graph
+
+**Precondition:** `status` ∈ {`validated_junctions`, `built`, `error`} — нормальный путь
+и оба повтора. **Transition:** → `building_graph`.
+
+Особые исходы:
+
+| исход | ответ | что со статусом |
+|-------|-------|-----------------|
+| `status == building_graph` | 200, `already in progress` | не меняется, задача не отправляется повторно |
+| нет артефакта `SKELETON_FINAL` | 200, `skeletonizing` | не меняется; автоматически запускается `task_skeletonize_simple` |
+| отправка задачи не удалась (брокер лёг) | 503 | **возвращается таким, каким был до вызова** — вместе с `error_message`/`error_stage` |
+
+Откат на 503 восстанавливает пред-вызовное состояние целиком, а не сваливает диаграмму
+в фиксированный статус: работа не начиналась, и любая другая точка отката вывела бы
+её из `Precondition` этого же эндпоинта — повтор отвечал бы 400 навсегда.
+
 ### Generate FXML
 
 ```bash
