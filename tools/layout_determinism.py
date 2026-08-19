@@ -23,6 +23,10 @@
 известных неповторимых среди невидимых. Вердикт по корпусу даёт только
 локальный прогон; в CI шаг обязан различать 1 и 2 (`.github/workflows/tests.yml`).
 
+Те же три исхода у `--write-baseline` (пункт 1-28): 0 — эталон переснят,
+1 — ОТКАЗ (пересъём узаконил бы поломку), 2 — СУДИТЬ НЕЧЕМ (корпус усечён,
+пересъём вычеркнул бы неизмеренное). См. `write_blocked()`.
+
 Ключ `--no-routing` выключает этап роутинга (`LayoutParams.routing`): им
 недетерминизм и локализуется — расстановка с раздвиганием отдельно от обхода
 чужих форм через libavoid.
@@ -186,6 +190,41 @@ def verdict(result: dict[str, list[str]], base: dict) -> tuple[int, list[str]]:
     return 0, lines
 
 
+def write_blocked(result: dict[str, list[str]],
+                  base: dict) -> tuple[list[str], list[str]]:
+    """-> (причины «судить нечем», причины отказа). Обе пустые = пересъём законен.
+
+    Пересъём — единственный путь, которым эталон вообще меняется, и по Д6 он
+    идёт ОТДЕЛЬНЫМ коммитом; красный флаг №4 протокола («эталон изменён тем же
+    коммитом, что и код») его поэтому не видит. 1-25 научил отвечать «судить
+    нечем» только `--check`, а запись осталась слепой (пункт 1-28): замер
+    2026-08-19 — `--git-only --runs 2 --write-baseline` печатал «эталон
+    переснят», exit 0 и оставлял в файле 3 графа из 17, вычёркивая заодно все
+    восемь известных неповторимых.
+
+    Те же три исхода, что у `verdict()`:
+    2 — СУДИТЬ НЕЧЕМ: часть эталона не измерена, пересъём вычеркнул бы её;
+    1 — ОТКАЗ: воспроизводимый граф сломался, пересъём записал бы поломку нормой;
+    0 — законно (в том числе первый снимок: сверять не с чем).
+    """
+    known = base.get("stable", {})
+    if not known:
+        return [], []
+
+    unjudged, refused = [], []
+    unmeasured = sorted(set(known) - set(result))
+    if unmeasured:
+        unjudged.append(f"не измерено {len(unmeasured)} графов эталона из "
+                        f"{len(known)} — корпус усечён, пересъём вычеркнул бы "
+                        f"их из эталона: {', '.join(unmeasured)}")
+    broke = sorted(u for u, s in result.items() if known.get(u) and not stability(s))
+    if broke:
+        refused.append(f"перестали воспроизводиться: {', '.join(broke)} — "
+                       "пересъём записал бы поломку нормой. Такой граф чинят "
+                       "или объясняют, а не переснимают")
+    return unjudged, refused
+
+
 def read_baseline() -> dict:
     if not BASELINE.exists():
         return {}
@@ -229,6 +268,15 @@ def main() -> int:
     result = measure(uids, args.runs, routing)
 
     if args.write_baseline:
+        unjudged, refused = write_blocked(shas(result), read_baseline())
+        for msg in unjudged:
+            print(f"[СУДИТЬ НЕЧЕМ] {msg}")
+        for msg in refused:
+            print(f"[ОТКАЗ] {msg}")
+        if refused:                      # доказанная поломка сильнее неполноты
+            return 1
+        if unjudged:
+            return 2
         BASELINE.parent.mkdir(parents=True, exist_ok=True)
         BASELINE.write_text(json.dumps(
             {"runs": args.runs, "routing": routing,

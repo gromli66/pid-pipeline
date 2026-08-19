@@ -125,3 +125,75 @@ def test_killed_child_is_loud(monkeypatch, stdout, rc, match):
     monkeypatch.setattr(det.subprocess, "run", lambda *a, **kw: _Proc())
     with pytest.raises(RuntimeError, match=match):
         det.run_pass(["aaaaaaaa", "bbbbbbbb"], True, 1)
+
+
+# ───────── путь ЗАПИСИ: пересъём тоже обязан судить (пункт 1-28) ─────────
+
+def _write_stand(tmp_path, monkeypatch, measured, base=BASE):
+    """Стенд пересъёма: свой эталон, свой корпус, замер подменён.
+
+    `measured` — {uid8: [sha прогона 1, sha прогона 2, ...]}: и корпус, и то,
+    что по нему намерилось, задаются одним словарём.
+    """
+    path = tmp_path / "determinism_baseline.json"
+    if base is not None:
+        path.write_text(json.dumps(base, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(det, "BASELINE", path)
+    monkeypatch.setattr(det.corpus, "corpus_paths",
+                        lambda include_storage=True: dict.fromkeys(measured))
+    monkeypatch.setattr(det, "measure", lambda uids, runs, routing: {
+        uid: [{"sha": sha, "defects": [1, 0]} for sha in measured[uid]] for uid in uids})
+    monkeypatch.setattr(sys, "argv", ["layout_determinism.py", "--write-baseline"])
+    return path
+
+
+def test_write_on_truncated_corpus_is_not_a_snapshot(tmp_path, monkeypatch, capsys):
+    """⛔ Дыра 1-28 (а): пересъём на усечённом корпусе молча урезал эталон.
+
+    Замер до правки: `--git-only --runs 2 --write-baseline` печатал «эталон
+    переснят», exit 0 и оставлял в файле 3 графа вместо 17 — вместе с восемью
+    известными неповторимыми. 1-25 научил отвечать «судить нечем» только
+    `--check`, а меняет эталон именно запись.
+    """
+    path = _write_stand(tmp_path, monkeypatch, {"aaaaaaaa": ["x", "x"]})
+    before = path.read_text(encoding="utf-8")
+
+    assert det.main() == 2
+    assert "СУДИТЬ НЕЧЕМ" in capsys.readouterr().out
+    assert path.read_text(encoding="utf-8") == before, "эталон переписан вопреки отказу"
+
+
+def test_write_refuses_to_record_a_broken_graph(tmp_path, monkeypatch, capsys):
+    """Отказ (1), а не «судить нечем»: воспроизводимый граф сломался.
+
+    Пересъём идёт ОТДЕЛЬНЫМ коммитом (так требует Д6), поэтому красный флаг №4
+    протокола («эталон изменён тем же коммитом, что и код») его не видит.
+    """
+    path = _write_stand(tmp_path, monkeypatch,
+                        {"aaaaaaaa": ["x", "y"], "bbbbbbbb": ["z", "w"]})
+    before = path.read_text(encoding="utf-8")
+
+    assert det.main() == 1
+    assert "перестали воспроизводиться: aaaaaaaa" in capsys.readouterr().out
+    assert path.read_text(encoding="utf-8") == before, "эталон переписан вопреки отказу"
+
+
+def test_write_on_the_whole_baseline_records_it(tmp_path, monkeypatch):
+    """Положительный контроль: измерен весь эталон — пересъём проходит.
+
+    Без него правка односторонняя: стенд, отказывающий всегда, гейтом не является.
+    """
+    path = _write_stand(tmp_path, monkeypatch,
+                        {"aaaaaaaa": ["x", "x"], "bbbbbbbb": ["z", "z"]})
+
+    assert det.main() == 0
+    assert json.loads(path.read_text(encoding="utf-8"))["stable"] == {
+        "aaaaaaaa": True, "bbbbbbbb": True}
+
+
+def test_write_of_the_first_snapshot_has_nothing_to_compare(tmp_path, monkeypatch):
+    """Эталона нет — сверять не с чем ни в одну сторону; первый снимок законен."""
+    path = _write_stand(tmp_path, monkeypatch, {"aaaaaaaa": ["x", "y"]}, base=None)
+
+    assert det.main() == 0
+    assert json.loads(path.read_text(encoding="utf-8"))["stable"] == {"aaaaaaaa": False}

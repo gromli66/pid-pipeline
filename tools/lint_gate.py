@@ -19,6 +19,10 @@
 Гейт валят также: код возврата линтера вне штатного набора, неразбираемый
 вывод и пустой результат при непустом эталоне — убитый прогон не имеет права
 выглядеть зелёным (урок пункта 0.3).
+
+У `--write-baseline` три исхода (`PROTOCOL §5`, пункт 1-28): 0 — эталон
+переснят, 1 — ОТКАЗ (долг вырос, пересъём его узаконил бы), 2 — СУДИТЬ НЕЧЕМ
+(прогон ruff убит). См. `write_blocked()`.
 """
 from __future__ import annotations
 
@@ -90,12 +94,23 @@ def mypy_errors() -> tuple[int, str]:
     return errors, out.strip()[-800:]
 
 
+def debt_grown(counts: dict[str, int],
+               known: dict[str, int]) -> dict[str, tuple[int, int]]:
+    """{файл: (было, стало)} там, где долг вырос.
+
+    Арифметика общая у `--check` и у пересъёма (пункт 1-28): два судьи одного
+    долга не должны разъехаться — ровно тот урок, что и у пола набора в
+    `suite_baseline.floor_problems`.
+    """
+    return {f: (known.get(f, 0), n) for f, n in counts.items()
+            if n > known.get(f, 0)}
+
+
 def verdict(counts: dict[str, int], mypy_bad: int,
             base: dict) -> tuple[bool, list[str]]:
     """-> (гейт пройден, строки отчёта). Отделено от печати ради теста."""
     known = base.get("ruff", {}).get("per_file", {})
-    grown = {f: (known.get(f, 0), n) for f, n in counts.items()
-             if n > known.get(f, 0)}
+    grown = debt_grown(counts, known)
     paid = {f: (n, counts.get(f, 0)) for f, n in known.items()
             if counts.get(f, 0) < n}
 
@@ -118,6 +133,37 @@ def verdict(counts: dict[str, int], mypy_bad: int,
     return (not grown and not mypy_bad), lines
 
 
+def write_blocked(counts: dict[str, int],
+                  base: dict) -> tuple[list[str], list[str]]:
+    """-> (причины «судить нечем», причины отказа). Обе пустые = пересъём законен.
+
+    Дыра пункта 1-28: `--write-baseline` не сверялся с эталоном ВОВСЕ —
+    `read_baseline()` звался только в ветке `--check`. Замер 2026-08-19:
+    широкий `except` в чистом `tools/corpus.py` → `--check` exit 1; один
+    пересъём (178 → 179, exit 0) → `--check` снова зелёный. Пересъём идёт
+    отдельным коммитом, как требует Д6, поэтому красный флаг №4 протокола
+    («эталон изменён тем же коммитом, что и код») этого не видит.
+
+    mypy сюда не входит намеренно: в файл эталона пишется только счёт ruff,
+    и грязный mypy пересъёмом не легализуется — его судит `--check` на каждом
+    прогоне. Блокировать им запись значило бы судить о том, чего не пишем.
+    """
+    ruff = base.get("ruff", {})
+    if not ruff:                                    # первый снимок
+        return [], []
+    if ruff.get("total") and not counts:
+        return ["ноль нарушений при непустом эталоне — прогон ruff убит, "
+                "а пересъём записал бы пустой долг"], []
+    grown = debt_grown(counts, ruff.get("per_file", {}))
+    if grown:
+        return [], ["долг широких except вырос против эталона — пересъём его "
+                    "узаконит:\n"
+                    + "\n".join(f"    {f}: {was} -> {now}"
+                                for f, (was, now) in sorted(grown.items()))
+                    + "\n  Новый широкий except чинят или откатывают."]
+    return [], []
+
+
 def read_baseline() -> dict:
     if not BASELINE.exists():
         return {}
@@ -136,6 +182,15 @@ def main() -> int:
     mypy_bad, mypy_tail = mypy_errors()
 
     if args.write_baseline:
+        unjudged, refused = write_blocked(counts, read_baseline())
+        for msg in unjudged:
+            print(f"[СУДИТЬ НЕЧЕМ] {msg}")
+        for msg in refused:
+            print(f"[ОТКАЗ] {msg}")
+        if refused:                      # доказанный рост долга сильнее неполноты
+            return 1
+        if unjudged:
+            return 2
         BASELINE.parent.mkdir(parents=True, exist_ok=True)
         BASELINE.write_text(json.dumps(
             {"ruff": {"select": ["BLE001", "E722"],

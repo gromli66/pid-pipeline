@@ -101,3 +101,81 @@ def test_baseline_holds_only_tracked_files():
     under_git = lint_gate.tracked()
     stray = sorted(set(base["ruff"]["per_file"]) - under_git)
     assert not stray, f"в эталоне файлы вне git: {stray}"
+
+
+# ───────── путь ЗАПИСИ: пересъём не легализует долг (пункт 1-28) ─────────
+
+def _write_stand(tmp_path, monkeypatch, counts, base=BASE, mypy_bad=0):
+    """Стенд пересъёма: свой эталон, линтеры подменены числами."""
+    path = tmp_path / "lint_baseline.json"
+    if base is not None:
+        path.write_text(json.dumps(base, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(lint_gate, "BASELINE", path)
+    monkeypatch.setattr(lint_gate, "ruff_counts", lambda: counts)
+    monkeypatch.setattr(lint_gate, "mypy_errors", lambda: (mypy_bad, ""))
+    monkeypatch.setattr(sys, "argv", ["lint_gate.py", "--write-baseline"])
+    return path
+
+
+def test_write_refuses_to_legalize_grown_debt(tmp_path, monkeypatch, capsys):
+    """⛔ Дыра 1-28 (б): `--write-baseline` не сверялся с эталоном вовсе.
+
+    Замер до правки на живом дереве: широкий `except` в чистом `tools/corpus.py`
+    → `--check` exit 1 «0 -> 1»; один `--write-baseline` (эталон 178 → 179,
+    exit 0) → `--check` снова зелёный. Пересъём идёт отдельным коммитом, как
+    требует Д6, поэтому красный флаг №4 протокола этого не видит.
+    """
+    path = _write_stand(tmp_path, monkeypatch,
+                        {"app/api/validation.py": 3, "ui/tabs/frame_tab.py": 2,
+                         "worker/tasks/graph.py": 1})
+    before = path.read_text(encoding="utf-8")
+
+    assert lint_gate.main() == 1
+    assert "worker/tasks/graph.py: 0 -> 1" in capsys.readouterr().out
+    assert path.read_text(encoding="utf-8") == before, "эталон переписан вопреки отказу"
+
+
+def test_write_of_a_killed_linter_is_unjudgeable(tmp_path, monkeypatch, capsys):
+    """Ноль нарушений при непустом эталоне — прогон убит: 2, а не 0 и не 1.
+
+    Разница с отказом принципиальна: тут не «долг вырос», а мерить было нечем,
+    и записывать пустой долг нельзя тем более.
+    """
+    path = _write_stand(tmp_path, monkeypatch, {})
+    before = path.read_text(encoding="utf-8")
+
+    assert lint_gate.main() == 2
+    assert "СУДИТЬ НЕЧЕМ" in capsys.readouterr().out
+    assert path.read_text(encoding="utf-8") == before, "эталон переписан вопреки отказу"
+
+
+def test_write_records_paid_debt(tmp_path, monkeypatch):
+    """Положительный контроль: долг оплачен — пересъём и есть способ это записать."""
+    path = _write_stand(tmp_path, monkeypatch,
+                        {"app/api/validation.py": 1, "ui/tabs/frame_tab.py": 2})
+
+    assert lint_gate.main() == 0
+    assert json.loads(path.read_text(encoding="utf-8"))["ruff"]["total"] == 3
+
+
+def test_write_does_not_judge_mypy(tmp_path, monkeypatch):
+    """Грязный mypy пересъём не блокирует: в эталон пишется только счёт ruff.
+
+    Долг mypy пересъёмом не легализуется в принципе — его судит `--check`
+    на каждом прогоне, а в файле эталона его нет.
+    """
+    path = _write_stand(tmp_path, monkeypatch,
+                        {"app/api/validation.py": 3, "ui/tabs/frame_tab.py": 2},
+                        mypy_bad=2)
+
+    assert lint_gate.main() == 0
+    assert json.loads(path.read_text(encoding="utf-8"))["ruff"]["total"] == 5
+
+
+def test_write_of_the_first_snapshot_has_nothing_to_compare(tmp_path, monkeypatch):
+    """Эталона нет — сверять не с чем; первый снимок законен."""
+    path = _write_stand(tmp_path, monkeypatch, {"worker/tasks/graph.py": 9}, base=None)
+
+    assert lint_gate.main() == 0
+    assert json.loads(path.read_text(encoding="utf-8"))["ruff"]["per_file"] == {
+        "worker/tasks/graph.py": 9}
