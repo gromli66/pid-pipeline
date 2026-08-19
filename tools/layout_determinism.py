@@ -26,6 +26,12 @@
 Те же три исхода у `--write-baseline` (пункт 1-28): 0 — эталон переснят,
 1 — ОТКАЗ (пересъём узаконил бы поломку), 2 — СУДИТЬ НЕЧЕМ (корпус усечён,
 пересъём вычеркнул бы неизмеренное). См. `write_blocked()`.
+⚠ Пересъём обязан быть не слабее эталона (пункт 1-29): `--runs` меньше
+эталонных или другой ключ роутинга — тоже «судить нечем». Иначе одна удачная
+выборка молча вычёркивает графы из списка неповторимых (§49.27). Одного пола
+мало: `false` в эталоне ЛИПКИЙ (`merge_stable()`), снять его может только явная
+починка `--allow-fixed <uid>` — замер 1-29 показал, что при `--runs 6`
+неповторимый граф всё равно способен выйти с одним хешем (§50.19).
 
 Ключ `--no-routing` выключает этап роутинга (`LayoutParams.routing`): им
 недетерминизм и локализуется — расстановка с раздвиганием отдельно от обхода
@@ -190,8 +196,8 @@ def verdict(result: dict[str, list[str]], base: dict) -> tuple[int, list[str]]:
     return 0, lines
 
 
-def write_blocked(result: dict[str, list[str]],
-                  base: dict) -> tuple[list[str], list[str]]:
+def write_blocked(result: dict[str, list[str]], base: dict,
+                  runs: int, routing: bool) -> tuple[list[str], list[str]]:
     """-> (причины «судить нечем», причины отказа). Обе пустые = пересъём законен.
 
     Пересъём — единственный путь, которым эталон вообще меняется, и по Д6 он
@@ -203,15 +209,39 @@ def write_blocked(result: dict[str, list[str]],
     восемь известных неповторимых.
 
     Те же три исхода, что у `verdict()`:
-    2 — СУДИТЬ НЕЧЕМ: часть эталона не измерена, пересъём вычеркнул бы её;
+    2 — СУДИТЬ НЕЧЕМ: замер не годен в замену эталону — часть эталона не
+        измерена (корпус усечён), либо снят он слабее эталонного: прогонов
+        меньше, чем у эталона, или другим ключом роутинга (пункт 1-29);
     1 — ОТКАЗ: воспроизводимый граф сломался, пересъём записал бы поломку нормой;
     0 — законно (в том числе первый снимок: сверять не с чем).
+
+    ⚠ Почему число прогонов — это «судить нечем», а не мелочь: гейт по своей
+    природе выборочный, «воспроизводим» читается как «за N прогонов не поймали»
+    (`TESTING §8.2`). Замер 2026-08-19 (§49.27): пересъём при `--runs 2` назвал
+    воспроизводимыми ЧЕТЫРЕ из восьми известных неповторимых графов, а эталон
+    снят при `runs 6`. Отказ по сломавшемуся графу этого не ловит по замыслу —
+    `false -> true` законное «стало лучше», — поэтому стережётся сам замер.
     """
     known = base.get("stable", {})
     if not known:
         return [], []
 
     unjudged, refused = [], []
+    base_runs = base.get("runs")
+    if base_runs and runs < base_runs:
+        unjudged.append(f"замер слабее эталона: прогонов {runs} против "
+                        f"{base_runs} — при малой выборке неповторимый граф "
+                        f"выходит воспроизводимым (§49.27: 4 из 8 известных "
+                        f"при --runs 2), и эталон ослаб бы молча. Переснимать "
+                        f"при --runs не меньше {base_runs}")
+    base_routing = base.get("routing")
+    if base_routing is not None and routing is not base_routing:
+        unjudged.append(f"замер снят другим ключом: роутинг "
+                        f"{'вкл' if routing else 'выкл'} против "
+                        f"{'вкл' if base_routing else 'выкл'} у эталона — "
+                        "это замер другой величины (без роутинга раскладка "
+                        "воспроизводима вся, замер 0.10), и пересъём стёр бы "
+                        "список неповторимых разом")
     unmeasured = sorted(set(known) - set(result))
     if unmeasured:
         unjudged.append(f"не измерено {len(unmeasured)} графов эталона из "
@@ -223,6 +253,43 @@ def write_blocked(result: dict[str, list[str]],
                        "пересъём записал бы поломку нормой. Такой граф чинят "
                        "или объясняют, а не переснимают")
     return unjudged, refused
+
+
+def merge_stable(result: dict[str, list[str]], base: dict,
+                 allow_fixed: list[str]) -> tuple[dict[str, bool], list[str]]:
+    """-> (что записать в эталон, строки-объяснения к печати).
+
+    Неповторимость — наблюдение ПОЛОЖИТЕЛЬНОЕ: два разных исхода её доказывают,
+    а одна тихая серия одинаковых не опровергает (`TESTING §8.2`). Поэтому
+    `false` в эталоне липкий: замер, показавший один хеш там, где эталон помнит
+    расхождение, его не стирает. Снять `false` может только явно объявленная
+    починка — `--allow-fixed <uid>` плюс объяснение в коммите, ЧТО изменилось
+    в коде; без такого ключа храповик стал бы вечным и починку недетерминизма
+    libavoid (ВН3) записать было бы нечем.
+
+    ⛔ Замерено СОБСТВЕННЫМ пересъёмом этого пункта (§50.19), а не выведено:
+    полный корпус, `--runs 6` — тот самый пол, который пункт и ввёл, — и
+    `0aea61c0` вышел с одним хешем. Пересъём записал бы его `true`, хотя §32.14
+    наблюдал у него ТРИ разных исхода из шести. Пол по числу прогонов такое не
+    держит: он необходим, но недостаточен.
+    """
+    known = base.get("stable", {})
+    stable, lines = {}, []
+    for uid8, sha_list in sorted(result.items()):
+        now = stability(sha_list)
+        if now and known.get(uid8) is False:
+            if uid8 in allow_fixed:
+                lines.append(f"[ПОЧИНКА по --allow-fixed] {uid8}: неповторим -> "
+                             "воспроизводим. Объяснить в коммите, ЧТО изменилось "
+                             "в коде — иначе это просто удачная выборка")
+            else:
+                now = False
+                lines.append(f"[ВЫБОРКА, НЕ ПОЧИНКА] {uid8}: эталон помнит "
+                             "неповторимость, а этот замер дал один хеш — "
+                             "оставлено «неповторим» (TESTING §8.2). Если это "
+                             f"починка кода: --allow-fixed {uid8}")
+        stable[uid8] = now
+    return stable, lines
 
 
 def read_baseline() -> dict:
@@ -247,6 +314,9 @@ def main() -> int:
                     help="сверить с эталоном; exit 1 при регрессе")
     ap.add_argument("--write-baseline", action="store_true",
                     help="переснять эталон (отдельным коммитом, Д6)")
+    ap.add_argument("--allow-fixed", action="append", default=None, metavar="UID8",
+                    help="при пересъёме записать граф из списка неповторимых "
+                         "как воспроизводимый — явная починка; можно повторять")
     args = ap.parse_args()
 
     if args.child is not None:
@@ -268,7 +338,8 @@ def main() -> int:
     result = measure(uids, args.runs, routing)
 
     if args.write_baseline:
-        unjudged, refused = write_blocked(shas(result), read_baseline())
+        unjudged, refused = write_blocked(shas(result), read_baseline(),
+                                          args.runs, routing)
         for msg in unjudged:
             print(f"[СУДИТЬ НЕЧЕМ] {msg}")
         for msg in refused:
@@ -277,10 +348,14 @@ def main() -> int:
             return 1
         if unjudged:
             return 2
+        stable, notes = merge_stable(shas(result), read_baseline(),
+                                     args.allow_fixed or [])
+        for msg in notes:
+            print(msg)
         BASELINE.parent.mkdir(parents=True, exist_ok=True)
         BASELINE.write_text(json.dumps(
             {"runs": args.runs, "routing": routing,
-             "stable": {u: stability(s) for u, s in sorted(shas(result).items())}},
+             "stable": stable},
             ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
         print(f"эталон переснят: {BASELINE}")
         return 0
