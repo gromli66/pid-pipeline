@@ -934,3 +934,204 @@ def test_escape_reverts_only_the_tail_after_a_committed_drag(ed):
 
     ed.undo()
     assert _geom(ed) == g0, "Ctrl+Z после отменённого хвоста не вернул исходное"
+
+
+# ── пункт 1.8, доработка: Ctrl+Z ВНУТРИ режима и выход из него ─────────────
+
+def _away_spot(editor):
+    """Точка «мимо всего»: ни один узел её не перехватывает и ни одна ВИДИМАЯ
+    ручка рядом не лежит — то есть клик по ней оператор считает промахом. Обе
+    проверки — по видимому (сцена + `find_node_at`), не по полям режима."""
+    x, y = _free_spot(editor)
+    assert editor.find_node_at(x, y) is None, \
+        "свободная точка перехвачена узлом — «клик мимо» не собрался"
+    centres = _handle_centres(editor)
+    for hx, hy in zip(centres[0::2], centres[1::2]):
+        assert ((x - hx) ** 2 + (y - hy) ** 2) ** 0.5 > 20.0, \
+            "свободная точка попала на ручку — «клик мимо» не собрался"
+    return x, y
+
+
+@pytest.mark.parametrize("editor_fixture", ["ed", "simple"])
+@pytest.mark.parametrize("exit_kind", ["escape", "click_away"])
+def test_undo_inside_resize_mode_survives_the_exit(request, editor_fixture,
+                                                   exit_kind):
+    """Дефект ШВА 1.6+1.7+1.8, найден ревизией связки (MEASUREMENTS §63б):
+    ресайз → commit → Ctrl+Z НЕ ВЫХОДЯ из режима → выход (Esc / клик мимо).
+
+    Ctrl+Z честно откатывал модель, но снимок `_resize_start_*` оставался
+    в состоянии «после ресайза», и откат брошенной тяги (1.8) принимал
+    расхождение, созданное undo, за расхождение, созданное тягой: выход
+    применял ПРОТУХШИЙ снимок и возвращал порчу целиком — при ПУСТОМ стеке
+    undo, то есть отменить её было уже нечем. Тяжелее закрытого дефекта:
+    порча приходит ПОСЛЕ отката, который оператор видел своими глазами.
+
+    Инвариант: что оператор отменил, то и осталось отменённым — геометрия
+    и ПОЛНЫЕ словари рёбер побайтово, стек там же, куда его привёл Ctrl+Z."""
+    ed = request.getfixturevalue(editor_fixture)
+    nid, corner = _free_corner_node(ed)
+    _ctrl_down(ed)
+    _dclick(ed, *_cxy(ed, nid), mods=CTRL)
+    assert _visible_handles(ed) == 4, "ручки не открылись — тест слеп"
+    g0, edges0, depth0 = _geom(ed), _edges_full(ed), _depth(ed)
+
+    _drag(ed, *corner, 30.0, 20.0)                 # закоммиченная протяжка
+    assert _geom(ed) != g0, "протяжка не изменила данные — тест пуст"
+    assert _depth(ed) == depth0 + 1, "протяжка обязана дать шаг undo"
+
+    ed.undo()                                      # Ctrl+Z, НЕ выходя из режима
+    assert _geom(ed) == g0, "undo не вернул рамку (проверять нечего)"
+    assert _edges_full(ed) == edges0, "undo не вернул рёбра (проверять нечего)"
+    assert _depth(ed) == depth0
+
+    if exit_kind == "escape":
+        _esc(ed)
+    else:
+        away = _away_spot(ed)
+        _press(ed, *away, mods=CTRL)
+        _release(ed, *away, mods=CTRL)
+
+    assert _geom(ed) == g0, \
+        "выход из режима вернул отменённую порчу (рамка/центроид/площадь)"
+    assert _edges_full(ed) == edges0, \
+        "выход из режима вернул отменённую порчу (словари рёбер целиком)"
+    assert _depth(ed) == depth0, "воскрешение записало шаг undo"
+    assert _visible_handles(ed) == 0, "ручки пережили выход из режима"
+
+
+@pytest.mark.parametrize("editor_fixture", ["ed", "simple"])
+def test_two_drags_undone_inside_resize_mode_survive_escape(request,
+                                                            editor_fixture):
+    """Вариация ревизора (§63.11): ДВЕ закоммиченные тяги → Ctrl+Z ×2 в режиме
+    → Esc. Снимок обновляется на каждом коммите, поэтому протухший возвращал
+    состояние после ВТОРОЙ тяги — Esc отменял обе отмены разом."""
+    ed = request.getfixturevalue(editor_fixture)
+    nid, corner = _free_corner_node(ed)
+    _ctrl_down(ed)
+    _dclick(ed, *_cxy(ed, nid), mods=CTRL)
+    g0, edges0, depth0 = _geom(ed), _edges_full(ed), _depth(ed)
+
+    _drag(ed, *corner, 30.0, 20.0)
+    bb = ed.nodes[nid]["bbox"]
+    corner2 = (float(bb[2]), float(bb[3]))
+    assert ed.find_node_at(*corner2) is None, \
+        "после первой протяжки угол попал под перехват — обстановка не собралась"
+    _drag(ed, *corner2, 25.0, 15.0)
+    assert _depth(ed) == depth0 + 2, "две протяжки обязаны дать два шага undo"
+
+    ed.undo()
+    ed.undo()
+    assert (_geom(ed), _edges_full(ed), _depth(ed)) == (g0, edges0, depth0), \
+        "два Ctrl+Z не вернули исходное (проверять нечего)"
+
+    _esc(ed)
+
+    assert _geom(ed) == g0, "Esc воскресил отменённые тяги (рамка)"
+    assert _edges_full(ed) == edges0, "Esc воскресил отменённые тяги (рёбра)"
+    assert _depth(ed) == depth0, "Esc тронул стек undo"
+
+
+@pytest.mark.parametrize("editor_fixture", ["ed", "simple"])
+def test_undo_inside_resize_mode_keeps_handles_on_the_restored_bbox(
+        request, editor_fixture):
+    """Вторая половина того же шва (§63.17): `_redraw_all` внутри undo сносит
+    ручки со сцены, а режим остаётся — press по бывшему углу превращается
+    в «клик мимо». Ручки судим ПО СЦЕНЕ: после Ctrl+Z они обязаны стоять там,
+    где теперь углы рамки, то есть показывать оператору правимый размер,
+    а не тот, который он только что отменил."""
+    ed = request.getfixturevalue(editor_fixture)
+    nid, corner = _free_corner_node(ed)
+    _ctrl_down(ed)
+    _dclick(ed, *_cxy(ed, nid), mods=CTRL)
+    corners0 = _bbox_corners(ed, nid)
+    assert _handle_centres(ed) == pytest.approx(corners0)
+
+    _drag(ed, *corner, 30.0, 20.0)
+    assert _handle_centres(ed) == pytest.approx(_bbox_corners(ed, nid)), \
+        "после протяжки ручки уехали с углов — тест слеп"
+
+    ed.undo()
+
+    assert _visible_handles(ed) == 4, "Ctrl+Z в режиме снёс ручки со сцены"
+    assert _handle_centres(ed) == pytest.approx(corners0), \
+        "ручки остались на отменённой рамке"
+
+
+def test_undo_of_a_foreign_command_keeps_exactly_four_handles(ed):
+    """Пересъём идёт на ЛЮБОМ undo, а не только на «своём»: сцену подметает
+    и чужая команда (`DragNodeCommand._apply_state` зовёт тот же
+    `_redraw_all` — замерено зондом И5). После отмены ЧУЖОГО шага ручек
+    снова четыре и они на рамке своего узла: ровно четыре ловит и потерю
+    (0), и вторую четвёрку поверх живых (8)."""
+    nid, _ = _free_corner_node(ed)
+    moved = next(n for n in _nodes_with_bbox(ed) if n != nid)
+    _drag(ed, *_cxy(ed, moved), 60.0, 30.0)        # чужой шаг undo
+
+    _ctrl_down(ed)
+    _dclick(ed, *_cxy(ed, nid), mods=CTRL)
+    corners = _bbox_corners(ed, nid)
+    assert _handle_centres(ed) == pytest.approx(corners)
+
+    ed.undo()                                      # отмена ЧУЖОЙ команды
+
+    assert _visible_handles(ed) == 4, \
+        "после отмены чужого шага ручек не четыре (снесены/удвоены)"
+    assert _handle_centres(ed) == pytest.approx(corners), \
+        "ручки уехали с рамки своего узла"
+
+
+def test_undo_that_removes_the_resized_node_closes_the_mode(ed):
+    """Узел, снесённый Ctrl+Z, уносит режим с собой — проверка жила в `undo()`
+    до пересъёма, и пересъём обязан её сохранить: иначе режим остаётся на
+    несуществующем узле и забирает инструмент навсегда (тот же класс, что
+    закрывал 1.6). Судим по ДАННЫМ, как в 1.6: после отмены жест `add_edge`
+    обязан дать ребро; снятые ручки сами по себе этого не доказывают —
+    их прячет и ранний выход из `_start_resize`."""
+    a, b = _unlinked_pair(ed)
+    ed.set_mode("add_edge")
+    _ctrl_down(ed)
+    x, y = _free_spot(ed)
+    nid = ed.add_equipment_node(x, y, 1, "test_eq", width=20, height=20)
+    assert _visible_handles(ed) == 4, "ручки не открылись — тест слеп"
+
+    ed.undo()
+
+    assert nid not in ed.nodes, "Ctrl+Z не снёс добавленный узел"
+    assert _visible_handles(ed) == 0, "ручки пережили снос своего узла"
+
+    edges0, depth0 = len(ed.edges_data), _depth(ed)
+    _tool_click(ed, a)
+    _tool_click(ed, b)
+    assert len(ed.edges_data) == edges0 + 1, \
+        "инструмент не вернулся: режим остался на снесённом узле"
+    assert _visible_handles(ed) == 0, "клик инструментом снова открыл ручки"
+
+
+@pytest.mark.parametrize("editor_fixture", ["ed", "simple"])
+def test_redo_inside_resize_mode_survives_the_exit(request, editor_fixture):
+    """Контроль к пересъёму со стороны redo (у ревизии он был чист, §63.15, и
+    обязан остаться таким): Ctrl+Z → Ctrl+Shift+Z в режиме → Esc. Пересъём
+    идёт и на redo, поэтому выход не имеет права ни вернуть отменённое, ни
+    откатить возвращённое — в модели остаётся состояние ПОСЛЕ ресайза."""
+    ed = request.getfixturevalue(editor_fixture)
+    nid, corner = _free_corner_node(ed)
+    _ctrl_down(ed)
+    _dclick(ed, *_cxy(ed, nid), mods=CTRL)
+    depth0 = _depth(ed)
+
+    _drag(ed, *corner, 30.0, 20.0)
+    g1, edges1, depth1 = _geom(ed), _edges_full(ed), _depth(ed)
+    assert depth1 == depth0 + 1
+
+    ed.undo()
+    ed.redo()
+    assert (_geom(ed), _edges_full(ed), _depth(ed)) == (g1, edges1, depth1), \
+        "redo не вернул ресайз (проверять нечего)"
+    assert _handle_centres(ed) == pytest.approx(_bbox_corners(ed, nid)), \
+        "после redo ручки не на восстановленной рамке"
+
+    _esc(ed)
+
+    assert _geom(ed) == g1, "Esc после redo откатил возвращённый ресайз"
+    assert _edges_full(ed) == edges1
+    assert _depth(ed) == depth1, "Esc после redo тронул стек undo"

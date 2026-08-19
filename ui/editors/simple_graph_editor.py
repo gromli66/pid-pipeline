@@ -489,6 +489,29 @@ class SimpleGraphEditor(BaseGraphEditor):
             "resize: брошенная тяга снята — %s возвращён к последнему "
             "зафиксированному размеру", node_id)
 
+    def _resize_resync_overlay(self):
+        """1.8: после undo/redo пересобрать режим правки размера на том, что
+        стало моделью — снимок и ручки.
+
+        Ctrl+Z, нажатый ВНУТРИ режима, честно откатывает модель, но снимок
+        `_resize_start_*` (три точки 1.7) остаётся от прежнего состояния,
+        и `_revert_uncommitted_resize` принимает расхождение, созданное undo,
+        за брошенную тягу: следующий же выход из режима возвращает то, что
+        оператор отменил и видел откаченным, — при пустом стеке, то есть без
+        шага отмены (дефект шва, ревизия связки 1.6+1.7+1.8). Пересъём и есть
+        лекарство: состояние после undo/redo и ЕСТЬ последнее зафиксированное.
+        Ручки переставляются той же правкой: команда зовёт `_redraw_all`
+        (не только своя — `DragNodeCommand` тоже) и сносит их со сцены, а
+        overlay остаётся с ПРЕЖНИМ bbox — тяга за такую ручку поехала бы
+        от отменённого размера."""
+        node_id = self._resizing_node
+        if not node_id:
+            return
+        if node_id not in self.nodes:
+            self._stop_resize()  # узел снесён undo/redo — закрыть режим
+            return
+        self._start_resize(node_id)
+
     def _stop_resize(self):
         """Убрать resize handles и вернуться в предыдущий режим."""
         # Сначала снять ручки, потом откат: `_redraw_all` внутри отката сносит
@@ -501,6 +524,8 @@ class SimpleGraphEditor(BaseGraphEditor):
         self._resize_start_bbox = None
         self._resize_start_centroid = None
         self._resize_start_area = None
+        self._resize_start_pins = None
+        self._resize_start_routes = None
         # Вернуться в предыдущий режим
         if self._current_mode == "resize_node":
             self.set_mode(self._mode_before_resize)
@@ -524,14 +549,11 @@ class SimpleGraphEditor(BaseGraphEditor):
 
     def undo(self):
         super().undo()
-        # Если resize-узел исчез после undo — убрать overlay
-        if self._resizing_node and self._resizing_node not in self.nodes:
-            self._stop_resize()
+        self._resize_resync_overlay()
 
     def redo(self):
         super().redo()
-        if self._resizing_node and self._resizing_node not in self.nodes:
-            self._stop_resize()
+        self._resize_resync_overlay()
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
