@@ -2611,3 +2611,123 @@ python -X utf8 tools/suite_baseline.py --check                 -> exit 0, соб
 | 64.9 | «`_redraw_all` зовёт только `ResizeNodeCommand`» — моё утверждение первой редакции комментария | 2026-08-19 | **опровергнуто зондом И5**: `DragNodeCommand._apply_state` (`advanced_commands.py:157`) зовёт тот же `_redraw_all`, поэтому ручки сносит и ЧУЖАЯ отмена. Комментарий и докстринг теста исправлены по замеру |
 | 64.10 | обе находки первого захода остались нетронутыми и адресованы 10-1 | 2026-08-19 | потерянный `release` при честной тяге (гард `:1733` overlay не видит) и прямой `set_mode` мимо `_stop_resize`. Второй сознательно НЕ чинился: ревизия назвала его единственным сейчас безопасным выходом после Ctrl+Z (§63.16) |
 | 64.11 | контроль ревизии §63.15 (redo) заперт тестом | 2026-08-19 | Ctrl+Z → Ctrl+Shift+Z → Esc: модель остаётся в состоянии ПОСЛЕ ресайза, стек 1, ручки на рамке. Под зондом И5 краснеет — контроль не пустой |
+
+## 65. Пункт 1-13 дороги (1.11) — «красная кнопка о гейт статуса» (2026-08-19)
+
+Тупик Т1 аудита конвейера: детекция упала → воркер ставит `status=ERROR`,
+`error_stage="detecting"`; клиент рисует красную кнопку «🔄 Поиск элементов»,
+клик уходит в `POST /api/detection/{uid}/detect`, а гейт требовал ТОЧНОГО
+`frame_cleaned` → **400**. Выхода из UI не было: три retry-эндпоинта, которые
+умеют выйти, не вызываются из клиента ни разу. Класс [сма] — сначала таблица
+переходов, потом правка.
+
+### 65а. Шаг 2 — все адреса пункта сверены по коду (кода не писал)
+
+| утверждение пункта | чем проверено | результат |
+|---|---|---|
+| гейт `app/api/detection.py:40-44` | `git show 4edcc17:app/api/detection.py \| sed -n '40,44p'` | ✔ построчное совпадение: `if diagram.status != DiagramStatus.FRAME_CLEANED:` → 400 |
+| красная кнопка ведёт в `POST /detect` | чтение `ui/widgets/diagram_workspace.py` | ✔ ДВА пути: `_apply_error_status` → `_stage_errors` → `_show_stage_error_dialog` (`:1179-1209`) и фолбэк `_update_buttons(ERROR, error_stage)` → `_error_key` → `_on_button_click` (`:1006-1046`, `:1433-1494`). Оба кончаются в `_start_detection` (`:1497`) → `_run_detection` → `api_client.start_detection` (`api_client.py:417-422`) |
+| `error_stage == "detecting"` | `grep -n 'stage="detecting"' worker/tasks/detection.py` | ✔ 6 точек отказа, все пишут ровно эту строку (`worker/utils/db_helpers.py:36`) |
+| три retry-эндпоинта из UI не зовутся | `grep -rn "retry_operation\|retry_detection\|retry-fetch" ui/ app/ worker/` | ✔ вызовов из `ui/` НЕТ: `api_client.retry_operation` (`:785`) объявлен и не вызван ниоткуда; `app/api/detection.py:82`, `app/api/cvat.py:503`, `app/api/diagrams.py:427` — для клиента мертвы |
+| покрытия в зоне нет | `grep -rn "start_detection\|FRAME_CLEANED" tests/ tools/` | ✔ **0 попаданий** до этого пункта |
+
+**Дрейф адреса:** аудит называл `diagram_workspace.py:1155-1171`, сегодня это
+`:1179-1195`. Вывод пункта не меняется.
+
+### 65б. Замер, решивший ФОРМУ правки (снят ДО кода, на `4edcc17`)
+
+    for f in detection segmentation junction graph ocr contours; do
+      echo "== app/api/$f.py"
+      git show 4edcc17:app/api/$f.py | grep -n "status not in\|status != DiagramStatus\|allowed = "
+    done
+
+| эндпоинт запуска авто-стадии | гейт до правки | пускает `error`? |
+|---|---|---|
+| `POST /detection/{uid}/detect` | `:40` `!= FRAME_CLEANED` | **НЕТ** |
+| `POST /segmentation/{uid}/segment` | `:61` `not in _ALLOWED_STATUSES` (в наборе `:33-36` есть `ERROR`) | да |
+| `POST /junction/{uid}/detect-junctions` | `:40` `SKELETONIZED_FINAL or (ERROR and error_stage=="detecting_junctions")` | да |
+| `POST /graph/{uid}/build` | `:59` `not in allowed_statuses` (в наборе `:54-58` есть `ERROR`) | да |
+| `POST /ocr/{uid}/start` | `:45` список из 11 статусов, `ERROR` в нём | да |
+| `POST /contours/{uid}/extract` | гейта статуса нет вовсе | да (нечему отказать) |
+
+**5 из 6 уже пускали `error`; детекция была единственной, кто отказывал.**
+`app/api/junction.py:40-52` несёт РОВНО тот гейт, который нужен детекции, — он и
+взят образцом, вместе со снятием `error_message`/`error_stage` при переходе
+(`junction.py:55-57`). Переход `error → detecting` в машине уже существовал: им
+владеет `/detection/{uid}/retry`. Правка не изобретает переход, а делает его
+достижимым оттуда, куда ведёт кнопка. ПР2-флаг не ставится — решение Максима
+2026-08-19.
+
+### 65в. Замер ДО правки: таблица переходов на НЕТРОНУТОМ коде
+
+`tests/test_detection_status_gate.py` (коммит **56b7c35**, до единой строки
+правки): оба эндпоинта файла прогнаны по ВСЕМУ множеству `DiagramStatus`
+(**31** значение — не 29, как говорят `CLAUDE.md` и доски), `AsyncSession`
+подделана, `send_task` подменён, живой брокер не нужен.
+
+    python -m pytest tests/test_detection_status_gate.py -q   -> 85 passed
+
+Зонды самой таблицы (дерево восстанавливалось КОПИЕЙ файла, не `git checkout`):
+
+| зонд | результат |
+|---|---|
+| гейт снят (`if False:`) | **39 failed** |
+| гейт сдвинут на чужой статус (`!= DETECTED`) | **3 failed** |
+
+### 65г. Правка — один файл, 32 строки
+
+`app/api/detection.py`: гейт `FRAME_CLEANED or (ERROR and error_stage == "detecting")`;
+снятие `error_message`/`error_stage` в том же переходе; `obs.bind(uid=...)` плюс
+`logger.info` о повторном запуске (Д2/Д3); докстринг приведён к факту
+(«Проверяет status == uploaded» было неправдой и до пункта).
+
+В таблице переходов изменилась **ровно одна клетка**. Обе редакции лежат в
+тесте независимыми литералами (`ALLOWED_BEFORE`, `ALLOWED`), разницу стережёт
+`test_gate_changed_by_exactly_one_cell`: правка одного множества без другого
+краснит сторож.
+
+### 65д. Зонды правки (Д1 — инъекция в ТЕКУЩЕЕ дерево)
+
+| зонд | что сломано нарочно | результат |
+|---|---|---|
+| З1 | гейт откачен к дефекту (`allowed = status == FRAME_CLEANED`) | **5 failed**: клетка `[detecting]` таблицы, `test_detect_retry_clears_error` и **все три** сценария шва. Сценарии УПАЛИ, а не повисли — подмена обеих модалок работает |
+| З2 | снято `diagram.error_stage = None` в `start_detection` | **2 failed** — ровно два теста снятия ошибки |
+| З3 | гейт открыт настежь (`allowed = True`) | **40 failed**, среди них оба замка «другой стороны»: `test_foreign_error_stage_still_refused` и сторож стенда `test_bench_judges_by_real_endpoint`. Порог заперт с двух сторон, а не только снизу |
+| З4 | `send_task` вырезан из эндпоинта | **5 failed** — утверждения о диспатче не декоративны |
+
+⭐ З1 — доказательство того, что сценарный тест читает НАСТОЯЩИЙ гейт сервера, а
+не копию: поддельный сервер стенда зовёт саму корутину
+`app.api.detection.start_detection` и превращает `HTTPException` в `APIError`
+ровно так, как это делает `APIClient._request`.
+
+⛔ Ловушка, снятая до прогона: в пути инъекции ДВЕ модалки — `QMessageBox` из
+`_run_detection` и `ErrorReportDialog` из `_show_stage_error_dialog`. Обе
+подменены; без подмены красный прогон не падает, а виснет (`PROTOCOL §5`).
+
+### 65е. Гейты пункта
+
+    python -m pytest tests/test_detection_status_gate.py tests/ui/test_detection_retry_deadend.py -q
+                                                  -> 92 passed (87 таблица + 5 сценарий)
+    python tools/lint_gate.py --check             -> exit 0 (BLE001/E722 174 при эталоне 178, mypy 0)
+    python tools/suite_baseline.py --check        -> exit 0, собрано 1172 (= 1080 + 92 моих),
+                                                     failed 13 / errors 9 — красных 22 без изменений
+    python -m pytest tests/test_docs_match_code.py -q -> 16 passed (сторож доков после Д4)
+
+**CI зелёный на коммите правки** (run **32266183726**, ветка `road/1.11`, 3м23с,
+все 5 шагов): собрано **1156** git-видимых, `{'failed': 13, 'passed': 1117,
+'skipped': 17, 'errors': 9}` — «новых красных нет»; линтер «долг не вырос».
+
+**Д6 не делался:** в дереве работают две чужие сессии (`road/1.20`, `road/GATE-5`),
+пересъём эталона вмуровал бы чужое промежуточное состояние (`PROTOCOL §Д6`). Пол
+базы — минимум, лишние тесты его не роняют.
+
+### 65ж. Находки строкой (в правку НЕ вошли, `PROTOCOL §4`)
+
+| # | что | результат |
+|---|---|---|
+| 65.1 | `POST /detection/{uid}/retry` после правки — полный дубль `/detect` | снос это класс [снос] с другим гейтом (импорт + старт воркера + `--collect-only` + сборка PyInstaller); адрес — волна 13 |
+| 65.2 | «`DiagramStatus` — 29 значений» (`CLAUDE.md`, доски) | по коду **31**; заперто тестом `test_status_machine_size_is_locked` |
+| 65.3 | мермейд-диаграмма `STATUS_MACHINE.md §2` не знает стадии `frame_removal` вовсе | правка `uploaded → frame_cleaned` сделана в §3 (это гейт, который менялся); диаграмма §2 требует добавления ДВУХ узлов — шире строки пункта |
+| 65.4 | соседние пять работ строки 1-13 не тронуты | 1.12 (серые кнопки direction), 1.13 (коммит статуса до `send_task`), 1.14 (`VALIDATED_MASKS` вне `allowed_statuses`), 1.15 (ретрай direction в начало), 1.16 (`None` из `async_safe_dispatch`) — отдельные сессии |
+| 65.5 | находка 1.3 (`api_client.skip_frame_removal` не зовётся из UI) — тот же класс, но **не тот узел** | тупик 1.11 живёт на паре «`ERROR` + `/detect`», к `cleaning_frame` отношения не имеет: правкой 1.3 не создан и ею не лечится |
+| 65.6 | `tools/redelivery_bench.py` не понадобился | пункт судится без живого брокера — гейт статуса решается до `send_task`; условие переиспользования из строки QUEUE (пин базы в `run_leg()`) не проверялось за ненадобностью |
