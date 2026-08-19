@@ -54,6 +54,7 @@ LMB = Qt.MouseButton.LeftButton
 RMB = Qt.MouseButton.RightButton
 
 UID = "d74eb9f1"          # 66 узлов / 63 ребра, корпус-фикстура в git
+UID_POLY = "089feca2"     # 45 equipment, из них 4 КОНТУРНЫХ; в d74eb9f1 их 0 (замер 1.6)
 DRAG_TOL = 4.0            # допуск на округление сцена -> вьюпорт -> сцена
 
 
@@ -64,17 +65,26 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
-@pytest.fixture(scope="module")
-def raster(tmp_path_factory):
+def _white_raster(uid, directory):
     """Белый растр размером с корпусную схему (редактор грузит граф + картинку)."""
-    path = corpus.graph_path(UID)
-    assert path is not None, f"корпус-фикстура {UID} не найдена (tools/corpus.py)"
+    path = corpus.graph_path(uid)
+    assert path is not None, f"корпус-фикстура {uid} не найдена (tools/corpus.py)"
     h, w = json.loads(path.read_text(encoding="utf-8"))["graph"]["image_size"]
     img = QImage(w, h, QImage.Format.Format_RGB32)
     img.fill(QColor("white"))
-    png = tmp_path_factory.mktemp("raster") / f"{UID}.png"
+    png = directory / f"{uid}.png"
     assert img.save(str(png))
     return str(png)
+
+
+@pytest.fixture(scope="module")
+def raster(tmp_path_factory):
+    return _white_raster(UID, tmp_path_factory.mktemp("raster"))
+
+
+@pytest.fixture(scope="module")
+def raster_poly(tmp_path_factory):
+    return _white_raster(UID_POLY, tmp_path_factory.mktemp("raster_poly"))
 
 
 @pytest.fixture
@@ -86,6 +96,31 @@ def ed(qapp, raster):
     editor = AdvancedGraphEditor()
     editor._canvas_mode = True
     assert editor.load_data(raster, str(corpus.graph_path(UID)))
+    editor.resize(1400, 900)
+    return editor
+
+
+@pytest.fixture
+def ed_poly(qapp, raster_poly):
+    """«Ручная правка» на схеме, где есть контурные узлы."""
+    from ui.editors.advanced_graph_editor import AdvancedGraphEditor
+
+    editor = AdvancedGraphEditor()
+    editor._canvas_mode = True
+    assert editor.load_data(raster_poly, str(corpus.graph_path(UID_POLY)))
+    editor.resize(1400, 900)
+    return editor
+
+
+@pytest.fixture
+def simple_poly(qapp, raster_poly):
+    """«Проверка схемы» на той же схеме: у простого редактора свой двойной клик
+    (`SimpleGraphEditor.mouseDoubleClickEvent`), который «Ручная правка» перекрывает."""
+    from ui.editors.simple_graph_editor import SimpleGraphEditor
+
+    editor = SimpleGraphEditor()
+    editor._canvas_mode = True
+    assert editor.load_data(raster_poly, str(corpus.graph_path(UID_POLY)))
     editor.resize(1400, 900)
     return editor
 
@@ -151,6 +186,43 @@ def _nodes_with_bbox(editor, min_side=20.0):
             continue
         out.append(nid)
     return out
+
+
+def _contour_nodes(editor):
+    """Оборудование, у которого ФОРМА — контур, а не рамка (клик по центроиду
+    адресован именно ему). Рамка bbox у таких узлов тоже есть — на неё и садились
+    ручки размера до 1.6."""
+    out = []
+    for nid, nd in editor.nodes.items():
+        seg = nd.get("segmentation")
+        bb = nd.get("bbox")
+        if nd.get("type") != "equipment" or not (seg and len(seg) >= 6):
+            continue
+        if not bb or len(bb) != 4:
+            continue
+        if editor.find_node_at(*_cxy(editor, nid)) != nid:
+            continue
+        out.append(nid)
+    return out
+
+
+def _unlinked_pair(editor):
+    """Два узла с рамкой, между которыми ещё НЕТ ребра — жест `add_edge` на них
+    наблюдаем в данных."""
+    nids = _nodes_with_bbox(editor)
+    for i, a in enumerate(nids):
+        for b in nids[i + 1:]:
+            if not editor.model.edge_exists(a, b):
+                return a, b
+    raise AssertionError("в корпусе нет пары узлов без ребра")
+
+
+def _tool_click(editor, nid):
+    """Клик инструментом по узлу: инструмент получает клик только под Ctrl
+    (`base_graph_editor.mousePressEvent:1645`), простой ЛКМ уходит во вьюпорт."""
+    x, y = _cxy(editor, nid)
+    _press(editor, x, y, mods=CTRL)
+    _release(editor, x, y, mods=CTRL)
 
 
 def _body_point(editor, nid):
@@ -562,3 +634,100 @@ def test_plain_double_click_is_inert(ed):
 
     assert _visible_handles(ed) == 0
     assert (_geom(ed), _depth(ed)) == (g0, depth0)
+
+
+# ── пункт 1.6: выход из правки размера возвращает инструмент ──────────────
+
+def test_repeated_double_click_leaves_the_tool_alive_after_escape(ed):
+    """Повторный Ctrl+2ЛКМ по узлу, УЖЕ находящемуся в правке размера, не должен
+    забирать инструмент навсегда.
+
+    Наблюдается по данным: после Esc жест `add_edge` (два клика по узлам) обязан
+    дать ребро. До 1.6 второй двойной клик сохранял 'resize_node' как «предыдущий
+    режим», и любой выход возвращал редактор в него же — ребро не появлялось, а
+    клик снова открывал ручки (замер: рёбер 63 -> 63 против 63 -> 64 в контроле)."""
+    a, b = _unlinked_pair(ed)
+    ed.set_mode("add_edge")
+    _ctrl_down(ed)
+
+    _dclick(ed, *_cxy(ed, a), mods=CTRL)          # вход в правку размера
+    assert _visible_handles(ed) == 4
+    _dclick(ed, *_cxy(ed, a), mods=CTRL)          # повтор жеста по тому же узлу
+    _esc(ed)
+    assert _visible_handles(ed) == 0, "ручки пережили Esc"
+
+    edges0, depth0 = len(ed.edges_data), _depth(ed)
+    _tool_click(ed, a)
+    _tool_click(ed, b)
+
+    assert len(ed.edges_data) == edges0 + 1, "инструмент не вернулся после Esc"
+    assert _depth(ed) == depth0 + 1
+    assert _visible_handles(ed) == 0, "клик инструментом снова открыл ручки размера"
+
+
+def test_escape_returns_the_tool_after_a_single_double_click(ed):
+    """Контроль к предыдущему: с ОДНИМ двойным кликом инструмент возвращался и
+    до 1.6 — тест заперт с обеих сторон и не зеленеет от сломанного `add_edge`."""
+    a, b = _unlinked_pair(ed)
+    ed.set_mode("add_edge")
+    _ctrl_down(ed)
+
+    _dclick(ed, *_cxy(ed, a), mods=CTRL)
+    _esc(ed)
+
+    edges0, depth0 = len(ed.edges_data), _depth(ed)
+    _tool_click(ed, a)
+    _tool_click(ed, b)
+
+    assert len(ed.edges_data) == edges0 + 1
+    assert _depth(ed) == depth0 + 1
+
+
+# ── пункт 1.6: ручки размера — только по рамке, не по контуру ─────────────
+
+def test_double_click_on_contour_node_gives_no_size_handles(simple_poly):
+    """«Проверка схемы»: Ctrl+2ЛКМ по КОНТУРНОМУ узлу не открывает ручки размера.
+
+    Рамка у контурного узла есть, но форма — контур: ручки правили бы bbox и
+    центроид, оставляя `segmentation` на месте (замер до 1.6 на node_4 схемы
+    089feca2: bbox уехал на 30x20 px, контур не сдвинулся ни на пиксель)."""
+    nid = _contour_nodes(simple_poly)[0]
+    g0, depth0 = _geom(simple_poly), _depth(simple_poly)
+    simple_poly.ctrl_pressed = True
+
+    _dclick(simple_poly, *_cxy(simple_poly, nid), mods=CTRL)
+
+    assert _visible_handles(simple_poly) == 0, "ручки размера сели на контурный узел"
+    assert (_geom(simple_poly), _depth(simple_poly)) == (g0, depth0)
+
+
+def test_click_from_resize_mode_does_not_move_handles_onto_a_contour_node(ed_poly):
+    """Вторая дверь: из правки размера рамки клик по контурному узлу не переносит
+    ручки на него. Дверь общая для обоих редакторов — она в `ResizeNodeHandler`,
+    поэтому развилка по контуру в двойном клике её не закрывает."""
+    box = _nodes_with_bbox(ed_poly)[0]
+    contour = _contour_nodes(ed_poly)[0]
+    _ctrl_down(ed_poly)
+    _dclick(ed_poly, *_cxy(ed_poly, box), mods=CTRL)
+    assert _visible_handles(ed_poly) == 4
+    g0, depth0 = _geom(ed_poly), _depth(ed_poly)
+
+    _tool_click(ed_poly, contour)
+
+    assert _visible_handles(ed_poly) == 0, "ручки размера перешли на контурный узел"
+    assert (_geom(ed_poly), _depth(ed_poly)) == (g0, depth0)
+
+
+def test_click_from_resize_mode_still_switches_between_boxes(ed_poly):
+    """Контроль к предыдущему: переключение ручек между РАМОЧНЫМИ узлами — живой
+    штатный жест, развилка по контуру не имеет права его гасить."""
+    box_a, box_b = _nodes_with_bbox(ed_poly)[:2]
+    _ctrl_down(ed_poly)
+    _dclick(ed_poly, *_cxy(ed_poly, box_a), mods=CTRL)
+    g0, depth0 = _geom(ed_poly), _depth(ed_poly)
+
+    _tool_click(ed_poly, box_b)
+
+    assert _visible_handles(ed_poly) == 4, "ручки не переехали на соседнюю рамку"
+    assert ed_poly._resizing_node == box_b
+    assert (_geom(ed_poly), _depth(ed_poly)) == (g0, depth0)

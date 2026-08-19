@@ -343,7 +343,7 @@ Signal: `confirmed()` — без аргументов.
 | `add_connector` | `AddConnectorHandler` | Ctrl+Click на ребро → `AddConnectorOnEdgeCommand` / на пустое → `AddConnectorIsolatedCommand` |
 | `delete_node` | `DeleteNodeHandler` | Ctrl+Click на узел → `DeleteNodeCommand` |
 | `add_node_from_list` | `AddNodeFromListHandler` | Ctrl+Click → `NodeListDialog` → `AddEquipmentNodeCommand` |
-| `resize_node` | `ResizeNodeHandler` | Ctrl+Click на equipment → `ResizableNodeOverlay` → drag handles → `ResizeNodeCommand` |
+| `resize_node` | `ResizeNodeHandler` | Ctrl+2Click на equipment **с рамкой** → `ResizableNodeOverlay` → drag handles → `ResizeNodeCommand`. Узел, чья форма задана контуром, ручками размера не правится (ручки двигали бы bbox и центроид, оставляя `segmentation` на месте). Выход (Esc / клик мимо) возвращает инструмент, который был до входа |
 
 Рёбра: point-to-point (без L-route). Connection points вычисляются автоматически на контуре bbox/polygon.
 
