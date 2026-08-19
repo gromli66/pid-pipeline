@@ -48,7 +48,7 @@ import pytest                                            # noqa: E402
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QObject, Signal               # noqa: E402
+from PySide6.QtCore import QEvent, QObject, Signal       # noqa: E402
 from PySide6.QtWidgets import (                          # noqa: E402
     QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QWidget,
 )
@@ -234,13 +234,25 @@ def bench(qapp, monkeypatch):
     monkeypatch.setattr("ui.tabs.pipe_tab.PipeTab", StubTab)
     monkeypatch.setattr("ui.tabs.junction_tab.JunctionTab", StubTab)
 
+    made = []
+
     def _make(status):
         server = FakeServer(status)
         ws = dw.DiagramWorkspace(FakeAPI(server), FakeStatusProvider())
         ws.load_diagram(UID, "схема оператора")
+        made.append(ws)
         return ws, server
 
-    return _make
+    yield _make
+
+    # Свои воркспейсы набор сносит сам, детерминированно (`PROTOCOL §5`,
+    # форма 1-36): брошенные виджеты живут до конца процесса и штрафуют
+    # СОСЕДА — доставку событий и его же `processEvents()`.
+    for ws in made:
+        ws.hide()
+        ws.setParent(None)
+        ws.deleteLater()
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 # ── жесты оператора ──────────────────────────────────────────────────────
