@@ -256,6 +256,10 @@ class PipeTab(AppearanceMixin, QWidget):
             self._editor = PolylineMaskEditor()
             self._editor.status_callback = lambda msg: self.status_label.setText(msg)
             self._editor.width_changed_callback = self._on_editor_width_changed
+            # Ctrl+S раньше звал save_mask() без пути — PNG падал в CWD процесса
+            # и на сервер не уходил, хотя подсказка кнопки обещает Ctrl+S (1.19).
+            # Хоткей жмёт саму кнопку: у этой вкладки она одна и всегда живая.
+            self._editor.save_requested_callback = self.btn_save.click
 
             # pipe_mask_validated (если ранее сохранена) → fallback skeleton_mask
             mask_path = artifacts.get("pipe_mask_validated") or artifacts.get("skeleton_mask")

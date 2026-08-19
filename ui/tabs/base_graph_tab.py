@@ -904,6 +904,7 @@ class BaseGraphTab(AppearanceMixin, QWidget):
             editor.status_callback = lambda msg: self.status_label.setText(msg)
             editor.stats_callback = self._update_stats
             editor.mode_callback = self._on_mode_changed
+            editor.save_requested_callback = self._save_from_hotkey
             # WYSIWYG: pre-transform графа в холст 1920x1080 перед загрузкой.
             # При неудаче — грузим как есть (граф в исходных координатах).
             graph_for_editor = artifacts["graph_json"]
@@ -1191,10 +1192,10 @@ class BaseGraphTab(AppearanceMixin, QWidget):
 
         Предупреждения 1.23 записи не мешали: оператор ВИДЕЛ, что открыл не
         свою работу, и первый же save молча затирал серверную. Сюда сходятся
-        все три боевых входа на запись — кнопка 💾, «Подтвердить» и
+        все боевые входы на запись — кнопка 💾, «Подтвердить» и
         автосохранение (раз в 120 с, включено по умолчанию), поэтому запрет
-        стоит один и здесь. Ctrl+S редактора ведёт в ЛОКАЛЬНОЕ сохранение
-        (`base_graph_editor.keyPressEvent`) и сервера не касается — это 1.19.
+        стоит один и здесь. Ctrl+S редактора с 1.19 жмёт ту же кнопку 💾
+        (`_save_from_hotkey`), то есть тоже приходит сюда, а не мимо.
 
         «Да» снимает запрет насовсем: решение принял оператор. «Нет» его
         оставляет, и вопрос вернётся при следующей попытке записи.
@@ -1216,6 +1217,21 @@ class BaseGraphTab(AppearanceMixin, QWidget):
                        "серверной копии", artifact)
         self._unreadable_on_server.discard(artifact)
         return True
+
+    def _save_from_hotkey(self):
+        """Ctrl+S редактора = нажатие кнопки 💾, а не отдельный путь записи.
+
+        Через саму кнопку, а не через `_save_graph`, потому что её состояние
+        И ЕСТЬ право на сохранение: `AdvancedGraphTab` гасит её на время
+        распознавания (гонка с фоновым потоком — иначе на сервер уйдёт граф
+        без распознанного текста), а `ContourTab` прячет вовсе — там
+        сохранение идёт «Подтвердить». `click()` на выключенной кнопке —
+        no-op, поэтому отдельной проверки `isEnabled()` не нужно.
+        """
+        if self.btn_save.isHidden():
+            self.status_label.setText("Сохранение — кнопкой «Подтвердить»")
+            return
+        self.btn_save.click()
 
     def _save_graph(self) -> bool:
         """Сохранить граф на сервер. Возвращает True при успехе."""
