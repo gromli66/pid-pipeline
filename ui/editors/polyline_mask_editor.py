@@ -249,6 +249,11 @@ class PolylineMaskEditor(QGraphicsView):
         self.ctrl_pressed = False
         self.status_callback = None
 
+        # Ctrl+S: сохранение — дело вкладки (ей известны пути и сервер).
+        # Без колбэка шорткат ничего не сохраняет: раньше он звал `save_mask()`
+        # без пути, и PNG падал в CWD процесса, минуя сервер (1.19).
+        self.save_requested_callback = None
+
         self._show_placeholder()
 
     def _show_placeholder(self):
@@ -1073,7 +1078,10 @@ class PolylineMaskEditor(QGraphicsView):
             event.key() == Qt.Key.Key_S
             and event.modifiers() & Qt.KeyboardModifier.ControlModifier
         ):
-            self.save_mask()
+            if self.save_requested_callback:
+                self.save_requested_callback()
+            else:
+                self._update_status("Сохранение доступно кнопкой на панели")
         else:
             super().keyPressEvent(event)
 

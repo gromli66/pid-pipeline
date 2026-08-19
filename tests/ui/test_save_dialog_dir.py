@@ -63,7 +63,13 @@ def test_save_dialog_does_not_open_in_repo_root(qapp, monkeypatch):
 
 
 def test_save_dialog_remembers_last_folder(qapp, monkeypatch, tmp_path):
-    """Второй Ctrl+S открывается там, где сохранили в первый раз."""
+    """Второй вызов открывает диалог там, где сохранили в первый раз.
+
+    ⚠ С пункта 1.19 на этот путь НЕ ведёт Ctrl+S: хоткей жмёт кнопку 💾
+    (сохранение на сервер), а `save_graph()` без пути остался методом
+    редактора без входа из UI. Утверждение теста от этого не меняется —
+    меняется только то, чем этот вызов бывает вызван.
+    """
     from ui.editors.base_graph_editor import BaseGraphEditor
 
     monkeypatch.chdir(REPO)

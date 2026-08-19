@@ -190,6 +190,9 @@ class BaseGraphEditor(QGraphicsView):
         self.status_callback: Optional[Callable] = None
         self.stats_callback: Optional[Callable] = None
         self.mode_callback: Optional[Callable] = None  # вызывается при set_mode(name)
+        # Ctrl+S: сохранение — дело вкладки (ей известны сервер и состояние
+        # кнопки 💾). Без колбэка шорткат ничего не сохраняет (1.19).
+        self.save_requested_callback: Optional[Callable] = None
 
         # ── View setup ──
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -1590,7 +1593,13 @@ class BaseGraphEditor(QGraphicsView):
             else:
                 self.undo()
         elif event.key() == Qt.Key.Key_S and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            self.save_graph()
+            # Раньше здесь звался ЛОКАЛЬНЫЙ `save_graph()` с диалогом, хотя
+            # подсказка кнопки 💾 обещает «Сохранить граф на сервер (Ctrl+S)»:
+            # кнопка и хоткей делали разное (1.19).
+            if self.save_requested_callback:
+                self.save_requested_callback()
+            else:
+                self.update_status("Сохранение доступно кнопкой на панели")
         else:
             super().keyPressEvent(event)
 
