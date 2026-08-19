@@ -58,6 +58,7 @@ W, H = 400, 300                 # растр-подложка
 
 N_SAVED = 3                     # узлов в сохранённом графе оператора
 N_RAW = 2                       # узлов в исходном графе сборщика
+N_OTHER = 4                     # третий источник: холст, устаревший для ОБОИХ
 
 #: заголовки предупреждений — то, по чему оператор отличает одно от другого
 TITLE_GRAPH = "Сохранённый граф не загружен"
@@ -67,7 +68,7 @@ TITLE_STALE = "Схема изменилась"        # старая модал
 
 # ── данные ───────────────────────────────────────────────────────────────
 
-def _graph(n_nodes: int) -> dict:
+def _graph(n_nodes: int, text: bool = False) -> dict:
     """Граф из n_nodes узлов в цепочку: число узлов и есть метка происхождения."""
     nodes, links = [], []
     for i in range(n_nodes):
@@ -80,13 +81,19 @@ def _graph(n_nodes: int) -> dict:
                       "source_point": [60.0 + 100 * i, 80.0],
                       "target_point": [60.0 + 100 * (i + 1), 80.0],
                       "waypoints": []})
+    blocks = [{"id": "t0", "text": "ЗД-1", "bbox": [66.0, 40.0, 106.0, 58.0],
+               "confidence": 0.93}] if text else []
     return {"directed": False, "multigraph": False,
             "graph": {"image_size": [H, W]},
-            "nodes": nodes, "links": links, "text_blocks": [], "bindings": []}
+            "nodes": nodes, "links": links,
+            "text_blocks": blocks, "bindings": []}
 
 
 GRAPH_SAVED = json.dumps(_graph(N_SAVED)).encode()
 GRAPH_RAW = json.dumps(_graph(N_RAW)).encode()
+GRAPH_OTHER = json.dumps(_graph(N_OTHER)).encode()
+#: источник холста С ПОДПИСЯМИ — ими видно, что импорт текста натворил
+GRAPH_SAVED_TEXT = json.dumps(_graph(N_SAVED, text=True)).encode()
 
 
 @pytest.fixture(scope="module")
@@ -110,6 +117,12 @@ def canvas_of(qapp, raster, tmp_path_factory):
     Собран тем же кодом, что и в бою (`_pretransform_to_canvas`), поэтому его
     штамп источника настоящий: холст из GRAPH_SAVED свежий, из GRAPH_RAW —
     устаревший относительно GRAPH_SAVED.
+
+    ⚠ Третий, `stale_both`, собран из GRAPH_OTHER и потому устарел
+    относительно ОБОИХ графов. Без него параметр «устаревший холст» в паре
+    с отказом graph_validated декоративен: холст из GRAPH_RAW фолбэку
+    РОВЕСНИК (фолбэк — тот же GRAPH_RAW), устаревшим не считается и зелёный
+    даёт даже нетронутый код.
     """
     from ui.tabs.base_graph_tab import _pretransform_to_canvas
 
@@ -125,7 +138,9 @@ def canvas_of(qapp, raster, tmp_path_factory):
         return out.read_bytes()
 
     return {"fresh": build(GRAPH_SAVED, "fresh"),
-            "stale": build(GRAPH_RAW, "stale")}
+            "stale": build(GRAPH_RAW, "stale"),
+            "stale_both": build(GRAPH_OTHER, "stale_both"),
+            "with_text": build(GRAPH_SAVED_TEXT, "with_text")}
 
 
 # ── подставной сервер ────────────────────────────────────────────────────
@@ -137,6 +152,7 @@ class FakeAPI:
         self.blobs = dict(blobs)
         self.failures = dict(failures or {})
         self.calls = []
+        self.uploads = []          # что вкладка ЗАПИСАЛА обратно (пункт 1.x9)
 
     def download_artifact(self, uid, artifact_type, dest_path):
         self.calls.append(artifact_type)
@@ -150,6 +166,12 @@ class FakeAPI:
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         dest_path.write_bytes(data)
         return dest_path
+
+    def upload_canvas_graph(self, uid, path):
+        self.uploads.append(("graph_canvas", Path(path).name))
+
+    def upload_validated_graph(self, uid, path):
+        self.uploads.append(("graph_validated", Path(path).name))
 
 
 def _server(raster, *, saved=True, raw=True, canvas=None, failures=None):
@@ -186,12 +208,21 @@ def _download(api, tmp_dir, want_canvas):
 
 @pytest.fixture
 def dialogs(monkeypatch):
-    """Все модалки вкладки → список (title, text). Возврата ждать некому."""
-    seen = []
+    """Все модалки вкладки → список (title, text). Возврата ждать некому.
+
+    `dialogs.answer` — что вернёт СЛЕДУЮЩИЙ диалог. По умолчанию `Cancel`:
+    у пункта 1.x9 появился вопрос, разрешающий перезапись, и тест, который
+    о нём не знает, не должен нечаянно ответить «да» за оператора.
+    """
+
+    class _Seen(list):
+        answer = QMessageBox.StandardButton.Cancel
+
+    seen = _Seen()
 
     def _rec(parent, title, text, *a, **kw):
         seen.append((title, text))
-        return QMessageBox.StandardButton.Ok
+        return seen.answer
 
     for name in ("warning", "critical", "information", "question"):
         monkeypatch.setattr(QMessageBox, name, staticmethod(_rec))
@@ -337,21 +368,76 @@ def test_saved_graph_5xx_warns_the_operator(open_tab, dialogs, raster):
     assert "затрёт" in dialogs[0][1], "не сказано главное — сохранение затрёт"
 
 
-def test_saved_graph_5xx_warns_on_the_canvas_tab_too(open_tab, dialogs, raster,
-                                                     canvas_of):
+def test_saved_graph_5xx_keeps_the_fresh_canvas(open_tab, dialogs, raster,
+                                               canvas_of):
     """Половина 1 живёт в базовом классе — «Ручная правка» предупреждает так же.
 
-    ⚠ Замер §68.3: при отказе сохранённого графа СВЕЖИЙ холст вдобавок
-    объявляется устаревшим — его штамп источника сверяется с фолбэком, а не
-    с graph_validated. Оператор получает ДВЕ модалки, и вторая («Схема
-    изменилась») называет неверную причину. Порядок заперт: первой идёт та,
-    что говорит правду. Ветку `if saved:` пункт не трогает — находка отдана
-    архитектору строкой в журнал, а здесь заперта как измеренный факт.
+    ⭐ Здесь же заперта вторая находка 1.23 (замер §68.3), ИСПРАВЛЕННАЯ
+    пунктом 1.x9. Было: штамп холста сверялся с ФОЛБЭКОМ, поэтому свежий холст
+    объявлялся устаревшим и пересобирался — оператор терял ручную раскладку,
+    а вторая модалка («Схема изменилась») называла причину, которой не было.
+    1.23 запер это как ИЗМЕРЕННЫЙ ФАКТ (порядок двух модалок), потому что
+    ветка `if saved:` не была его адресом. Теперь замок стоит на верном
+    поведении: источник не прочитан — судить о холсте нечем, холст остаётся
+    оператору, а модалка ровно одна и правдивая.
     """
-    open_tab(_advanced(), _server(
+    tab = open_tab(_advanced(), _server(
         raster, canvas=canvas_of["fresh"],
         failures={"graph_validated": APIError("bad gateway", 502)}))
-    assert _titles(dialogs) == [TITLE_GRAPH, TITLE_STALE]
+    assert _titles(dialogs) == [TITLE_GRAPH]       # одна модалка, и она правдива
+    assert TITLE_STALE not in _titles(dialogs)
+    assert _nodes_in_editor(tab) == N_SAVED        # у оператора СВОЙ холст…
+    assert _nodes_in_editor(tab) != N_RAW          # …а не пересобранный из фолбэка
+
+
+@pytest.mark.parametrize("canvas_kind", ["fresh", "stale_both"])
+def test_saved_graph_5xx_never_rebuilds_the_canvas(canvas_kind, open_tab,
+                                                   dialogs, raster, canvas_of):
+    """Источник не прочитан → холст не пересобирается НИ В ОДНОМ случае.
+
+    Пересборка оставляет след — `graph_1920.json` во временном каталоге
+    вкладки; его отсутствие и есть «холст оператора не тронут». УСТАРЕВШИЙ
+    холст здесь тоже остаётся: судить о нём нечем, а цена ложного «устарел» —
+    выброшенная ручная раскладка (та же логика, что у `contours_download_failed`,
+    пункт 0.5).
+    """
+    tab = open_tab(_advanced(), _server(
+        raster, canvas=canvas_of[canvas_kind],
+        failures={"graph_validated": APIError("bad gateway", 502)}))
+    assert not (tab.temp_dir / "graph_1920.json").exists()
+    assert _titles(dialogs) == [TITLE_GRAPH]
+
+
+def _canvas_text(tab) -> int:
+    """Сколько подписей осталось на холсте вкладки (файл, а не сцена)."""
+    canvas = json.loads(
+        (tab.temp_dir / "graph_canvas.json").read_text(encoding="utf-8"))
+    return len(canvas.get("text_blocks") or [])
+
+
+def test_saved_graph_5xx_does_not_wipe_the_labels_on_the_canvas(
+        open_tab, dialogs, raster, canvas_of):
+    """Оставить холст мало — его нельзя ещё и опрашивать по фолбэку.
+
+    `import_text` при источнике БЕЗ подписей чистит холст досуха
+    (`modules/graph/core/text_import.py`: `text_blocks = []`, `bindings = []`),
+    а фолбэк `graph_json` — граф ДО OCR, подписей в нём нет по определению.
+    То есть «холст сохранён, но подписи с него стёрты фолбэком» — та же потеря
+    работы оператора, только тише.
+    """
+    tab = open_tab(_advanced(), _server(
+        raster, canvas=canvas_of["with_text"],
+        failures={"graph_validated": APIError("bad gateway", 502)}))
+    assert _canvas_text(tab) == 1
+
+
+def test_read_source_still_imports_its_text_into_the_canvas(
+        open_tab, dialogs, raster, canvas_of):
+    """Порог с другой стороны: импорт НЕ выключен — при прочитанном источнике
+    холст по-прежнему берёт текст из него (в GRAPH_SAVED подписей нет, и холст
+    честно остаётся без них)."""
+    tab = open_tab(_advanced(), _server(raster, canvas=canvas_of["with_text"]))
+    assert _canvas_text(tab) == 0
 
 
 def test_canvas_404_rebuilds_silently(open_tab, dialogs, raster):
@@ -406,3 +492,107 @@ def test_stale_canvas_still_shows_its_own_modal(open_tab, dialogs, raster,
     open_tab(_advanced(), _server(raster, canvas=canvas_of["stale"]))
     assert _titles(dialogs) == [TITLE_STALE]
     assert TITLE_CANVAS not in _titles(dialogs)
+
+
+# =========================================================================
+# Слой 3 — запись: предупреждение обязано МЕШАТЬ (пункт 1.x9)
+# =========================================================================
+#
+# 1.23 закрыл ВИДИМОСТЬ отказа и границу назвал прямо: запрет записи в букву
+# его гейта не входил. Замер остатка: после слепой пересборки первая же запись
+# уходила на сервер и затирала холст, который прочитать не удалось.
+#
+# ⚠ Путь записи — `BaseGraphTab._save_graph`, а НЕ Ctrl+S: горячая клавиша
+# редактора зовёт локальный `editor.save_graph` (`base_graph_editor.py:1592`,
+# это пункт 1.19). Через `_save_graph` идут все три боевых входа на сервер:
+# кнопка 💾 (`base_graph_tab.py:806`), «Подтвердить» (`_on_confirm`)
+# и автосохранение раз в 120 с (`ui/services/autosave.py`, включено по умолчанию).
+
+
+def test_clean_open_saves_without_a_question(open_tab, dialogs, raster,
+                                             canvas_of):
+    """Контроль с другой стороны: всё скачалось — запись идёт молча."""
+    api = _server(raster, canvas=canvas_of["fresh"])
+    tab = open_tab(_advanced(), api)
+    assert tab._save_graph() is True
+    assert api.uploads == [("graph_canvas", "graph_canvas.json")]
+    assert _titles(dialogs) == []
+
+
+def test_canvas_404_saves_without_a_question(open_tab, dialogs, raster):
+    """404 = холста законно нет (первый заход): затирать нечего, вопроса нет."""
+    api = _server(raster)
+    tab = open_tab(_advanced(), api)
+    assert tab._save_graph() is True
+    assert api.uploads == [("graph_canvas", "graph_canvas.json")]
+    assert _titles(dialogs) == []
+
+
+def test_canvas_5xx_does_not_let_the_first_save_through(open_tab, dialogs,
+                                                        raster, canvas_of):
+    """Ядро 1.x9: холст собран вслепую — первая запись на сервер НЕ уходит."""
+    api = _server(raster, canvas=canvas_of["fresh"],
+                  failures={"graph_canvas": APIError("bad gateway", 502)})
+    tab = open_tab(_advanced(), api)
+    assert _titles(dialogs) == [TITLE_CANVAS]      # предупреждение при открытии
+    dialogs.clear()
+
+    assert tab._save_graph() is False
+    assert api.uploads == [], "серверный холст затёрт при отказе оператора"
+    assert len(dialogs) == 1, "запись отменена молча — оператор не понял, почему"
+    assert "затрёт" in dialogs[0][1]
+
+
+def test_canvas_5xx_save_goes_through_after_an_explicit_yes(open_tab, dialogs,
+                                                            raster, canvas_of):
+    """Запрет снимается только явным «да» — и спрашивается ровно один раз."""
+    api = _server(raster, canvas=canvas_of["fresh"],
+                  failures={"graph_canvas": APIError("bad gateway", 502)})
+    tab = open_tab(_advanced(), api)
+    dialogs.clear()
+    dialogs.answer = QMessageBox.StandardButton.Yes
+
+    assert tab._save_graph() is True
+    assert api.uploads == [("graph_canvas", "graph_canvas.json")]
+    assert len(dialogs) == 1
+
+    dialogs.clear()
+    assert tab._save_graph() is True               # второй save — уже без вопроса
+    assert len(api.uploads) == 2
+    assert _titles(dialogs) == []
+
+
+def test_saved_graph_5xx_does_not_let_the_first_save_through(open_tab, dialogs,
+                                                             raster):
+    """Та же половина у графа: открыт исходный — запись ждёт «да» оператора.
+
+    Модалка 1.23 обещала «сохранение затрёт сохранённый граф на сервере»
+    и не мешала ему это сделать. «Проверка схемы» пишет в `graph_validated`
+    (`_canvas_mode` False), поэтому под угрозой именно он.
+    """
+    api = _server(raster,
+                  failures={"graph_validated": APIError("bad gateway", 502)})
+    tab = open_tab(_simple(), api)
+    assert _titles(dialogs) == [TITLE_GRAPH]
+    dialogs.clear()
+
+    assert tab._save_graph() is False
+    assert api.uploads == [], "серверный graph_validated затёрт исходным графом"
+    assert len(dialogs) == 1
+
+
+def test_the_lock_is_addressed_to_its_own_artifact(open_tab, dialogs, raster,
+                                                   canvas_of):
+    """Запрет адресный: отказ ГРАФА не запирает запись в ПРОЧИТАННЫЙ холст.
+
+    «Ручная правка» пишет в `graph_canvas`, а он скачался — затирать нечужое
+    незачем. Без этой границы любой сбой запирал бы вкладку целиком.
+    """
+    api = _server(raster, canvas=canvas_of["fresh"],
+                  failures={"graph_validated": APIError("bad gateway", 502)})
+    tab = open_tab(_advanced(), api)
+    dialogs.clear()
+
+    assert tab._save_graph() is True
+    assert api.uploads == [("graph_canvas", "graph_canvas.json")]
+    assert _titles(dialogs) == []
