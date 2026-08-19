@@ -3904,18 +3904,25 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         cmd.execute()
         cmd.description = "Auto-Fix (chains)"
 
-        stats = auto_fix_graph(
-            self.nodes,
-            self.edges_data,
-            equip_max_shift=self.EQUIP_MAX_SHIFT,
-            conn_max_shift=self.CONN_MAX_SHIFT,
-        )
-
-        self._redraw_all()
-        self.model.rebuild_edge_data_index()
-
-        cmd.finalize()
-        self.undo_mgr.push_executed(cmd)
+        try:
+            stats = auto_fix_graph(
+                self.nodes,
+                self.edges_data,
+                equip_max_shift=self.EQUIP_MAX_SHIFT,
+                conn_max_shift=self.CONN_MAX_SHIFT,
+            )
+        finally:
+            # Закрытие шага undo — в finally: движок мутирует узлы и рёбра НА
+            # МЕСТЕ (autofix_chains.auto_fix_graph, Step 4), и его падение на
+            # пересадке рёбер оставляло оператора с изменённым холстом, без
+            # Ctrl+Z и без роста revision — вкладка считала, что несохранённого
+            # нет. Перерисовка здесь же: иначе сцена показывает старые
+            # координаты поверх уже сдвинутой модели. Порядок тот же, что на
+            # зелёном пути.
+            self._redraw_all()
+            self.model.rebuild_edge_data_index()
+            cmd.finalize()
+            self.undo_mgr.push_executed(cmd)
 
         self.update_status(
             f"Auto-Fix: {stats['h_chains']}H + {stats['v_chains']}V цепочек, "
