@@ -25,6 +25,13 @@ through, corner, corner4, conn_off, poly_off, adrift.
 1-25/1-26/1-28): 0 — эталон переснят, 1 — ОТКАЗ (дефекты выросли, пересъём
 узаконил бы рост), 2 — СУДИТЬ НЕЧЕМ (корпус усечён, пересъём вычеркнул бы
 неизмеренное). См. `write_blocked()`.
+
+⛔ Эталон помнит ОТПЕЧАТОК каждого холста (пункт GATE-6, форма `version: 2`):
+имя файла говорит только «как называется», а не «что внутри». Отпечаток
+разошёлся — «судить нечем» с указанием файла, а не «дефекты выросли»;
+на записи он, наоборот, снимает отказ (утверждение о росте — это утверждение
+о ТОМ ЖЕ холсте). Старый плоский вид `{файл: counts}` читается как
+«отпечатков нет», то есть тоже «судить нечем» — до первого пересъёма.
 """
 from __future__ import annotations
 
@@ -39,9 +46,11 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from modules.graph.core import edit_checks  # noqa: E402
+from tools import corpus  # noqa: E402
 
 BASELINE = REPO / "tools" / "bench" / "edit_baseline.json"
 CORPUS = REPO / "tools" / "bench" / "edit_corpus"
+BASELINE_VERSION = 2
 
 # колонки: (заголовок, ключ counts, дефект?)
 COLS = [
@@ -80,6 +89,46 @@ def read_baseline() -> dict:
     if not BASELINE.exists():
         return {}
     return json.loads(BASELINE.read_text(encoding="utf-8"))
+
+
+def baseline_parts(base: dict) -> tuple[dict, dict]:
+    """-> (counts по файлам, отпечатки входа по файлам).
+
+    Форма v2 (пункт GATE-6) держит рядом с числами отпечаток данных, на
+    которых они сняты. Старый плоский вид `{файл: counts}` читается как
+    «отпечатков нет»: он не может назвать холст, о котором судит.
+    """
+    if base.get("version"):
+        return base.get("files", {}), base.get("inputs", {})
+    return base, {}
+
+
+def input_fingerprints(paths: list[Path]) -> dict[str, str]:
+    """{имя файла: отпечаток входных данных} — чем именно кормили стенд."""
+    return {p.name: corpus.data_fingerprint(p) for p in paths}
+
+
+def input_drift(inputs: dict[str, str], base: dict) -> dict[str, str]:
+    """{имя файла: чем именно судить нечем} — холсты, о которых эталон молчит.
+
+    Дыра одна на два стенда (пункт GATE-6): у ПР1 эталон ключевался `uid8`,
+    здесь — именем файла, и ни один не помнил СОДЕРЖИМОГО. Холст под тем же
+    именем может быть другим, и «дефекты выросли» сказало бы о нём неправду.
+    Файла нет в эталоне — сверять нечего, это прежний пропуск, а не двойка.
+    """
+    files, known = baseline_parts(base)
+    drift: dict[str, str] = {}
+    for name in sorted(inputs):
+        if name not in files:
+            continue
+        was = known.get(name)
+        if was is None:
+            drift[name] = ("эталон не помнит отпечатка входных данных — "
+                           "он снят до пункта GATE-6")
+        elif was != inputs[name]:
+            drift[name] = (f"входные данные сменились: {was[:16]} -> "
+                           f"{inputs[name][:16]}")
+    return drift
 
 
 def measure_file(path: Path) -> dict:
@@ -123,18 +172,23 @@ def _print_top(name: str, res: dict, top: int):
             print(f"    {fmt(d)}")
 
 
-def defect_growth(rows: dict[str, dict],
-                  base: dict) -> dict[str, list[tuple[str, int, int]]]:
+def defect_growth(rows: dict[str, dict], base: dict,
+                  drift: dict[str, str] | None = None,
+                  ) -> dict[str, list[tuple[str, int, int]]]:
     """{файл: [(колонка, было, стало), ...]} — только там, где дефект вырос.
 
     Арифметика общая у `--check` и у пересъёма (пункт 1-30): два судьи одного
     корпуса не должны разъехаться — тот же урок, что у `floor_problems`
     в `suite_baseline.py` и у `debt_grown` в `lint_gate.py`.
     Файла нет в эталоне — сравнивать не с чем, это пропуск, а не рост.
+    Холст из `drift` — тот же пропуск: числа эталона сняты не с него
+    (пункт GATE-6).
     """
+    files, _ = baseline_parts(base)
+    drift = drift or {}
     grown: dict[str, list[tuple[str, int, int]]] = {}
     for name, res in rows.items():
-        b = base.get(name)
+        b = None if name in drift else files.get(name)
         if b is None:
             continue
         for _h, key, is_defect in COLS:
@@ -148,23 +202,29 @@ def defect_growth(rows: dict[str, dict],
 
 def unmeasured(rows: dict[str, dict], base: dict) -> list[str]:
     """Файлы эталона, которых в этом замере нет. Общее у чтения и записи."""
-    return sorted(set(base) - set(rows))
+    return sorted(set(baseline_parts(base)[0]) - set(rows))
 
 
-def _compare(rows: dict[str, dict], base: dict) -> int:
+def _compare(rows: dict[str, dict], base: dict, inputs: dict[str, str]) -> int:
     """Сравнение с базой: дефектные колонки не могут расти.
 
     Три исхода (`PROTOCOL §5`), а не два:
     0 — не хуже базы, и при этом измерен ВЕСЬ её корпус;
     1 — опровергнуто: дефектная колонка выросла;
-    2 — СУДИТЬ НЕЧЕМ: база пуста или часть её файлов не измерена. Корпус
-        лежит вне git (`.gitignore:37`), поэтому на чистом дереве мерить
-        нечего — а раньше такой прогон печатал «рост дефектов: 0» и exit 0.
+    2 — СУДИТЬ НЕЧЕМ: база пуста, часть её файлов не измерена или ХОЛСТ
+        НЕ ТОТ, на котором сняты её числа (пункт GATE-6). Корпус лежит вне
+        git (`.gitignore:37`), поэтому на чистом дереве мерить нечего —
+        а раньше такой прогон печатал «рост дефектов: 0» и exit 0.
     Доказанный рост сильнее неполноты: если что-то выросло, это 1.
     """
-    grown = defect_growth(rows, base)
+    files, _ = baseline_parts(base)
+    drift = input_drift(inputs, base)
+    grown = defect_growth(rows, base, drift)
     for name, res in rows.items():
-        b = base.get(name)
+        if name in drift:
+            print(f"судить нечем  {name}: {drift[name]}")
+            continue
+        b = files.get(name)
         if b is None:
             print(f"{name}: в базе нет — пропуск сравнения")
             continue
@@ -178,19 +238,24 @@ def _compare(rows: dict[str, dict], base: dict) -> int:
     print(f"\nрост дефектов: {bad}")
     if bad:
         return 1
-    if not base:
+    if not files:
         print("судить нечем: эталон пуст — сначала --write-baseline")
+        return 2
+    if drift:
+        print(f"судить нечем: по {len(drift)} файлам эталон не отвечает за свои "
+              f"числа — отпечаток входа не сходится или его нет вовсе: "
+              f"{', '.join(sorted(drift))}")
         return 2
     missing = unmeasured(rows, base)
     if missing:
         print(f"судить нечем: не измерено {len(missing)} файлов эталона "
-              f"из {len(base)} — корпус усечён: {', '.join(missing)}")
+              f"из {len(files)} — корпус усечён: {', '.join(missing)}")
         return 2
     return 0
 
 
-def write_blocked(rows: dict[str, dict],
-                  base: dict) -> tuple[list[str], list[str]]:
+def write_blocked(rows: dict[str, dict], base: dict,
+                  inputs: dict[str, str]) -> tuple[list[str], list[str]]:
     """-> (причины «судить нечем», причины отказа). Обе пустые = пересъём законен.
 
     Четвёртый стенд с той же дырой, что 1-25/1-26/1-28 закрыли у трёх соседей
@@ -209,17 +274,23 @@ def write_blocked(rows: dict[str, dict],
     0 — законно: измерен весь эталон и ни одна дефектная колонка не выросла.
         Первый снимок (эталона в дереве нет) сверять не с чем — он проходит.
     Доказанный рост сильнее неполноты, как у `_compare` и у трёх соседей.
+
+    ⭐ Отпечаток входа (GATE-6) отказ СНИМАЕТ, а не ставит: «дефекты выросли» —
+    утверждение о ТОМ ЖЕ холсте, и при другом холсте его просто нет. Пересъём
+    подменённых данных законен, но не молчалив: причину печатает `main()`
+    строкой `[ВХОД НЕ ТОТ]`.
     """
-    if not base:                                    # первый снимок
+    files, _ = baseline_parts(base)
+    if not files:                                   # первый снимок
         return [], []
     unjudged, refused = [], []
     missing = unmeasured(rows, base)
     if missing:
         unjudged.append(
-            f"не измерено {len(missing)} файлов эталона из {len(base)} — "
+            f"не измерено {len(missing)} файлов эталона из {len(files)} — "
             f"корпус усечён (он вне git, .gitignore:37), пересъём вычеркнул "
             f"бы их из эталона: {', '.join(missing)}")
-    grown = defect_growth(rows, base)
+    grown = defect_growth(rows, base, input_drift(inputs, base))
     if grown:
         refused.append(
             "дефекты выросли против эталона — пересъём узаконит рост:\n"
@@ -256,12 +327,14 @@ def main() -> int:
     if not paths:
         ap.error("нет входных файлов (--all или список)")
 
-    rows = {}
+    rows, measured = {}, []
     for p in paths:
         if not p.exists():
             print(f"{p}: нет файла — пропуск")
             continue
         rows[p.name] = measure_file(p)
+        measured.append(p)
+    inputs = input_fingerprints(measured)
 
     _print_table(rows)
     if args.top:
@@ -275,7 +348,10 @@ def main() -> int:
             encoding="utf-8")
         print(f"\ncounts -> {args.json}")
     if args.write_baseline:
-        unjudged, refused = write_blocked(rows, read_baseline())
+        for name, why in input_drift(inputs, read_baseline()).items():
+            print(f"[ВХОД НЕ ТОТ] {name}: {why}; вердикт эталона об этом "
+                  "холсте к нынешним данным не относится")
+        unjudged, refused = write_blocked(rows, read_baseline(), inputs)
         for msg in unjudged:
             print(f"[СУДИТЬ НЕЧЕМ] {msg}")
         for msg in refused:
@@ -286,14 +362,15 @@ def main() -> int:
             return 2
         BASELINE.parent.mkdir(parents=True, exist_ok=True)
         BASELINE.write_text(
-            json.dumps(counts_only, ensure_ascii=False, indent=1),
+            json.dumps({"version": BASELINE_VERSION, "files": counts_only,
+                        "inputs": inputs}, ensure_ascii=False, indent=1),
             encoding="utf-8")
         print(f"\nбаза заморожена -> {_rel(BASELINE)}")
     if args.check:
         if not BASELINE.exists():
             print("базы нет — сначала --write-baseline")
             return 2
-        return _compare(rows, read_baseline())
+        return _compare(rows, read_baseline(), inputs)
     return 0
 
 

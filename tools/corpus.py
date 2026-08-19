@@ -28,6 +28,7 @@ sha256 — `tests/fixtures/graph/README.md`).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -69,3 +70,23 @@ def load_graph(uid8: str) -> dict:
     if path is None:
         raise KeyError(f"графа {uid8} нет ни в {FIXTURE_DIR}, ни в {STORAGE_DIR}")
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def data_fingerprint(path: Path) -> str:
+    """Отпечаток ВХОДНЫХ данных корпусного файла (пункт GATE-6).
+
+    Эталоны стендов ключуются по имени (`uid8` у ПР1, имя файла у «Ручной
+    правки») и до GATE-6 не помнили, НА КАКИХ данных они сняты, — поэтому
+    подмена входа читалась как регресс кода. Замер 1-30 (§70): схему
+    `8d14cf73` переписали обычным запуском клиента, и стенд сказал
+    «перестал воспроизводиться» (exit 1) вместо «судить нечем» (exit 2).
+
+    Считается по СОДЕРЖИМОМУ, а не по байтам файла: `.gitattributes`
+    нормализует json по EOL (`* text=auto eol=lf`), и байтовый отпечаток
+    краснел бы от одного переноса строки. Проекция — та же, которой
+    `layout_determinism` хеширует сам граф, поэтому порядок ключей значим:
+    от него зависит и результат раскладки.
+    """
+    obj = json.loads(path.read_text(encoding="utf-8"))
+    blob = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()

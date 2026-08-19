@@ -23,17 +23,26 @@ if str(REPO) not in sys.path:
 from tools import layout_determinism as det  # noqa: E402
 
 BASE = {"runs": 6, "routing": True,
-        "stable": {"aaaaaaaa": True, "bbbbbbbb": False}}
+        "stable": {"aaaaaaaa": True, "bbbbbbbb": False},
+        "inputs": {"aaaaaaaa": "in-a", "bbbbbbbb": "in-b"}}
 
 
-def _lines(result, base=BASE, runs=6, routing=True):
+def _lines(result, base=BASE, runs=6, routing=True, inputs=None):
     """`runs=6` — ровно столько, сколько записано в `BASE`.
 
     С пункта 1-30 сверка судит и силу самой выборки: без явного числа каждый
     тест ниже мерил бы «замер слабее эталона» вместо своей ветки
     (`DEFAULT_RUNS` = 2). Число абсолютное, из проверяемого поля не считается.
+
+    `inputs` — отпечатки ВХОДНЫХ данных замера (пункт GATE-6). По умолчанию
+    берутся из самого эталона: «вход тот же, на котором эталон снят», — так
+    тесты выше судят ровно то, что судили до GATE-6. Подмена входа разбирается
+    отдельными тестами ниже, и отпечаток там задаётся явно.
     """
-    code, lines = det.verdict(result, base, runs, routing)
+    if inputs is None:
+        known = base.get("inputs", {})
+        inputs = {u: known.get(u, f"свежий-{u}") for u in result}
+    code, lines = det.verdict(result, base, runs, routing, inputs)
     return code, "\n".join(lines)
 
 
@@ -198,6 +207,9 @@ def test_killed_child_on_check_is_unjudgeable_not_a_traceback(monkeypatch, capsy
     """
     monkeypatch.setattr(det.corpus, "corpus_paths",
                         lambda include_storage=True: {"aaaaaaaa": "x", "bbbbbbbb": "y"})
+    # корпус здесь фиктивный, снимать отпечаток не с чего (пункт GATE-6)
+    monkeypatch.setattr(det, "input_fingerprints",
+                        lambda paths: {u: f"in-{u}" for u in paths})
     monkeypatch.setattr(det, "measure", lambda *a: (_ for _ in ()).throw(
         RuntimeError("прогон (seed=1) вернул 77: boom")))
     monkeypatch.setattr(sys, "argv",
@@ -236,7 +248,8 @@ def test_killed_child_is_loud(monkeypatch, stdout, rc, match):
 
 # ───────── путь ЗАПИСИ: пересъём тоже обязан судить (пункт 1-28) ─────────
 
-def _write_stand(tmp_path, monkeypatch, measured, base=BASE, argv=("--runs", "6")):
+def _write_stand(tmp_path, monkeypatch, measured, base=BASE, argv=("--runs", "6"),
+                 inputs=None):
     """Стенд пересъёма: свой эталон, свой корпус, замер подменён.
 
     `measured` — {uid8: [sha прогона 1, sha прогона 2, ...]}: и корпус, и то,
@@ -246,6 +259,9 @@ def _write_stand(tmp_path, monkeypatch, measured, base=BASE, argv=("--runs", "6"
     в `BASE`: с пункта 1-29 пересъём слабее эталона отказывает, и без этого
     ключа любой из тестов ниже мерил бы отказ по числу прогонов вместо
     своей ветки (`DEFAULT_RUNS` = 2).
+
+    `inputs` — отпечатки входных данных (пункт GATE-6). По умолчанию равны
+    эталонным: вход тот же, на котором эталон снят.
     """
     path = tmp_path / "determinism_baseline.json"
     if base is not None:
@@ -253,6 +269,13 @@ def _write_stand(tmp_path, monkeypatch, measured, base=BASE, argv=("--runs", "6"
     monkeypatch.setattr(det, "BASELINE", path)
     monkeypatch.setattr(det.corpus, "corpus_paths",
                         lambda include_storage=True: dict.fromkeys(measured))
+    # Корпус здесь фиктивный (пути `None`), настоящий файл читать нечем:
+    # отпечатки берутся из эталона — «вход тот же, на котором он снят».
+    # Подменённый вход задаётся `inputs` явно (пункт GATE-6).
+    known = (base or {}).get("inputs", {})
+    monkeypatch.setattr(det, "input_fingerprints", lambda paths: dict(
+        inputs if inputs is not None else
+        {u: known.get(u, f"свежий-{u}") for u in paths}))
     monkeypatch.setattr(det, "measure", lambda uids, runs, routing: {
         uid: [{"sha": sha, "defects": [1, 0]} for sha in measured[uid]] for uid in uids})
     monkeypatch.setattr(sys, "argv",
@@ -461,3 +484,292 @@ def test_allow_fixed_does_not_lift_the_refusal(tmp_path, monkeypatch, capsys):
     assert det.main() == 1
     assert "перестали воспроизводиться: aaaaaaaa" in capsys.readouterr().out
     assert path.read_text(encoding="utf-8") == before, "отказ обойдён ключом"
+
+
+# ───── отпечаток ВХОДНЫХ данных: дрейф данных ≠ регресс кода (GATE-6) ─────
+#
+# Замер долга 1-30 (§70): `8d14cf73` переписали обычным запуском клиента, и
+# стенд сказал «опровергнуто» (exit 1) там, где по смыслу «судить нечем» (2).
+# Правило трёх исходов `PROTOCOL §5` нарушено с НОВОЙ стороны: обстановка
+# ущербна не средой, а ПОДМЕНОЙ ВХОДА. Разбор пришлось вести руками — по датам
+# файлов и чужому замеру §62г; CI такой дрейф не увидит никогда.
+
+def test_changed_input_is_unjudgeable_not_a_regression():
+    """⛔ Сам дефект пункта: тот же uid, ДРУГИЕ данные — судить нечем.
+
+    Эталон числит граф воспроизводимым, замер даёт два исхода — до GATE-6
+    это было «[ПРОВАЛ] перестал воспроизводиться» и exit 1. Но вход другой,
+    и вердикт эталона к нему не относится вовсе: ни поломки, ни починки
+    здесь не доказано.
+    """
+    code, text = _lines({"aaaaaaaa": ["x", "y"], "bbbbbbbb": ["z", "w"]},
+                        inputs={"aaaaaaaa": "in-a-НОВЫЙ", "bbbbbbbb": "in-b"})
+
+    assert code == 2
+    assert "СУДИТЬ НЕЧЕМ" in text and "aaaaaaaa" in text
+    assert "перестали воспроизводиться" not in text, \
+        "дрейф данных выдан за регресс кода — это и есть дефект GATE-6"
+
+
+def test_changed_input_names_what_changed():
+    """«Судить нечем» обязано называть, ЧТО сменилось, а не только что нечем.
+
+    Ради этого пункт и заводился: разбор §70 стоил ручного сравнения дат
+    файлов, потому что стенд сказал только «перестал воспроизводиться».
+    """
+    code, text = _lines({"aaaaaaaa": ["x", "x"], "bbbbbbbb": ["z", "w"]},
+                        inputs={"aaaaaaaa": "in-a-НОВЫЙ", "bbbbbbbb": "in-b"})
+
+    assert code == 2
+    assert "in-a" in text and "in-a-НОВЫЙ" in text, \
+        "не названы ни прежний отпечаток, ни нынешний"
+
+
+def test_same_input_still_proves_a_regression():
+    """⭐ Обратная полярность: вход ТОТ ЖЕ — поломка по-прежнему exit 1.
+
+    Без этого теста правка односторонняя: стенд, который на всё отвечает
+    «судить нечем», гейтом не является.
+    """
+    code, text = _lines({"aaaaaaaa": ["x", "y"], "bbbbbbbb": ["z", "w"]},
+                        inputs={"aaaaaaaa": "in-a", "bbbbbbbb": "in-b"})
+
+    assert code == 1
+    assert "перестали воспроизводиться: aaaaaaaa" in text
+
+
+def test_baseline_without_fingerprints_cannot_judge():
+    """Эталон, снятый ДО GATE-6, отпечатка не помнит — значит не судит.
+
+    Это ровно то состояние, в котором стенд прожил всю дорогу: вердикт
+    выносился о данных, про которые эталон ничего не знает. Лечится
+    единственным пересъёмом (Д6), после которого отпечатки в файле есть.
+    """
+    old = {"runs": 6, "routing": True,
+           "stable": {"aaaaaaaa": True, "bbbbbbbb": False}}
+    code, text = _lines({"aaaaaaaa": ["x", "y"], "bbbbbbbb": ["z", "w"]},
+                        base=old, inputs={"aaaaaaaa": "in-a", "bbbbbbbb": "in-b"})
+
+    assert code == 2
+    assert "не помнит отпечатка" in text
+    assert "перестали воспроизводиться" not in text
+
+
+def test_drift_of_one_graph_does_not_hide_a_regression_in_another():
+    """Приоритет тот же, что у 1-25/1-28: доказанное сильнее неполноты.
+
+    Один граф подменён (судить нечем), у второго вход ТОТ ЖЕ и он сломался —
+    это 1, и оба факта названы. Иначе достаточно было бы тронуть один файл
+    корпуса, чтобы гейт замолчал обо всех.
+    """
+    base = {"runs": 6, "routing": True,
+            "stable": {"aaaaaaaa": True, "cccccccc": True},
+            "inputs": {"aaaaaaaa": "in-a", "cccccccc": "in-c"}}
+    code, text = _lines({"aaaaaaaa": ["x", "y"], "cccccccc": ["p", "q"]},
+                        base=base,
+                        inputs={"aaaaaaaa": "in-a-НОВЫЙ", "cccccccc": "in-c"})
+
+    assert code == 1
+    assert "перестали воспроизводиться: cccccccc" in text
+    assert "aaaaaaaa" in text and "СУДИТЬ НЕЧЕМ" in text
+    assert "перестали воспроизводиться: aaaaaaaa" not in text
+
+
+def test_changed_input_is_not_marked_as_corpus():
+    """Метку `unjudged=corpus` шаг CI прощает — подмена входа под неё не идёт.
+
+    В git фикстуры заморожены (`.gitattributes`: `-text`, sha256 в README):
+    разошедшийся отпечаток ТАМ означает, что данные сменили, а эталон нет.
+    Такое обязано ронять сборку, а не превращаться в `::warning`.
+    """
+    code, text = _lines({"aaaaaaaa": ["x", "x"], "bbbbbbbb": ["z", "w"]},
+                        inputs={"aaaaaaaa": "in-a-НОВЫЙ", "bbbbbbbb": "in-b"})
+
+    assert code == 2
+    assert text.strip().endswith(det.MARK_UNJUDGED_OTHER)
+    assert det.MARK_UNJUDGED_CORPUS not in text
+
+
+def test_new_graph_needs_no_fingerprint():
+    """Свежий граф корпуса эталону неизвестен — сверять его отпечаток не с чем.
+
+    Ветка «новый граф корпуса неповторим» (1-25) обязана работать по-прежнему:
+    отсутствие отпечатка у НЕИЗВЕСТНОГО графа — не «судить нечем», а норма.
+    """
+    code, text = _lines({"aaaaaaaa": ["x", "x"], "bbbbbbbb": ["z", "w"],
+                         "cccccccc": ["p", "q"]},
+                        inputs={"aaaaaaaa": "in-a", "bbbbbbbb": "in-b",
+                                "cccccccc": "in-c"})
+
+    assert code == 1
+    assert "новый граф корпуса неповторим: cccccccc" in text
+
+
+def test_check_names_the_graph_whose_data_changed(tmp_path, monkeypatch, capsys):
+    """Проводка целиком: `main()` обязан САМ снять отпечатки и отдать их судье.
+
+    Отдельно от `verdict()`, потому что верный судья при неподключённом
+    отпечатке — это гейт, который молчит: на пустых `inputs` судья зелен,
+    и ошибку проводки поймать может только сквозной прогон.
+    """
+    path = tmp_path / "determinism_baseline.json"
+    path.write_text(json.dumps(BASE, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(det, "BASELINE", path)
+    monkeypatch.setattr(det.corpus, "corpus_paths",
+                        lambda include_storage=True: {"aaaaaaaa": tmp_path / "a.json",
+                                                      "bbbbbbbb": tmp_path / "b.json"})
+    (tmp_path / "a.json").write_text('{"nodes": ["ПОДМЕНА"]}', encoding="utf-8")
+    (tmp_path / "b.json").write_text('{"nodes": []}', encoding="utf-8")
+    monkeypatch.setattr(det, "measure", lambda uids, runs, routing: {
+        uid: [{"sha": "s", "defects": [1, 0]} for _ in range(runs)] for uid in uids})
+    monkeypatch.setattr(sys, "argv",
+                        ["layout_determinism.py", "--check", "--runs", "6"])
+
+    assert det.main() == 2
+    out = capsys.readouterr().out
+    assert "aaaaaaaa" in out and "СУДИТЬ НЕЧЕМ" in out
+    assert "[OK] регресса воспроизводимости нет" not in out
+
+
+# ───── тот же отпечаток на пути ЗАПИСИ: пересъём его записывает ─────
+
+def test_write_records_the_input_fingerprints(tmp_path, monkeypatch):
+    """Положительный контроль: эталон уносит с собой отпечаток каждого графа.
+
+    Без этого следующая сверка снова осталась бы без отпечатка — то самое
+    состояние, ради которого пункт и заведён.
+    """
+    path = _write_stand(tmp_path, monkeypatch,
+                        {"aaaaaaaa": ["x", "x"], "bbbbbbbb": ["z", "w"]},
+                        inputs={"aaaaaaaa": "in-a", "bbbbbbbb": "in-b"})
+
+    assert det.main() == 0
+    assert json.loads(path.read_text(encoding="utf-8"))["inputs"] == {
+        "aaaaaaaa": "in-a", "bbbbbbbb": "in-b"}
+
+
+def test_write_of_a_graph_whose_input_changed_is_not_refused(
+        tmp_path, monkeypatch, capsys):
+    """⭐ Чем пункт оплачивает работу первую: пересъём подменённого входа ЗАКОНЕН.
+
+    Отказ 1-28 («перестал воспроизводиться — пересъём записал бы поломку
+    нормой») стоит на утверждении, что вход тот же. Когда вход другой,
+    утверждения о поломке нет вовсе, а есть новые данные — их и записывают.
+    Молча это делать нельзя: причина печатается.
+    """
+    path = _write_stand(tmp_path, monkeypatch,
+                        {"aaaaaaaa": ["x", "y"], "bbbbbbbb": ["z", "w"]},
+                        inputs={"aaaaaaaa": "in-a-НОВЫЙ", "bbbbbbbb": "in-b"})
+
+    assert det.main() == 0
+    written = json.loads(path.read_text(encoding="utf-8"))
+    assert written["stable"] == {"aaaaaaaa": False, "bbbbbbbb": False}
+    assert written["inputs"]["aaaaaaaa"] == "in-a-НОВЫЙ"
+    out = capsys.readouterr().out
+    assert "aaaaaaaa" in out and "in-a" in out, "вход подменили молча"
+
+
+def test_write_still_refuses_a_broken_graph_on_the_same_input(
+        tmp_path, monkeypatch, capsys):
+    """⭐ Обратная полярность записи: отказ 1-28 цел, пока вход ТОТ ЖЕ.
+
+    Дверь открыта ровно на подмену входа и ни на палец шире.
+    """
+    path = _write_stand(tmp_path, monkeypatch,
+                        {"aaaaaaaa": ["x", "y"], "bbbbbbbb": ["z", "w"]},
+                        inputs={"aaaaaaaa": "in-a", "bbbbbbbb": "in-b"})
+    before = path.read_text(encoding="utf-8")
+
+    assert det.main() == 1
+    assert "перестали воспроизводиться: aaaaaaaa" in capsys.readouterr().out
+    assert path.read_text(encoding="utf-8") == before, "эталон переписан вопреки отказу"
+
+
+def test_changed_input_does_not_lift_the_stickiness(tmp_path, monkeypatch, capsys):
+    """⛔ Липкость 1-29 подменой входа НЕ снимается — так решил архитектор.
+
+    Направление разрешено только одно: граф ДОБАВЛЯЕТСЯ в неповторимые.
+    Обратное (`false -> true`) остаётся за `--allow-fixed` и объяснением
+    в коммите, даже когда данные и правда другие: иначе достаточно было бы
+    пересохранить схему в клиенте, чтобы вычеркнуть её из списка.
+    """
+    path = _write_stand(tmp_path, monkeypatch,
+                        {"aaaaaaaa": ["x", "x"], "bbbbbbbb": ["z", "z"]},
+                        inputs={"aaaaaaaa": "in-a", "bbbbbbbb": "in-b-НОВЫЙ"})
+
+    assert det.main() == 0
+    assert json.loads(path.read_text(encoding="utf-8"))["stable"]["bbbbbbbb"] is False
+    assert "--allow-fixed" in capsys.readouterr().out
+
+
+# ───────── сам отпечаток: что он обязан и чего не обязан видеть ─────────
+
+def test_fingerprint_ignores_formatting_but_sees_data(tmp_path):
+    """Отпечаток снимается с СОДЕРЖИМОГО, а не с байтов файла.
+
+    `.gitattributes` нормализует json по EOL (`* text=auto eol=lf`), и
+    байтовый отпечаток краснел бы от одного переноса строки — вторая
+    EOL-ловушка после `.gitattributes` из 0.8 (замечание ревизии 1-28).
+    Проекция взята та же, которой стенд хеширует сам граф.
+    """
+    from tools import corpus
+
+    plain = tmp_path / "plain.json"
+    fancy = tmp_path / "fancy.json"
+    other = tmp_path / "other.json"
+    plain.write_bytes(b'{"nodes": [{"id": "N1"}], "links": []}')
+    fancy.write_bytes(
+        b'{\r\n "nodes": [\r\n  {"id": "N1"}\r\n ],\r\n "links": []\r\n}\r\n')
+    other.write_bytes(b'{"nodes": [{"id": "N2"}], "links": []}')
+
+    assert corpus.data_fingerprint(plain) == corpus.data_fingerprint(fancy)
+    assert corpus.data_fingerprint(plain) != corpus.data_fingerprint(other)
+
+
+def test_baseline_in_git_remembers_the_fixture_fingerprints():
+    """Три графа фикстуры (то, что видит CI) — с отпечатком, и он сходится.
+
+    Фикстуры заморожены `.gitattributes` (`-text`) и их sha256 записаны
+    в `tests/fixtures/graph/README.md`; расхождение здесь означает, что
+    данные сменили, а эталон не переснимали.
+    """
+    from tools import corpus
+
+    base = json.loads(det.BASELINE.read_text(encoding="utf-8"))
+    for uid8, path in corpus.fixture_paths().items():
+        assert base.get("inputs", {}).get(uid8) == corpus.data_fingerprint(path), \
+            f"отпечаток графа {uid8} в эталоне разошёлся с фикстурой"
+
+
+@pytest.mark.parametrize("payload,match", [
+    ("{ это не json", "отпечаток входа не снят"),
+    (None, "отпечаток входа не снят"),        # файла нет вовсе
+])
+def test_unreadable_corpus_file_is_unjudgeable_not_a_traceback(
+        tmp_path, monkeypatch, capsys, payload, match):
+    """⛔ Полярность 1-30 на НОВОМ пути: снятие отпечатка идёт ДО замера.
+
+    Отпечаток снимается разбором файла, то есть у стенда появился путь,
+    который может умереть раньше `measure()` — и до этого теста умирал
+    трейсбеком с кодом 1, неотличимым от доказанной поломки. Нечитаемый
+    или неразбираемый файл корпуса — сломанная ОБСТАНОВКА, значит «судить
+    нечем» (2) и метка `environment`, а не `corpus`: усечённый корпус в CI
+    штатен и прощается, а битый файл — нет.
+    """
+    path = tmp_path / "determinism_baseline.json"
+    path.write_text(json.dumps(BASE, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(det, "BASELINE", path)
+    graph = tmp_path / "aaaaaaaa.json"
+    if payload is not None:
+        graph.write_text(payload, encoding="utf-8")
+    monkeypatch.setattr(det.corpus, "corpus_paths",
+                        lambda include_storage=True: {"aaaaaaaa": graph})
+    monkeypatch.setattr(det, "measure", lambda *a: pytest.fail(
+        "замер начался, хотя отпечаток входа снять не удалось"))
+    monkeypatch.setattr(sys, "argv",
+                        ["layout_determinism.py", "--check", "--runs", "6"])
+
+    assert det.main() == 2
+    out = capsys.readouterr().out
+    assert match in out
+    assert out.strip().endswith(det.MARK_UNJUDGED_OTHER)
