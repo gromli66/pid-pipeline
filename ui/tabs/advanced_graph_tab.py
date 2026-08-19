@@ -24,6 +24,7 @@ from ui.services.ui_settings import UISettings
 from ui.editors.advanced_graph_editor import AdvancedGraphEditor
 from ui.editors.base_graph_editor import BaseGraphEditor
 from ui.tabs.simple_graph_tab import SimpleGraphTab
+from ui.widgets.error_report_dialog import report_exception
 
 logger = logging.getLogger(__name__)
 
@@ -788,10 +789,33 @@ class AdvancedGraphTab(SimpleGraphTab):
                 self._editor.smooth_canvas()
             else:
                 self._editor.auto_fix()      # фолбэк-холст: родная среда
-            # Вернуть фокус редактору, иначе Ctrl+Z не дойдёт и не отменит
-            self._editor.setFocus()
         except Exception as exc:
-            import traceback
-            traceback.print_exc()
-            from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "Авто-выравнивание", str(exc))
+            # Здесь стоял traceback.print_exc(): в собранном .exe
+            # (console=False) sys.stdout и sys.stderr = None, печать уходила
+            # в никуда, логгер не звался вовсе — прирост файла лога на отказе
+            # был 0 байт (замер §96). Оператору оставалась одна строка модалки.
+            logger.error("Авто-выравнивание: отказ", exc_info=True)
+            report_exception(
+                self, "Авто-выравнивание", exc,
+                canvas=self._canvas_snapshot(),
+                diagram_name=self.diagram_name,
+            )
+        finally:
+            # Вернуть фокус редактору, иначе Ctrl+Z не дойдёт и не отменит.
+            # В finally, а не в конце try: после отказа холст уже изменён,
+            # шаг отмены открыт (пункт 1.1) — и нужен оператору тем более.
+            self._editor.setFocus()
+
+    def _canvas_snapshot(self):
+        """Холст таким, каким его видел оператор в момент отказа.
+
+        Отчёт важнее снимка: отрисовка испорченного холста может сама бросить,
+        и тогда оператор остался бы вообще без отчёта — поэтому отказ снимка
+        уходит строкой в лог, а отчёт собирается без картинки.
+        """
+        try:
+            shot = self._editor.grab()
+        except Exception:
+            logger.warning("Снимок холста для отчёта не сделан", exc_info=True)
+            return None
+        return None if shot.isNull() else shot
