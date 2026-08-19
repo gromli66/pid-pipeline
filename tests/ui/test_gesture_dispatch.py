@@ -746,3 +746,191 @@ def test_click_from_resize_mode_still_switches_between_boxes(ed_poly):
     assert _handle_centres(ed_poly) == pytest.approx(_bbox_corners(ed_poly, box_b)), \
         "ручки сидят не на той рамке, по которой кликнули"
     assert (_geom(ed_poly), _depth(ed_poly)) == (g0, depth0)
+
+
+# ── пункт 1.8: липкий ресайз и брошенная тяга ─────────────────────────────
+
+@pytest.fixture
+def simple(qapp, raster):
+    """«Проверка схемы» на той же схеме, что `ed`: липкость воспроизводима
+    только у простого редактора — «Ручная правка» в режиме ресайза не отдаёт
+    press перехвату узла (`_node_drag_allowed` там False вне idle)."""
+    from ui.editors.simple_graph_editor import SimpleGraphEditor
+
+    editor = SimpleGraphEditor()
+    editor._canvas_mode = True
+    assert editor.load_data(raster, str(corpus.graph_path(UID)))
+    editor.resize(1400, 900)
+    return editor
+
+
+def _edges_full(editor):
+    """Полные словари всех рёбер: откат сравнивается ЦЕЛИКОМ, а не по перечню
+    полей — так был пойман дефект 1.7 (`_src_side`/`_tgt_side`, заведённые
+    ресайзом, переживали восстановление части полей)."""
+    return json.dumps([{k: v for k, v in sorted(e.items())}
+                       for e in editor.edges_data], sort_keys=True, default=str)
+
+
+def _free_spot(editor, margin=60.0):
+    """Точка холста, где нет ни одного узла в радиусе `margin` — для узла,
+    который тест создаёт сам (сцена в canvas-режиме — 1920×1080)."""
+    for x in range(80, 1840, 120):
+        for y in range(80, 1000, 120):
+            if all(((x - nd["centroid"][1]) ** 2
+                    + (y - nd["centroid"][0]) ** 2) ** 0.5 > margin
+                   for nd in editor.nodes.values()):
+                return float(x), float(y)
+    raise AssertionError("на холсте нет свободного места под тестовый узел")
+
+
+def _free_corner_node(editor, need_edges=True):
+    """Оборудование с рамкой, у которого правый-нижний угол лежит ВНЕ радиуса
+    перехвата всех центроидов (`find_node_at` по углу молчит): press по такому
+    углу уходит хендлеру напрямую — настоящая протяжка за ручку. Возвращает
+    (nid, (x, y) угла)."""
+    for nid, nd in editor.nodes.items():
+        bb = nd.get("bbox")
+        seg = nd.get("segmentation")
+        if nd.get("type") != "equipment" or not bb or len(bb) != 4:
+            continue
+        if seg and len(seg) >= 6:
+            continue                      # контурный: ручки не сядут (1.6)
+        if bb[2] - bb[0] <= 20.0 or bb[3] - bb[1] <= 20.0:
+            continue
+        if editor.find_node_at(*_cxy(editor, nid)) != nid:
+            continue
+        if need_edges and not any(nid in (e.get("source"), e.get("target"))
+                                  for e in editor.edges_data):
+            continue                      # откат обязан вернуть и рёбра
+        corner = (float(bb[2]), float(bb[3]))
+        if editor.find_node_at(*corner) is None:
+            return nid, corner
+    raise AssertionError("в корпусе нет рамки со свободным правым-нижним углом")
+
+
+def test_click_on_captured_handle_does_not_start_sticky_resize(simple):
+    """«Липкий ресайз» (замер 2026-08-11; механизм — MEASUREMENTS §56): у
+    свежедобавленного узла 20×20 ручка живёт в радиусе перехвата
+    `find_node_at` (в холсте `CLICK_THRESHOLD` = 8 px от центроида), поэтому
+    press по ней уходит отложенным решением клик/drag, а release превращается
+    в синтетический `on_press(event=None)` — тяга стартует УЖЕ ПОСЛЕ
+    отпускания кнопки. Дальше рамку везёт голый mouseMove (mouseTracking
+    включён), и дельта вписывается в undo следующим коммитом, о котором
+    оператор не просил.
+
+    Одиночный клик по ручке обязан оставить рамку, глубину undo и сами
+    ручки на месте."""
+    _ctrl_down(simple)
+    x, y = _free_spot(simple)
+    nid = simple.add_equipment_node(x, y, 1, "test_eq", width=20, height=20)
+    assert _visible_handles(simple) == 4, "ручки не открылись после добавления"
+    bbox0 = list(simple.nodes[nid]["bbox"])
+    depth0 = _depth(simple)
+
+    # Точка «перехваченной ручки»: на диагонали к правому-нижнему углу,
+    # в 5.5 px от центроида — внутри перехвата узла (< 8) и внутри ручки
+    # (полудиагональ 14.14 − 5.5 = 8.6 px от угла < 12).
+    cx, cy = _cxy(simple, nid)
+    gx, gy = bbox0[2], bbox0[3]
+    diag = ((gx - cx) ** 2 + (gy - cy) ** 2) ** 0.5
+    px = cx + (gx - cx) * (5.5 / diag)
+    py = cy + (gy - cy) * (5.5 / diag)
+    assert simple.find_node_at(px, py) == nid, \
+        "точка не перехвачена узлом — сценарий липкости не собрался, тест слеп"
+
+    _press(simple, px, py, mods=CTRL)
+    _release(simple, px, py, mods=CTRL)            # одиночный клик по ручке
+    _move(simple, px + 76.0, py + 44.0, mods=CTRL, down=False)
+    _move(simple, px + 152.0, py + 88.0, mods=CTRL, down=False)
+
+    assert list(simple.nodes[nid]["bbox"]) == bbox0, \
+        "рамка поехала за курсором при отпущенной кнопке (липкий ресайз)"
+    assert _depth(simple) == depth0, "движение без кнопки записало шаг undo"
+    assert _handle_centres(simple) == pytest.approx(_bbox_corners(simple, nid)), \
+        "ручки уехали с углов рамки"
+
+
+def test_handle_drag_resizes_bbox_in_simple_editor(simple):
+    """Контроль к фиксу липкости: НАСТОЯЩАЯ протяжка за ручку (press-move-
+    release по свободному углу) в «Проверке схемы» жива — рамка растёт, жест
+    ложится одним шагом undo. Фикс не имеет права глушить `start_drag` вовсе."""
+    nid, corner = _free_corner_node(simple, need_edges=False)
+    _ctrl_down(simple)
+    _dclick(simple, *_cxy(simple, nid), mods=CTRL)
+    assert _visible_handles(simple) == 4
+    bbox0 = list(simple.nodes[nid]["bbox"])
+    depth0 = _depth(simple)
+
+    _drag(simple, *corner, 30.0, 20.0)
+
+    bbox1 = simple.nodes[nid]["bbox"]
+    assert bbox1[2] == pytest.approx(bbox0[2] + 30.0, abs=DRAG_TOL)
+    assert bbox1[3] == pytest.approx(bbox0[3] + 20.0, abs=DRAG_TOL)
+    assert _depth(simple) == depth0 + 1, "жест обязан дать ровно один шаг undo"
+
+
+@pytest.mark.parametrize("editor_fixture", ["ed", "simple"])
+def test_escape_mid_drag_reverts_the_uncommitted_resize(request, editor_fixture):
+    """«Брошенная тяга» (оба редактора): Esc посреди протяжки за ручку —
+    кнопка ещё нажата, коммита не было. Статусная строка обещает отмену,
+    значит рамка, центроид, площадь и ПОЛНЫЕ словари рёбер обязаны вернуться
+    к состоянию до тяги, шага undo нет, ручки сняты. До 1.8 модель оставалась
+    в состоянии последнего кадра тяги при undo=0 и чистом дёрти-флаге
+    (замер 2026-08-11)."""
+    ed = request.getfixturevalue(editor_fixture)
+    nid, corner = _free_corner_node(ed)
+    _ctrl_down(ed)
+    _dclick(ed, *_cxy(ed, nid), mods=CTRL)
+    assert _visible_handles(ed) == 4
+    g0, edges0, depth0 = _geom(ed), _edges_full(ed), _depth(ed)
+
+    _press(ed, *corner, mods=CTRL)
+    for k in range(1, 5):
+        _move(ed, corner[0] + 30.0 * k / 4, corner[1] + 20.0 * k / 4, mods=CTRL)
+    assert _geom(ed) != g0, "тяга не изменила данные — жест мимо ручки, тест слеп"
+
+    _esc(ed)                                       # кнопка НЕ отпускалась
+
+    assert _geom(ed) == g0, "Esc не вернул рамку: брошенная тяга осталась в модели"
+    assert _edges_full(ed) == edges0, \
+        "Esc не вернул рёбра (сравнение словарей целиком — как в 1.7)"
+    assert _depth(ed) == depth0, "отменённая тяга записала шаг undo"
+    assert _visible_handles(ed) == 0, "ручки пережили Esc"
+
+    _release(ed, corner[0] + 30.0, corner[1] + 20.0, mods=CTRL)
+    assert (_geom(ed), _edges_full(ed), _depth(ed)) == (g0, edges0, depth0), \
+        "запоздалый release после Esc снова тронул данные"
+
+
+def test_escape_reverts_only_the_tail_after_a_committed_drag(ed):
+    """Точность отката: снимок живёт в трёх точках (вход в режим, commit,
+    «start для следующего drag» — 1.7). Esc после «потянул-отпустил-потянул»
+    обязан вернуть модель к ЗАКОММИЧЕННОМУ состоянию, а не к входу в режим —
+    иначе отмена хвоста молча стирала бы принятую работу. Ctrl+Z затем
+    возвращает исходное."""
+    nid, corner = _free_corner_node(ed)
+    _ctrl_down(ed)
+    _dclick(ed, *_cxy(ed, nid), mods=CTRL)
+    g0, depth0 = _geom(ed), _depth(ed)
+
+    _drag(ed, *corner, 30.0, 20.0)                 # закоммиченная протяжка
+    g1, edges1, depth1 = _geom(ed), _edges_full(ed), _depth(ed)
+    assert depth1 == depth0 + 1 and g1 != g0
+
+    bb = ed.nodes[nid]["bbox"]
+    new_corner = (float(bb[2]), float(bb[3]))
+    assert ed.find_node_at(*new_corner) is None, \
+        "после первой протяжки угол попал под перехват — обстановка не собралась"
+    _press(ed, *new_corner, mods=CTRL)
+    _move(ed, new_corner[0] + 40.0, new_corner[1], mods=CTRL)
+    assert _geom(ed) != g1, "вторая тяга не началась (иначе тест пуст)"
+
+    _esc(ed)
+
+    assert _geom(ed) == g1, "Esc откатил дальше последнего коммита"
+    assert _edges_full(ed) == edges1
+    assert _depth(ed) == depth1, "Esc тронул стек undo"
+
+    ed.undo()
+    assert _geom(ed) == g0, "Ctrl+Z после отменённого хвоста не вернул исходное"
