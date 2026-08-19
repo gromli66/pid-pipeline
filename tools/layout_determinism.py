@@ -19,9 +19,13 @@
 Провал `--check` (exit 1) — граф, который был воспроизводим, перестал им быть
 (или новый граф корпуса неповторим). Обратное движение — печатается, exit 0.
 ⚠ **exit 2 — «судить нечем»** (`PROTOCOL §5`): часть графов эталона не
-измерена. Так выглядит чистый клон и CI — в git лежат 3 графа из 17, а 8
-известных неповторимых среди невидимых. Вердикт по корпусу даёт только
-локальный прогон; в CI шаг обязан различать 1 и 2 (`.github/workflows/tests.yml`).
+измерена, замер слабее эталонного (`--runs` меньше, другой ключ роутинга —
+пункт 1-30) или дочерний прогон убит. Так выглядит чистый клон и CI — в git
+лежат 3 графа из 19, а 9 известных неповторимых среди невидимых. Вердикт по
+корпусу даёт только локальный прогон; в CI шаг обязан различать 1 и 2
+(`.github/workflows/tests.yml`) — и различать ПРИЧИНУ двойки: усечённый
+корпус там штатен, убитый прогон нет. Причина — последней строкой вывода,
+`MARK_UNJUDGED_CORPUS` или `MARK_UNJUDGED_OTHER`.
 
 Те же три исхода у `--write-baseline` (пункт 1-28): 0 — эталон переснят,
 1 — ОТКАЗ (пересъём узаконил бы поломку), 2 — СУДИТЬ НЕЧЕМ (корпус усечён,
@@ -59,6 +63,15 @@ from tools import corpus                                      # noqa: E402
 
 BASELINE = REPO / "tools" / "bench" / "determinism_baseline.json"
 DEFAULT_RUNS = 2
+
+# Последняя строка вывода при exit 2 — ЧЕМ именно судить нечем. Читает её шаг
+# CI (`.github/workflows/tests.yml`), которому усечённый корпус штатен (в git
+# 3 графа из 19), а сломанная обстановка — нет. До пункта 1-30 убитый дочерний
+# прогон умирал трейсбеком с кодом 1 и потому в CI краснел; сделать его честным
+# «судить нечем», не разделив причины, значило бы завести шагу зелёную дыру.
+# Метки ASCII: их грепает bash на windows-раннере.
+MARK_UNJUDGED_CORPUS = "unjudged=corpus"
+MARK_UNJUDGED_OTHER = "unjudged=environment"
 
 
 # ─────────────────────────── один прогон (дочерний) ───────────────────────────
@@ -145,24 +158,63 @@ def report_lines(result: dict[str, list[str]]) -> list[str]:
     return out
 
 
-def verdict(result: dict[str, list[str]], base: dict) -> tuple[int, list[str]]:
+def weaker_than_baseline(base: dict, runs: int, routing: bool) -> list[str]:
+    """Причины «этот замер слабее того, что записано в эталоне» (пункт 1-29).
+
+    Гейт по природе выборочный: «воспроизводим» читается как «за N прогонов
+    не поймали расхождения» (`TESTING §8.2`). Замер меньшим числом прогонов
+    или другим ключом роутинга — замер другой (более слабой) величины.
+
+    Арифметика общая у записи и у чтения (пункт 1-30): у пересъёма она с 1-29,
+    а `--check` при малом `--runs` до 1-30 печатал «[стало лучше] воспроизводятся
+    впервые» про заведомо неповторимые графы и отдавал exit 0 — то есть
+    «доказано, что регресса нет» по выборке, которая этого доказать не может.
+    """
+    reasons = []
+    base_runs = base.get("runs")
+    if base_runs and runs < base_runs:
+        reasons.append(f"замер слабее эталона: прогонов {runs} против "
+                       f"{base_runs} — при малой выборке неповторимый граф "
+                       f"выходит воспроизводимым (§49.27: 4 из 8 известных "
+                       f"при --runs 2). Мерить при --runs не меньше {base_runs}")
+    base_routing = base.get("routing")
+    if base_routing is not None and routing is not base_routing:
+        reasons.append(f"замер снят другим ключом: роутинг "
+                       f"{'вкл' if routing else 'выкл'} против "
+                       f"{'вкл' if base_routing else 'выкл'} у эталона — "
+                       "это замер другой величины (без роутинга раскладка "
+                       "воспроизводима вся, замер 0.10)")
+    return reasons
+
+
+def verdict(result: dict[str, list[str]], base: dict,
+            runs: int, routing: bool) -> tuple[int, list[str]]:
     """-> (код возврата, строки отчёта). Отделено от печати, чтобы проверялось
     тестом, а не глазами.
 
     Три исхода (`PROTOCOL §5`), а не два:
-    0 — регресса воспроизводимости нет, и весь эталон при этом измерен;
+    0 — регресса воспроизводимости нет, и весь эталон при этом измерен
+        замером не слабее эталонного;
     1 — опровергнуто: воспроизводимый граф сломался или новый неповторим;
-    2 — СУДИТЬ НЕЧЕМ: эталона нет, или часть его графов не измерена. Так
-        выглядит усечённый корпус — в git лежат 3 графа из 17, остальные
-        только в локальном `storage/`, и среди неизмеренных 8 известных
-        неповторимых. Раньше такой прогон печатал «регресса нет» и exit 0.
+    2 — СУДИТЬ НЕЧЕМ: эталона нет, часть его графов не измерена, или замер
+        слабее эталона. Усечённый корпус — в git лежат 3 графа из 19,
+        остальные только в локальном `storage/`, и среди неизмеренных
+        8 известных неповторимых; раньше такой прогон печатал «регресса нет»
+        и exit 0 (пункт 1-25). Слабый замер — пункт 1-30: `--check --runs 2`
+        против эталона в 6 прогонов печатал «[стало лучше] воспроизводятся
+        впервые» про графы, у которых расхождение просто не успело выпасть,
+        и отдавал 0.
     Доказанный регресс сильнее неполноты: если сломался измеренный граф, это 1.
+    Ложного КРАСНОГО малый `--runs` дать не может — расхождение это наблюдение,
+    а не порог, — поэтому поломка судится и по слабой выборке.
     """
     known = base.get("stable", {})
     if not known:
         return 2, report_lines(result) + [
-            "[СУДИТЬ НЕЧЕМ] эталона нет или он пуст — сначала --write-baseline"]
+            "[СУДИТЬ НЕЧЕМ] эталона нет или он пуст — сначала --write-baseline",
+            MARK_UNJUDGED_OTHER]
 
+    weak = weaker_than_baseline(base, runs, routing)
     broke, fixed, fresh = [], [], []
     for uid8, shas in sorted(result.items()):
         now = stability(shas)
@@ -180,8 +232,16 @@ def verdict(result: dict[str, list[str]], base: dict) -> tuple[int, list[str]]:
         lines.append(f"[ПРОВАЛ] перестали воспроизводиться: {', '.join(broke)}")
     if fresh:
         lines.append(f"[ПРОВАЛ] новый граф корпуса неповторим: {', '.join(fresh)}")
-    if fixed:
+    if fixed and weak:
+        # То же правило, что у `merge_stable()` на записи: неповторимость —
+        # наблюдение положительное, и слабая выборка её не отменяет.
+        lines.append(f"[ВЫБОРКА, НЕ ПОЧИНКА] дали один хеш, но замер слабее "
+                     f"эталона — «воспроизводятся впервые» из него не следует: "
+                     f"{', '.join(fixed)}")
+    elif fixed:
         lines.append(f"[стало лучше] воспроизводятся впервые: {', '.join(fixed)}")
+    for msg in weak:
+        lines.append(f"[СУДИТЬ НЕЧЕМ] {msg}")
 
     unmeasured = sorted(set(known) - set(result))
     if unmeasured:
@@ -190,8 +250,10 @@ def verdict(result: dict[str, list[str]], base: dict) -> tuple[int, list[str]]:
                      f"{', '.join(unmeasured)}")
     if broke or fresh:
         return 1, lines
+    if weak:                          # обстановка замера, а не данные корпуса
+        return 2, lines + [MARK_UNJUDGED_OTHER]
     if unmeasured:
-        return 2, lines
+        return 2, lines + [MARK_UNJUDGED_CORPUS]
     lines.append("[OK] регресса воспроизводимости нет")
     return 0, lines
 
@@ -226,22 +288,11 @@ def write_blocked(result: dict[str, list[str]], base: dict,
     if not known:
         return [], []
 
-    unjudged, refused = [], []
-    base_runs = base.get("runs")
-    if base_runs and runs < base_runs:
-        unjudged.append(f"замер слабее эталона: прогонов {runs} против "
-                        f"{base_runs} — при малой выборке неповторимый граф "
-                        f"выходит воспроизводимым (§49.27: 4 из 8 известных "
-                        f"при --runs 2), и эталон ослаб бы молча. Переснимать "
-                        f"при --runs не меньше {base_runs}")
-    base_routing = base.get("routing")
-    if base_routing is not None and routing is not base_routing:
-        unjudged.append(f"замер снят другим ключом: роутинг "
-                        f"{'вкл' if routing else 'выкл'} против "
-                        f"{'вкл' if base_routing else 'выкл'} у эталона — "
-                        "это замер другой величины (без роутинга раскладка "
-                        "воспроизводима вся, замер 0.10), и пересъём стёр бы "
-                        "список неповторимых разом")
+    # Слабость замера считается тем же `weaker_than_baseline`, что и на чтении
+    # (пункт 1-30): два судьи одной выборки не должны разъехаться.
+    unjudged = [msg + " — иначе эталон ослаб бы молча"
+                for msg in weaker_than_baseline(base, runs, routing)]
+    refused = []
     unmeasured = sorted(set(known) - set(result))
     if unmeasured:
         unjudged.append(f"не измерено {len(unmeasured)} графов эталона из "
@@ -335,7 +386,15 @@ def main() -> int:
 
     print(f"корпус: {len(uids)} графов, прогонов: {args.runs}, "
           f"роутинг: {'вкл' if routing else 'выкл'}", flush=True)
-    result = measure(uids, args.runs, routing)
+    try:
+        result = measure(uids, args.runs, routing)
+    except RuntimeError as exc:
+        # Убитый, оборванный или молча потерявший графы дочерний прогон — это
+        # сломанная обстановка, а не регресс кода (пункт 1-30). Раньше он
+        # умирал трейсбеком и кодом 1, неотличимым от доказанной поломки.
+        print(f"[СУДИТЬ НЕЧЕМ] замер не состоялся: {exc}")
+        print(MARK_UNJUDGED_OTHER)
+        return 2
 
     if args.write_baseline:
         unjudged, refused = write_blocked(shas(result), read_baseline(),
@@ -347,6 +406,8 @@ def main() -> int:
         if refused:                      # доказанная поломка сильнее неполноты
             return 1
         if unjudged:
+            print(MARK_UNJUDGED_OTHER if weaker_than_baseline(
+                read_baseline(), args.runs, routing) else MARK_UNJUDGED_CORPUS)
             return 2
         stable, notes = merge_stable(shas(result), read_baseline(),
                                      args.allow_fixed or [])
@@ -361,7 +422,7 @@ def main() -> int:
         return 0
 
     if args.check:
-        code, lines = verdict(shas(result), read_baseline())
+        code, lines = verdict(shas(result), read_baseline(), args.runs, routing)
     else:
         code, lines = 0, report_lines(shas(result))
     print("\n".join(lines))

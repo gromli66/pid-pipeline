@@ -72,26 +72,62 @@ def test_compare_separates_regression_from_fix():
     assert fixed == ["a::t1"]
 
 
-def test_killed_run_is_a_failure_not_a_green_gate(monkeypatch, capsys):
-    """Дефект ревизии 0.3: гейт был ЗЕЛЁНЫМ при убитом прогоне.
+def _check_stand(monkeypatch, run, collect="tests/test_alpha.py::test_one\n\n1 test collected in 1.0s\n"):
+    """Стенд ЧТЕНИЯ: pytest подменён парой (вывод прогона, вывод сбора).
+
+    Пол базы опущен до 1, чтобы сбор из одной строки его не ронял: иначе
+    любой тест ниже мерил бы усыхание набора вместо своей ветки — ровно та
+    ловушка «покраснел сосед», что поймана в 1-28.
+    """
+    monkeypatch.setattr(sb, "_pytest",
+                        lambda args: (collect, 0) if "--collect-only" in args else run)
+    monkeypatch.setattr(sb, "_load_baseline", lambda: dict(BASE, min_collected=1))
+
+
+def test_killed_run_on_check_is_unjudgeable(monkeypatch, capsys):
+    """⛔ Дыра 1-30 (б): у пути ЧТЕНИЯ третьего исхода не было вовсе.
 
     `os._exit(77)` в первом тесте (класс §24.6 — access violation в этом же
     наборе уже случался) обрывает вывод: итоговой строки нет, красных не
-    разобрано ни одного, и сравнение с базой читает это как «позеленело всё».
-    Проверяем именно `cmd_check`, а не отдельный предикат: сломана была
-    проводка кода возврата, а не арифметика.
+    разобрано ни одного. Гейт 0.3 научился на этом краснеть — но тем же
+    кодом 1, что на доказанной регрессии, и вызывающий не мог отличить
+    «чини обстановку» от «чини код». Зелёным это не становится ни на шаг:
+    2 так же не ноль, и CI на ней так же красен.
     """
-    killed = ("tests/test_alpha.py .\n", 77)
+    _check_stand(monkeypatch, ("tests/test_alpha.py .\n", 77))
 
-    def fake_pytest(args):
-        return ("\n738 tests collected in 1.0s\n", 0) if "--collect-only" in args else killed
+    assert sb.cmd_check() == 2
+    out = capsys.readouterr().out
+    assert "[СУДИТЬ НЕЧЕМ]" in out and "77" in out
+    assert "[ПРОВАЛ]" not in out, "покраснел не тот механизм: провал вместо «судить нечем»"
 
-    monkeypatch.setattr(sb, "_pytest", fake_pytest)
-    monkeypatch.setattr(sb, "_load_baseline", lambda: BASE)
+
+def test_new_red_on_check_is_still_a_regression(monkeypatch, capsys):
+    """Обратная полярность: замер состоялся и говорит про КОД — это 1.
+
+    Без неё правка 1-30 (б) односторонняя: стенд, отвечающий «судить нечем»
+    на всё подряд, гейтом не является.
+    """
+    _check_stand(monkeypatch, (REPORT_GREW, 1))
 
     assert sb.cmd_check() == 1
     out = capsys.readouterr().out
-    assert "[ПРОВАЛ]" in out and "77" in out
+    assert "[ПРОВАЛ] новые красные" in out
+    assert "tests/test_delta.py::test_four" in out
+
+
+def test_proven_regression_outranks_a_broken_measurement(monkeypatch, capsys):
+    """Приоритет тот же, что у трёх соседей: доказанный регресс сильнее неполноты.
+
+    Прогон убит (код 77) И в нём виден красный, которого нет в базе, — вердикт 1,
+    а не 2: про код уже есть что сказать.
+    """
+    _check_stand(monkeypatch, (REPORT_GREW, 77))
+
+    assert sb.cmd_check() == 1
+    out = capsys.readouterr().out
+    assert "[СУДИТЬ НЕЧЕМ]" in out and "77" in out
+    assert "[ПРОВАЛ] новые красные" in out
 
 
 def test_run_without_summary_line_is_a_failure():
@@ -272,7 +308,7 @@ def test_write_refuses_when_red_set_grew(tmp_path, monkeypatch, capsys):
     # Код 1 — именно ОТКАЗ: замер сделан, и он говорит «пересъём узаконил бы
     # регрессию». «Судить нечем» отдаёт 2 и живёт отдельно (пункт 1-28).
     assert sb.cmd_write() == 1
-    assert "tests/test_delta.py::test_four" in capsys.readouterr().err
+    assert "tests/test_delta.py::test_four" in capsys.readouterr().out
     assert path.read_text(encoding="utf-8") == before, "база переписана вопреки отказу"
 
 
@@ -332,7 +368,7 @@ def test_write_on_incomplete_output_is_unjudgeable(tmp_path, monkeypatch, capsys
     before = path.read_text(encoding="utf-8")
 
     assert sb.cmd_write() == 2
-    assert "вывод неполон" in capsys.readouterr().err
+    assert "вывод неполон" in capsys.readouterr().out
     assert path.read_text(encoding="utf-8") == before
 
 
@@ -369,7 +405,7 @@ def test_rollback_of_an_item_is_not_a_shrink(tmp_path, monkeypatch):
         "tests/test_item.py": (20, "0" * 12),          # снят откатом пункта
     })
 
-    problems, notes = sb.floor_problems(base, {"tests/test_alpha.py": 1})
+    problems, notes, _ = sb.floor_problems(base, {"tests/test_alpha.py": 1})
 
     assert problems == []
     assert any("tests/test_item.py: 20 → 0" in note for note in notes), notes
@@ -385,7 +421,7 @@ def test_untouched_file_losing_tests_is_still_a_shrink(tmp_path, monkeypatch):
     _tree(tmp_path, monkeypatch, {"tests/test_layout.py": TWO_TESTS})
     base = _base({"tests/test_layout.py": (22, sb.file_digest(tmp_path / "tests/test_layout.py"))})
 
-    problems, _ = sb.floor_problems(base, {"tests/test_layout.py": 0})
+    problems, _, _ = sb.floor_problems(base, {"tests/test_layout.py": 0})
 
     assert any("усох" in p and "тихо потеряно 22" in p for p in problems), problems
 
@@ -409,7 +445,7 @@ def test_file_erased_past_git_is_a_shrink(tmp_path, monkeypatch):
     _tree(tmp_path, monkeypatch, {}, tracked={"tests/test_item.py"})
     base = _base({"tests/test_item.py": (20, "0" * 12)})
 
-    problems, _ = sb.floor_problems(base, {})
+    problems, _, _ = sb.floor_problems(base, {})
 
     assert any("усох" in p and "tests/test_item.py: 20 → 0" in p for p in problems), problems
 
@@ -419,21 +455,64 @@ def test_edited_file_losing_tests_is_explained(tmp_path, monkeypatch):
     _tree(tmp_path, monkeypatch, {"tests/test_layout.py": TWO_TESTS})
     base = _base({"tests/test_layout.py": (22, "0" * 12)})   # отпечаток разошёлся
 
-    problems, notes = sb.floor_problems(base, {"tests/test_layout.py": 0})
+    problems, notes, _ = sb.floor_problems(base, {"tests/test_layout.py": 0})
 
     assert problems == []
     assert any("в диффе" in note for note in notes), notes
 
 
-def test_git_silence_is_not_a_green_gate(tmp_path, monkeypatch):
-    """git не ответил про пропавшие файлы — «судить нечем» громче «всё чисто»."""
+def test_git_silence_is_unjudgeable_not_a_refusal(tmp_path, monkeypatch):
+    """⛔ Полярность 1-30 (в): молчащий git — «судить нечем», а не отказ.
+
+    До 1-30 исчезнувшие файлы при сломанном git уходили в ТИХУЮ потерю
+    («осторожная сторона»), и стенд краснел провалом — то есть врал про код
+    там, где сломана обстановка: откат пункта от тихой пропажи различает
+    ровно ответ git, и без него вердикта нет ни в ту, ни в другую сторону.
+    Зелёным это не становится: причина громкая, а код — 2.
+    """
     _tree(tmp_path, monkeypatch, {})
     monkeypatch.setattr(sb, "tracked_by_git", lambda paths: (set(paths), "fatal: not a git repository"))
     base = _base({"tests/test_item.py": (20, "0" * 12)})
 
-    problems, _ = sb.floor_problems(base, {})
+    problems, _, unjudged = sb.floor_problems(base, {})
 
-    assert any("git не ответил" in p for p in problems), problems
+    assert problems == [], "молчание git не имеет права быть провалом"
+    assert any("git не ответил" in u for u in unjudged), unjudged
+    assert any("tests/test_item.py: 20 → 0" in u for u in unjudged), unjudged
+
+
+def test_missing_git_binary_is_unjudgeable_too(monkeypatch):
+    """Та же семья, шире записанного: git не вернул код, а вовсе не запустился.
+
+    Замерено 2026-08-19: без git в PATH `subprocess.run(["git", …])` кидает
+    `FileNotFoundError`, а он мимо проверки `returncode != 0` — стенд умирал
+    трейсбеком с кодом 1 там, где по смыслу «судить нечем».
+    """
+    def no_git(cmd, *a, **kw):
+        raise FileNotFoundError(2, "The system cannot find the file specified", "git")
+
+    monkeypatch.setattr(sb.subprocess, "run", no_git)
+
+    tracked, error = sb.tracked_by_git({"tests/test_item.py"})
+
+    assert tracked == {"tests/test_item.py"}
+    assert "git не запустился" in error
+
+
+def test_git_silence_does_not_hide_a_real_shrink(tmp_path, monkeypatch):
+    """Обратная полярность: файлы НА МЕСТЕ судятся отпечатком и без git.
+
+    Иначе правка 1-30 (в) была бы односторонней — сломанный git глушил бы
+    пол целиком, а не только ту его часть, которая от git и зависит.
+    """
+    _tree(tmp_path, monkeypatch, {"tests/test_layout.py": TWO_TESTS})
+    monkeypatch.setattr(sb, "tracked_by_git", lambda paths: (set(paths), "fatal: not a git repository"))
+    base = _base({"tests/test_layout.py": (30, sb.file_digest(tmp_path / "tests/test_layout.py"))})
+
+    problems, _, unjudged = sb.floor_problems(base, {"tests/test_layout.py": 0})
+
+    assert any("тихо потеряно 30" in p for p in problems), problems
+    assert unjudged == [], "исчезнувших файлов нет — судить нечему нечего"
 
 
 def test_old_baseline_without_map_is_judged_by_the_number():
@@ -474,7 +553,7 @@ def test_write_refuses_when_the_floor_dropped(tmp_path, monkeypatch, capsys):
     before = path.read_text(encoding="utf-8")
 
     assert sb.cmd_write() == 1
-    assert "тихо потеряно 29" in capsys.readouterr().err
+    assert "тихо потеряно 29" in capsys.readouterr().out
     assert path.read_text(encoding="utf-8") == before, "база переписана вопреки отказу"
 
 
@@ -527,11 +606,14 @@ def test_broken_collection_on_write_is_unjudgeable(tmp_path, monkeypatch):
     assert exc.value.code == 2
 
 
-def test_broken_collection_on_check_still_exits_one(tmp_path, monkeypatch):
-    """Обратная сторона: у `--check` код не менялся — правка 1-28 про запись.
+def test_broken_collection_on_check_is_unjudgeable(tmp_path, monkeypatch, capsys):
+    """⛔ Пункт 1-30 (б) довёл до чтения то, что 1-28 сделал на записи.
 
-    CI зовёт `--check` и не различает 1 и 2 на этом шаге; смена кода тут была
-    бы правкой чужого пункта.
+    Один и тот же сломанный сбор давал у пересъёма 2, а у сверки 1 — тот же
+    код, что «в наборе новый красный». Между тем сбор ломает пункт 0.0, а не
+    база: обвинять базу нечем. CI обе двойки-единицы красит одинаково (шаг
+    падает на любом ненулевом), так что менять было безопасно — менялся
+    диагноз, а не цвет.
     """
     _stand(tmp_path, monkeypatch, REPORT)
     monkeypatch.setattr(sb, "_pytest",
@@ -540,7 +622,8 @@ def test_broken_collection_on_check_still_exits_one(tmp_path, monkeypatch):
     with pytest.raises(SystemExit) as exc:
         sb.cmd_check()
 
-    assert exc.value.code == 1
+    assert exc.value.code == 2
+    assert "[СУДИТЬ НЕЧЕМ]" in capsys.readouterr().out
 
 
 def test_killed_run_on_write_is_unjudgeable(tmp_path, monkeypatch, capsys):
@@ -552,5 +635,5 @@ def test_killed_run_on_write_is_unjudgeable(tmp_path, monkeypatch, capsys):
     before = path.read_text(encoding="utf-8")
 
     assert sb.cmd_write() == 2
-    assert "СУДИТЬ НЕЧЕМ" in capsys.readouterr().err
+    assert "СУДИТЬ НЕЧЕМ" in capsys.readouterr().out
     assert path.read_text(encoding="utf-8") == before

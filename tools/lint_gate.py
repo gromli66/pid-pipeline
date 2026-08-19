@@ -20,9 +20,15 @@
 вывод и пустой результат при непустом эталоне — убитый прогон не имеет права
 выглядеть зелёным (урок пункта 0.3).
 
-У `--write-baseline` три исхода (`PROTOCOL §5`, пункт 1-28): 0 — эталон
-переснят, 1 — ОТКАЗ (долг вырос, пересъём его узаконил бы), 2 — СУДИТЬ НЕЧЕМ
-(прогон ruff убит). См. `write_blocked()`.
+Три исхода (`PROTOCOL §5`) на ОБОИХ путях: 0 — доказано (эталон переснят /
+долг не вырос), 1 — опровергнуто (долг вырос; на записи это ОТКАЗ), 2 —
+СУДИТЬ НЕЧЕМ. См. `write_blocked()`.
+
+⛔ «Судить нечем» — это и убитый прогон линтера (пункт 1-30): `ruff`/`mypy`
+с кодом вне `{0, 1}`, неразбираемый вывод, молчащий `git ls-files`. До 1-30
+такой прогон умирал `RuntimeError` — трейсбеком и кодом 1, то есть тем же
+кодом, что доказанный рост долга. Полярность была безопасная (громко и
+красным), но перепутанная: тут чинят обстановку, а не код.
 """
 from __future__ import annotations
 
@@ -35,6 +41,10 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 BASELINE = REPO / "tools" / "bench" / "lint_baseline.json"
+
+# Три исхода `PROTOCOL §5`. На пути записи 1 читается как ОТКАЗ.
+EXIT_REFUTED = 1
+EXIT_UNJUDGED = 2
 
 
 def _run(args: list[str]) -> subprocess.CompletedProcess:
@@ -53,9 +63,12 @@ def tracked() -> set[str]:
     в одном нетрекнутом `tools/tz_lint.py`. Хуже того, его строка в эталоне
     заранее прощала бы долг файлу, которого в git ещё нет.
     """
-    proc = subprocess.run(["git", "ls-files", "*.py"], cwd=str(REPO),
-                          capture_output=True, text=True, encoding="utf-8",
-                          errors="replace")
+    try:
+        proc = subprocess.run(["git", "ls-files", "*.py"], cwd=str(REPO),
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace")
+    except OSError as exc:                  # git не установлен или недоступен
+        raise RuntimeError(f"git ls-files не запустился: {exc}") from exc
     if proc.returncode != 0:
         raise RuntimeError(f"git ls-files вернул {proc.returncode}: "
                            f"{(proc.stderr or '').strip()[-200:]}")
@@ -178,8 +191,14 @@ def main() -> int:
                     help="переснять эталон (отдельным коммитом, Д6)")
     args = ap.parse_args()
 
-    counts = ruff_counts()
-    mypy_bad, mypy_tail = mypy_errors()
+    try:
+        counts = ruff_counts()
+        mypy_bad, mypy_tail = mypy_errors()
+    except RuntimeError as exc:
+        # Убитый прогон линтера или молчащий git — сломана обстановка, а не код
+        # (пункт 1-30). Раньше это был трейсбек и код 1, неотличимый от роста долга.
+        print(f"[СУДИТЬ НЕЧЕМ] замер линтеров не состоялся: {exc}")
+        return EXIT_UNJUDGED
 
     if args.write_baseline:
         unjudged, refused = write_blocked(counts, read_baseline())
@@ -188,9 +207,9 @@ def main() -> int:
         for msg in refused:
             print(f"[ОТКАЗ] {msg}")
         if refused:                      # доказанный рост долга сильнее неполноты
-            return 1
+            return EXIT_REFUTED
         if unjudged:
-            return 2
+            return EXIT_UNJUDGED
         BASELINE.parent.mkdir(parents=True, exist_ok=True)
         BASELINE.write_text(json.dumps(
             {"ruff": {"select": ["BLE001", "E722"],
@@ -206,7 +225,7 @@ def main() -> int:
         print(mypy_tail)
     if not args.check:
         return 0
-    return 0 if ok else 1
+    return 0 if ok else EXIT_REFUTED
 
 
 if __name__ == "__main__":

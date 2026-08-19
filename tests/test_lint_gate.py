@@ -179,3 +179,86 @@ def test_write_of_the_first_snapshot_has_nothing_to_compare(tmp_path, monkeypatc
     assert lint_gate.main() == 0
     assert json.loads(path.read_text(encoding="utf-8"))["ruff"]["per_file"] == {
         "worker/tasks/graph.py": 9}
+
+
+# ─── убитый прогон линтера — «судить нечем», а не трейсбек (пункт 1-30) ───
+
+class _Killed:
+    """Ответ подменённого `_run`: код вне штатных (0, 1)."""
+    returncode = 77
+    stdout = ""
+    stderr = "boom"
+
+
+def _live_stand(tmp_path, monkeypatch, argv):
+    """Свой эталон, но настоящие `ruff_counts`/`mypy_errors` — подменён `_run`."""
+    path = tmp_path / "lint_baseline.json"
+    path.write_text(json.dumps(BASE, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(lint_gate, "BASELINE", path)
+    monkeypatch.setattr(sys, "argv", ["lint_gate.py", *argv])
+    return path
+
+
+@pytest.mark.parametrize("argv", [["--check"], ["--write-baseline"]])
+def test_killed_linter_is_unjudgeable_not_a_traceback(tmp_path, monkeypatch,
+                                                      capsys, argv):
+    """⛔ Дыра 1-30 (г): убитый ruff/mypy умирал `RuntimeError` → exit 1.
+
+    Полярность была безопасная (громко и красным), но перепутанная: тем же
+    кодом 1 отвечает доказанный рост долга, а тут замер не состоялся —
+    чинят обстановку, а не код. Трейсбек уходит, причина остаётся в тексте.
+    """
+    path = _live_stand(tmp_path, monkeypatch, argv)
+    monkeypatch.setattr(lint_gate, "_run", lambda args: _Killed())
+    before = path.read_text(encoding="utf-8")
+
+    assert lint_gate.main() == 2
+    out = capsys.readouterr().out
+    assert "[СУДИТЬ НЕЧЕМ]" in out and "77" in out
+    assert path.read_text(encoding="utf-8") == before, "эталон тронут на убитом прогоне"
+
+
+def test_silent_git_is_unjudgeable(tmp_path, monkeypatch, capsys):
+    """Та же семья: `git ls-files` не ответил — списка трекнутых файлов нет.
+
+    Без него счётчик долга считался бы по мусору рабочего дерева (замер
+    2026-08-18: 200/74 локально против 199/73 на раннере), то есть замер
+    не годен в принципе.
+    """
+    _live_stand(tmp_path, monkeypatch, ["--check"])
+    monkeypatch.setattr(lint_gate, "ruff_counts", lambda: (_ for _ in ()).throw(
+        RuntimeError("git ls-files вернул 128: fatal: not a git repository")))
+
+    assert lint_gate.main() == 2
+    out = capsys.readouterr().out
+    assert "[СУДИТЬ НЕЧЕМ]" in out and "not a git repository" in out
+
+
+def test_live_linters_still_judge(tmp_path, monkeypatch, capsys):
+    """Обратная полярность: живой замер судит по-прежнему — 0 или 1, не 2.
+
+    Иначе правка односторонняя: стенд, отвечающий «судить нечем» на всё
+    подряд, гейтом не является.
+    """
+    _live_stand(tmp_path, monkeypatch, ["--check"])
+    monkeypatch.setattr(lint_gate, "ruff_counts",
+                        lambda: {"app/api/validation.py": 4, "ui/tabs/frame_tab.py": 2})
+    monkeypatch.setattr(lint_gate, "mypy_errors", lambda: (0, ""))
+
+    assert lint_gate.main() == 1
+    assert "широких except 3 -> 4" in capsys.readouterr().out
+
+
+def test_missing_git_binary_is_unjudgeable_too(monkeypatch):
+    """Та же семья: без git в PATH `subprocess.run` кидает `FileNotFoundError`.
+
+    Он идёт мимо проверки `returncode != 0`, поэтому до пункта 1-30 стенд
+    умирал трейсбеком с кодом 1 — тем же, что доказанный рост долга.
+    """
+    def no_git(cmd, *a, **kw):
+        raise FileNotFoundError(2, "The system cannot find the file specified", "git")
+
+    monkeypatch.setattr(lint_gate.subprocess, "run", no_git)
+
+    with pytest.raises(RuntimeError, match="git ls-files не запустился"):
+        lint_gate.tracked()
