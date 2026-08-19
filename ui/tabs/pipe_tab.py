@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, Slot, Qt, QThread
 
-from ui.services.api_client import APIClient
+from ui.services.api_client import APIClient, APIError
 from ui.services.artifact_downloader import (
     ArtifactDownloader, Job, artifact, one,
 )
@@ -34,12 +34,20 @@ logger = logging.getLogger(__name__)
 #: тип ДО поиска артефакта (`app/api/diagrams.py:369-376`) и отвечал 400,
 #: а необязательное задание его глотало — медианная толщина труб не считалась
 #: никогда. Тип обязан быть значением `ArtifactType`.
+#:
+#: ⛔ `swallow=(APIError,)` у необязательных (пункт 1.x12, решение 0.5): отказ
+#: СЕРВЕРА терпим, отказ ЛОКАЛЬНОГО ДИСКА уводит вкладку в ошибку. Обратно
+#: на сервер эти два артефакта не уходят, поэтому цена тише, чем у соседних
+#: вкладок, — вкладка молча открывалась с дефолтной шириной кисти вместо
+#: медианной, ровно тем же симптомом, что и в 1.x3. Политика одна на все
+#: четыре вкладки: она копируется вместе с заданием и теряется молча.
 _ARTIFACTS = (
     one(artifact("original_image", "original.png"), required=True),
     Job((artifact("pipe_mask_validated", "mask.png"),
          artifact("skeleton_mask", "mask.png")), required=True),
-    one(artifact("coco_validated", "coco_validated.json")),
-    one(artifact("pipe_mask", "pipe_mask.png")),
+    one(artifact("coco_validated", "coco_validated.json"),
+        swallow=(APIError,)),
+    one(artifact("pipe_mask", "pipe_mask.png"), swallow=(APIError,)),
 )
 
 

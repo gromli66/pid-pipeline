@@ -73,6 +73,12 @@ def _sorted_edge_key(ek: str) -> str:
 #: проглоченный `ocr_binding` = вкладка открыта с ПУСТЫМИ привязками, а
 #: `_save_binding` пишет их обратно безусловно — работа оператора стирается
 #: и без его участия (автосохранение зовёт тот же метод по таймеру).
+#:
+#: ⛔ `failure_key` у привязок (пункт 1.x12, механизм 1.23) — остаток той же
+#: истории с другой стороны границы: 5xx ЗАВЁРНУТ в `APIError`, поэтому
+#: `swallow` его не берёт и вкладка открывается пустой так же молча, как при
+#: законном 404. Различение то же, что у графа: 404 = привязок законно нет
+#: (первый заход), любой другой отказ сервера = они МОГЛИ лежать.
 _ARTIFACTS = (
     one(artifact("original_image", "original.png"), required=True),
     one(endpoint("download_ocr_result", "ocr_result.json", "ocr_result"),
@@ -84,7 +90,7 @@ _ARTIFACTS = (
          artifact("coco_predicted", "coco_predicted.json", key="coco")),
         swallow=(APIError,)),
     one(endpoint("download_ocr_binding", "ocr_binding.json", "binding"),
-        swallow=(APIError,)),
+        swallow=(APIError,), failure_key="binding_download_failed"),
     one(endpoint("download_ocr_validation", "ocr_validation.json",
                  "ocr_validation"),
         swallow=(APIError,)),
@@ -648,6 +654,21 @@ class OcrBindingTab(AppearanceMixin, QWidget):
                 "восстановится.",
             )
 
+        if artifacts.get("binding_download_failed"):
+            # Привязки МОГЛИ лежать на сервере и просто не отдаться (5xx, сеть):
+            # вкладка открыта пустой, а `_save_binding` пишет их обратно
+            # безусловно — прежняя работа была бы затёрта молча.
+            logger.warning("ocr_binding не скачался — вкладка открыта "
+                           "без сохранённых привязок")
+            QMessageBox.warning(
+                self, "Сохранённые привязки не загружены",
+                "Не удалось скачать сохранённые привязки — вкладка открыта "
+                "БЕЗ них.\n\n"
+                "Сохранение из этой вкладки затрёт привязки на сервере. "
+                "Закройте вкладку и откройте её заново, когда связь "
+                "восстановится.",
+            )
+
         try:
             # Загрузить OCR данные
             with open(artifacts["ocr_result"], encoding="utf-8") as f:
@@ -800,7 +821,13 @@ class OcrBindingTab(AppearanceMixin, QWidget):
     def _on_download_error(self, error_msg: str):
         self._download_thread.quit()
         self._download_thread.wait()
-        if self._retry_count < 10:
+        # Ждать имеет смысл только отказа СЕРВЕРА: «OCR ещё не готов» приходит
+        # 404-м, и следующая попытка его застанет. Отказ ЛОКАЛЬНОГО диска —
+        # та же граница по `APIError`, что у `swallow`, — повторами не лечится,
+        # а десять попыток по 5 с показывают «⏳ OCR в процессе» почти минуту:
+        # оператор всё это время видит ложь о работе вместо причины отказа.
+        if isinstance(self._downloader.last_error, APIError) \
+                and self._retry_count < 10:
             self._retry_count += 1
             self.loading_label.setText(
                 f"⏳ OCR в процессе... (попытка {self._retry_count}/10)")

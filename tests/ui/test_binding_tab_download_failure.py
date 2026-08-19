@@ -481,7 +481,23 @@ def test_every_optional_job_carries_the_policy(raster):
         [j.fetches[0].source for j in optional if j.swallow != (APIError,)]
 
 
-# ── граница пункта: отказ СЕРВЕРА по-прежнему глотается молча ────────────
+# =========================================================================
+# Пункт 1.x12 — отказ СЕРВЕРА у привязок оператор тоже видит (механизм 1.23)
+# =========================================================================
+# ⛔ Здесь стоял `test_server_failure_on_binding_is_still_swallowed_silently`
+# (1.x10): он запирал КАК ФАКТ то, что 5xx у `ocr_binding` неотличим от 404, —
+# и сам назвал лекарство: не `swallow` (граница по `APIError` его не берёт,
+# 5xx в него ЗАВЁРНУТ), а `failure_key`, механизм 1.23. Это он и есть.
+#
+# Различение то же, что у графа в §5.1: 404 = сохранённых привязок законно нет
+# (первый заход) — молчим; любой другой отказ сервера = они МОГЛИ лежать,
+# а `_save_binding` пишет привязки обратно безусловно, то есть вкладка,
+# открытая без них, затрёт работу оператора первым же сохранением или тиком
+# автосохранения.
+
+#: заголовок предупреждения о непрочитанных привязках
+TITLE_BINDING = "Сохранённые привязки не загружены"
+
 
 def test_absent_binding_is_still_swallowed_silently(raster, open_tab, dialogs):
     """404 = привязок законно нет (первый заход) — ни ошибки, ни модалки."""
@@ -491,24 +507,176 @@ def test_absent_binding_is_still_swallowed_silently(raster, open_tab, dialogs):
     assert dialogs == [], "404 — законный первый заход, пугать оператора нечем"
 
 
-def test_server_failure_on_binding_is_still_swallowed_silently(
+def test_server_failure_on_binding_warns_the_operator(
         raster, open_tab, dialogs):
-    """5xx: тоже глотается — это ГРАНИЦА пункта, названная в строке очереди.
+    """5xx: вкладка открылась без привязок — и оператор ВИДИТ, чего лишился."""
+    api = _server(raster, binding=BINDING_SAVED,
+                  failures={"ocr_binding": APIError("gateway timeout", 504)})
+    tab = open_tab(api)
 
-    ⛔ Осадок назван прямо: сохранённые привязки могли лежать на сервере, и
-    вкладка откроется без них так же молча, как при 404. Лечится это не
-    `swallow`, а `failure_key` (механизм 1.23/1.x8) — то есть отдельным
-    пунктом; здесь поведение заперто, чтобы правка его не сдвинула тихо.
+    assert tab._bindings == [], "фолбэка у привязок нет — вкладка работает пустой"
+    assert TITLE_BINDING in _titles(dialogs), (
+        "оператор молча получил пустые привязки, а «Сохранить» затрёт ими "
+        f"его собственные {N_BINDINGS}")
+
+
+def test_binding_warning_names_the_cost_of_saving(raster, open_tab, dialogs):
+    """Текст модалки обязан назвать ПОСЛЕДСТВИЕ, иначе предупреждение декоративно."""
+    open_tab(_server(raster, binding=BINDING_SAVED,
+                     failures={"ocr_binding": APIError("boom", 500)}))
+
+    text = next(t for title, t in dialogs if title == TITLE_BINDING)
+    assert "затрёт" in text, "модалка не говорит, чем грозит сохранение"
+
+
+def test_binding_flag_marks_only_non_404_failures(raster, tmp_path):
+    """Флаг ставится ровно на «состояние неизвестно», а не на любой отказ."""
+    key = "binding_download_failed"
+
+    healthy, _ = _download(_server(raster, binding=BINDING_SAVED), tmp_path / "h")
+    missing, _ = _download(_server(raster), tmp_path / "i")
+    broken, _ = _download(
+        _server(raster, binding=BINDING_SAVED,
+                failures={"ocr_binding": APIError("boom", 503)}),
+        tmp_path / "j")
+
+    assert healthy.get(key) is None
+    assert "binding" in healthy, "здоровый сервер обязан отдать привязки"
+    assert missing.get(key) is None, "404 — не отказ, а законное отсутствие"
+    assert broken.get(key) is True
+
+
+def test_failed_binding_leaves_a_log_line(raster, open_tab, dialogs, caplog):
+    """Д2: отказ виден не только оператору, но и в логе клиента."""
+    with caplog.at_level(logging.WARNING, logger="ui.tabs.ocr_binding_tab"):
+        open_tab(_server(raster, binding=BINDING_SAVED,
+                         failures={"ocr_binding": APIError("boom", 502)}))
+
+    lines = [r.getMessage() for r in caplog.records
+             if r.name == "ui.tabs.ocr_binding_tab" and r.levelno >= logging.WARNING]
+    assert any("binding" in m for m in lines), \
+        f"в логе вкладки нет строки об отказе привязок: {lines}"
+
+
+def test_healthy_server_shows_no_binding_warning(raster, open_tab, dialogs):
+    """Порог с другой стороны: привязки доехали — ни одной модалки."""
+    tab = open_tab(_server(raster, binding=BINDING_SAVED))
+
+    assert len(tab._bindings) == N_BINDINGS
+    assert dialogs == []
+
+
+def test_binding_warning_does_not_block_the_save(raster, open_tab, dialogs):
+    """⛔ ОСТАТОК, названный прямо: предупреждение НЕ МЕШАЕТ записи.
+
+    У графовой вкладки запрет слепой перезаписи ввёл 1.x9 — он живёт
+    в `BaseGraphTab._save_graph`, а эта вкладка от него не наследуется
+    (`OcrBindingTab(AppearanceMixin, QWidget)`). Гейт пункта 1.x12 требует
+    «модалка и строка в лог», запрет записи в него не входит и не сделан.
+    Заперто здесь как ИЗВЕСТНАЯ граница, чтобы не выглядело починенным.
     """
     api = _server(raster, binding=BINDING_SAVED,
                   failures={"ocr_binding": APIError("gateway timeout", 504)})
     tab = open_tab(api)
 
-    assert tab._bindings == []
-    assert dialogs == []
+    assert tab._save_binding() is True
+    assert _bindings_on_server(api) == 0, (
+        "поведение изменилось: запись больше не проходит — обновить границу "
+        "пункта и доки, а не тест")
 
-    artifacts, error = _download(api, tab.temp_dir / "again")
-    assert error is None
-    assert "binding" not in artifacts
-    assert not [k for k, v in artifacts.items() if v is True], \
-        "флага отказа у привязки нет — это остаток, адресованный отдельному пункту"
+
+# =========================================================================
+# Пункт 1.x12 — «⏳ OCR в процессе» на отказе, который повторами не лечится
+# =========================================================================
+# `_on_download_error` повторяет загрузку 10 раз по 5 с, показывая всё это время
+# «⏳ OCR в процессе...». Для «OCR ещё не готов» это правда: артефакта пока нет,
+# сервер отвечает 404, и следующая попытка его застанет. Для отказа ЛОКАЛЬНОГО
+# диска это ложь о работе на ~50 секунд: ждать нечего, повторять нечего.
+# Граница та же, что у `swallow` (1.x10): `APIError` = отказ сервера, может
+# пройти; не-`APIError` = локальная запись, не пройдёт никогда.
+
+
+@pytest.fixture
+def retries(monkeypatch):
+    """План повторов: миллисекунды, с которыми вкладка звала `QTimer.singleShot`.
+
+    ⚠ Утверждение о ФАКТЕ вызова, а не таймаут (`PROTOCOL §5`): настоящий
+    таймер в наборе либо висит, либо стреляет в чужой тест.
+    """
+    from ui.tabs import ocr_binding_tab as mod
+
+    seen = []
+    monkeypatch.setattr(mod.QTimer, "singleShot",
+                        staticmethod(lambda ms, fn: seen.append(ms)))
+    return seen
+
+
+@pytest.fixture
+def open_tab_failing(qapp, monkeypatch):
+    """Довести вкладку до `_on_download_error` НАСТОЯЩИМ загрузчиком.
+
+    Снят только поток: загрузчик тот же, сигнал тот же, слот тот же — то есть
+    проверяется боевой шов «загрузчик → вкладка», а не подделка.
+    """
+    from ui.services.artifact_downloader import ArtifactDownloader
+    from ui.tabs.ocr_binding_tab import OcrBindingTab, _ARTIFACTS
+
+    opened = []
+
+    def _open(api):
+        monkeypatch.setattr(
+            OcrBindingTab, "_start_download",
+            lambda self: setattr(self, "_download_thread", QThread(self)))
+        tab = OcrBindingTab(UID, "проба 1.x12", api)
+        opened.append(tab)
+
+        # ровно то, что делает боевой `_start_download`, без переноса в поток
+        tab._downloader = ArtifactDownloader(api, UID, tab.temp_dir, _ARTIFACTS)
+        tab._downloader.finished.connect(tab._on_download_finished)
+        tab._downloader.error.connect(tab._on_download_error)
+        tab._downloader.run()
+        return tab
+
+    yield _open
+    for tab in opened:
+        tab.cleanup()
+        tab.deleteLater()
+    qapp.processEvents()
+
+
+def test_disk_failure_is_reported_at_once(raster, open_tab_failing, retries,
+                                          dialogs):
+    """Отказ диска: оператор видит ошибку СРАЗУ, без «⏳ OCR в процессе»."""
+    api = _server(raster, binding=BINDING_SAVED,
+                  failures={"ocr_binding": OSError("диск отвалился")})
+    tab = open_tab_failing(api)
+
+    assert retries == [], "повтор запланирован на отказе, который им не лечится"
+    text = tab.loading_label.text()
+    assert "OCR в процессе" not in text, f"ложь о работе OCR: {text!r}"
+    assert "диск отвалился" in text, f"оператор не видит причину: {text!r}"
+
+
+def test_unfinished_ocr_still_waits_and_says_so(raster, open_tab_failing,
+                                                retries, dialogs):
+    """Порог с другой стороны: OCR ещё не готов (404) — ждём и говорим правду."""
+    api = _server(raster)
+    del api.blobs["ocr_result"]                    # этап ещё не отработал
+    tab = open_tab_failing(api)
+
+    assert retries == [5000], "повтор обязан остаться: 404 застанет следующая попытка"
+    assert "OCR в процессе" in tab.loading_label.text()
+
+
+def test_server_failure_still_waits(raster, open_tab_failing, retries, dialogs):
+    """Граница пункта: 5xx у обязательного артефакта — прежние 10 повторов.
+
+    Пункт трогает ровно «повторами не лечится», то есть не-`APIError`. Отказ
+    сервера может пройти со следующей попытки, и текст про OCR при нём остаётся
+    прежним — это ИЗВЕСТНЫЙ остаток, а не недосмотр.
+    """
+    api = _server(raster, failures={"ocr_result": APIError("boom", 502)})
+    tab = open_tab_failing(api)
+
+    assert retries == [5000]
+    assert "OCR в процессе" in tab.loading_label.text()

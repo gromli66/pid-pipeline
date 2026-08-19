@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, Slot, Qt, QThread
 
-from ui.services.api_client import APIClient
+from ui.services.api_client import APIClient, APIError
 from ui.services.artifact_downloader import (
     ArtifactDownloader, Job, artifact, one,
 )
@@ -30,18 +30,30 @@ logger = logging.getLogger(__name__)
 #: Что вкладка тянет с сервера: правленое оператором → модельное.
 #: Центры квадратов необязательны — на старом сервере типов ещё нет, и вкладка
 #: от этого падать не должна (доопределятся из масок экстрактором).
+#:
+#: ⛔ `swallow=(APIError,)` у необязательных (пункт 1.x12, решение 0.5) — то же
+#: правило, что у графовой вкладки и вкладки привязки: отказ СЕРВЕРА терпим
+#: (артефакта может законно не быть), отказ ЛОКАЛЬНОГО ДИСКА — нет. Граница
+#: проходит по `APIError`: коды HTTP и сетевые сбои в него завёрнуты, а запись
+#: скачанного в файл лежит за обёрткой, значит не-`APIError` = «на диск
+#: не легло». Цена молчания здесь ЗАМЕРЕНА: потерянный `bridge_mask_validated`
+#: = редактор берёт ПУСТУЮ маску мостов, а `_save_masks` шлёт её обратно
+#: безусловно (1200 белых пикселей оператора → 0); потерянные центры =
+#: `_upload_points` подменяет применённый оператором размер машинным (20 → 15).
 _ARTIFACTS = (
     one(artifact("original_image", "original.png"), required=True),
     Job((artifact("junction_mask_validated", "junction_mask.png",
                   key="junction_mask"),
          artifact("junction_mask", "junction_mask.png")), required=True),
     Job((artifact("bridge_mask_validated", "bridge_mask.png", key="bridge_mask"),
-         artifact("bridge_mask", "bridge_mask.png"))),
+         artifact("bridge_mask", "bridge_mask.png")), swallow=(APIError,)),
     Job((artifact("skeleton_final", "skeleton.png", key="skeleton"),
-         artifact("skeleton", "skeleton.png"))),
-    one(artifact("coco_validated", "coco_validated.json")),
+         artifact("skeleton", "skeleton.png")), swallow=(APIError,)),
+    one(artifact("coco_validated", "coco_validated.json"),
+        swallow=(APIError,)),
     Job((artifact("junction_points_validated", "points.json", key="points"),
-         artifact("junction_points", "points.json", key="points"))),
+         artifact("junction_points", "points.json", key="points")),
+        swallow=(APIError,)),
 )
 
 
