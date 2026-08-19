@@ -1114,6 +1114,12 @@ class BaseGraphTab(AppearanceMixin, QWidget):
         try:
             QApplication.setOverrideCursor(Qt.WaitCursor)
 
+            # На сервер уходит ровно то, что считает дёрти-флаг: живое превью
+            # идёт мимо стека команд, флаг его не видит, а оператор не
+            # подтверждал (1.5). Без снятия сервер расходился с моделью —
+            # превью уезжало заливкой, а выход из режима откатывал его в модели.
+            self._editor.drop_uncommitted_preview()
+
             # Холст пишется в свой артефакт: graph_validated принадлежит вкладкам
             # в оригинальных координатах и затирать его 1920-графом нельзя.
             to_canvas = getattr(self._editor, "_canvas_mode", False)
