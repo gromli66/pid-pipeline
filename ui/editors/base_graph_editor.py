@@ -280,6 +280,16 @@ class BaseGraphEditor(QGraphicsView):
         self.update_statistics()
         return True
 
+    def drop_uncommitted_preview(self) -> None:
+        """Снять живое превью, которое оператор ещё не подтвердил.
+
+        Зовётся вкладкой перед записью графа: на сервер уходит ровно то, что
+        считает дёрти-флаг (`undo_mgr.revision`), а незафиксированные превью
+        мимо стека команд не идут. База превью не держит — no-op; переопределяет
+        `AdvancedGraphEditor` (панель «Размеры»).
+        """
+        return
+
     def save_graph(self, path: str = "") -> bool:
         """Сохранить граф в JSON."""
         if not path:
