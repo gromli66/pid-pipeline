@@ -67,6 +67,13 @@ class DiagramInfo:
     cvat_task_id: Optional[int] = None
     cvat_job_id: Optional[int] = None
     error_message: Optional[str] = None
+    # Этап, на котором остановилась обработка. Сервер его отдаёт всегда
+    # (`DiagramResponse.error_stage`), а поля здесь не было — и воркспейс,
+    # читающий его через `getattr(diagram, 'error_stage', None)`, молча
+    # получал `None` при ЛЮБОМ значении на сервере. Для диаграммы, открытой
+    # уже сломанной, это единственный источник: слежение `load_diagram`
+    # не включает, полинг молчит (пункт 1.x11 дороги).
+    error_stage: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -306,6 +313,7 @@ class APIClient:
             cvat_task_id=result.get("cvat_task_id"),
             cvat_job_id=result.get("cvat_job_id"),
             error_message=result.get("error_message"),
+            error_stage=result.get("error_stage"),
             created_at=result.get("created_at"),
             updated_at=result.get("updated_at"),
         )

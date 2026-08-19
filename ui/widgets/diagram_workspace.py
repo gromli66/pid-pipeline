@@ -544,6 +544,18 @@ class DiagramWorkspace(QWidget):
         self.title_label = QLabel("Диаграмма")
         self.title_label.setStyleSheet("font-size: 13px; font-weight: bold;")
         top_row.addWidget(self.title_label)
+
+        # СТРАХОВКА ОТ ТУПИКА (пункт 1.x11). Появляется только тогда, когда
+        # ошибка есть, а нажать нечего: ни одна из 13 кнопок не доступна.
+        # Не входит в `_action_buttons` — там 13 кнопок 1:1 с бусинами, и
+        # четырнадцатая сломала бы привязку (`beads.set_anchor_widgets`).
+        self.btn_error_retry = QPushButton("🔄 Повторить")
+        self.btn_error_retry.setFixedHeight(28)
+        self.btn_error_retry.setStyleSheet(_BTN_STYLE_RED)
+        self.btn_error_retry.setVisible(False)
+        self.btn_error_retry.clicked.connect(self._on_error_retry)
+        top_row.addWidget(self.btn_error_retry)
+
         top_row.addStretch()
         header_layout.addLayout(top_row)
 
@@ -760,19 +772,24 @@ class DiagramWorkspace(QWidget):
             diagram = self.api_client.get_diagram(self._uid)
             logger.info("Refresh: %s → %s", self._uid[:8], diagram.status.value)
             self._apply_status(diagram.status,
-                               error_stage=getattr(diagram, 'error_stage', None))
+                               error_stage=getattr(diagram, 'error_stage', None),
+                               error_message=getattr(diagram, 'error_message', None))
         except Exception as exc:
             logger.error("Refresh failed: %s", exc)
 
-    def _apply_status(self, status: DiagramStatus, error_stage: str = None):
+    def _apply_status(self, status: DiagramStatus, error_stage: str = None,
+                      error_message: str = None):
         """Применить статус к бусинам и кнопкам."""
         _prev_status = self._last_status
         self._last_status = status
 
+        # Страховку показывает только ветка тупика — новое состояние её снимает.
+        self.btn_error_retry.setVisible(False)
+
         # ERROR: по-этапная изоляция — не морозим весь пайплайн, а
         # реконструируем прогресс из ProcessingStage и красим только упавший этап.
         if status == DiagramStatus.ERROR:
-            self._apply_error_status(error_stage)
+            self._apply_error_status(error_stage, error_message)
             return
         self._stage_errors = {}
 
@@ -1026,6 +1043,14 @@ class DiagramWorkspace(QWidget):
         # Map error_stage to button key for retry
         _STAGE_TO_KEY = {
             "detecting": "detect",
+            # Пишет СЕРВЕР, а не воркер (`app/api/cvat.py:374`), поэтому
+            # значение шло мимо решёток, перебиравших `set_diagram_error`, —
+            # и давало ноль кнопок из 13. Кнопка выбрана не на глаз: сервер
+            # по этому значению возвращает диаграмму в `validating_bbox`
+            # (`app/api/diagrams.py:453`), а `cvat_validation` — та же кнопка
+            # в карте основного пути (`_STAGE_TYPE_TO_KEY`). Дверь кнопки —
+            # `reopen_bbox_validation`, и она из `error` пускает.
+            "fetching_annotations": "cvat",
             # Та же кнопка, что у сегментации: см. `_STAGE_TYPE_TO_KEY`.
             # Эта ветка работает, когда `/stages` недоступен, — без строки
             # оператор оставался с тринадцатью серыми кнопками.
@@ -1118,7 +1143,8 @@ class DiagramWorkspace(QWidget):
             btn.setStyleSheet(_BTN_STYLE_GRAY)
         btn.setText(label)
 
-    def _apply_error_status(self, error_stage: str = None):
+    def _apply_error_status(self, error_stage: str = None,
+                            error_message: str = None):
         """ERROR без «заморозки»: реконструировать прогресс из ProcessingStage.
 
         Завершённые этапы остаются зелёными, параллельные ветки — независимыми,
@@ -1136,6 +1162,7 @@ class DiagramWorkspace(QWidget):
             self._update_beads(DiagramStatus.ERROR)
             self._update_buttons(DiagramStatus.ERROR, error_stage=error_stage)
             self._update_gif(DiagramStatus.ERROR)
+            self._offer_error_retry(error_stage, error_message)
             return
 
         # Последняя попытка каждого stage_type
@@ -1216,6 +1243,63 @@ class DiagramWorkspace(QWidget):
                     (f"Ошибка: {short}\n" if short else "")
                     + "Нажмите — показать лог и перезапустить"
                 )
+
+    def _offer_error_retry(self, error_stage: str = None,
+                           error_message: str = None):
+        """Ноль кнопок из 13 — показать ошибку и дать выход, а не тупик.
+
+        Ветка узкая по УСЛОВИЮ, а не по списку значений: она включается ровно
+        тогда, когда оператору нечего нажать. Так закрывается весь класс, а не
+        одно значение: `error_stage` пишут и воркер, и API (`app/api/cvat.py:374`
+        — `fetching_annotations`), карта клиента о писателях со стороны API
+        не знала, и любое новое значение снова обнулило бы столбец кнопок.
+
+        Куда откатывать — решает СЕРВЕР: у `POST /api/diagrams/{uid}/retry`
+        своя карта `error_stage → предыдущий статус` (`app/api/diagrams.py:448`).
+        Клиент здесь не гадает, а показывает, что именно сломалось.
+        """
+        if any(btn.isEnabled() for btn in self._action_buttons.values()):
+            return
+
+        stage = error_stage or "неизвестен"
+        text = error_message or "Обработка остановлена с ошибкой"
+        self.btn_error_retry.setToolTip(
+            f"Этап: {stage}\n{text}\n\n"
+            "Нажмите — сервер вернёт диаграмму на предыдущий шаг."
+        )
+        self.btn_error_retry.setVisible(True)
+        logger.warning(
+            "Этап «%s» клиенту неизвестен, доступных кнопок нет — "
+            "предложен откат сервером", stage,
+        )
+        self.status_message.emit(f"Ошибка на этапе «{stage}»: {text}", 10000)
+
+    def _on_error_retry(self):
+        """Выход из тупика: откат на предыдущий шаг решением сервера."""
+        reply = QMessageBox.question(
+            self, "Повторить",
+            "Обработка остановлена с ошибкой, а этап клиенту неизвестен.\n"
+            "Сервер вернёт диаграмму на предыдущий шаг — часть обработки "
+            "придётся повторить.\n\nПродолжить?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            result = self.api_client.retry_operation(self._uid)
+        except APIError as exc:
+            QMessageBox.warning(
+                self, "Ошибка", f"Не удалось повторить:\n{exc.message}",
+            )
+            return
+
+        new_status = (result or {}).get("status", "")
+        logger.info("Откат из ошибки: %s → %s", self._uid[:8], new_status)
+        self.status_message.emit(
+            f"↩ Диаграмма возвращена на шаг «{new_status}»", 5000,
+        )
+        self._refresh_status()
 
     def _show_stage_error_dialog(self, key: str, original_handler):
         """Окно отчёта об ошибке этапа (traceback/phase/step/code + копировать/сохранить)."""
@@ -2405,7 +2489,8 @@ class DiagramWorkspace(QWidget):
             logger.info("Poll update: %s", status_info.status.value)
             was_notified = self._ocr_notified
             self._apply_status(status_info.status,
-                               error_stage=getattr(status_info, 'error_stage', None))
+                               error_stage=getattr(status_info, 'error_stage', None),
+                               error_message=getattr(status_info, 'error_message', None))
 
             # B6.4: Показать уведомление при первом обнаружении OCR артефакта
             if self._ocr_notified and not was_notified:
