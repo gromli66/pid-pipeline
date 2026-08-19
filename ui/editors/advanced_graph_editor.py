@@ -296,6 +296,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self._resize_model_base = None             # snapshot модели до превью
         self._resize_pin_base: list = []           # [(edge, role, dx, dy)] до превью
         self._resize_model_rev = None              # undo_mgr.revision на момент базлайна
+        self._resize_preview_geom: dict = {}       # node_id → что ВПИСАЛО превью
         # Колбэки в таб (назначаются при готовности редактора):
         self.resize_panel_show_cb: Optional[callable] = None     # (visible: bool)
         self.resize_panel_classes_cb: Optional[callable] = None  # (names, current)
@@ -2794,7 +2795,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 if self._poly_overlay.vertex_count <= 3:
                     self.update_status("Минимум 3 вершины")
                     return
-                before = self.model.snapshot()
+                before = self._undo_point()
                 self._poly_overlay.remove_vertex(vtx)
                 self._poly_write_node()
                 self._poly_push(before, "Удалить вершину")
@@ -3812,6 +3813,11 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             return False
         node_id = (edge_data['source'] if endpoint == 'source'
                    else edge_data['target'])
+        # `contextMenuEvent` не проверяет ни режим, ни состояние: ПКМ по
+        # приколотому концу достижим при живом превью «Размеров» (§83.28).
+        # Точка возврата — ниже (см. drop_uncommitted_preview); граница И5
+        # соблюдена ранним выходом «пина нет» выше.
+        self.drop_uncommitted_preview()
         snap_cmd = AutoFixCommand(self.model, self._redraw_all)
         snap_cmd.description = "Отвязать вход"
         snap_cmd.execute()
@@ -4101,6 +4107,33 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             }
         self._resize_pin_base = self._capture_resize_pins()
         self._resize_model_rev = self.undo_mgr.revision
+        self._resize_preview_geom = {}
+
+    @staticmethod
+    def _preview_geom_key(node: dict) -> tuple:
+        """Отпечаток геометрии узла — им сверяется, что превью ещё в модели."""
+        return (tuple(node['centroid']),
+                tuple(node.get('bbox') or ()),
+                tuple(node.get('segmentation') or ()),
+                node.get('area'))
+
+    def _preview_still_in_model(self) -> bool:
+        """Превью, вписанное последним `_apply_sizes_from_base`, ещё в модели.
+
+        Прямой ответ вместо косвенного: у каждого узла набора сверяется
+        геометрия с той, что вписало превью. `model.restore` пересобирает
+        словари и кладёт в них состояние ДО превью — отпечатки расходятся,
+        и мы честно уходим в ветку «бросить без отката». Правка НА МЕСТЕ
+        чужого узла отпечатков набора не трогает — превью наше, его можно
+        и нужно снять.
+        """
+        if not self._resize_preview_geom:
+            return False
+        for nid, key in self._resize_preview_geom.items():
+            node = self.nodes.get(nid)
+            if node is None or self._preview_geom_key(node) != key:
+                return False
+        return True
 
     def _resize_baseline_alive(self) -> bool:
         """Базлайн снят и всё ещё описывает текущее состояние схемы.
@@ -4109,13 +4142,27 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         прежде всего Ctrl+Z / Ctrl+Y посреди живого превью. Тогда базлайн
         описывает состояние, которое оператор уже отменил: откат по нему
         отменил бы сам откат, а превью село бы вокруг отменённого центроида
-        (замер §48). Сторож — `undo_mgr.revision`: он считает ВСЕ мутации
-        через стек, включая команды, которые правят узлы на месте и модель
-        не пересобирают (`DragNodeCommand`), — сравнение объектов `nodes`/
-        `edges_data` по ссылке такие правки пропускает (замер §48).
+        (замер §48). Первый сторож — `undo_mgr.revision`: он считает ВСЕ
+        мутации через стек, включая команды, которые правят узлы на месте
+        и модель не пересобирают (`DragNodeCommand`), — сравнение объектов
+        `nodes`/`edges_data` по ссылке такие правки пропускает (замер §48).
+
+        ⛔ Но `revision` — сторож КОСВЕННЫЙ, и своей косвенностью он сам стал
+        дефектом (ревизия связки, §83б): он растёт на ЛЮБОЙ мутации стека,
+        а «модель пересобрали» верно только для undo/redo снимочных команд.
+        `OptimizeEdgeCommand.undo` и `DragNodeCommand.undo` правят словари НА
+        МЕСТЕ — один Ctrl+Z по такой команде объявлял базлайн мёртвым, хотя
+        превью физически оставалось в модели, и все ШЕСТЬ потребителей
+        `drop_uncommitted_preview()` вырождались в no-op ОДНОВРЕМЕННО (четыре
+        кнопки, воронка OCR, путь записи). Поэтому у сторожа есть второе,
+        ПРЯМОЕ мнение — `_preview_still_in_model()`: превью снимается, пока
+        оно наше, независимо от того, сколько чужих шагов легло в стек.
         """
-        return (self._resize_model_base is not None
-                and self._resize_model_rev == self.undo_mgr.revision)
+        if self._resize_model_base is None:
+            return False
+        if self._resize_model_rev == self.undo_mgr.revision:
+            return True
+        return self._preview_still_in_model()
 
     def _capture_resize_pins(self):
         """Пины инцидентных рёбер набора — тоже часть базлайна превью.
@@ -4152,6 +4199,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self._resize_base = {}
         self._resize_pin_base = []
         self._resize_model_rev = None
+        self._resize_preview_geom = {}
 
     def _revert_resize_preview(self):
         """Откатить брошенное превью: набор сменили или вышли из режима.
@@ -4161,8 +4209,13 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         вернуть её оператору было нечем (замер §48).
         """
         if not self._resize_baseline_alive():
-            # Модель пересобрали под превью (Ctrl+Z) — базлайн больше не про
-            # неё; вернуть по нему значило бы отменить чужой откат.
+            # Модель пересобрали под превью (undo/redo снимочной команды) —
+            # базлайн больше не про неё, а превью физически исчезло вместе
+            # с ней; вернуть по нему значило бы отменить чужой откат.
+            # ⚠ Ветка верна ТОЛЬКО при этом условии, и проверяет его теперь
+            # сам сторож (`_preview_still_in_model`), а не счётчик мутаций:
+            # раньше сюда уходила любая правка НА МЕСТЕ, и превью оставалось
+            # в модели молча (замер §83б — шесть потребителей разом).
             self._drop_resize_baseline()
             return
         touched = list(self._resize_base)
@@ -4181,6 +4234,12 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self._drop_resize_baseline()
         for nid in touched:
             self._refresh_node_visual(nid)
+        if self._poly_edit_node in touched:
+            # Оверлей вершин построен из `segmentation` узла, то есть из
+            # ПРЕВЬЮ. Без пересборки следующая же запись контура
+            # (`_poly_write_node`) вписала бы превью обратно — уже отдельным
+            # шагом undo. Та же пересборка, что после undo/redo.
+            self._poly_resync_overlay()
         # Штатное событие, не сбой: оператор увидит, почему рамки «вернулись».
         import logging
         logging.getLogger(__name__).info(
@@ -4209,6 +4268,17 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self._revert_resize_preview()
         self._redraw_resize_frames()
 
+    def _undo_point(self):
+        """Снимок модели как точка возврата: превью снимается ДО снимка.
+
+        Тот же порядок, что у четырёх кнопок редактора и у воронки OCR-слоя,
+        только для путей, которые строят `SnapshotCommand._before` из готового
+        снимка (правка полигона). Поздним откатом это не лечится: `_before`
+        уже отравлен, и Ctrl+Z вернул бы превью даже из чистой модели.
+        """
+        self.drop_uncommitted_preview()
+        return self.model.snapshot()
+
     def _apply_sizes_from_base(self, width, height, scale, kind):
         """Применить размеры к набору, отталкиваясь от зафиксированного базлайна.
 
@@ -4230,6 +4300,12 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 n['segmentation'] = list(base['segmentation'])
                 n['area'] = base['area']
                 self._resize_node_poly(n, float(scale))
+        # Что именно вписано — отпечаток для `_preview_still_in_model()`:
+        # им сторож базлайна отвечает ПРЯМО, а не через `undo_mgr.revision`.
+        self._resize_preview_geom = {
+            nid: self._preview_geom_key(self.nodes[nid])
+            for nid in self._resize_base if nid in self.nodes
+        }
 
     def _refresh_node_visual(self, node_id: str):
         """Обновить визуал узла (bbox/полигон/маркер) по текущим данным."""
@@ -4957,6 +5033,12 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             self.update_status("Буфер узлов пуст — сначала Ctrl+C")
             return
 
+        # Призрак вставки переживает смену инструмента (гасит его только
+        # перерисовка сцены), поэтому фиксация достижима при живом превью
+        # «Размеров»: Ctrl+V в базовом → кнопка «Размеры» → Ctrl+ЛКМ (§86.13).
+        # Точка возврата — ниже (см. drop_uncommitted_preview); граница И5
+        # соблюдена ранним выходом «буфер пуст» выше.
+        self.drop_uncommitted_preview()
         cmd = SnapshotCommand(self.model, self._redraw_all)
         cmd.execute()
         cmd.description = "Вставить узлы"
@@ -5302,7 +5384,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             vtx = self._poly_overlay.find_vertex_at(
                 self._ctrl_lmb_start_x, self._ctrl_lmb_start_y)
             if vtx is not None:
-                self._poly_op_before = self.model.snapshot()
+                self._poly_op_before = self._undo_point()
                 self._poly_overlay.start_drag(vtx)
                 return
         if self._current_mode == "resize_objects":
@@ -5430,6 +5512,14 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         seg = node.get('segmentation') if node else None
         if not (seg and isinstance(seg, list) and len(seg) >= 6):
             return
+        # Инструмент «Размеры» этот вход НЕ гасит: `set_mode` тут не зовётся,
+        # а ветка полигона в `mousePressEvent` стоит раньше сторожа резайза —
+        # режим остаётся `resize_objects` с живым превью (§83.26). Оверлей
+        # строится из `segmentation` узла, поэтому превью снимается ДО него:
+        # иначе оператор правит вершины уже масштабированного контура, и
+        # первая же операция впишет превью в свой шаг undo.
+        self.drop_uncommitted_preview()
+        seg = node.get('segmentation')      # откат мог вернуть контур к базлайну
         self._exit_polygon_editing_mode()
         from ui.editors.polygon_overlay import PolygonVertexOverlay
         self._poly_op_before = None
@@ -5507,7 +5597,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         """Вставить вершину на ребре полигона под курсором (шаг undo)."""
         if not self._poly_overlay:
             return
-        before = self.model.snapshot()
+        before = self._undo_point()
         self._poly_overlay.insert_vertex(edge_idx, x, y)
         self._poly_write_node()
         self._poly_push(before, "Добавить вершину")
