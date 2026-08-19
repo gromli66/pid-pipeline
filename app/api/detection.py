@@ -108,12 +108,14 @@ async def start_detection(
         # Без этого диаграмма оставалась в DETECTING навсегда: задачи нет,
         # значит некому ни упасть в error, ни дойти до конца, а кнопка
         # «Поиск элементов» при *ING-статусе даже не нажимается.
-        diagram.status, diagram.error_stage, diagram.error_message = previous_state
-        await db.commit()
+        # След — ДО коммита возврата: на бою БД падает вместе с брокером, и тогда
+        # исключение коммита унесло бы наружу единственную запись об отказе ОТПРАВКИ.
         logger.exception(
-            "Отправка детекции не удалась (%s) — состояние возвращено в '%s'",
+            "Отправка детекции не удалась (%s) — возвращаю состояние в '%s'",
             exc, previous_state[0].value, extra={"event": "dispatch_failed"},
         )
+        diagram.status, diagram.error_stage, diagram.error_message = previous_state
+        await db.commit()
         raise HTTPException(
             status_code=503,
             detail=f"Worker unavailable: {exc}",
@@ -180,12 +182,14 @@ async def retry_detection(
             },
         )
     except Exception as exc:
-        diagram.status, diagram.error_stage, diagram.error_message = previous_state
-        await db.commit()
+        # След — ДО коммита возврата: на бою БД падает вместе с брокером, и тогда
+        # исключение коммита унесло бы наружу единственную запись об отказе ОТПРАВКИ.
         logger.exception(
-            "Отправка повтора детекции не удалась (%s) — состояние возвращено в '%s'",
+            "Отправка повтора детекции не удалась (%s) — возвращаю состояние в '%s'",
             exc, previous_state[0].value, extra={"event": "dispatch_failed"},
         )
+        diagram.status, diagram.error_stage, diagram.error_message = previous_state
+        await db.commit()
         raise HTTPException(
             status_code=503,
             detail=f"Worker unavailable: {exc}",
