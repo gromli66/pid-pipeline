@@ -18,6 +18,9 @@
     `contours_validated` — выброшенные правки оператора;
   * `Job.failure_key` — не-404 `APIError` кладёт в артефакты `{failure_key: True}`
     («состояние неизвестно»), чтобы вкладка не спутала сбой сети с «артефакта нет».
+    То же и для ЦЕПОЧКИ (пункт 1.23): фолбэк, взятый после не-404 отказа
+    предпочтённого кандидата, взят вслепую — предпочтённый артефакт мог лежать
+    на сервере. Флаг приезжает вместе с фолбэком, а не вместо него.
 """
 
 from __future__ import annotations
@@ -107,6 +110,8 @@ class ArtifactDownloader(QObject):
     def _run_job(self, job: Job) -> tuple[dict, str | None]:
         """Вернуть (что положить в артефакты, ключ для строки прогресса)."""
         last: BaseException | None = None
+        #: предпочтённый кандидат отказал НЕ по 404 — он мог быть на месте
+        preferred_unknown = False
         for i, f in enumerate(job.fetches):
             try:
                 dest = self._fetch(f)
@@ -115,9 +120,18 @@ class ArtifactDownloader(QObject):
                 if i + 1 < len(job.fetches):
                     logger.info("артефакт %s недоступен (%s), пробую следующий",
                                 f.source, exc)
+                    if not (isinstance(exc, APIError) and exc.status_code == 404):
+                        preferred_unknown = True
                     continue
                 break
             logger.info("артефакт %s загружен как %s", f.source, f.key)
+            if preferred_unknown and job.failure_key:
+                # Фолбэк взят вслепую: 404 = предпочтённого артефакта законно
+                # нет, всё прочее = он мог быть. Молча подменить его = открыть
+                # оператору чужую работу и затереть его собственную при записи.
+                logger.warning("взят фолбэк %s — состояние предпочтённого "
+                               "артефакта неизвестно (%s)", f.key, last)
+                return {f.key: dest, job.failure_key: True}, f.key
             return {f.key: dest}, f.key
 
         assert last is not None
