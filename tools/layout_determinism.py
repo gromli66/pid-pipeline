@@ -37,6 +37,14 @@
 починка `--allow-fixed <uid>` — замер 1-29 показал, что при `--runs 6`
 неповторимый граф всё равно способен выйти с одним хешем (§50.19).
 
+⛔ Эталон помнит ОТПЕЧАТОК ВХОДНЫХ ДАННЫХ каждого графа (пункт GATE-6):
+поле `inputs` рядом со `stable`. Отпечаток разошёлся — «судить нечем»
+с указанием графа и обоих отпечатков, а не «регресс»: uid тот же, данные
+другие. Отпечатка нет вовсе (эталон снят до GATE-6) — то же самое.
+На пути ЗАПИСИ отпечаток, наоборот, СНИМАЕТ отказ: «перестал
+воспроизводиться» — утверждение о ТОМ ЖЕ входе, а при другом входе его
+нет. Липкость `false` (1-29) этим не снимается.
+
 Ключ `--no-routing` выключает этап роутинга (`LayoutParams.routing`): им
 недетерминизм и локализуется — расстановка с раздвиганием отдельно от обхода
 чужих форм через libavoid.
@@ -187,8 +195,42 @@ def weaker_than_baseline(base: dict, runs: int, routing: bool) -> list[str]:
     return reasons
 
 
+def input_fingerprints(paths: dict[str, Path]) -> dict[str, str]:
+    """{uid8: отпечаток входных данных} — чем именно кормили стенд."""
+    return {uid8: corpus.data_fingerprint(p) for uid8, p in sorted(paths.items())}
+
+
+def input_drift(inputs: dict[str, str], base: dict) -> dict[str, str]:
+    """{uid8: чем именно судить нечем} — графы, о которых эталон судить не может.
+
+    Две причины, и обе означают одно: вердикт эталона снят НЕ НА ЭТИХ данных.
+    Отпечатка в эталоне нет вовсе (снят до GATE-6) — или он разошёлся
+    с отпечатком нынешнего файла. Корпус в `storage/` живой: обычный запуск
+    клиента переписывает граф под тем же uid (`TESTING §3`), и до GATE-6 стенд
+    называл это регрессом кода.
+
+    Граф, которого эталон не знает, сюда не попадает: сверять его отпечаток
+    не с чем, а неповторимость нового графа судится прежней веткой (1-25).
+    """
+    known_stable = base.get("stable", {})
+    known_inputs = base.get("inputs", {})
+    drift: dict[str, str] = {}
+    for uid8 in sorted(inputs):
+        if uid8 not in known_stable:
+            continue
+        was = known_inputs.get(uid8)
+        if was is None:
+            drift[uid8] = ("эталон не помнит отпечатка входных данных — "
+                           "он снят до пункта GATE-6")
+        elif was != inputs[uid8]:
+            drift[uid8] = (f"входные данные сменились: {was[:16]} -> "
+                           f"{inputs[uid8][:16]}")
+    return drift
+
+
 def verdict(result: dict[str, list[str]], base: dict,
-            runs: int, routing: bool) -> tuple[int, list[str]]:
+            runs: int, routing: bool,
+            inputs: dict[str, str]) -> tuple[int, list[str]]:
     """-> (код возврата, строки отчёта). Отделено от печати, чтобы проверялось
     тестом, а не глазами.
 
@@ -196,8 +238,11 @@ def verdict(result: dict[str, list[str]], base: dict,
     0 — регресса воспроизводимости нет, и весь эталон при этом измерен
         замером не слабее эталонного;
     1 — опровергнуто: воспроизводимый граф сломался или новый неповторим;
-    2 — СУДИТЬ НЕЧЕМ: эталона нет, часть его графов не измерена, или замер
-        слабее эталона. Усечённый корпус — в git лежат 3 графа из 19,
+    2 — СУДИТЬ НЕЧЕМ: эталона нет, часть его графов не измерена, замер
+        слабее эталона или ВХОД ГРАФА НЕ ТОТ, на котором эталон снят
+        (пункт GATE-6: `8d14cf73` переписали запуском клиента, и стенд
+        назвал дрейф данных регрессом кода).
+        Усечённый корпус — в git лежат 3 графа из 19,
         остальные только в локальном `storage/`, и среди неизмеренных
         8 известных неповторимых; раньше такой прогон печатал «регресса нет»
         и exit 0 (пункт 1-25). Слабый замер — пункт 1-30: `--check --runs 2`
@@ -215,6 +260,7 @@ def verdict(result: dict[str, list[str]], base: dict,
             MARK_UNJUDGED_OTHER]
 
     weak = weaker_than_baseline(base, runs, routing)
+    drift = input_drift(inputs, base)
     broke, fixed, fresh = [], [], []
     for uid8, shas in sorted(result.items()):
         now = stability(shas)
@@ -222,6 +268,8 @@ def verdict(result: dict[str, list[str]], base: dict,
         if was is None:
             if not now:
                 fresh.append(uid8)
+        elif uid8 in drift:
+            continue                  # вход не тот — ни поломки, ни починки
         elif was and not now:
             broke.append(uid8)
         elif not was and now:
@@ -240,6 +288,8 @@ def verdict(result: dict[str, list[str]], base: dict,
                      f"{', '.join(fixed)}")
     elif fixed:
         lines.append(f"[стало лучше] воспроизводятся впервые: {', '.join(fixed)}")
+    for uid8, why in drift.items():
+        lines.append(f"[СУДИТЬ НЕЧЕМ] {uid8}: {why}")
     for msg in weak:
         lines.append(f"[СУДИТЬ НЕЧЕМ] {msg}")
 
@@ -250,7 +300,7 @@ def verdict(result: dict[str, list[str]], base: dict,
                      f"{', '.join(unmeasured)}")
     if broke or fresh:
         return 1, lines
-    if weak:                          # обстановка замера, а не данные корпуса
+    if weak or drift:                 # обстановка замера, а не усечённый корпус
         return 2, lines + [MARK_UNJUDGED_OTHER]
     if unmeasured:
         return 2, lines + [MARK_UNJUDGED_CORPUS]
@@ -259,7 +309,8 @@ def verdict(result: dict[str, list[str]], base: dict,
 
 
 def write_blocked(result: dict[str, list[str]], base: dict,
-                  runs: int, routing: bool) -> tuple[list[str], list[str]]:
+                  runs: int, routing: bool,
+                  inputs: dict[str, str]) -> tuple[list[str], list[str]]:
     """-> (причины «судить нечем», причины отказа). Обе пустые = пересъём законен.
 
     Пересъём — единственный путь, которым эталон вообще меняется, и по Д6 он
@@ -276,6 +327,13 @@ def write_blocked(result: dict[str, list[str]], base: dict,
         меньше, чем у эталона, или другим ключом роутинга (пункт 1-29);
     1 — ОТКАЗ: воспроизводимый граф сломался, пересъём записал бы поломку нормой;
     0 — законно (в том числе первый снимок: сверять не с чем).
+
+    ⭐ Отпечаток входа (GATE-6) отказ СНИМАЕТ, а не ставит: «перестал
+    воспроизводиться» — утверждение о ТОМ ЖЕ входе, и при другом входе его
+    просто нет. Пересъём подменённых данных законен, но не молчалив: причину
+    печатает `main()` строкой `[ВХОД НЕ ТОТ]`. Липкость `false` этим не
+    снимается — `merge_stable()` про отпечаток не знает, и `false -> true`
+    по-прежнему требует `--allow-fixed`.
 
     ⚠ Почему число прогонов — это «судить нечем», а не мелочь: гейт по своей
     природе выборочный, «воспроизводим» читается как «за N прогонов не поймали»
@@ -298,7 +356,9 @@ def write_blocked(result: dict[str, list[str]], base: dict,
         unjudged.append(f"не измерено {len(unmeasured)} графов эталона из "
                         f"{len(known)} — корпус усечён, пересъём вычеркнул бы "
                         f"их из эталона: {', '.join(unmeasured)}")
-    broke = sorted(u for u, s in result.items() if known.get(u) and not stability(s))
+    drift = input_drift(inputs, base)
+    broke = sorted(u for u, s in result.items()
+                   if known.get(u) and not stability(s) and u not in drift)
     if broke:
         refused.append(f"перестали воспроизводиться: {', '.join(broke)} — "
                        "пересъём записал бы поломку нормой. Такой граф чинят "
@@ -386,6 +446,17 @@ def main() -> int:
 
     print(f"корпус: {len(uids)} графов, прогонов: {args.runs}, "
           f"роутинг: {'вкл' if routing else 'выкл'}", flush=True)
+    # Отпечатки снимаются ДО замера — это ровно тот вход, который увидят
+    # дочерние прогоны (пункт GATE-6). Нечитаемый или неразбираемый файл
+    # корпуса — сломанная ОБСТАНОВКА, а не регресс кода: тот же урок 1-30,
+    # что и у убитого дочернего прогона, только этот путь идёт раньше него
+    # и до GATE-6 его не было вовсе.
+    try:
+        inputs = input_fingerprints({u: available[u] for u in uids})
+    except (OSError, ValueError) as exc:
+        print(f"[СУДИТЬ НЕЧЕМ] отпечаток входа не снят: {exc}")
+        print(MARK_UNJUDGED_OTHER)
+        return 2
     try:
         result = measure(uids, args.runs, routing)
     except RuntimeError as exc:
@@ -397,8 +468,11 @@ def main() -> int:
         return 2
 
     if args.write_baseline:
+        for uid8, why in input_drift(inputs, read_baseline()).items():
+            print(f"[ВХОД НЕ ТОТ] {uid8}: {why}; вердикт эталона об этом "
+                  "графе к нынешним данным не относится")
         unjudged, refused = write_blocked(shas(result), read_baseline(),
-                                          args.runs, routing)
+                                          args.runs, routing, inputs)
         for msg in unjudged:
             print(f"[СУДИТЬ НЕЧЕМ] {msg}")
         for msg in refused:
@@ -416,13 +490,15 @@ def main() -> int:
         BASELINE.parent.mkdir(parents=True, exist_ok=True)
         BASELINE.write_text(json.dumps(
             {"runs": args.runs, "routing": routing,
-             "stable": stable},
+             "stable": stable,
+             "inputs": {u: inputs[u] for u in sorted(stable)}},
             ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
         print(f"эталон переснят: {BASELINE}")
         return 0
 
     if args.check:
-        code, lines = verdict(shas(result), read_baseline(), args.runs, routing)
+        code, lines = verdict(shas(result), read_baseline(), args.runs, routing,
+                              inputs)
     else:
         code, lines = 0, report_lines(shas(result))
     print("\n".join(lines))

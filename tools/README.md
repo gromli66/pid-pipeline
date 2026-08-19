@@ -19,7 +19,9 @@
   сначала три графа из git (`tests/fixtures/graph/`, пункт 0.8), потом локальный
   `storage/diagrams/`. На него переведены layout_bench.py и корпусная цепочка
   `tests/test_canvas_pipeline_golden.py`; cmp_bitexact.py и corner_probe.py пока ищут
-  storage сами — их эталоны всё равно лежат в `_scratch/`, которого в git нет
+  storage сами — их эталоны всё равно лежат в `_scratch/`, которого в git нет.
+  `data_fingerprint()` (пункт GATE-6) — отпечаток ВХОДНЫХ данных по содержимому,
+  им эталоны стендов отличают дрейф данных от регресса кода (docs/TESTING.md §3, §8.2)
 - suite_baseline.py — базовая линия набора тестов (`bench/suite_baseline.json` в git),
   гейт «ни одного нового красного» (docs/TESTING.md §7)
 - lint_gate.py (ПР5, пункт 0.10) — храповик линтеров: счётчик широких `except` по файлам
