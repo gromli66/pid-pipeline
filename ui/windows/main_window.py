@@ -6,6 +6,7 @@ Main Window — главное окно P&ID Pipeline.
 - Page 1: Рабочее пространство диаграммы (DiagramWorkspace)
 """
 
+import logging
 from typing import Optional
 
 from PySide6.QtWidgets import (
@@ -24,6 +25,8 @@ from ui.widgets.diagram_list import DiagramListWidget
 from ui.widgets.diagram_workspace import DiagramWorkspace
 from ui.widgets.upload_dialog import UploadDialog
 from ui._version import __version__ as APP_VERSION
+
+logger = logging.getLogger(__name__)
 
 # Базовый заголовок окна: в собранном клиенте показываем версию-дату,
 # из исходников (dev) — исполняемый git-коммит: «какой код я гоняю»
@@ -277,3 +280,76 @@ class MainWindow(QMainWindow):
     @Slot(str, str)
     def _on_status_error(self, uid: str, error_message: str):
         self.statusbar.showMessage(f"Ошибка: {error_message}", 5000)
+
+    # === Закрытие клиента ===
+
+    def closeEvent(self, event):
+        """Спросить о несохранённом, погасить фон, оставить след в логе.
+
+        Обработчика не было вовсе, и крестик окна убивал процесс мимо всего:
+        правки открытой вкладки уходили молча (вопрос задавал только путь
+        «← Назад» — `DiagramWorkspace._close_active_tab`), `cleanup()` не
+        звался, а о конце сеанса в логе клиента не оставалось ни строки —
+        в собранном `.exe` (`console=False`) файл лога единственный след,
+        `sys.stdout` там `None`.
+
+        Это же единственная точка, где накопленное клиентом успевает уйти:
+        отсюда пункт 10.15 (активное время оператора) шлёт последний батч.
+        """
+        if not self._confirm_unsaved():
+            logger.info("Закрытие клиента отменено — несохранённые изменения")
+            event.ignore()
+            return
+
+        self.workspace.cleanup()
+        logger.info("Клиент закрывается")
+        event.accept()
+
+    def _confirm_unsaved(self) -> bool:
+        """Вопрос об открытой вкладке с правками. `False` — не закрывать.
+
+        Вопрос и цепочка сохранения — те же, что у «← Назад»: у вкладок один
+        контракт `has_unsaved_changes()` плюс один из `_save_graph` /
+        `_save_masks` / `_save_mask` (у вкладки привязки OCR `_save_graph` —
+        псевдоним). Вкладки без единого из них (сейчас таких нет) закрытию не
+        мешают: тупик «клиент не закрывается» дороже несохранённой вкладки,
+        о которой оператора спросили.
+        """
+        tab = self.workspace._active_tab
+        if tab is None or not hasattr(tab, 'has_unsaved_changes'):
+            return True
+        if not tab.has_unsaved_changes():
+            return True
+
+        reply = QMessageBox.question(
+            self, "Выход",
+            "Есть несохранённые изменения. Сохранить перед выходом?",
+            QMessageBox.StandardButton.Yes
+            | QMessageBox.StandardButton.No
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if reply == QMessageBox.StandardButton.Cancel:
+            return False
+        if reply == QMessageBox.StandardButton.No:
+            logger.warning("Выход без сохранения вкладки %s — выбор оператора",
+                           type(tab).__name__)
+            return True
+
+        for name in ('_save_graph', '_save_masks', '_save_mask'):
+            save = getattr(tab, name, None)
+            if save is None:
+                continue
+            if save():
+                return True
+            # Об ошибке говорит сама вкладка (диалог или своя строка статуса);
+            # здесь — почему окно осталось на экране.
+            logger.warning("Сохранение %s.%s не удалось — клиент не закрыт",
+                           type(tab).__name__, name)
+            self.statusbar.showMessage(
+                "Не удалось сохранить — клиент остался открытым", 5000)
+            return False
+
+        logger.warning("Вкладка %s не умеет сохраняться — выход без сохранения",
+                       type(tab).__name__)
+        return True
