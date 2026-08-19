@@ -294,6 +294,8 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         # Базлайн для живого превью (геометрия до изменения + снимок модели для undo).
         self._resize_base: dict = {}               # node_id → исходная геометрия
         self._resize_model_base = None             # snapshot модели до превью
+        self._resize_pin_base: list = []           # [(edge, role, dx, dy)] до превью
+        self._resize_model_rev = None              # undo_mgr.revision на момент базлайна
         # Колбэки в таб (назначаются при готовности редактора):
         self.resize_panel_show_cb: Optional[callable] = None     # (visible: bool)
         self.resize_panel_classes_cb: Optional[callable] = None  # (names, current)
@@ -3954,6 +3956,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             self.update_status("На схеме нет узлов оборудования")
 
     def _exit_resize_objects(self):
+        # Выход из режима (Esc / кнопка) — тот же брошенный превью, что и смена
+        # набора: «Применить» не нажимали, значит возвращаем как было.
+        self._revert_resize_preview()
         self._clear_resize_frames()
         self._resize_sel = set()
         if callable(self.resize_panel_show_cb):
@@ -4046,9 +4051,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
 
     def _update_resize_panel(self):
         """Перерисовать рамки + обновить контролы панели под текущий набор."""
-        # Набор изменился → базлайн пересоберётся при следующем превью.
-        self._resize_model_base = None
-        self._resize_base = {}
+        # Набор изменился → незафиксированное превью откатить (базлайн уходит
+        # вместе с ним и пересоберётся при следующем превью).
+        self._revert_resize_preview()
         self._redraw_resize_frames()
         if not callable(self.resize_panel_state_cb):
             return
@@ -4072,12 +4077,101 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 'segmentation': list(n['segmentation']) if n.get('segmentation') else None,
                 'area': n.get('area'),
             }
+        self._resize_pin_base = self._capture_resize_pins()
+        self._resize_model_rev = self.undo_mgr.revision
+
+    def _resize_baseline_alive(self) -> bool:
+        """Базлайн снят и всё ещё описывает текущее состояние схемы.
+
+        Между снятием и применением базлайна может пройти чужая команда —
+        прежде всего Ctrl+Z / Ctrl+Y посреди живого превью. Тогда базлайн
+        описывает состояние, которое оператор уже отменил: откат по нему
+        отменил бы сам откат, а превью село бы вокруг отменённого центроида
+        (замер §48). Сторож — `undo_mgr.revision`: он считает ВСЕ мутации
+        через стек, включая команды, которые правят узлы на месте и модель
+        не пересобирают (`DragNodeCommand`), — сравнение объектов `nodes`/
+        `edges_data` по ссылке такие правки пропускает (замер §48).
+        """
+        return (self._resize_model_base is not None
+                and self._resize_model_rev == self.undo_mgr.revision)
+
+    def _capture_resize_pins(self):
+        """Пины инцидентных рёбер набора — тоже часть базлайна превью.
+
+        `rescale_edge_pins` домножает `dx/dy` НА МЕСТЕ, поэтому без возврата к
+        исходным значениям каждый тик бегунка множит уже домноженное: замер §48
+        на рамке 20×36 при одном и том же 90×90 дал `dx` 10.0 → 45.0 → 202.5
+        за два тика, а после «Применить» — 911.25 при полуширине узла 45.
+        """
+        from ui.editors import port_model
+
+        pins = []
+        for e in self.edges_data:
+            for role in ('source', 'target'):
+                if e.get(role) not in self._resize_sel:
+                    continue
+                pin = port_model.edge_pin(e, role)
+                if pin is not None:
+                    pins.append((e, role, float(pin['dx']), float(pin['dy'])))
+        return pins
+
+    def _restore_resize_pins(self):
+        """Вернуть пины набора к базлайну (перед очередным пересчётом рамок)."""
+        from ui.editors import port_model
+
+        for e, role, dx, dy in self._resize_pin_base:
+            pin = port_model.edge_pin(e, role)
+            if pin is not None:
+                pin['dx'], pin['dy'] = dx, dy
+
+    def _drop_resize_baseline(self):
+        """Забыть базлайн: превью зафиксировано или откачено, возвращать нечего."""
+        self._resize_model_base = None
+        self._resize_base = {}
+        self._resize_pin_base = []
+        self._resize_model_rev = None
+
+    def _revert_resize_preview(self):
+        """Откатить брошенное превью: набор сменили или вышли из режима.
+
+        Превью мутирует МОДЕЛЬ и в undo не пишет, поэтому без этого отката
+        изменённая геометрия оставалась на схеме при пустом стеке отмены —
+        вернуть её оператору было нечем (замер §48).
+        """
+        if not self._resize_baseline_alive():
+            # Модель пересобрали под превью (Ctrl+Z) — базлайн больше не про
+            # неё; вернуть по нему значило бы отменить чужой откат.
+            self._drop_resize_baseline()
+            return
+        touched = list(self._resize_base)
+        self._restore_resize_pins()
+        for nid, base in self._resize_base.items():
+            n = self.nodes.get(nid)
+            if not n:
+                continue
+            n['centroid'] = list(base['centroid'])
+            if base['bbox']:
+                n['bbox'] = list(base['bbox'])
+            if base['segmentation']:
+                n['segmentation'] = list(base['segmentation'])
+            if base['area'] is not None:
+                n['area'] = base['area']
+        self._drop_resize_baseline()
+        for nid in touched:
+            self._refresh_node_visual(nid)
+        # Штатное событие, не сбой: оператор увидит, почему рамки «вернулись».
+        import logging
+        logging.getLogger(__name__).info(
+            "resize preview: превью не применено — набор (%d) возвращён к исходным "
+            "размерам", len(touched))
 
     def _apply_sizes_from_base(self, width, height, scale, kind):
         """Применить размеры к набору, отталкиваясь от зафиксированного базлайна.
 
-        Идемпотентно: повторные вызовы (живой бегунок) не накапливают масштаб.
+        Идемпотентно: повторные вызовы (живой бегунок) не накапливают ни
+        масштаб рамок, ни смещения пинов.
         """
+        self._restore_resize_pins()
         for nid, base in self._resize_base.items():
             n = self.nodes.get(nid)
             if not n:
@@ -4133,7 +4227,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         kind = self._resize_kind()
         if kind in ('mixed', 'empty'):
             return
-        if self._resize_model_base is None:
+        if not self._resize_baseline_alive():
             self._capture_resize_base()
         self._apply_sizes_from_base(width, height, scale, kind)
         for nid in self._resize_sel:
@@ -4310,7 +4404,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
 
         from ui.editors.undo_manager import SnapshotCommand
         # Базлайн = состояние ДО живого превью (чтобы Ctrl+Z вернул и размеры тоже).
-        if self._resize_model_base is None:
+        if not self._resize_baseline_alive():
             self._capture_resize_base()
         cmd = SnapshotCommand(self.model, self._redraw_all)
         cmd._before = self._resize_model_base
@@ -4344,7 +4438,11 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         cmd.finalize()
         self.undo_mgr.push_executed(cmd)
 
-        # Сбросить базлайн и обновить панель/рамки от нового состояния.
+        # Превью зафиксировано командой — базлайн больше не точка возврата.
+        # Снять его ДО сброса панели: та откатывает незафиксированное превью
+        # и иначе отменила бы только что применённое.
+        self._drop_resize_baseline()
+        # Обновить панель/рамки от нового состояния.
         self._update_resize_panel()
         self.update_statistics()
         if kind == 'box':
