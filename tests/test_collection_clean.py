@@ -17,6 +17,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from tools import suite_baseline
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -56,14 +58,21 @@ def test_suite_does_not_shrink():
     В счёт идёт git-видимая часть сбора (пункт 0.3y): параметры по корпусу из
     локального `storage/` на чистом дереве не собираются, и если бы они входили
     в счёт, пол зависел бы от числа диаграмм на машине. Арифметика общая со
-    стендом, чтобы два потребителя одного пола не разъехались.
+    стендом, чтобы три потребителя одного пола не разъехались.
+
+    ⛔ Третий исход — `skip` (пункт 1-30): git не ответил про исчезнувшие
+    файлы, и откат пункта от тихой пропажи отличить нечем. Красным тут была бы
+    ложь про код там, где сломана обстановка; «судить нечем» у теста и есть
+    пропуск с громкой причиной.
     """
     assert BASELINE.exists(), f"нет базовой линии {BASELINE}: python tools/suite_baseline.py --write-baseline"
     base = json.loads(BASELINE.read_text(encoding="utf-8"))
 
     out = _collect().stdout or ""
     per_file, _ = suite_baseline.split_collected(out, suite_baseline.local_corpus_uids())
-    problems, _ = suite_baseline.floor_problems(base, per_file)
+    problems, _, unjudged = suite_baseline.floor_problems(base, per_file)
+    if unjudged and not problems:
+        pytest.skip("судить нечем: " + "\n".join(unjudged))
     assert not problems, (
         "\n".join(problems)
         + "\n  если тесты убраны намеренно, пересними базу: "

@@ -26,8 +26,14 @@ BASE = {"runs": 6, "routing": True,
         "stable": {"aaaaaaaa": True, "bbbbbbbb": False}}
 
 
-def _lines(result, base=BASE):
-    code, lines = det.verdict(result, base)
+def _lines(result, base=BASE, runs=6, routing=True):
+    """`runs=6` — ровно столько, сколько записано в `BASE`.
+
+    С пункта 1-30 сверка судит и силу самой выборки: без явного числа каждый
+    тест ниже мерил бы «замер слабее эталона» вместо своей ветки
+    (`DEFAULT_RUNS` = 2). Число абсолютное, из проверяемого поля не считается.
+    """
+    code, lines = det.verdict(result, base, runs, routing)
     return code, "\n".join(lines)
 
 
@@ -100,6 +106,107 @@ def test_proven_regression_beats_unmeasured():
     assert code == 1
     assert "перестали воспроизводиться: aaaaaaaa" in text
     assert "СУДИТЬ НЕЧЕМ" in text
+
+
+# ───── слабый замер на ЧТЕНИИ — тоже «судить нечем» (пункт 1-30) ─────
+
+def test_check_with_fewer_runs_than_the_baseline_is_not_green(capsys):
+    """⛔ Дыра 1-30 (з), кандидат из §53.35: `--check --runs 2` врал зелёным.
+
+    Эталон снят при 6 прогонах, а замер в 2 печатал «[стало лучше]
+    воспроизводятся впервые» про заведомо неповторимые графы и отдавал
+    exit 0 — то есть «доказано, что регресса нет» по выборке, которая этого
+    доказать не может (§49.27: при `--runs 2` четыре из восьми известных
+    неповторимых выходят воспроизводимыми). Ложного КРАСНОГО малый `--runs`
+    дать не может, поэтому 1-29 пола на чтении не ставил; вводящий в
+    заблуждение зелёный — тоже дефект гейта, и лечится он третьим исходом.
+    """
+    code, text = _lines({"aaaaaaaa": ["x", "x"], "bbbbbbbb": ["z", "z"]}, runs=2)
+
+    assert code == 2
+    assert "прогонов 2 против 6" in text
+    assert "[ВЫБОРКА, НЕ ПОЧИНКА]" in text and "bbbbbbbb" in text
+    assert "[стало лучше]" not in text, "утверждение о починке по слабой выборке"
+    assert "[OK] регресса воспроизводимости нет" not in text
+
+
+@pytest.mark.parametrize("runs", [6, 7])
+def test_check_at_or_above_the_baseline_runs_judges(runs):
+    """Порог заперт с двух сторон АБСОЛЮТНЫМИ числами (урок 0.4).
+
+    Эталон снят при 6 прогонах: 5 — «судить нечем» (тест ниже), 6 и 7 —
+    вердикт выносится. Ни одно число не вычисляется из проверяемого поля.
+    """
+    code, text = _lines({"aaaaaaaa": ["x", "x"], "bbbbbbbb": ["z", "z"]}, runs=runs)
+
+    assert code == 0
+    assert "[стало лучше] воспроизводятся впервые: bbbbbbbb" in text
+
+
+def test_check_with_five_runs_is_below_the_baseline():
+    assert _lines({"aaaaaaaa": ["x", "x"], "bbbbbbbb": ["z", "w"]}, runs=5)[0] == 2
+
+
+def test_check_with_another_routing_key_is_not_green(capsys):
+    """Тот же класс, что малый `--runs`: без роутинга раскладка воспроизводима вся."""
+    code, text = _lines({"aaaaaaaa": ["x", "x"], "bbbbbbbb": ["z", "z"]},
+                        runs=6, routing=False)
+
+    assert code == 2
+    assert "роутинг" in text
+
+
+def test_broken_graph_outranks_a_weak_sample_on_read():
+    """Приоритет тот же: поломка наблюдается двумя исходами и от выборки не зависит."""
+    code, text = _lines({"aaaaaaaa": ["x", "y"], "bbbbbbbb": ["z", "z"]}, runs=2)
+
+    assert code == 1
+    assert "перестали воспроизводиться: aaaaaaaa" in text
+
+
+# ───── чем именно судить нечем: метка для шага CI (пункт 1-30) ─────
+
+def test_truncated_corpus_is_marked_as_corpus():
+    """Усечённый корпус — штатная обстановка CI, шаг переводит её в ::warning."""
+    code, text = _lines({"aaaaaaaa": ["x", "x"]})
+
+    assert code == 2
+    assert text.strip().endswith(det.MARK_UNJUDGED_CORPUS)
+
+
+def test_weak_sample_is_not_marked_as_corpus():
+    """⛔ Обратная сторона (г): дыру в шаге CI открывать нельзя.
+
+    Шаг CI прощает exit 2 «корпус усечён» — там в git 3 графа из 19. Если бы
+    ту же метку получала любая двойка, убитый дочерний прогон и слабая
+    выборка ехали бы в CI зелёным warning'ом. Причина двойки называется в
+    последней строке, и корпус от обстановки в ней отличим.
+    """
+    code, text = _lines({"aaaaaaaa": ["x", "x"], "bbbbbbbb": ["z", "z"]}, runs=2)
+
+    assert code == 2
+    assert text.strip().endswith(det.MARK_UNJUDGED_OTHER)
+    assert det.MARK_UNJUDGED_CORPUS not in text
+
+
+def test_killed_child_on_check_is_unjudgeable_not_a_traceback(monkeypatch, capsys):
+    """⛔ Дыра 1-30 (г): убитый дочерний прогон умирал `RuntimeError` → exit 1.
+
+    Полярность была безопасная (громко и красным), но перепутанная: замер
+    не состоялся, значит «судить нечем», а не «регресс». Трейсбек при этом
+    исчезает, а причина остаётся в тексте.
+    """
+    monkeypatch.setattr(det.corpus, "corpus_paths",
+                        lambda include_storage=True: {"aaaaaaaa": "x", "bbbbbbbb": "y"})
+    monkeypatch.setattr(det, "measure", lambda *a: (_ for _ in ()).throw(
+        RuntimeError("прогон (seed=1) вернул 77: boom")))
+    monkeypatch.setattr(sys, "argv",
+                        ["layout_determinism.py", "--check", "--runs", "6"])
+
+    assert det.main() == 2
+    out = capsys.readouterr().out
+    assert "[СУДИТЬ НЕЧЕМ]" in out and "вернул 77" in out
+    assert out.strip().endswith(det.MARK_UNJUDGED_OTHER), "CI простил бы убитый прогон"
 
 
 def test_baseline_in_git_covers_the_fixtures():
@@ -333,3 +440,24 @@ def test_write_records_a_declared_fix(tmp_path, monkeypatch, capsys):
     assert json.loads(path.read_text(encoding="utf-8"))["stable"] == {
         "aaaaaaaa": True, "bbbbbbbb": True}
     assert "ПОЧИНКА" in capsys.readouterr().out
+
+
+def test_allow_fixed_does_not_lift_the_refusal(tmp_path, monkeypatch, capsys):
+    """⛔ Правда, к которой пункт 1-30 (д) привёл `TESTING §8.2`.
+
+    Док обещал снять отказ по сломавшемуся графу «повторным прогоном и
+    пересъёмом с объяснением». Стенд такого пересъёма не знает: `--allow-fixed`
+    работает в `merge_stable()` и снимает липкость `false -> true`, а отказ
+    ставит `write_blocked()` на обратном движении `true -> false` — и ключа,
+    который его снимал бы, нет ни одного. Настоящая лазейка — правка эталона
+    руками, видная в диффе; §7.1 про базу набора говорит это честно, §8.2
+    теперь тоже.
+    """
+    path = _write_stand(tmp_path, monkeypatch,
+                        {"aaaaaaaa": ["x", "y"], "bbbbbbbb": ["z", "w"]},
+                        argv=("--runs", "6", "--allow-fixed", "aaaaaaaa"))
+    before = path.read_text(encoding="utf-8")
+
+    assert det.main() == 1
+    assert "перестали воспроизводиться: aaaaaaaa" in capsys.readouterr().out
+    assert path.read_text(encoding="utf-8") == before, "отказ обойдён ключом"

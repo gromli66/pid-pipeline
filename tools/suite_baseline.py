@@ -11,7 +11,7 @@
     python -X utf8 tools/suite_baseline.py --check           # сверка, exit 1 при регрессии
     python -X utf8 tools/suite_baseline.py --write-baseline  # пересъём базы (Д6: отдельный коммит)
 
-Что считается провалом (`--check` → exit 1):
+Что считается ОПРОВЕРГНУТЫМ (`--check` → exit 1):
     * НОВЫЙ красный — тест, который в базе зелёный, а сейчас упал;
     * усыхание набора — тесты пропали у файлов, которые в диффе не менялись
       (`importorskip` без установленной зависимости, `collect_ignore`,
@@ -24,16 +24,26 @@
       и вычитает из счёта. В карту идёт git-видимая часть сбора — без
       параметров по корпусу, которого нет в git (пункт 0.3y): иначе счёт
       зависел бы от числа диаграмм в локальном `storage/`;
-    * прогон не состоялся — pytest вернул код вне {0, 1}, итоговой строки нет,
-      или разобранных идентификаторов меньше, чем красных в счётчиках. Убитый
-      прогон (`os._exit`, access violation §24.6) даёт ПУСТОЙ список красных,
-      то есть без этих проверок читается как «всё починилось»;
     * массовое «позеленение» (> `MAX_FIXED`) и рост `skipped` на том же
       прогоне, где что-то позеленело (красный превратили в skip).
 Единичный позеленевший тест провалом НЕ считается — печатается и требует
 пересъёма базы.
 
-У `--write-baseline` тоже ТРИ исхода, а не два (`PROTOCOL §5`, пункт 1-28):
+Что считается «СУДИТЬ НЕЧЕМ» (`--check` → exit 2, пункт 1-30):
+    * прогон не состоялся — сбор pytest сломан (это пункт 0.0, а не база),
+      pytest вернул код вне {0, 1}, итоговой строки нет, или разобранных
+      идентификаторов меньше, чем красных в счётчиках. Убитый прогон
+      (`os._exit`, access violation §24.6) даёт ПУСТОЙ список красных,
+      то есть без этих проверок читается как «всё починилось»;
+    * git не ответил про исчезнувшие файлы — отличить откат пункта от тихой
+      пропажи нечем (`shrinkage()`).
+До 1-30 третьего исхода у `--check` не было вовсе: путь чтения умел только
+«доказано/опровергнуто» и на сломанной обстановке отдавал ту же единицу, что
+на доказанной регрессии, — вызывающий не мог отличить «чини код» от «чини
+обстановку». Приоритет прежний: доказанный регресс сильнее неполноты, и обе
+причины разом дают 1.
+
+У `--write-baseline` ТРИ исхода с пункта 1-28:
     * ОТКАЗ (exit 1) — замер годен и говорит, что пересъём узаконил бы
       регрессию: множество красных ВЫРОСЛО против текущей базы (пункт 1-26)
       или набор тихо потерял тесты, то есть уехал бы вниз ПОЛ (пункт 1-28).
@@ -47,6 +57,10 @@
 Законны: красные ушли, состав тот же, потеря видна в диффе (откат пункта).
 Первый снимок (базы в дереве нет) сверять не с чем — он проходит, и стенд
 об этом говорит.
+
+Вердикты обоих путей печатаются в **stdout** — как у `layout_determinism.py`
+и `lint_gate.py` (пункт 1-30: форма у трёх стендов была одна, а поток разный,
+и вывод пересъёма разъезжался с выводом сверки в одном и том же логе).
 """
 from __future__ import annotations
 
@@ -93,12 +107,13 @@ MAX_FIXED = 10
 # каждой новой диаграммы в storage/, и к 0.3x от него оставалось 2 теста.
 FLOOR_MARGIN = 5
 
-# Коды возврата ПУТИ ЗАПИСИ — три исхода, а не два (`PROTOCOL §5`, пункт 1-28).
-# До него «судить нечем» (сломанный сбор, убитый прогон, оборванный хвост) и
-# «отказ» (пересъём узаконил бы регрессию) отдавали одинаковую единицу, и
-# вызывающий не мог отличить «чини обстановку» от «чини код».
-WRITE_REFUSED = 1
-WRITE_UNJUDGED = 2
+# Три исхода, а не два (`PROTOCOL §5`). Пункт 1-28 развёл их на пути ЗАПИСИ,
+# пункт 1-30 — на пути ЧТЕНИЯ: до него «судить нечем» (сломанный сбор, убитый
+# прогон, оборванный хвост, молчащий git) и «опровергнуто» (новый красный,
+# усохший набор) отдавали одинаковую единицу, и вызывающий не мог отличить
+# «чини обстановку» от «чини код». На записи 1 читается как ОТКАЗ.
+EXIT_REFUTED = 1
+EXIT_UNJUDGED = 2
 
 # Нежадно до « - » (после него причина) — идентификатор может содержать
 # пробелы и кириллицу: в storage/ уже лежит «Новая папка», и параметр теста
@@ -211,26 +226,31 @@ def tracked_by_git(paths: set[str]) -> tuple[set[str], str]:
     Индекс — ответ самого git на вопрос «этот файл ещё часть дерева?».
     `git revert` пункта снимает файл вместе с записью о нём, а стёртый,
     переименованный или забытый мимо git в индексе остаётся: первое — откат,
-    второе — тихая пропажа. Git не ответил — считаем числящимися всеми
-    (осторожная сторона: потеря пойдёт в счёт) и говорим об этом вслух.
+    второе — тихая пропажа. Git не ответил — судить об исчезнувших файлах
+    нечем, и `shrinkage()` уводит их в отдельную корзину «судить нечем»
+    (пункт 1-30); возвращаемое множество в этом случае не значит ничего.
     """
     if not paths:
         return set(), ""
-    proc = subprocess.run(
-        ["git", "ls-files", "-z", "--", *sorted(paths)],
-        cwd=str(REPO),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
+    try:
+        proc = subprocess.run(
+            ["git", "ls-files", "-z", "--", *sorted(paths)],
+            cwd=str(REPO),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError as exc:                  # git не установлен или недоступен
+        return set(paths), f"git не запустился: {exc}"
     if proc.returncode != 0:
         return set(paths), (proc.stderr or "").strip() or f"git ls-files вернул {proc.returncode}"
     return {p for p in proc.stdout.split("\0") if p}, ""
 
 
-def shrinkage(base: dict, per_file: dict[str, int]) -> tuple[dict[str, int], dict[str, int], str]:
-    """Разложить потерю тестов на тихую и объяснённую диффом.
+def shrinkage(base: dict, per_file: dict[str, int]
+              ) -> tuple[dict[str, int], dict[str, int], dict[str, int], str]:
+    """Разложить потерю тестов на тихую, объяснённую диффом и неподсудную.
 
     Гейт умеет судить ровно об одном: файл байт-в-байт тот же, что в базе,
     а тестов из него выходит меньше. В диффе такого не видно ничем — так
@@ -243,7 +263,14 @@ def shrinkage(base: dict, per_file: dict[str, int]) -> tuple[dict[str, int], dic
     красил гейт законным возвратом: пункты дороги приносят по 5–53 теста
     при допуске 5 (пункт 1-27).
 
-    Возвращает ({файл: тихо потеряно}, {файл: потеряно явно}, ошибка git).
+    ⛔ Третья корзина — «судить нечем» (пункт 1-30). Исчезнувший файл судится
+    ТОЛЬКО ответом git, и если git не ответил, различить откат пункта и тихую
+    пропажу нечем. До 1-30 такие файлы уходили в тихую потерю (осторожная
+    сторона) и стенд ОТКАЗЫВАЛ — то есть на сломанном git гейт врал красным
+    про код, хотя сломана была обстановка. Файлы, которые на месте, судятся
+    отпечатком и молчания git не замечают — их вердикт остаётся в силе.
+
+    Возвращает ({тихо потеряно}, {потеряно явно}, {судить нечем}, ошибка git).
     """
     base_per: dict[str, list] = base["per_file"]
     absent = {path for path in base_per if not (REPO / path).exists()}
@@ -251,23 +278,29 @@ def shrinkage(base: dict, per_file: dict[str, int]) -> tuple[dict[str, int], dic
 
     silent: dict[str, int] = {}
     explained: dict[str, int] = {}
+    unknown: dict[str, int] = {}
     for path, (was, digest) in base_per.items():
         delta = was - per_file.get(path, 0)
         if delta <= 0:
             continue
         if path in absent:
-            # снят вместе с записью в git — откат; остался в индексе — пропажа
-            (silent if path in tracked else explained)[path] = delta
+            if git_error:                       # об исчезнувших судить нечем
+                unknown[path] = delta
+            else:
+                # снят вместе с записью в git — откат; остался в индексе — пропажа
+                (silent if path in tracked else explained)[path] = delta
         else:
             (silent if file_digest(REPO / path) == digest else explained)[path] = delta
-    return silent, explained, git_error
+    return silent, explained, unknown, git_error
 
 
-def floor_problems(base: dict, per_file: dict[str, int]) -> tuple[list[str], list[str]]:
-    """(причины провала по усыханию набора, что сказать вслух при зелёном).
+def floor_problems(base: dict, per_file: dict[str, int]
+                   ) -> tuple[list[str], list[str], list[str]]:
+    """(причины провала по усыханию, что сказать при зелёном, «судить нечем»).
 
-    Пол один на двоих: второй его потребитель — сторож сбора
-    `tests/test_collection_clean.py`. Считается здесь, чтобы они не разъехались.
+    Пол один на троих: остальные потребители — сторож сбора
+    `tests/test_collection_clean.py` и путь записи `write_blocked()`.
+    Считается здесь, чтобы они не разъехались.
     """
     if "per_file" not in base:                     # база снята до пункта 1-27
         git_visible = sum(per_file.values())
@@ -275,13 +308,12 @@ def floor_problems(base: dict, per_file: dict[str, int]) -> tuple[list[str], lis
             return ([
                 f"набор усох: в git-видимой части {git_visible} < {base['min_collected']} "
                 "(база без карты файлов — карта появится с ближайшим пересъёмом)"
-            ], [])
-        return ([], [])
+            ], [], [])
+        return ([], [], [])
 
-    silent, explained, git_error = shrinkage(base, per_file)
+    silent, explained, unknown, git_error = shrinkage(base, per_file)
     problems: list[str] = []
-    if git_error:
-        problems.append(f"git не ответил про исчезнувшие файлы ({git_error}) — об откате судить нечем")
+    unjudged: list[str] = []
 
     def _lines(where: dict[str, int]) -> str:
         return "\n".join(
@@ -289,6 +321,12 @@ def floor_problems(base: dict, per_file: dict[str, int]) -> tuple[list[str], lis
             for path in sorted(where)
         )
 
+    if unknown:
+        unjudged.append(
+            f"git не ответил про исчезнувшие файлы ({git_error}) — откат пункта "
+            f"от тихой пропажи отличить нечем, {len(unknown)} файлов "
+            f"(−{sum(unknown.values())}) остались без вердикта:\n{_lines(unknown)}"
+        )
     lost = sum(silent.values())
     if lost > FLOOR_MARGIN:
         problems.append(
@@ -304,7 +342,7 @@ def floor_problems(base: dict, per_file: dict[str, int]) -> tuple[list[str], lis
             f"(−{sum(explained.values())}) — файл правили или сняли вместе с записью в git:\n"
             f"{_lines(explained)}"
         )
-    return problems, notes
+    return problems, notes, unjudged
 
 
 def compare(base_red: set[str], cur_red: set[str]) -> tuple[list[str], list[str]]:
@@ -313,13 +351,17 @@ def compare(base_red: set[str], cur_red: set[str]) -> tuple[list[str], list[str]
 
 
 def verdict(red: set[str], totals: dict[str, int], run_rc: int) -> list[str]:
-    """Причины провала самого прогона (пустой список = прогон состоялся).
+    """Причины «СУДИТЬ НЕЧЕМ» у самого прогона (пустой список = прогон состоялся).
 
     Порядок проверок важен: сначала «прогон вообще состоялся», потом уже
     сравнение с базой. Убитый прогон даёт пустой список красных, и без
     этих проверок он читается как «всё починилось».
 
-    Состав набора считает `floor_problems` — у него второй потребитель.
+    ⚠ Это НЕ регрессия, а сломанная обстановка: с пункта 1-30 обе стороны
+    (`--check` и пересъём) отдают на этих причинах 2, а не 1. Здесь чинят
+    обстановку, а в `compare()`/`floor_problems()` — код.
+
+    Состав набора считает `floor_problems` — у него три потребителя.
     """
     fail: list[str] = []
 
@@ -359,7 +401,8 @@ def write_blocked(base: dict | None, red: set[str], totals: dict[str, int],
     `floor_problems`, что и `--check`, — третий потребитель одного пола.
 
     Три исхода (`PROTOCOL §5`), а не два:
-    2 — СУДИТЬ НЕЧЕМ: вывод неполон, сверять состав с базой не на чем;
+    2 — СУДИТЬ НЕЧЕМ: вывод неполон, сверять состав с базой не на чем, либо
+        git не ответил про исчезнувшие файлы (пункт 1-30);
     1 — ОТКАЗ: замер годен и говорит, что пересъём узаконил бы регрессию —
         новый красный или тихо потерянные тесты;
     0 — законно. Законны: красные ушли (починили), состав тот же (пересъём ради
@@ -388,8 +431,10 @@ def write_blocked(base: dict | None, red: set[str], totals: dict[str, int],
             + "\n".join(f"    + {nid}" for nid in new)
             + "\n  Новый красный чинят или откатывают — пересъём его не легализует."
         )
-    for problem in floor_problems(base, per_file)[0]:
+    floor, _notes, floor_unjudged = floor_problems(base, per_file)
+    for problem in floor:
         refused.append(problem + "\n  Пересъём записал бы эту потерю нормой.")
+    unjudged += floor_unjudged
     return unjudged, refused
 
 
@@ -409,46 +454,46 @@ def _load_baseline() -> dict:
     return json.loads(BASELINE.read_text(encoding="utf-8"))
 
 
-def _measure(unjudged: int = 1) -> tuple[set[str], dict[str, int], int, dict[str, int], int, str, int]:
-    """Замер набора. `unjudged` — код возврата, когда мерить оказалось нечем.
+def _measure() -> tuple[set[str], dict[str, int], int, dict[str, int], int, str, int]:
+    """Замер набора. Мерить оказалось нечем — «судить нечем» на ОБОИХ путях.
 
-    У `--check` это 1 (CI на этом шаге 1 и 2 не различает — менять его код
-    значило бы править чужой пункт), у пересъёма — 2 «судить нечем» (1-28).
+    До пункта 1-30 у `--check` тут была единица: считалось, что шаг CI
+    1 и 2 не различает. Он их и не различает — но обе не нулевые, значит
+    сборка краснеет одинаково, а вызывающий человек получает диагноз
+    «чини обстановку (это пункт 0.0), а не код».
     """
     run_text, run_rc = _pytest(PYTEST_RUN)
     collect_text, collect_rc = _pytest(PYTEST_COLLECT)
     if collect_rc != 0:
-        mark = "[СУДИТЬ НЕЧЕМ] " if unjudged == WRITE_UNJUDGED else ""
-        print(f"{mark}сбор pytest сломан (exit {collect_rc}) — это пункт 0.0, а не база",
-              file=sys.stderr)
-        sys.exit(unjudged)
+        print(f"[СУДИТЬ НЕЧЕМ] сбор pytest сломан (exit {collect_rc}) — "
+              f"это пункт 0.0, а не база")
+        sys.exit(EXIT_UNJUDGED)
     collected = parse_collected(collect_text)
     per_file, local = split_collected(collect_text, local_corpus_uids())
     return parse_red(run_text), parse_totals(run_text), collected, per_file, local, run_text, run_rc
 
 
 def cmd_write() -> int:
-    red, totals, collected, per_file, local, run_text, run_rc = _measure(WRITE_UNJUDGED)
+    red, totals, collected, per_file, local, run_text, run_rc = _measure()
     if run_rc not in RUN_RC_OK:
         print(f"[СУДИТЬ НЕЧЕМ] прогон вернул {run_rc} — снимать базу с оборванного "
-              f"прогона нельзя:\n" + run_text[-2000:], file=sys.stderr)
-        return WRITE_UNJUDGED
+              f"прогона нельзя:\n" + run_text[-2000:])
+        return EXIT_UNJUDGED
     if not totals:
-        print("[СУДИТЬ НЕЧЕМ] не разобрал итоговую строку pytest:\n" + run_text[-2000:],
-              file=sys.stderr)
-        return WRITE_UNJUDGED
+        print("[СУДИТЬ НЕЧЕМ] не разобрал итоговую строку pytest:\n" + run_text[-2000:])
+        return EXIT_UNJUDGED
     base = _load_baseline() if BASELINE.exists() else None
     if base is None:
         print(f"базы {BASELINE.name} нет — первый снимок, сверять не с чем")
     unjudged, refused = write_blocked(base, red, totals, per_file)
     for msg in unjudged:
-        print(f"[СУДИТЬ НЕЧЕМ] {msg}", file=sys.stderr)
+        print(f"[СУДИТЬ НЕЧЕМ] {msg}")
     for msg in refused:
-        print(f"[ОТКАЗ] {msg}", file=sys.stderr)
+        print(f"[ОТКАЗ] {msg}")
     if refused:                      # доказанная регрессия сильнее неполноты (1-25)
-        return WRITE_REFUSED
+        return EXIT_REFUTED
     if unjudged:
-        return WRITE_UNJUDGED
+        return EXIT_UNJUDGED
     git_visible = sum(per_file.values())
     BASELINE.write_text(
         json.dumps(
@@ -493,9 +538,14 @@ def cmd_check() -> int:
           f"git-видимых {base.get('collected_git_visible', '?')} "
           f"в {len(base.get('per_file') or ())} файлах, {base['totals']}")
 
-    problems = verdict(red, totals, run_rc)
-    floor, notes = floor_problems(base, per_file)
+    # Два ведра, а не одно (пункт 1-30): сломанная обстановка — «судить нечем»
+    # (2), доказанная регрессия — «опровергнуто» (1). Приоритет как у соседних
+    # стендов: доказанный регресс сильнее неполноты.
+    unjudged = verdict(red, totals, run_rc)
+    problems: list[str] = []
+    floor, notes, floor_unjudged = floor_problems(base, per_file)
     problems += floor
+    unjudged += floor_unjudged
     for note in notes:
         print(f"\n{note}")
     if len(fixed) > MAX_FIXED:
@@ -511,6 +561,8 @@ def cmd_check() -> int:
         )
 
     bad = bool(problems)
+    for msg in unjudged:
+        print(f"\n[СУДИТЬ НЕЧЕМ] {msg}")
     for msg in problems:
         print(f"\n[ПРОВАЛ] {msg}")
     if new:
@@ -522,11 +574,14 @@ def cmd_check() -> int:
         print(f"\n[позеленело] {len(fixed)} — пересними базу отдельным коммитом (--write-baseline):")
         for nid in fixed:
             print(f"  - {nid}")
-    if not bad:
-        print("\n[OK] новых красных нет")
-    else:
+    if bad:
         print("\nхвост прогона:\n" + "\n".join(run_text.splitlines()[-25:]))
-    return 1 if bad else 0
+        return EXIT_REFUTED
+    if unjudged:
+        print("\nхвост прогона:\n" + "\n".join(run_text.splitlines()[-25:]))
+        return EXIT_UNJUDGED
+    print("\n[OK] новых красных нет")
+    return 0
 
 
 def main() -> int:
