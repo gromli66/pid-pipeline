@@ -5,14 +5,372 @@
   "env": "requirements/api.txt + ui.txt + dev.txt + shapely==2.1.2",
   "totals": {
     "failed": 13,
-    "passed": 927,
+    "passed": 937,
     "skipped": 14,
     "errors": 9
   },
-  "collected": 963,
+  "collected": 973,
   "corpus_local": 16,
-  "collected_git_visible": 947,
-  "min_collected": 942,
+  "collected_git_visible": 957,
+  "min_collected": 952,
+  "per_file": {
+    "tests/observability/test_contours_errors.py": [
+      5,
+      "0f95dfa84c95"
+    ],
+    "tests/observability/test_current_step.py": [
+      5,
+      "75c7d12eaf19"
+    ],
+    "tests/observability/test_cvat_errors.py": [
+      9,
+      "329bf2298b0a"
+    ],
+    "tests/observability/test_cvat_stage_rows.py": [
+      8,
+      "be0e40b3614b"
+    ],
+    "tests/observability/test_db_helpers_errorcode.py": [
+      6,
+      "900856711ac8"
+    ],
+    "tests/observability/test_detection_errors.py": [
+      5,
+      "7d4d9ba1795a"
+    ],
+    "tests/observability/test_direction_errors.py": [
+      4,
+      "0ff941e9b975"
+    ],
+    "tests/observability/test_errors.py": [
+      5,
+      "74cbda9b909b"
+    ],
+    "tests/observability/test_frame_errors.py": [
+      2,
+      "3b6531080d49"
+    ],
+    "tests/observability/test_fxml_errors.py": [
+      4,
+      "83606400b71d"
+    ],
+    "tests/observability/test_graph_errors.py": [
+      4,
+      "7aebf1a3e87a"
+    ],
+    "tests/observability/test_junction_errors.py": [
+      7,
+      "226ea27e7d3a"
+    ],
+    "tests/observability/test_logging.py": [
+      5,
+      "f11ca954350c"
+    ],
+    "tests/observability/test_obs.py": [
+      10,
+      "8f7f76f7af51"
+    ],
+    "tests/observability/test_ocr_errors.py": [
+      7,
+      "fd6aaf4e7368"
+    ],
+    "tests/observability/test_persist_failed_attempt.py": [
+      3,
+      "edcb8e06e3b8"
+    ],
+    "tests/observability/test_postprocess_log_level.py": [
+      2,
+      "d472b752d14f"
+    ],
+    "tests/observability/test_progress_model.py": [
+      15,
+      "838e4e6f7a91"
+    ],
+    "tests/observability/test_segmentation_errors.py": [
+      5,
+      "0f3414408778"
+    ],
+    "tests/observability/test_skeleton_errors.py": [
+      5,
+      "a212bbfac5ef"
+    ],
+    "tests/observability/test_skeleton_extension_substeps.py": [
+      3,
+      "c3002f5f0a11"
+    ],
+    "tests/observability/test_stage_durations.py": [
+      13,
+      "bdd4a9b8d3b2"
+    ],
+    "tests/observability/test_start_stage_commit.py": [
+      2,
+      "6c2d2a3a9426"
+    ],
+    "tests/observability/test_substep_status_line.py": [
+      7,
+      "314a262a2ddf"
+    ],
+    "tests/observability/test_upload_errors.py": [
+      4,
+      "0ddec6aea54b"
+    ],
+    "tests/test_avoid_router.py": [
+      9,
+      "236e61232b8c"
+    ],
+    "tests/test_b5_fixes.py": [
+      19,
+      "1483101f492a"
+    ],
+    "tests/test_canvas_pipeline_golden.py": [
+      7,
+      "95e9e9837662"
+    ],
+    "tests/test_canvas_staleness.py": [
+      17,
+      "73767eff4cf5"
+    ],
+    "tests/test_canvas_to_fxml.py": [
+      11,
+      "8cf27428cae7"
+    ],
+    "tests/test_client_spec.py": [
+      4,
+      "099dd9b514fa"
+    ],
+    "tests/test_collection_clean.py": [
+      2,
+      "b41e9c51e171"
+    ],
+    "tests/test_contours_merge.py": [
+      10,
+      "fa51263e8f75"
+    ],
+    "tests/test_corpus_fixtures.py": [
+      5,
+      "75acf06b202d"
+    ],
+    "tests/test_cyrillic_binding.py": [
+      1,
+      "338de737ccf7"
+    ],
+    "tests/test_cyrillic_load.py": [
+      1,
+      "5ca4a3742a82"
+    ],
+    "tests/test_detection_v2_migration.py": [
+      12,
+      "5aa9a2c351c5"
+    ],
+    "tests/test_direction_nodes.py": [
+      13,
+      "a71086e753d5"
+    ],
+    "tests/test_dn2_edit_diff.py": [
+      6,
+      "577b7ed2006f"
+    ],
+    "tests/test_docs_match_code.py": [
+      16,
+      "82614397ddb0"
+    ],
+    "tests/test_e2e_local.py": [
+      16,
+      "33bed376ed4f"
+    ],
+    "tests/test_edge_pins.py": [
+      7,
+      "3f92ff656e83"
+    ],
+    "tests/test_edit_avoid.py": [
+      15,
+      "db2d2a1ae077"
+    ],
+    "tests/test_edit_bench.py": [
+      7,
+      "4b832604ad73"
+    ],
+    "tests/test_edit_checks.py": [
+      14,
+      "6e835234a9a1"
+    ],
+    "tests/test_edit_engine.py": [
+      21,
+      "81bc5d92fde9"
+    ],
+    "tests/test_edit_smooth.py": [
+      17,
+      "4dccc213c6b8"
+    ],
+    "tests/test_flower_service.py": [
+      12,
+      "4e73aab43045"
+    ],
+    "tests/test_geometry_guard.py": [
+      1,
+      "1f95892cc06d"
+    ],
+    "tests/test_layout_determinism.py": [
+      13,
+      "cdf92d986f1f"
+    ],
+    "tests/test_layout_dispatch_policy.py": [
+      12,
+      "f8b61206f38c"
+    ],
+    "tests/test_layout_gate.py": [
+      13,
+      "e0600309b289"
+    ],
+    "tests/test_layout_smoke.py": [
+      9,
+      "17c9f5590af0"
+    ],
+    "tests/test_legal_pairs.py": [
+      4,
+      "6f2f3d6a3711"
+    ],
+    "tests/test_lint_gate.py": [
+      10,
+      "d3003c02213f"
+    ],
+    "tests/test_napravlenie_audit.py": [
+      14,
+      "4bf966047f0f"
+    ],
+    "tests/test_pair_bench.py": [
+      21,
+      "e33182feb4cd"
+    ],
+    "tests/test_phase7_cyrillic.py": [
+      1,
+      "23bb8537faab"
+    ],
+    "tests/test_refactoring.py": [
+      45,
+      "e7f6258eefd9"
+    ],
+    "tests/test_refactoring_v2.py": [
+      13,
+      "f6569181a0c8"
+    ],
+    "tests/test_requirements_pins.py": [
+      2,
+      "9fcbd5c25cee"
+    ],
+    "tests/test_seat_contract.py": [
+      37,
+      "cb23afec96c7"
+    ],
+    "tests/test_seating.py": [
+      23,
+      "10757aad6338"
+    ],
+    "tests/test_simple_seat_lift.py": [
+      6,
+      "eeaea512ffd2"
+    ],
+    "tests/test_stub_isolation.py": [
+      3,
+      "2f0d15c5af4f"
+    ],
+    "tests/test_suite_baseline.py": [
+      33,
+      "1d2009c8209a"
+    ],
+    "tests/test_text_import.py": [
+      10,
+      "6d03fd0b3463"
+    ],
+    "tests/test_undo_snapshot_integrity.py": [
+      2,
+      "dcf38143f6dd"
+    ],
+    "tests/test_worker/test_broker_visibility.py": [
+      7,
+      "3388e8862df3"
+    ],
+    "tests/test_worker/test_imports.py": [
+      16,
+      "66ac16c448fe"
+    ],
+    "tests/ui/test_artifact_downloader.py": [
+      53,
+      "9c51ec50fc66"
+    ],
+    "tests/ui/test_bundled_fonts.py": [
+      14,
+      "42fb8c08bd22"
+    ],
+    "tests/ui/test_client_logging.py": [
+      17,
+      "b0036f6871e2"
+    ],
+    "tests/ui/test_connection_point.py": [
+      9,
+      "0bdfcb12e3cd"
+    ],
+    "tests/ui/test_connector_radius_split.py": [
+      7,
+      "0d360253ebbd"
+    ],
+    "tests/ui/test_drag_avoid.py": [
+      12,
+      "86cf9a540468"
+    ],
+    "tests/ui/test_frame_crop_preview.py": [
+      14,
+      "bbfbe6a98134"
+    ],
+    "tests/ui/test_gesture_dispatch.py": [
+      19,
+      "387f651e702f"
+    ],
+    "tests/ui/test_interactive_drag.py": [
+      38,
+      "0aaeab086532"
+    ],
+    "tests/ui/test_layout_lock_buttons.py": [
+      8,
+      "b5f3753f92d0"
+    ],
+    "tests/ui/test_mode_exit_finishes_gesture.py": [
+      2,
+      "d81f4e5c99af"
+    ],
+    "tests/ui/test_ocr_binding_radius_split.py": [
+      3,
+      "db96266a74dc"
+    ],
+    "tests/ui/test_port_model.py": [
+      27,
+      "b447009e7989"
+    ],
+    "tests/ui/test_reseat_on_open.py": [
+      10,
+      "46ba3ca6c9c0"
+    ],
+    "tests/ui/test_save_dialog_dir.py": [
+      2,
+      "10efef8eaca9"
+    ],
+    "tests/ui/test_side_marks.py": [
+      13,
+      "77bea8651961"
+    ],
+    "tests/ui/test_size_regulators.py": [
+      9,
+      "21ddd4f192d8"
+    ],
+    "tests/ui/test_square_size_ops.py": [
+      12,
+      "555ddc50446d"
+    ],
+    "tests/ui/test_workspace_graph_flow.py": [
+      6,
+      "983d30c63f0c"
+    ]
+  },
   "red": [
     "tests/test_cyrillic_load.py::test_cyrillic_load",
     "tests/test_refactoring.py::TestDefaultProjectCode::test_config_has_default_project_code",
