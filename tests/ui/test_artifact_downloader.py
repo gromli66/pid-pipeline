@@ -53,7 +53,7 @@ _ALL_BLOBS = {
     "junction_points": b'{"points": []}',
     "pipe_mask_validated": b"PNG-pipe-validated",
     "skeleton_mask": b"PNG-skeleton-mask",
-    "segmentation_mask": b"PNG-segmentation",
+    "pipe_mask": b"PNG-pipe-mask",
     "download_ocr_result": b'{"target": []}',
     "download_ocr_binding": b'{"bindings": []}',
     "download_ocr_validation": b'{"validated": []}',
@@ -163,7 +163,7 @@ EXPECTED_MAP = {
         "original_image": "original.png",
         "pipe_mask_validated": "mask.png",
         "coco_validated": "coco_validated.json",
-        "segmentation_mask": "segmentation_mask.png",
+        "pipe_mask": "pipe_mask.png",
     },
     "ocr": {
         "original_image": "original.png",
@@ -294,7 +294,7 @@ def test_required_artifact_missing_gives_error(kind, missing, tmp_path):
     ("junction", ("coco_validated",), "coco_validated"),
     ("junction", ("junction_points_validated", "junction_points"), "points"),
     ("pipe", ("coco_validated",), "coco_validated"),
-    ("pipe", ("segmentation_mask",), "segmentation_mask"),
+    ("pipe", ("pipe_mask",), "pipe_mask"),
     ("ocr", ("coco_validated", "coco_predicted"), "coco"),
     ("ocr", ("download_ocr_binding",), "binding"),
     ("ocr", ("download_ocr_validation",), "ocr_validation"),
@@ -351,7 +351,7 @@ def test_graph_optional_non_api_error_stops_the_tab(tmp_path):
 
 @pytest.mark.parametrize("kind,failing,gone", [
     ("junction", "coco_validated", "coco_validated"),
-    ("pipe", "segmentation_mask", "segmentation_mask"),
+    ("pipe", "pipe_mask", "pipe_mask"),
     ("ocr", "download_ocr_binding", "binding"),
 ])
 def test_masks_and_ocr_swallow_any_optional_failure(kind, failing, gone, tmp_path):
@@ -374,7 +374,7 @@ def test_masks_and_ocr_swallow_any_optional_failure(kind, failing, gone, tmp_pat
                   "bridge_mask_validated", "skeleton_final", "coco_validated",
                   "junction_points_validated"}),
     ("pipe", {"original_image", "pipe_mask_validated", "coco_validated",
-              "segmentation_mask"}),
+              "pipe_mask"}),
     ("ocr", {"original_image", "download_ocr_result", "graph_validated",
              "coco_validated", "download_ocr_binding", "download_ocr_validation"}),
 ])

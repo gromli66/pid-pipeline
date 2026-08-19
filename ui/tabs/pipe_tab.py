@@ -29,12 +29,17 @@ logger = logging.getLogger(__name__)
 
 #: Что вкладка тянет с сервера. У маски ключ = сработавший кандидат:
 #: `_on_downloaded` читает pipe_mask_validated, потом skeleton_mask.
+#: ⛔ Маска сегментации — `pipe_mask` (выход этапа сегментации). Раньше здесь
+#: стоял `segmentation_mask`, которого нет в `ArtifactType`: эндпоинт проверяет
+#: тип ДО поиска артефакта (`app/api/diagrams.py:369-376`) и отвечал 400,
+#: а необязательное задание его глотало — медианная толщина труб не считалась
+#: никогда. Тип обязан быть значением `ArtifactType`.
 _ARTIFACTS = (
     one(artifact("original_image", "original.png"), required=True),
     Job((artifact("pipe_mask_validated", "mask.png"),
          artifact("skeleton_mask", "mask.png")), required=True),
     one(artifact("coco_validated", "coco_validated.json")),
-    one(artifact("segmentation_mask", "segmentation_mask.png")),
+    one(artifact("pipe_mask", "pipe_mask.png")),
 )
 
 
@@ -259,7 +264,7 @@ class PipeTab(AppearanceMixin, QWidget):
                 original_path=str(artifacts["original_image"]),
                 mask_path=str(mask_path),
                 coco_path=str(artifacts.get("coco_validated", "")),
-                pipe_mask_path=str(artifacts.get("segmentation_mask", "")),
+                pipe_mask_path=str(artifacts.get("pipe_mask", "")),
             )
             self._editor_layout.insertWidget(
                 self._editor_layout.count() - 1, self._editor
