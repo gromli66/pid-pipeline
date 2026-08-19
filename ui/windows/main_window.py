@@ -308,48 +308,12 @@ class MainWindow(QMainWindow):
     def _confirm_unsaved(self) -> bool:
         """Вопрос об открытой вкладке с правками. `False` — не закрывать.
 
-        Вопрос и цепочка сохранения — те же, что у «← Назад»: у вкладок один
-        контракт `has_unsaved_changes()` плюс один из `_save_graph` /
-        `_save_masks` / `_save_mask` (у вкладки привязки OCR `_save_graph` —
-        псевдоним). Вкладки без единого из них (сейчас таких нет) закрытию не
-        мешают: тупик «клиент не закрывается» дороже несохранённой вкладки,
-        о которой оператора спросили.
+        Дверь одна и живёт в воркспейсе (`confirm_discard_active_tab`, пункт
+        1.21): вкладка его, контракт `has_unsaved_changes()` и метод сохранения
+        — тоже его. Здесь остаётся ровно то, что своё у этого пути: слово
+        о действии, которое читает оператор — закрывается КЛИЕНТ, а не вкладка.
+
+        Пока дверей было две (эту завёл пункт 1.18, вторую — «← Назад»), они
+        успели разойтись в четырёх клетках; замер и перечень — в §81.
         """
-        tab = self.workspace._active_tab
-        if tab is None or not hasattr(tab, 'has_unsaved_changes'):
-            return True
-        if not tab.has_unsaved_changes():
-            return True
-
-        reply = QMessageBox.question(
-            self, "Выход",
-            "Есть несохранённые изменения. Сохранить перед выходом?",
-            QMessageBox.StandardButton.Yes
-            | QMessageBox.StandardButton.No
-            | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
-        )
-        if reply == QMessageBox.StandardButton.Cancel:
-            return False
-        if reply == QMessageBox.StandardButton.No:
-            logger.warning("Выход без сохранения вкладки %s — выбор оператора",
-                           type(tab).__name__)
-            return True
-
-        for name in ('_save_graph', '_save_masks', '_save_mask'):
-            save = getattr(tab, name, None)
-            if save is None:
-                continue
-            if save():
-                return True
-            # Об ошибке говорит сама вкладка (диалог или своя строка статуса);
-            # здесь — почему окно осталось на экране.
-            logger.warning("Сохранение %s.%s не удалось — клиент не закрыт",
-                           type(tab).__name__, name)
-            self.statusbar.showMessage(
-                "Не удалось сохранить — клиент остался открытым", 5000)
-            return False
-
-        logger.warning("Вкладка %s не умеет сохраняться — выход без сохранения",
-                       type(tab).__name__)
-        return True
+        return self.workspace.confirm_discard_active_tab("выходом")

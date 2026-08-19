@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (                            # noqa: E402
     QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QWidget,
 )
 
+import ui.widgets.diagram_workspace as dw                  # noqa: E402
 import ui.windows.main_window as mw                        # noqa: E402
 from ui.services.api_client import DiagramStatus           # noqa: E402
 
@@ -174,6 +175,10 @@ def window(qapp, monkeypatch):
     monkeypatch.setattr(mw, "APIClient", FakeAPI)
     monkeypatch.setattr(mw, "StatusProvider", FakeStatusProvider)
     monkeypatch.setattr(mw, "QMessageBox", FakeMsgBox)
+    # Дверь вопроса переехала в воркспейс (пункт 1.21): подмена только
+    # в `main_window` перестала её накрывать, и набор ПОВИС на живом
+    # `QMessageBox` — 60 с без завершения вместо 1 с (замер §81).
+    monkeypatch.setattr(dw, "QMessageBox", FakeMsgBox)
 
     win = mw.MainWindow()
     win.show()

@@ -42,6 +42,9 @@ class FrameTab(QWidget):
         self._diagram_name = diagram_name
         self.api_client = api_client
         self._confirmed = False
+        # Сколько операций редактора лежало на сервере в момент последней
+        # записи. Ноль — вкладка только открылась, сохранять нечего.
+        self._saved_undo_len = 0
         self._tmp_dir = Path(tempfile.mkdtemp(prefix="frame_"))
 
         self._build_ui()
@@ -168,27 +171,60 @@ class FrameTab(QWidget):
     def _on_editor_status(self, msg: str):
         self.status_message.emit(msg)
 
+    # ── Контракт с воркспейсом ────────────────────────────
+    def has_unsaved_changes(self) -> bool:
+        """Есть ли применённые операции, которых нет на сервере.
+
+        Вкладка была ЕДИНСТВЕННОЙ без этого метода, а вопрос о несохранённом
+        начинается с `hasattr` (`DiagramWorkspace.confirm_discard_active_tab`)
+        — поэтому «← Назад» и ✕ окна уносили очистку молча на обоих путях
+        (пункт 1.21, замер §81).
+
+        Считается по стеку отмены редактора: он растёт на каждой применённой
+        операции и убывает на «Отменить», так что после отката правка от
+        сохранённой отличается — это тоже «несохранено».
+        ⚠ Известный предел: стек `deque(maxlen=30)`, поэтому 31-я операция
+        подряд длину не меняет. Для этой вкладки (полигон + пара боксов +
+        обрезка) недостижимо; лечится счётчиком мутаций в редакторе.
+        """
+        return len(self.editor.undo_stack) != self._saved_undo_len
+
     # ── Сохранение / пропуск ──────────────────────────────
+    def _save_image(self) -> bool:
+        """Записать очищенное изображение на сервер. True при успехе.
+
+        Имя — из контракта воркспейса (`_TAB_SAVE_METHODS`): через него идёт
+        ответ «Да» на вопрос о несохранённом.
+        """
+        try:
+            clean_path = self._tmp_dir / "cleaned.png"
+            self.editor.save_image(str(clean_path))
+            self.api_client.save_cleaned_image(str(self._uid), clean_path)
+            self._saved_undo_len = len(self.editor.undo_stack)
+            return True
+        except (APIError, Exception) as exc:
+            QMessageBox.warning(self, "Ошибка", f"Не удалось сохранить:\n{exc}")
+            return False
+
     @Slot()
     def _on_save_only(self):
         """Сохранить очищенное изображение без перехода к следующему этапу."""
-        try:
-            clean_path = self._tmp_dir / "cleaned.png"
-            self.editor.save_image(str(clean_path))
-            self.api_client.save_cleaned_image(str(self._uid), clean_path)
+        if self._save_image():
             self.status_message.emit("💾 Сохранено")
-        except (APIError, Exception) as exc:
-            QMessageBox.warning(self, "Ошибка", f"Не удалось сохранить:\n{exc}")
 
     def _on_save(self):
+        if not self._save_image():
+            return
         try:
-            clean_path = self._tmp_dir / "cleaned.png"
-            self.editor.save_image(str(clean_path))
-            self.api_client.save_cleaned_image(str(self._uid), clean_path)
             self.api_client.complete_frame_removal(str(self._uid))
-            self._confirmed = True
-            self.status_message.emit("✅ Рамка очищена → детекция доступна")
-            self.confirmed.emit()
         except (APIError, Exception) as exc:
-            QMessageBox.warning(self, "Ошибка", f"Не удалось сохранить:\n{exc}")
+            # Запись уже прошла — вкладка чистая; не доехало только завершение
+            # этапа, и говорить «не удалось сохранить» здесь было бы неправдой.
+            QMessageBox.warning(
+                self, "Ошибка",
+                f"Изображение сохранено, но этап не завершён:\n{exc}")
+            return
+        self._confirmed = True
+        self.status_message.emit("✅ Рамка очищена → детекция доступна")
+        self.confirmed.emit()
 

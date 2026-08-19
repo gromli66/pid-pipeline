@@ -1333,41 +1333,80 @@ class DiagramWorkspace(QWidget):
     # последствиями. Замер §51: откат не менял НИ ОДНОЙ кнопки — только цвет бусины,
     # и её теперь красит поправка `_MANUAL_INPROGRESS` в `_update_beads`.
 
+    #: Имена методов сохранения, которыми вкладка отвечает на «Да». Порядок
+    #: значим: у вкладки привязки OCR `_save_graph` — псевдоним `_save_binding`.
+    _TAB_SAVE_METHODS = ("_save_graph", "_save_masks", "_save_mask", "_save_image")
+
+    def confirm_discard_active_tab(self, action: str = "закрытием") -> bool:
+        """Единственный вопрос о несохранённом. `False` — вкладку не трогать.
+
+        Дверь одна на оба пути ухода: «← Назад» из вкладки и ✕ окна
+        (`MainWindow.closeEvent`, пункт 1.18). Дверей было две, и они разошлись
+        в четырёх клетках (замер §81): текст вопроса; «Да» у вкладки без метода
+        сохранения («← Назад» молча оставлял вкладку открытой — тупик, окно
+        закрывалось с записью в лог); след в логе на «Нет»; объяснение при
+        отказе сохранения. Своё у путей осталось одно — слово о действии.
+
+        Вкладка без `has_unsaved_changes()` вопроса не поднимает, и это была
+        буква пункта 1.21: контракт — часть договора вкладки с воркспейсом,
+        а «Очистка рамки» единственная его не имела и уходила молча на обоих
+        путях. Вкладка, которая сохраняться не умеет, закрытию не мешает:
+        тупик «не закрывается и не объясняет» дороже несохранённой вкладки,
+        о которой оператора спросили (решение пункта 1.18).
+        """
+        tab = self._active_tab
+        if tab is None or not hasattr(tab, 'has_unsaved_changes'):
+            return True
+        if not tab.has_unsaved_changes():
+            return True
+
+        reply = QMessageBox.question(
+            self, "Несохранённые изменения",
+            f"Есть несохранённые изменения. Сохранить перед {action}?",
+            QMessageBox.StandardButton.Yes
+            | QMessageBox.StandardButton.No
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if reply == QMessageBox.StandardButton.Cancel:
+            return False
+        if reply == QMessageBox.StandardButton.No:
+            logger.warning("Уход из вкладки %s без сохранения — выбор оператора",
+                           type(tab).__name__)
+            return True
+
+        for name in self._TAB_SAVE_METHODS:
+            save = getattr(tab, name, None)
+            if save is None:
+                continue
+            if save():
+                return True
+            # Об ошибке говорит сама вкладка (диалог или своя строка статуса);
+            # здесь — почему на экране ничего не изменилось.
+            logger.warning("Сохранение %s.%s не удалось — закрытие отменено",
+                           type(tab).__name__, name)
+            self.status_message.emit(
+                "Не удалось сохранить — закрытие отменено", 5000)
+            return False
+
+        logger.warning("Вкладка %s не умеет сохраняться — уход без сохранения",
+                       type(tab).__name__)
+        return True
+
     def _close_active_tab(self):
         """← Назад (из вкладки) → закрыть, вернуться к header."""
         if not self._active_tab:
             return
 
-        # Остановить автосохранение
-        self._autosave.stop()
-
-        # Спросить о сохранении
-        tab = self._active_tab
         tab_key = self._active_tab_key
-        if hasattr(tab, 'has_unsaved_changes') and tab.has_unsaved_changes():
-            reply = QMessageBox.question(
-                self, "Закрыть вкладку",
-                "Есть несохранённые изменения. Сохранить перед закрытием?",
-                QMessageBox.StandardButton.Yes
-                | QMessageBox.StandardButton.No
-                | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Cancel,
-            )
-            if reply == QMessageBox.StandardButton.Cancel:
-                return
-            if reply == QMessageBox.StandardButton.Yes:
-                saved = False
-                if hasattr(tab, '_save_graph'):
-                    saved = tab._save_graph()
-                elif hasattr(tab, '_save_masks'):
-                    saved = tab._save_masks()
-                elif hasattr(tab, '_save_mask'):
-                    saved = tab._save_mask()
-                if not saved:
-                    return  # сохранение не удалось — не закрываем
+        if not self.confirm_discard_active_tab():
+            # Вкладка остаётся на экране — вместе со своим автосохранением.
+            # Раньше `_autosave.stop()` стоял ДО вопроса, и отказ закрывать
+            # оставлял открытую вкладку с мёртвым таймером (замер §81).
+            return
 
         # Проверить _saved перед удалением (двойная страховка для масок)
-        self._detect_saved_mask(tab)
+        self._detect_saved_mask(self._active_tab)
 
         self._close_tab_and_restore_header()
 
@@ -1381,16 +1420,29 @@ class DiagramWorkspace(QWidget):
             self._check_masks_completion()
 
     def _force_close_tab(self):
-        """Закрыть вкладку без вопросов (при смене диаграммы / cleanup)."""
+        """Закрыть вкладку без вопросов (при смене диаграммы / cleanup).
+
+        Молчит законно: жеста к этому пути при открытой вкладке нет — header
+        с кнопкой «← Назад в список» спрятан, а список диаграмм лежит за ним
+        (замер §81, заперт тестом `test_header_back_is_unreachable_...`).
+        Появится жест — молчание станет дефектом, и тест об этом скажет.
+        """
         if self._active_tab:
-            self._autosave.stop()
             self._remove_tab_widget()
             self.header_panel.setUpdatesEnabled(True)
             self._was_status_watching = False
 
     def _remove_tab_widget(self):
-        """Убрать виджет вкладки из layout."""
+        """Убрать виджет вкладки из layout.
+
+        Автосохранение живёт ровно столько, сколько вкладка, поэтому гасится
+        здесь — в единственной точке, где вкладка умирает. Раньше `stop()`
+        стоял в двух путях закрытия из пятнадцати, и после «Подтвердить»
+        таймер оставался крутиться на снесённом виджете (замер §81: в
+        `_close_tab_and_restore_header` ведут 12 путей, `stop()` был у одного).
+        """
         if self._active_tab:
+            self._autosave.stop()
             self._tab_container_layout.removeWidget(self._active_tab)
             self._active_tab.setParent(None)
             self._active_tab.deleteLater()
