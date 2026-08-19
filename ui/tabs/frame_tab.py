@@ -18,7 +18,7 @@ import logging
 import tempfile
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QMessageBox,
 )
@@ -45,7 +45,11 @@ class FrameTab(QWidget):
         self._tmp_dir = Path(tempfile.mkdtemp(prefix="frame_"))
 
         self._build_ui()
-        self._load_original()
+        # Загрузка — ПОСЛЕ конструктора: воркспейс ещё не вставил вкладку в
+        # layout и не подключил её сигналы, поэтому синхронная качка морозила
+        # клиент до конца скачивания, а её диалог всплывал над несуществующей
+        # вкладкой и вешал процесс насмерть (пункт 1.x6 дороги).
+        QTimer.singleShot(0, self, self._load_original)
 
     # ── UI ────────────────────────────────────────────────
     def _build_ui(self):
@@ -118,6 +122,14 @@ class FrameTab(QWidget):
 
         root.addLayout(toolbar)
 
+        # Строка отказа загрузки — вместо модалки из конструктора (1.x6).
+        self.error_label = QLabel()
+        self.error_label.setWordWrap(True)
+        self.error_label.setStyleSheet(
+            "color: #C62828; background-color: #FFEBEE; padding: 6px;")
+        self.error_label.hide()
+        root.addWidget(self.error_label)
+
         self.editor = FrameRemoverView()
         self.editor.status_callback = self._on_editor_status
         root.addWidget(self.editor, stretch=1)
@@ -130,9 +142,18 @@ class FrameTab(QWidget):
             if not self.editor.load_image(str(dest)):
                 raise RuntimeError("Не удалось открыть изображение")
             self.editor.set_tool("polygon")
+            logger.info("original_image загружен, вкладка очистки рамки готова")
             self.status_message.emit("Обведите внутреннюю часть чертежа полигоном")
         except (APIError, Exception) as exc:
-            QMessageBox.warning(self, "Ошибка", f"Не удалось загрузить изображение:\n{exc}")
+            # Не диалогом: закрыть его в этот момент некому — под offscreen
+            # процесс висит насмерть, на бою модалка стоит над вкладкой,
+            # которой ещё нет (1.x6). Оператор видит строку, файл лога —
+            # трассировку (Д2: QMessageBox в собранном .exe следа не оставляет).
+            logger.exception("Не удалось загрузить original_image: %s", exc)
+            text = f"❌ Не удалось загрузить изображение: {exc}"
+            self.error_label.setText(text)
+            self.error_label.show()
+            self.status_message.emit(text)
 
     # ── Инструменты ───────────────────────────────────────
     def _set_tool(self, tool: str):
