@@ -883,11 +883,15 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             self._drag_route_ctx = prev_ctx
             self._drag_routable_edges = prev_routable
             self._amnesty_cache = {}
+            # Закрытие шага undo — тоже в finally: движок мутирует граф НА
+            # МЕСТЕ, и его падение посреди лестницы оставляло оператора с
+            # изменённым холстом и без Ctrl+Z (шаг открыт execute() выше, но
+            # не закрыт). Порядок тот же, что на зелёном пути.
+            self.model.rebuild_edge_data_index()
+            self._redraw_all()
+            cmd.finalize()
+            self.undo_mgr.push_executed(cmd)
 
-        self.model.rebuild_edge_data_index()
-        self._redraw_all()
-        cmd.finalize()
-        self.undo_mgr.push_executed(cmd)
         self.update_status(
             f"Сглаживание: колен {stats['колено']}, изломов "
             f"{stats['излом']}, скольжений {stats['скольжение']}, "

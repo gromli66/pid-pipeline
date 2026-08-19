@@ -593,12 +593,16 @@ def _try_remedies(graph, e, stats, route_fn, reseat_fn, budget,
     snap_edges = [deepcopy(dict(x)) for x in g_edges(graph)]
 
     def restore_all():
+        # deepcopy обязателен: update() копирует dict ПОВЕРХНОСТНО, и без
+        # него живое ребро получило бы тот же список waypoints, что лежит в
+        # снимке. Дальше drop_collinear делает по нему pop(), снимок
+        # укорачивается навсегда, и следующий откат возвращает уже порчу.
         for cur, old in zip(graph.get("nodes") or [], snap_nodes):
             cur.clear()
-            cur.update(old)
+            cur.update(deepcopy(old))
         for cur, old in zip(g_edges(graph), snap_edges):
             cur.clear()
-            cur.update(old)
+            cur.update(deepcopy(old))
 
     ok = False
     try:
@@ -620,12 +624,17 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
     snap_edges = [deepcopy(dict(x)) for x in g_edges(graph)]
 
     def restore():
+        # deepcopy — см. restore_all(): снимок обязан пережить любое число
+        # проб. Здесь это критично вдвойне: restore() в ветке КОЛЕНА ниже
+        # зовётся БЕЗУСЛОВНО, как только движку передан роутер (а редактор
+        # передаёт его всегда), то есть на боевом пути алиас взводился
+        # раньше первой же пробы со сдвигом.
         for cur, old in zip(graph.get("nodes") or [], snap_nodes):
             cur.clear()
-            cur.update(old)
+            cur.update(deepcopy(old))
         for cur, old in zip(g_edges(graph), snap_edges):
             cur.clear()
-            cur.update(old)
+            cur.update(deepcopy(old))
 
     eid = e.get("id")
 
