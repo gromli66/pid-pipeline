@@ -28,7 +28,10 @@
 пересъём вычеркнул бы неизмеренное). См. `write_blocked()`.
 ⚠ Пересъём обязан быть не слабее эталона (пункт 1-29): `--runs` меньше
 эталонных или другой ключ роутинга — тоже «судить нечем». Иначе одна удачная
-выборка молча вычёркивает графы из списка неповторимых (§49.27).
+выборка молча вычёркивает графы из списка неповторимых (§49.27). Одного пола
+мало: `false` в эталоне ЛИПКИЙ (`merge_stable()`), снять его может только явная
+починка `--allow-fixed <uid>` — замер 1-29 показал, что при `--runs 6`
+неповторимый граф всё равно способен выйти с одним хешем (§50.19).
 
 Ключ `--no-routing` выключает этап роутинга (`LayoutParams.routing`): им
 недетерминизм и локализуется — расстановка с раздвиганием отдельно от обхода
@@ -252,6 +255,43 @@ def write_blocked(result: dict[str, list[str]], base: dict,
     return unjudged, refused
 
 
+def merge_stable(result: dict[str, list[str]], base: dict,
+                 allow_fixed: list[str]) -> tuple[dict[str, bool], list[str]]:
+    """-> (что записать в эталон, строки-объяснения к печати).
+
+    Неповторимость — наблюдение ПОЛОЖИТЕЛЬНОЕ: два разных исхода её доказывают,
+    а одна тихая серия одинаковых не опровергает (`TESTING §8.2`). Поэтому
+    `false` в эталоне липкий: замер, показавший один хеш там, где эталон помнит
+    расхождение, его не стирает. Снять `false` может только явно объявленная
+    починка — `--allow-fixed <uid>` плюс объяснение в коммите, ЧТО изменилось
+    в коде; без такого ключа храповик стал бы вечным и починку недетерминизма
+    libavoid (ВН3) записать было бы нечем.
+
+    ⛔ Замерено СОБСТВЕННЫМ пересъёмом этого пункта (§50.19), а не выведено:
+    полный корпус, `--runs 6` — тот самый пол, который пункт и ввёл, — и
+    `0aea61c0` вышел с одним хешем. Пересъём записал бы его `true`, хотя §32.14
+    наблюдал у него ТРИ разных исхода из шести. Пол по числу прогонов такое не
+    держит: он необходим, но недостаточен.
+    """
+    known = base.get("stable", {})
+    stable, lines = {}, []
+    for uid8, sha_list in sorted(result.items()):
+        now = stability(sha_list)
+        if now and known.get(uid8) is False:
+            if uid8 in allow_fixed:
+                lines.append(f"[ПОЧИНКА по --allow-fixed] {uid8}: неповторим -> "
+                             "воспроизводим. Объяснить в коммите, ЧТО изменилось "
+                             "в коде — иначе это просто удачная выборка")
+            else:
+                now = False
+                lines.append(f"[ВЫБОРКА, НЕ ПОЧИНКА] {uid8}: эталон помнит "
+                             "неповторимость, а этот замер дал один хеш — "
+                             "оставлено «неповторим» (TESTING §8.2). Если это "
+                             f"починка кода: --allow-fixed {uid8}")
+        stable[uid8] = now
+    return stable, lines
+
+
 def read_baseline() -> dict:
     if not BASELINE.exists():
         return {}
@@ -274,6 +314,9 @@ def main() -> int:
                     help="сверить с эталоном; exit 1 при регрессе")
     ap.add_argument("--write-baseline", action="store_true",
                     help="переснять эталон (отдельным коммитом, Д6)")
+    ap.add_argument("--allow-fixed", action="append", default=None, metavar="UID8",
+                    help="при пересъёме записать граф из списка неповторимых "
+                         "как воспроизводимый — явная починка; можно повторять")
     args = ap.parse_args()
 
     if args.child is not None:
@@ -305,10 +348,14 @@ def main() -> int:
             return 1
         if unjudged:
             return 2
+        stable, notes = merge_stable(shas(result), read_baseline(),
+                                     args.allow_fixed or [])
+        for msg in notes:
+            print(msg)
         BASELINE.parent.mkdir(parents=True, exist_ok=True)
         BASELINE.write_text(json.dumps(
             {"runs": args.runs, "routing": routing,
-             "stable": {u: stability(s) for u, s in sorted(shas(result).items())}},
+             "stable": stable},
             ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
         print(f"эталон переснят: {BASELINE}")
         return 0

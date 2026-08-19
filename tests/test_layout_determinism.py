@@ -188,13 +188,20 @@ def test_write_on_the_whole_baseline_records_it(tmp_path, monkeypatch):
     """Положительный контроль: измерен весь эталон — пересъём проходит.
 
     Без него правка односторонняя: стенд, отказывающий всегда, гейтом не является.
+
+    ⚠ С пункта 1-29 замер `bbbbbbbb` здесь совпадает с эталоном (неповторим):
+    случай «эталон числит неповторимым, а замер дал один хеш» разбирается
+    отдельно (`test_write_keeps_a_known_unstable_graph_unstable`) и пересъёмом
+    больше не проходит. Новый граф `cccccccc` — чтобы записанное отличалось от
+    эталона и запись была видна, а не совпала с ним случайно.
     """
     path = _write_stand(tmp_path, monkeypatch,
-                        {"aaaaaaaa": ["x", "x"], "bbbbbbbb": ["z", "z"]})
+                        {"aaaaaaaa": ["x", "x"], "bbbbbbbb": ["z", "w"],
+                         "cccccccc": ["p", "p"]})
 
     assert det.main() == 0
     assert json.loads(path.read_text(encoding="utf-8"))["stable"] == {
-        "aaaaaaaa": True, "bbbbbbbb": True}
+        "aaaaaaaa": True, "bbbbbbbb": False, "cccccccc": True}
 
 
 def test_write_of_the_first_snapshot_has_nothing_to_compare(tmp_path, monkeypatch):
@@ -283,3 +290,46 @@ def test_broken_graph_outranks_a_weak_sample(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "перестали воспроизводиться: aaaaaaaa" in out
     assert "прогонов 5 против 6" in out
+
+
+# ── «стало лучше» на неповторимом графе — не починка, а выборка (пункт 1-29) ──
+
+def test_write_keeps_a_known_unstable_graph_unstable(tmp_path, monkeypatch, capsys):
+    """⛔ Замерено СОБСТВЕННЫМ пересъёмом 1-29 (§50.19), а не выведено.
+
+    Полный корпус, `--runs 6` — ровно тот пол, который этот же пункт и ввёл:
+    `0aea61c0` вышел с одним хешем, и пересъём молча записал его `true`. Между
+    тем §32.14 наблюдал у него **3 разных исхода из 6** — неповторимость
+    доказана положительным наблюдением, и удачная серия его не отменяет
+    (`TESTING §8.2` называет именно этот граф). Пол по числу прогонов такое
+    не держит: он необходим, но недостаточен.
+
+    Правило поэтому храповиковое: `false` в эталоне липкий, снять его может
+    только явно объявленная починка (`--allow-fixed`), а не тихий замер.
+    """
+    path = _write_stand(tmp_path, monkeypatch,
+                        {"aaaaaaaa": ["x", "x"], "bbbbbbbb": ["z", "z"]})
+
+    assert det.main() == 0
+    assert json.loads(path.read_text(encoding="utf-8"))["stable"] == {
+        "aaaaaaaa": True, "bbbbbbbb": False}, "неповторимость стёрта выборкой"
+    out = capsys.readouterr().out
+    assert "bbbbbbbb" in out and "--allow-fixed" in out, "тихо, без объяснения"
+
+
+def test_write_records_a_declared_fix(tmp_path, monkeypatch, capsys):
+    """Обратная сторона: починку записать МОЖНО, но только назвав граф.
+
+    Иначе храповик стал бы вечным: когда недетерминизм libavoid однажды
+    починят (ВН3, волна 9), стенд обязан уметь это записать. Ключ и есть то
+    самое «объяснение», которого требует `TESTING §8.2`, — он заставляет
+    назвать uid руками и объяснить в коммите, ЧТО изменилось.
+    """
+    path = _write_stand(tmp_path, monkeypatch,
+                        {"aaaaaaaa": ["x", "x"], "bbbbbbbb": ["z", "z"]},
+                        argv=("--runs", "6", "--allow-fixed", "bbbbbbbb"))
+
+    assert det.main() == 0
+    assert json.loads(path.read_text(encoding="utf-8"))["stable"] == {
+        "aaaaaaaa": True, "bbbbbbbb": True}
+    assert "ПОЧИНКА" in capsys.readouterr().out
