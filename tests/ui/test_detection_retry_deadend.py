@@ -43,7 +43,7 @@ import pytest                                              # noqa: E402
 pytest.importorskip("PySide6")
 
 from fastapi import HTTPException                          # noqa: E402
-from PySide6.QtCore import QObject, Signal                 # noqa: E402
+from PySide6.QtCore import QEvent, QObject, Signal          # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox    # noqa: E402
 
 import ui.widgets.error_report_dialog as erd               # noqa: E402
@@ -211,6 +211,7 @@ def bench(qapp, monkeypatch):
     monkeypatch.setattr(erd, "ErrorReportDialog", StubErrorDialog)
 
     from worker.celery_app import celery_app
+    made = []
 
     def _make(status, error_stage=None, stages=None):
         server = FakeServer(status, error_stage=error_stage,
@@ -228,9 +229,23 @@ def bench(qapp, monkeypatch):
         ws = dw.DiagramWorkspace(FakeAPI(server, stages or []),
                                  FakeStatusProvider())
         ws.load_diagram(UID, "схема оператора")
+        made.append(ws)
         return ws, server
 
-    return _make
+    yield _make
+
+    # Свои воркспейсы набор сносит сам, детерминированно (`PROTOCOL §5`, правило
+    # 1-32). Замер 1.x11: без этой уборки файл оставлял 2000 живых виджетов и 87
+    # БЕГУЩИХ таймеров на весь процесс, и свежий 10-мс таймер соседнего теста
+    # ждал события 0.27 с вместо 0.02 — на раннере CI это уронило
+    # `test_unsaved_question.py::test_autosave_tick_reaches_the_tab_save_method`.
+    # Выпиваем ровно отложенные удаления, а не всю очередь: общий
+    # `processEvents()` оплачивал бы ещё и чужой мусор.
+    for ws in made:
+        ws.hide()
+        ws.setParent(None)
+        ws.deleteLater()
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 # ── гейт пункта: выход из тупика есть ────────────────────────────────────
