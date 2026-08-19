@@ -138,6 +138,9 @@ MainWindow (QMainWindow)
 4. Показывает header panel.
 5. Останавливает AutoSave.
 6. Обновляет статус.
+7. Только для вкладки труб — двойная страховка `_check_masks_completion()`.
+
+**Команда о завершении валидации масок отправляется один раз на одно подтверждение** (пункт 1.20 дороги). Раньше шаг 7 стоял безусловно, а флаг `_pipe_confirmed` жил до конца сеанса с диаграммой — поэтому закрытие ЛЮБОЙ следующей вкладки слало `complete_mask_validation` заново, в том числе когда оператор на шаге 1 ОТКАЗАЛСЯ сохранять изменения. Пока сервер ещё не ушёл дальше `validated_masks`, такая повторная команда диспатчит скелетизацию второй раз (`app/api/validation.py:481-503`) — это UI-нога гонки двойной скелетизации; остальные две ноги (дыра `already_past` и гейт задачи) закрываются отдельно. Право доложить возвращает только новое подтверждение вкладки труб.
 
 ### 3.5 Rollback
 
@@ -154,7 +157,7 @@ MainWindow (QMainWindow)
 
 Примеры:
 
-- **`pipe`** → `_open_pipe()` → создаёт `PipeTab`, скачивает маски → подключает `pipe_confirmed` signal → `_on_pipe_confirmed()` → `api_client.complete_mask_validation()`.
+- **`pipe`** → `_open_pipe()` → создаёт `PipeTab`, скачивает маски → подключает `pipe_confirmed` signal → `_on_pipe_confirmed()` → `api_client.complete_mask_validation()` — ровно один раз на подтверждение (см. §3.4).
 - **`val_graph`** → двухфазный флоу: `SimpleGraphTab` → confirm → `AdvancedGraphTab` → confirm → `complete_graph_validation()`.
 - **`contours`** → `ContourTab` → confirm → `complete_contour_validation()`.
 - **`ocr_binding`** → `OcrBindingTab` → confirm → `complete_ocr_binding()`.
