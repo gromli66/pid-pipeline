@@ -611,7 +611,8 @@ def _canvas_has_layout(canvas_path: Path) -> bool:
     return canvas_state.has_layout(canvas)
 
 
-def _canvas_is_stale(canvas_path: Path, source_path: Path) -> bool:
+def _canvas_is_stale(canvas_path: Path, source_path: Path,
+                     download_failed: bool = False) -> bool:
     """Холст устарел, если геометрия graph_validated изменилась после сборки.
 
     Смёржить их нельзя — pretransform необратим, поэтому устаревший холст
@@ -619,7 +620,16 @@ def _canvas_is_stale(canvas_path: Path, source_path: Path) -> bool:
 
     Считает общий модуль `modules.graph.core.canvas_state` — тот же, что зовёт
     воркер. Две реализации канона = расходящиеся sha = ложное «устарело».
+
+    download_failed: graph_validated не скачался по НЕ-404 (сеть, 5xx) — тогда
+    `source_path` это ФОЛБЭК `graph_json`, а не источник холста, и сверка с ним
+    врёт: свежий холст объявляется устаревшим, а модалка «Схема изменилась»
+    называет причину, которой не было (замер §68.3). Судить нечем — холст
+    остаётся оператору: цена ложного «устарел» — выброшенная ручная раскладка.
+    То же различение, что у `_canvas_contours_stale` (пункт 0.5).
     """
+    if download_failed:
+        return False
     from modules.graph.core import canvas_state
 
     try:
@@ -750,6 +760,9 @@ class BaseGraphTab(AppearanceMixin, QWidget):
         self._editor: Optional[BaseGraphEditor] = None
         # undo_mgr.revision на момент последнего успешного save
         self._saved_revision: int = 0
+        # Артефакты, чьё состояние на сервере НЕИЗВЕСТНО: скачать не удалось
+        # не по 404. Запись в них ждёт явного «да» оператора (1.x9).
+        self._unreadable_on_server: set[str] = set()
 
         self._setup_ui()
         self._download_artifacts()
@@ -861,6 +874,15 @@ class BaseGraphTab(AppearanceMixin, QWidget):
         self._download_thread.wait()
         self.loading_label.hide()
 
+        # Не-404 при загрузке = на сервере МОГЛА лежать работа оператора,
+        # которую прочитать не удалось, а открытое собрано вслепую. Запись
+        # в такой артефакт запирается до явного «да» (1.x9): предупреждения
+        # 1.23 записи не мешали, и первый же save затирал непрочитанное.
+        for flag, name in (("saved_graph_download_failed", "graph_validated"),
+                           ("canvas_download_failed", "graph_canvas")):
+            if artifacts.get(flag):
+                self._unreadable_on_server.add(name)
+
         if artifacts.get("saved_graph_download_failed"):
             # Сохранённый граф МОГ лежать на сервере и просто не отдался (5xx,
             # сеть, диск): открыт исходный, а `_save_graph` пишет обратно
@@ -891,14 +913,22 @@ class BaseGraphTab(AppearanceMixin, QWidget):
                 # иначе они бы сконвертили граф и автосейв залил бы 1920.
                 try:
                     saved = artifacts.get("graph_canvas")
-                    if saved and not _canvas_is_stale(saved, artifacts["graph_json"]) \
+                    # graph_json — это ФОЛБЭК, когда сохранённый граф не отдался:
+                    # ни судить по нему о свежести холста, ни подмешивать из
+                    # него подписи нельзя — источник не прочитан (1.x9).
+                    source_unknown = bool(
+                        artifacts.get("saved_graph_download_failed"))
+                    if saved and not _canvas_is_stale(
+                                saved, artifacts["graph_json"],
+                                download_failed=source_unknown) \
                             and not _canvas_contours_stale(
                                 saved, artifacts.get("contours_validated"),
                                 download_failed=bool(artifacts.get(
                                     "contours_download_failed"))):
                         # Холст актуален — грузим правки оператора как есть
-                        _import_text_into_canvas(
-                            Path(saved), Path(artifacts["graph_json"]))
+                        if not source_unknown:
+                            _import_text_into_canvas(
+                                Path(saved), Path(artifacts["graph_json"]))
                         # §8.3.1: посадка концов чинится при каждом открытии
                         # (на каноничном холсте — no-op).
                         _reseat_canvas_endpoints(Path(saved))
@@ -1142,9 +1172,63 @@ class BaseGraphTab(AppearanceMixin, QWidget):
             return self._editor.undo_mgr.revision != self._saved_revision
         return False
 
+    #: артефакт → о чём предупредить, если писать в него придётся вслепую
+    _BLIND_WRITE_WARNING = {
+        "graph_canvas":
+            "Сохранённый холст «Ручной правки» не удалось скачать — открытый "
+            "собран заново, без прежних правок.\n\n"
+            "Сохранение затрёт на сервере холст, в котором могла остаться "
+            "ваша ручная раскладка.",
+        "graph_validated":
+            "Сохранённый граф не удалось скачать — открыт ИСХОДНЫЙ, без ваших "
+            "прежних правок.\n\n"
+            "Сохранение затрёт на сервере сохранённый граф, в котором могла "
+            "остаться ваша прежняя валидация.",
+    }
+
+    def _confirm_blind_overwrite(self, artifact: str) -> bool:
+        """Разрешена ли запись в артефакт, чьё состояние на сервере неизвестно.
+
+        Предупреждения 1.23 записи не мешали: оператор ВИДЕЛ, что открыл не
+        свою работу, и первый же save молча затирал серверную. Сюда сходятся
+        все три боевых входа на запись — кнопка 💾, «Подтвердить» и
+        автосохранение (раз в 120 с, включено по умолчанию), поэтому запрет
+        стоит один и здесь. Ctrl+S редактора ведёт в ЛОКАЛЬНОЕ сохранение
+        (`base_graph_editor.keyPressEvent`) и сервера не касается — это 1.19.
+
+        «Да» снимает запрет насовсем: решение принял оператор. «Нет» его
+        оставляет, и вопрос вернётся при следующей попытке записи.
+        """
+        if artifact not in self._unreadable_on_server:
+            return True
+        reply = QMessageBox.question(
+            self, "Сохранение затрёт серверную копию",
+            f"{self._BLIND_WRITE_WARNING[artifact]}\n\nСохранить всё равно?",
+            QMessageBox.StandardButton.Yes
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            logger.warning("запись в %s отменена оператором: серверная копия "
+                           "не прочитана", artifact)
+            return False
+        logger.warning("оператор разрешил перезапись %s поверх непрочитанной "
+                       "серверной копии", artifact)
+        self._unreadable_on_server.discard(artifact)
+        return True
+
     def _save_graph(self) -> bool:
         """Сохранить граф на сервер. Возвращает True при успехе."""
         if not self._editor:
+            return False
+
+        # Куда пишем — тем и определяется, что под угрозой: холст уходит
+        # в graph_canvas, вкладки в оригинальных координатах — в graph_validated.
+        artifact = ("graph_canvas"
+                    if getattr(self._editor, "_canvas_mode", False)
+                    else "graph_validated")
+        if not self._confirm_blind_overwrite(artifact):
+            self.status_label.setText("Сохранение отменено")
             return False
 
         try:
@@ -1158,15 +1242,13 @@ class BaseGraphTab(AppearanceMixin, QWidget):
 
             # Холст пишется в свой артефакт: graph_validated принадлежит вкладкам
             # в оригинальных координатах и затирать его 1920-графом нельзя.
-            to_canvas = getattr(self._editor, "_canvas_mode", False)
-            name = "graph_canvas.json" if to_canvas else "graph_validated.json"
-            graph_path = self.temp_dir / name
+            graph_path = self.temp_dir / f"{artifact}.json"
             if not self._editor.save_graph(str(graph_path)):
                 self.status_label.setText("Не удалось сохранить локально")
                 return False
 
             self.status_label.setText("Загрузка графа на сервер...")
-            if to_canvas:
+            if artifact == "graph_canvas":
                 self.api_client.upload_canvas_graph(self.uid, graph_path)
             else:
                 self.api_client.upload_validated_graph(self.uid, graph_path)
