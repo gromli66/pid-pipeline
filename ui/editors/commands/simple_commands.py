@@ -4,6 +4,8 @@ Simple Commands — 7 granular команд для SimpleGraphEditor.
 Каждая команда хранит данные для undo/redo без snapshot.
 """
 
+import copy
+
 from ui.editors.undo_manager import Command
 from ui.editors.graph_data import GraphDataModel
 
@@ -308,12 +310,28 @@ class ResizeNodeCommand(Command):
     вернуть и их, иначе после отката пин остаётся отмасштабированным при
     старой рамке и вылетает за границу узла. Снимок пинов:
     {(edge_key, role): {'dx','dy'} | None}.
+
+    1.7: тем же жестом пересаживаются КОНЦЫ инцидентных рёбер
+    (`_reseat_after_resize`; в «Ручной правке» — движком, вместе с коленями).
+    Пины этого не покрывают: пин — смещение от центроида, а на сервер уходят
+    `source_point`/`target_point`/`waypoints`. Без их снимка Ctrl+Z возвращал
+    рамку и оставлял маршруты в состоянии «после ресайза» (замер 1.7: ребро
+    `node_2 -> node_3`, source_point [13, 1547] -> [27.26, 1577.79], не
+    возвращался). Снимок маршрутов: {edge_key: {поле: значение}}, поля —
+    `ROUTE_KEYS`; отсутствующее в снимке поле при откате УДАЛЯЕТСЯ (иначе
+    `_src_side`/`_tgt_side`, заведённые ресайзом, переживают undo).
     """
+
+    #: Поля ребра, которые переписывает пересадка концов после resize
+    #: (замер 1.7: сравнение полных словарей рёбер до/после жеста).
+    ROUTE_KEYS = ('source_point', 'target_point', 'waypoints',
+                  '_src_side', '_tgt_side')
 
     def __init__(self, model: GraphDataModel, editor, node_id: str,
                  old_bbox: list, old_centroid: list, old_area: float,
                  new_bbox: list, new_centroid: list, new_area: float,
-                 old_pins: dict | None = None, new_pins: dict | None = None):
+                 old_pins: dict | None = None, new_pins: dict | None = None,
+                 old_routes: dict | None = None, new_routes: dict | None = None):
         self._model = model
         self._editor = editor
         self._node_id = node_id
@@ -325,6 +343,22 @@ class ResizeNodeCommand(Command):
         self._new_area = new_area
         self._old_pins = old_pins
         self._new_pins = new_pins
+        self._old_routes = old_routes
+        self._new_routes = new_routes
+
+    def _apply_routes(self, routes):
+        """1.7: вернуть концы/колени инцидентных рёбер к снятому состоянию."""
+        if not routes:
+            return
+        for key, fields in routes.items():
+            edge_data = self._model.find_edge_data(key)
+            if edge_data is None:
+                continue
+            for field in self.ROUTE_KEYS:
+                if field in fields:
+                    edge_data[field] = copy.deepcopy(fields[field])
+                else:
+                    edge_data.pop(field, None)
 
     def _apply_pins(self, pins):
         if not pins:
@@ -346,6 +380,7 @@ class ResizeNodeCommand(Command):
             'area': self._new_area,
         })
         self._apply_pins(self._new_pins)
+        self._apply_routes(self._new_routes)
         self._editor._redraw_all()
 
     def undo(self):
@@ -355,6 +390,7 @@ class ResizeNodeCommand(Command):
             'area': self._old_area,
         })
         self._apply_pins(self._old_pins)
+        self._apply_routes(self._old_routes)
         self._editor._redraw_all()
 
     @property

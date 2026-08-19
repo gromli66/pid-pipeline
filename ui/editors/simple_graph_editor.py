@@ -304,6 +304,9 @@ class SimpleGraphEditor(BaseGraphEditor):
         # Э5: пины концов инцидентных рёбер масштабируются вместе с рамкой —
         # undo обязан вернуть и их (иначе пин вылетает за границу узла).
         self._resize_start_pins = self._snapshot_edge_pins(node_id)
+        # 1.7: концы/колени инцидентных рёбер переписывает `_reseat_after_resize`
+        # (в «Ручной правке» — движком) — undo обязан вернуть и их.
+        self._resize_start_routes = self._snapshot_edge_routes(node_id)
 
         self._resize_overlay = ResizableNodeOverlay(
             scene=self.scene,
@@ -363,6 +366,21 @@ class SimpleGraphEditor(BaseGraphEditor):
                 snap[(key, role)] = dict(pin) if pin else None
         return snap
 
+    def _snapshot_edge_routes(self, node_id: str) -> dict:
+        """1.7: снимок маршрутов инцидентных рёбер для undo resize —
+        {edge_key: {поле: значение}} по `ResizeNodeCommand.ROUTE_KEYS`.
+        Отсутствующее поле в снимок не попадает — при откате оно удаляется."""
+        import copy
+
+        snap = {}
+        for e in self.edges_data:
+            if node_id not in (e.get('source'), e.get('target')):
+                continue
+            key = self.model.edge_key(e['source'], e['target'])
+            snap[key] = {f: copy.deepcopy(e[f])
+                         for f in ResizeNodeCommand.ROUTE_KEYS if f in e}
+        return snap
+
     def _reseat_after_resize(self, node_id: str):
         """База: пересадка концов рёбер узла после resize (point-to-point).
 
@@ -414,6 +432,8 @@ class SimpleGraphEditor(BaseGraphEditor):
                 new_area=new_area,
                 old_pins=getattr(self, '_resize_start_pins', None),
                 new_pins=self._snapshot_edge_pins(node_id),
+                old_routes=getattr(self, '_resize_start_routes', None),
+                new_routes=self._snapshot_edge_routes(node_id),
             )
             self.undo_mgr.push_executed(cmd)
             self.update_status(f"Resize: {node_id} → {int(new_bbox[2]-new_bbox[0])}×{int(new_bbox[3]-new_bbox[1])}")
@@ -423,6 +443,7 @@ class SimpleGraphEditor(BaseGraphEditor):
         self._resize_start_centroid = new_centroid
         self._resize_start_area = new_area
         self._resize_start_pins = self._snapshot_edge_pins(node_id)
+        self._resize_start_routes = self._snapshot_edge_routes(node_id)
 
     def _stop_resize(self):
         """Убрать resize handles и вернуться в предыдущий режим."""

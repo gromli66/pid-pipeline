@@ -361,7 +361,7 @@ undo_mgr.push_executed(cmd)
 | `AddConnectorIsolatedCommand` | `model.add_node()` + `_draw_single_node()` | `model.remove_node()` + `remove_node_items()` |
 | `DeleteNodeCommand` | Запоминает соседей → удаляет рёбра визуально → `model.remove_node()` каскадно → обновляет цвета | Восстанавливает node + все рёбра + цвета |
 | `AddEquipmentNodeCommand` | `model.add_node()` + `_draw_single_node()` | `model.remove_node()` + `remove_node_items()` |
-| `ResizeNodeCommand` | `model.update_node()` (новые bbox/centroid/area) + `_redraw_all()` | `model.update_node()` (старые) + `_redraw_all()` |
+| `ResizeNodeCommand` | `model.update_node()` (новые bbox/centroid/area) + пины Э5 + маршруты инцидентных рёбер (`ROUTE_KEYS`) + `_redraw_all()` | то же со снимком «до»: рамка, пины и концы/колени рёбер возвращаются вместе (1.7 — раньше undo возвращал только рамку, а `source_point`/`target_point`/`waypoints` оставались от ресайза) |
 
 Из `contour_commands.py`:
 
