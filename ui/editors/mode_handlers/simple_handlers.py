@@ -153,7 +153,12 @@ class ResizeNodeHandler(ModeHandler):
         if overlay and overlay.visible:
             handle = overlay.find_handle_at(x, y)
             if handle:
-                overlay.start_drag(handle)
+                # 1.8: тягу открывает только НАСТОЯЩЕЕ нажатие. Синтетический
+                # клик (`event=None` из `_on_ctrl_lmb_click`) приходит уже
+                # ПОСЛЕ отпускания кнопки: начатая из него тяга не получит
+                # release и поедет за голым mouseMove («липкий ресайз»).
+                if event is not None:
+                    overlay.start_drag(handle)
                 return True
 
         # 2. Клик на узел

@@ -445,11 +445,58 @@ class SimpleGraphEditor(BaseGraphEditor):
         self._resize_start_pins = self._snapshot_edge_pins(node_id)
         self._resize_start_routes = self._snapshot_edge_routes(node_id)
 
+    def _revert_uncommitted_resize(self):
+        """1.8: снять брошенную тягу — вернуть узел и инцидентные рёбра к
+        последнему снимку (вход в режим / последний `_commit_resize`).
+
+        Esc посреди протяжки прячет ручки, но модель уже мутирована каждым
+        кадром (`_on_node_resized`: bbox/centroid/area, пины, пересадка
+        концов) — без отката статусная строка врёт про отмену, а порча
+        остаётся без шага undo и с чистым дёрти-флагом. Откат — тем же
+        снимком и тем же кодом, что у Ctrl+Z (`ResizeNodeCommand.undo`:
+        пять полей `ROUTE_KEYS`, заведённые ресайзом поля удаляются);
+        в стек undo НИЧЕГО не пишется — у отменённого жеста нет шага."""
+        node_id = self._resizing_node
+        start_bbox = getattr(self, '_resize_start_bbox', None)
+        if not node_id or not start_bbox:
+            return
+        node = self.nodes.get(node_id)
+        if not node:
+            return  # узел снесён undo/redo — откатывать нечего
+        cur_pins = self._snapshot_edge_pins(node_id)
+        cur_routes = self._snapshot_edge_routes(node_id)
+        if (list(node.get('bbox') or []) == list(start_bbox)
+                and cur_pins == getattr(self, '_resize_start_pins', None)
+                and cur_routes == getattr(self, '_resize_start_routes', None)):
+            return  # тяги не было: последний commit уже синхронизировал снимок
+        cmd = ResizeNodeCommand(
+            self.model, self, node_id,
+            old_bbox=list(start_bbox),
+            old_centroid=list(self._resize_start_centroid),
+            old_area=self._resize_start_area,
+            new_bbox=list(node['bbox']),
+            new_centroid=list(node['centroid']),
+            new_area=node.get('area', 0),
+            old_pins=getattr(self, '_resize_start_pins', None),
+            new_pins=cur_pins,
+            old_routes=getattr(self, '_resize_start_routes', None),
+            new_routes=cur_routes,
+        )
+        cmd.undo()
+        # Штатное событие, не сбой: оператор увидит, почему рамка «вернулась».
+        import logging
+        logging.getLogger(__name__).info(
+            "resize: брошенная тяга снята — %s возвращён к последнему "
+            "зафиксированному размеру", node_id)
+
     def _stop_resize(self):
         """Убрать resize handles и вернуться в предыдущий режим."""
+        # Сначала снять ручки, потом откат: `_redraw_all` внутри отката сносит
+        # со сцены всё с Z > 0, и hide() после него удалял бы осиротевшие item.
         if self._resize_overlay:
             self._resize_overlay.hide()
             self._resize_overlay = None
+        self._revert_uncommitted_resize()
         self._resizing_node = None
         self._resize_start_bbox = None
         self._resize_start_centroid = None

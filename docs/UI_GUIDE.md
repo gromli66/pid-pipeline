@@ -343,7 +343,7 @@ Signal: `confirmed()` — без аргументов.
 | `add_connector` | `AddConnectorHandler` | Ctrl+Click на ребро → `AddConnectorOnEdgeCommand` / на пустое → `AddConnectorIsolatedCommand` |
 | `delete_node` | `DeleteNodeHandler` | Ctrl+Click на узел → `DeleteNodeCommand` |
 | `add_node_from_list` | `AddNodeFromListHandler` | Ctrl+Click → `NodeListDialog` → `AddEquipmentNodeCommand` |
-| `resize_node` | `ResizeNodeHandler` | Ctrl+2Click на equipment **с рамкой** → `ResizableNodeOverlay` → drag handles → `ResizeNodeCommand`. Узел, чья форма задана контуром, ручками размера не правится (ручки двигали бы bbox и центроид, оставляя `segmentation` на месте). Выход (Esc / клик мимо) возвращает инструмент, который был до входа |
+| `resize_node` | `ResizeNodeHandler` | Ctrl+2Click на equipment **с рамкой** → `ResizableNodeOverlay` → drag handles → `ResizeNodeCommand`. Узел, чья форма задана контуром, ручками размера не правится (ручки двигали бы bbox и центроид, оставляя `segmentation` на месте). Выход (Esc / клик мимо) возвращает инструмент, который был до входа. Незакоммиченная тяга при выходе снимается (1.8): `_stop_resize` возвращает узел и инцидентные рёбра к последнему снимку тем же кодом, что Ctrl+Z (`ResizeNodeCommand.undo`), в стек undo ничего не пишет и оставляет след в логе клиента. Тягу открывает только настоящее нажатие: синтетический клик (`event=None` из `_on_ctrl_lmb_click`) `start_drag` не зовёт — иначе у мелкого узла (ручка в радиусе перехвата `find_node_at`) одиночный Ctrl+клик по ручке начинал «липкий ресайз» — тягу при отпущенной кнопке |
 
 Рёбра: point-to-point (без L-route). Connection points вычисляются автоматически на контуре bbox/polygon.
 
