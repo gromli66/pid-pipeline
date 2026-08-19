@@ -19,6 +19,7 @@ from ui.services.api_client import APIClient, APIError
 from ui.services.artifact_downloader import (
     ArtifactDownloader, Job, artifact, one,
 )
+from ui.tabs.save_mode import NonInteractiveSaveMixin
 from ui.widgets.appearance_panel import AppearanceMixin
 from ui.widgets.toolbar_buttons import (
     make_undo_button, make_save_button, make_confirm_button,
@@ -57,7 +58,7 @@ _ARTIFACTS = (
 )
 
 
-class JunctionTab(AppearanceMixin, QWidget):
+class JunctionTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
     """Вкладка валидации junction/bridge масок."""
 
     confirmed = Signal()          # Подтверждено
@@ -401,10 +402,14 @@ class JunctionTab(AppearanceMixin, QWidget):
             return True
 
         except Exception as exc:
-            QMessageBox.warning(
-                self, "Ошибка",
-                f"Не удалось сохранить junction маски:\n{exc}"
-            )
+            # По таймеру — строкой, а не модалкой посреди работы (1-38).
+            if self._save_interactive:
+                QMessageBox.warning(
+                    self, "Ошибка",
+                    f"Не удалось сохранить junction маски:\n{exc}"
+                )
+            else:
+                self._refuse_save(f"⚠️ Автосохранение не удалось: {exc}")
             return False
         finally:
             QApplication.restoreOverrideCursor()
@@ -445,15 +450,21 @@ class JunctionTab(AppearanceMixin, QWidget):
             return True
         except Exception as exc:  # noqa: BLE001 — класс отказа цены не меняет
             logger.warning("Центры не сохранены на сервер: %s", exc)
-            QMessageBox.warning(
-                self, "Центры не сохранены",
-                "Маски записаны, а центры перекрёстков и мостов — нет:\n"
-                f"{exc}\n\n"
-                "При следующем открытии вкладки применённый вами размер "
-                "квадратов будет заменён машинным, и ужатые квадраты "
-                "экстрактор не разберёт.\n\n"
-                "Сохраните ещё раз, когда причина устранена."
-            )
+            # По таймеру — строкой, а не модалкой посреди работы (1-38).
+            if self._save_interactive:
+                QMessageBox.warning(
+                    self, "Центры не сохранены",
+                    "Маски записаны, а центры перекрёстков и мостов — нет:\n"
+                    f"{exc}\n\n"
+                    "При следующем открытии вкладки применённый вами размер "
+                    "квадратов будет заменён машинным, и ужатые квадраты "
+                    "экстрактор не разберёт.\n\n"
+                    "Сохраните ещё раз, когда причина устранена."
+                )
+            else:
+                self._refuse_save(
+                    "⚠️ Автосохранение: маски записаны, центры перекрёстков "
+                    f"и мостов — НЕТ ({exc})")
             return False
 
     @Slot()
