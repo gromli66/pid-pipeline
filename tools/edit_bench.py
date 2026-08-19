@@ -242,8 +242,9 @@ def _compare(rows: dict[str, dict], base: dict, inputs: dict[str, str]) -> int:
         print("судить нечем: эталон пуст — сначала --write-baseline")
         return 2
     if drift:
-        print(f"судить нечем: у {len(drift)} файлов эталона вход другой — "
-              f"числа сняты не с них: {', '.join(sorted(drift))}")
+        print(f"судить нечем: по {len(drift)} файлам эталон не отвечает за свои "
+              f"числа — отпечаток входа не сходится или его нет вовсе: "
+              f"{', '.join(sorted(drift))}")
         return 2
     missing = unmeasured(rows, base)
     if missing:
