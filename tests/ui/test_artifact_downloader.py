@@ -11,10 +11,12 @@
   * политика ошибок: что обязательно, что глотается, что уводит вкладку в error;
   * бит-в-бит: sha256 приземлившегося файла равен sha256 источника.
 
-⛔ Строгость графовой вкладки — несущее поведение, а не придирка: тихо потерянный
+⛔ Строгость к не-`APIError` — несущее поведение, а не придирка: тихо потерянный
 `graph_canvas` означает «холст пересобран заново, прежние правки не сохранятся»
 (base_graph_tab.py `_on_downloaded`), тихо потерянный `contours_validated` —
-выброшенные правки оператора (см. `_canvas_contours_stale`).
+выброшенные правки оператора (см. `_canvas_contours_stale`). С пунктов 1.x10
+и 1.x12 это правило стоит у ВСЕХ четырёх вкладок: у привязки цена — затёртые
+привязки оператора, у junction — затёртая маска мостов и подменённые центры.
 """
 import hashlib
 import os
@@ -364,25 +366,48 @@ def test_ocr_optional_non_api_error_stops_the_tab(tmp_path):
     assert error
 
 
-@pytest.mark.parametrize("kind,failing,gone", [
-    ("junction", "coco_validated", "coco_validated"),
-    ("pipe", "pipe_mask", "pipe_mask"),
-])
-def test_masks_swallow_any_optional_failure(kind, failing, gone, tmp_path):
-    """Характеризация, НЕ приёмка: две вкладки масок глотают ЛЮБУЮ ошибку.
+#: ВСЕ необязательные задания двух вкладок масок — полная популяция замера
+#: 1.x12, а не два известных случая. У цепочки политику судит ПОСЛЕДНИЙ
+#: кандидат (свойство `_run_job`, решение 0.5), поэтому валятся оба.
+MASK_OPTIONAL_JOBS = [
+    ("junction", ("bridge_mask_validated", "bridge_mask")),
+    ("junction", ("skeleton_final", "skeleton")),
+    ("junction", ("coco_validated",)),
+    ("junction", ("junction_points_validated", "junction_points")),
+    ("pipe", ("coco_validated",)),
+    ("pipe", ("pipe_mask",)),
+]
 
-    ⛔ Это та же расходимость с решением 0.5, которую 1.x10 закрыл во вкладке
-    привязки, — здесь она ОСТАЁТСЯ и заперта как факт, чтобы не сдвинулась
-    молча. Замер 1.x10: необязательных заданий с дефолтным `(Exception,)`
-    осталось шесть — четыре у junction, два у pipe; из них работу оператора
-    пишут обратно `junction_points_validated` (`_upload_points`) и
-    `bridge_mask_validated` (`_save_masks`). Адресовано архитектору строкой
-    в журнал доски.
+
+@pytest.mark.parametrize("kind,failing", MASK_OPTIONAL_JOBS)
+def test_masks_optional_non_api_error_stops_the_tab(kind, failing, tmp_path):
+    """Вкладки масок — та же строгость (пункт 1.x12, решение 0.5).
+
+    ⛔ Здесь стоял характеризационный `test_masks_swallow_any_optional_failure`
+    (1.x10): он запирал КАК ФАКТ то, что junction и pipe глотают ЛЮБУЮ ошибку,
+    включая отказ локального диска, и сам назвал цену — `bridge_mask_validated`
+    и `junction_points_validated` вкладка пишет на сервер ОБРАТНО (`_save_masks`,
+    `_upload_points`), то есть открытая без них затирает работу оператора ровно
+    так же, как это делала вкладка привязки до 1.x10.
     """
-    api = FakeAPI(failures={failing: OSError("диск полон")})
+    api = FakeAPI(failures={name: OSError("диск полон") for name in failing})
+    artifacts, error, _ = run_download(kind, tmp_path, api)
+    assert artifacts is None
+    assert error is not None and "диск полон" in error
+
+
+@pytest.mark.parametrize("kind,failing", MASK_OPTIONAL_JOBS)
+def test_masks_optional_server_failure_is_still_swallowed(kind, failing, tmp_path):
+    """Порог с другой стороны: отказ СЕРВЕРА у вкладок масок терпим и молчит.
+
+    Правка 1.x12 не «ужесточает вообще»: 5xx у необязательного артефакта
+    вкладку не роняет — он глотается так же, как 404 (раздел 5).
+    """
+    api = FakeAPI(failures={name: APIError("bad gateway", 502) for name in failing})
     artifacts, error, _ = run_download(kind, tmp_path, api)
     assert error is None
-    assert gone not in artifacts
+    assert artifacts is not None
+    assert not [k for k, v in artifacts.items() if v is True],         "у вкладок масок `failure_key` не заводился — пункт его не ставил"
 
 
 # ---------------------------------------------------------------------------
