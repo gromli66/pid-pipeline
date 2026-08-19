@@ -349,13 +349,36 @@ def test_graph_optional_non_api_error_stops_the_tab(tmp_path):
     assert error
 
 
+def test_ocr_optional_non_api_error_stops_the_tab(tmp_path):
+    """Вкладка привязки — та же строгость (пункт 1.x10, решение 0.5).
+
+    Раньше стояла в параметризации «глотают ЛЮБУЮ ошибку» ниже. Цена тихой
+    потери здесь ровно та же, что у холста: `_save_binding` пишет привязки
+    обратно БЕЗУСЛОВНО, поэтому вкладка, открытая без них, стирает работу
+    оператора первым же сохранением (сценарий —
+    `test_binding_tab_download_failure.py`).
+    """
+    api = FakeAPI(failures={"download_ocr_binding": OSError("диск полон")})
+    artifacts, error, _ = run_download("ocr", tmp_path, api)
+    assert artifacts is None
+    assert error
+
+
 @pytest.mark.parametrize("kind,failing,gone", [
     ("junction", "coco_validated", "coco_validated"),
     ("pipe", "pipe_mask", "pipe_mask"),
-    ("ocr", "download_ocr_binding", "binding"),
 ])
-def test_masks_and_ocr_swallow_any_optional_failure(kind, failing, gone, tmp_path):
-    """Три остальные вкладки глотают ЛЮБУЮ ошибку необязательного артефакта."""
+def test_masks_swallow_any_optional_failure(kind, failing, gone, tmp_path):
+    """Характеризация, НЕ приёмка: две вкладки масок глотают ЛЮБУЮ ошибку.
+
+    ⛔ Это та же расходимость с решением 0.5, которую 1.x10 закрыл во вкладке
+    привязки, — здесь она ОСТАЁТСЯ и заперта как факт, чтобы не сдвинулась
+    молча. Замер 1.x10: необязательных заданий с дефолтным `(Exception,)`
+    осталось шесть — четыре у junction, два у pipe; из них работу оператора
+    пишут обратно `junction_points_validated` (`_upload_points`) и
+    `bridge_mask_validated` (`_save_masks`). Адресовано архитектору строкой
+    в журнал доски.
+    """
     api = FakeAPI(failures={failing: OSError("диск полон")})
     artifacts, error, _ = run_download(kind, tmp_path, api)
     assert error is None

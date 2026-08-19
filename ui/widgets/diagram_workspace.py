@@ -289,6 +289,12 @@ _STAGE_TYPE_TO_KEY = {
     "frame_removal": "frame",
     "detection": "detect",
     "cvat_validation": "cvat",
+    # Классификация направления своей бусины не имеет: она встроена между
+    # валидацией детекции и сегментацией, статуса не меняет и перезапускается
+    # тем же `POST /segment` (сервер по `error_stage` заводит цепочку заново
+    # С НАПРАВЛЕНИЯ — `app/api/segmentation.py:22,96`). Без этой строки её
+    # падение не показывалось вовсе: ни красной бусины, ни окна отчёта.
+    "direction_classification": "segment",
     "segmentation": "segment",
     "skeletonization": "segment",
     "mask_validation": "pipe",
@@ -1020,6 +1026,10 @@ class DiagramWorkspace(QWidget):
         # Map error_stage to button key for retry
         _STAGE_TO_KEY = {
             "detecting": "detect",
+            # Та же кнопка, что у сегментации: см. `_STAGE_TYPE_TO_KEY`.
+            # Эта ветка работает, когда `/stages` недоступен, — без строки
+            # оператор оставался с тринадцатью серыми кнопками.
+            "direction_classification": "segment",
             "segmenting": "segment",
             "skeletonizing": "segment",
             "skeletonizing_simple": "pipe",

@@ -2,7 +2,8 @@
 Graph API — построение графа P&ID (Phase 5).
 
 Endpoints:
-- POST /{uid}/build        — запустить построение графа (VALIDATED_MASKS → BUILDING_GRAPH)
+- POST /{uid}/build        — запустить построение графа
+                             (VALIDATED_JUNCTIONS | BUILT | ERROR → BUILDING_GRAPH)
 - GET  /{uid}/result       — получить результат построения (node/edge count, artifacts)
 """
 
@@ -12,10 +13,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import obs
+from app.core.logging import get_logger
 from app.db import get_async_db
 from app.models import Diagram, DiagramStatus, Artifact, ArtifactType
 
 router = APIRouter()
+
+logger = get_logger(__name__)
 
 
 @router.post("/{uid}/build")
@@ -95,7 +100,12 @@ async def start_graph_building(
             "uid": str(uid),
         }
 
-    # Переводим в BUILDING_GRAPH
+    # Переводим в BUILDING_GRAPH. Состояние до перехода держим целиком: если
+    # отправка задачи упадёт, вернуть надо всё, что переход записал, а не один
+    # статус — иначе диаграмма останется в ERROR с пустым error_stage, и клиент
+    # погасит ВСЕ кнопки (ui/widgets/diagram_workspace.py: _error_key).
+    obs.bind(uid=str(uid), phase="graph_build")
+    previous_state = (diagram.status, diagram.error_stage, diagram.error_message)
     diagram.status = DiagramStatus.BUILDING_GRAPH
     diagram.error_message = None
     diagram.error_stage = None
@@ -112,9 +122,18 @@ async def start_graph_building(
         )
         task_id = async_result.id
     except Exception as exc:
-        # Worker недоступен — откатываем статус
-        diagram.status = DiagramStatus.VALIDATED_MASKS
+        # Worker недоступен — возвращаем состояние, каким оно было до вызова.
+        # Прежний откат ставил VALIDATED_MASKS, которого нет в allowed_statuses
+        # этого же эндпоинта: повторная сборка отвечала 400 навсегда, а кнопка
+        # «Сборка схемы» при таком статусе даже не нажимается (порог доступности —
+        # VALIDATED_JUNCTIONS). Работа не начиналась, значит и откатывать некуда,
+        # кроме исходной точки.
+        diagram.status, diagram.error_stage, diagram.error_message = previous_state
         await db.commit()
+        logger.warning(
+            "Отправка сборки графа не удалась (%s) — состояние возвращено в '%s'",
+            exc, previous_state[0].value, extra={"event": "dispatch_failed"},
+        )
         raise HTTPException(
             status_code=503,
             detail=f"Worker unavailable: {exc}",

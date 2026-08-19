@@ -133,6 +133,7 @@ stateDiagram-v2
 | `detected → validating_bbox` | API | `app/api/cvat.py`: `open_cvat_validation()` |
 | `validating_bbox → validated_bbox` | API | `app/api/cvat.py`: `fetch_cvat_annotations()` |
 | `validated_bbox → segmenting` | API | `app/api/segmentation.py`: `start_segmentation()` |
+| `error → segmenting` | API | `app/api/segmentation.py`: `start_segmentation()` — по `error_stage` выбирает шаг перезапуска; `direction_classification` и `segmenting` заводят цепочку `task_classify_direction → task_segment_pipes` заново |
 | `segmenting → skeletonizing` | Worker | `worker/tasks/segmentation.py`: auto-chain |
 | `skeletonizing → skeletonized` | Worker | `worker/tasks/skeleton.py`: `task_skeletonize()` |
 | `skeletonized → validating_masks` | API | `app/api/validation.py`: `start_mask_validation()` |
@@ -144,6 +145,7 @@ stateDiagram-v2
 | `detected_junctions → validating_junctions` | API | `app/api/validation.py`: `start_junction_validation()` |
 | `validating_junctions → validated_junctions` | API | `app/api/validation.py`: `complete_junction_validation()` |
 | `validated_junctions → building_graph` | API | auto-dispatch из `complete_junction_validation()` |
+| `validated_junctions \| built \| error → building_graph` | API | `app/api/graph.py`: `start_graph_building()` — ручной запуск и оба повтора |
 | `validated_junctions → extracting_contours` | API | auto-dispatch (параллельно), queue `sam2` |
 | `validated_junctions → ocr_processing` | API | auto-dispatch (параллельно), queue `ocr` |
 | `building_graph → built` | Worker | `worker/tasks/graph.py`: `task_build_graph()` |
@@ -156,6 +158,13 @@ stateDiagram-v2
 | `* → generating_fxml` | API | `app/api/validation.py`: `complete_graph_validation()` |
 | `generating_fxml → completed` | Worker | `worker/tasks/graph.py`: `task_generate_fxml()` |
 | `* → error` | Worker | `worker/utils/db_helpers.py`: `set_diagram_error()` |
+
+**Отказ отправки — не переход.** API-эндпоинт коммитит статус этапа ДО `send_task`, поэтому
+упавшая отправка обязана вернуть состояние, каким оно было до вызова: статус и оба поля
+ошибки (`error_message`, `error_stage`). Это не откат из §4 — этапа не было, откатывать
+нечего. Точка возврата обязана лежать внутри `Precondition` самого эндпоинта, иначе повтор
+отвечает 400 навсегда: так и было в `start_graph_building()` до пункта 1.14 дороги — откат
+ставил `validated_masks`, которого нет в его же списке допустимых статусов.
 
 ---
 
@@ -252,6 +261,7 @@ set_diagram_error(db, diagram_uid, message, stage)
 | `error_stage` | Кнопка (key) |
 |---------------|-------------|
 | `detecting` | `detect` |
+| `direction_classification` | `segment` |
 | `segmenting` | `segment` |
 | `skeletonizing` | `segment` |
 | `skeletonizing_simple` | `pipe` |
@@ -261,6 +271,8 @@ set_diagram_error(db, diagram_uid, message, stage)
 | `contour_extraction` | `contours` |
 | `generating_fxml` | `fxml` |
 | `ocr` | `ocr` |
+
+Эта таблица — **фолбэк**: она работает, когда `/stages` недоступен. Штатно клиент идёт другим путём — `_apply_error_status()` берёт из `/stages` последнюю попытку каждой стадии и маппит **`stage_type`** на ту же кнопку картой `_STAGE_TYPE_TO_KEY` (`direction_classification`, `segmentation`, `skeletonization` и `final_skeletonization` → `segment`; `layout` → `edit_graph`; единственный `StageType` без кнопки — `upload`). Обе карты обязаны знать один и тот же набор стадий: стадия, которой нет ни в одной, не показывается оператору вовсе — ни красной бусиной, ни окном отчёта (пункт 1.12 дороги: так молчала классификация направления).
 
 Кнопка с ошибкой отображается красной с иконкой 🔄 (retry). Клик → окно отчёта об ошибке → повторный запуск ТОГО ЖЕ этапа его штатным эндпоинтом запуска. Отката при этом не происходит: клиент зовёт `POST /api/detection/{uid}/detect`, `/api/segmentation/{uid}/segment` и т.д., а не retry-эндпоинты — те из UI не вызываются вовсе. Поэтому гейт статуса у эндпоинта запуска обязан пропускать `error` со своим `error_stage`, иначе оператор попадает в тупик (пункт 1.11 дороги).
 
