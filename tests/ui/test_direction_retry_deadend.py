@@ -91,8 +91,25 @@ ERROR_STAGES = sorted(set(RUNTIME_ERROR_STAGES) | {s.value for s in StageType})
 # ── решётка 1: фолбэк-ветка `_update_buttons` (карта `_STAGE_TO_KEY`) ─────
 # `error_stage` → ключ кнопки, которая станет красной. Чего нет в карте —
 # нет и красной кнопки: в фолбэк-ветке это ноль доступных кнопок из 13.
+# ДО пункта 1.12 (зафиксировано коммитом 4564f55, 126 тестов зелёные
+# на нетронутом коде):
+RED_BY_ERROR_STAGE_BEFORE = {
+    "detecting": "detect",
+    "segmenting": "segment",
+    "skeletonizing": "segment",
+    "skeletonizing_simple": "pipe",
+    "detecting_junctions": "junction",
+    "building_graph": "graph",
+    "validating_graph": "val_graph",
+    "contour_extraction": "contours",
+    "generating_fxml": "fxml",
+    "ocr": "ocr",
+}
+
+# ПОСЛЕ пункта 1.12. Разница обязана быть ровно в одной клетке — сторож ниже.
 RED_BY_ERROR_STAGE = {
     "detecting": "detect",
+    "direction_classification": "segment",
     "segmenting": "segment",
     "skeletonizing": "segment",
     "skeletonizing_simple": "pipe",
@@ -108,10 +125,30 @@ RED_BY_ERROR_STAGE = {
 # `stage_type` упавшей стадии → ключ, который попадёт в `_stage_errors`
 # (красная бусина + красная кнопка + окно отчёта). `upload` кнопки не имеет
 # по замыслу — этапа «Загрузка» в столбце нет.
+# ДО пункта 1.12 (тот же коммит 4564f55):
+FAILED_KEY_BY_STAGE_TYPE_BEFORE = {
+    "frame_removal": "frame",
+    "detection": "detect",
+    "cvat_validation": "cvat",
+    "segmentation": "segment",
+    "skeletonization": "segment",
+    "mask_validation": "pipe",
+    "junction_classification": "junction",
+    "final_skeletonization": "segment",
+    "graph_building": "graph",
+    "graph_validation": "val_graph",
+    "contour_extraction": "contours",
+    "ocr": "ocr",
+    "layout": "edit_graph",
+    "fxml_generation": "fxml",
+}
+
+# ПОСЛЕ пункта 1.12. Разница — ровно одна клетка, сторож ниже.
 FAILED_KEY_BY_STAGE_TYPE = {
     "frame_removal": "frame",
     "detection": "detect",
     "cvat_validation": "cvat",
+    "direction_classification": "segment",
     "segmentation": "segment",
     "skeletonization": "segment",
     "mask_validation": "pipe",
@@ -359,6 +396,35 @@ def test_grid_keys_name_real_stage_types():
         assert StageType(value).value == value
 
 
+def test_grids_changed_by_exactly_one_cell_each():
+    """Пункт 1.12 добавил по одной клетке в каждую решётку и не отнял ни одной.
+
+    Обе редакции — независимые литералы, поэтому правка одной карты без
+    другой краснит этот сторож: «переход вне зафиксированного набора»
+    (`PROTOCOL §Гейты`) ловится здесь, а не глазами ревизора.
+    """
+    added = {k: v for k, v in RED_BY_ERROR_STAGE.items()
+             if RED_BY_ERROR_STAGE_BEFORE.get(k) != v}
+    assert added == {"direction_classification": "segment"}
+    assert set(RED_BY_ERROR_STAGE_BEFORE) - set(RED_BY_ERROR_STAGE) == set()
+
+    added = {k: v for k, v in FAILED_KEY_BY_STAGE_TYPE.items()
+             if FAILED_KEY_BY_STAGE_TYPE_BEFORE.get(k) != v}
+    assert added == {"direction_classification": "segment"}
+    assert set(FAILED_KEY_BY_STAGE_TYPE_BEFORE) - set(FAILED_KEY_BY_STAGE_TYPE) == set()
+
+
+def test_upload_stays_outside_the_grid():
+    """Единственная стадия без кнопки — `upload`, и она такой и остаётся.
+
+    Порог с другой стороны: пункт закрывает дыру направления, а не
+    «раздаёт кнопку каждому `StageType`».
+    """
+    outside = [s.value for s in StageType
+               if s.value not in FAILED_KEY_BY_STAGE_TYPE]
+    assert outside == ["upload"]
+
+
 # ── решётка 1: фолбэк-ветка, весь словарь `error_stage` ──────────────────
 
 @pytest.mark.parametrize("stage", ERROR_STAGES)
@@ -419,8 +485,162 @@ def test_direction_error_over_every_status(status, bench):
     ws, _ = bench(status, "direction_classification", stages=[])
 
     if status is SrvStatus.ERROR:
-        assert enabled_keys(ws) == [], (
-            "тупик 1.12 больше не воспроизводится — пересними решётку"
+        assert enabled_keys(ws) == ["segment"], (
+            "выход из упавшего направления снова закрыт"
         )
+        assert red_keys(ws) == ["segment"]
     else:
         assert enabled_keys(ws), f"статус {status.value} осиротел без ошибки"
+
+
+# ── гейт пункта: выход из тупика есть ────────────────────────────────────
+
+def test_red_button_restarts_direction_with_stages(bench):
+    """Стадии доступны: клик по красной кнопке через окно отчёта чинит тупик.
+
+    Боевая картина: валидация детекции завершена, направление упало. Кнопка
+    «Выделение труб» обязана стать красной, а перезапуск — уйти цепочкой,
+    начинающейся С НАПРАВЛЕНИЯ.
+    """
+    ws, server = bench(SrvStatus.ERROR, "direction_classification",
+                       _failed_direction_stages())
+
+    btn = ws._action_buttons["segment"]
+    assert btn.isEnabled(), "красная кнопка недоступна — тупик виден уже здесь"
+    assert sorted(ws._stage_errors) == ["segment"], "упавший этап не опознан"
+    assert btn.styleSheet() == dw._BTN_STYLE_RED
+    assert btn.text().startswith("🔄")
+
+    btn.click()
+
+    assert StubErrorDialog.opened == ["Выделение труб"], "окно отчёта не открылось"
+    assert server.diagram.status is SrvStatus.SEGMENTING, (
+        f"направление не перезапущено: на сервере {server.diagram.status.value}"
+    )
+    assert server.restart_from == ["direction_classification"], (
+        f"перезапуск ушёл не с направления: {server.restart_from}"
+    )
+    assert server.dispatched == [DIRECTION_TASK, SEGMENT_TASK], (
+        f"цепочка ушла не та: {server.dispatched}"
+    )
+    assert FakeMsgBox.calls == [], f"оператор получил отказ: {FakeMsgBox.calls}"
+
+
+def test_red_button_restarts_direction_without_stages(bench):
+    """Стадий нет: та же кнопка в фолбэк-ветке `_update_buttons` делает то же.
+
+    Это та ветка, где до правки серыми были ВСЕ тринадцать кнопок.
+    """
+    ws, server = bench(SrvStatus.ERROR, "direction_classification", stages=[])
+
+    btn = ws._action_buttons["segment"]
+    assert btn.isEnabled(), "красная кнопка недоступна в фолбэк-ветке"
+    assert ws._stage_errors == {}, "фолбэк-ветка не должна знать стадий"
+
+    btn.click()
+
+    assert StubErrorDialog.opened == [], "в фолбэк-ветке окна отчёта нет"
+    assert server.diagram.status is SrvStatus.SEGMENTING, (
+        f"направление не перезапущено: на сервере {server.diagram.status.value}"
+    )
+    assert server.restart_from == ["direction_classification"]
+    assert server.dispatched == [DIRECTION_TASK, SEGMENT_TASK]
+    assert FakeMsgBox.calls == [], f"оператор получил отказ: {FakeMsgBox.calls}"
+
+
+def test_restart_clears_error_on_server(bench):
+    """Перезапуск снимает ошибку — иначе диаграмма бежит с протухшим error_stage."""
+    ws, server = bench(SrvStatus.ERROR, "direction_classification",
+                       _failed_direction_stages())
+
+    ws._action_buttons["segment"].click()
+
+    assert server.diagram.error_stage is None
+    assert server.diagram.error_message is None
+
+
+def test_error_report_carries_the_stage_row(bench):
+    """Окно отчёта получает СТРОКУ упавшей стадии, а не пустышку.
+
+    Без неё оператор видит красную кнопку и пустой отчёт: `error_message`
+    и traceback направления до него не доезжают.
+    """
+    ws, _ = bench(SrvStatus.ERROR, "direction_classification",
+                  _failed_direction_stages())
+
+    row = ws._stage_errors["segment"]
+    assert row["stage_type"] == "direction_classification"
+    assert "Direction classification timed out" in row["error_message"]
+    assert ws._action_buttons["segment"].toolTip().startswith("Ошибка:")
+
+
+# ── порог с другой стороны ───────────────────────────────────────────────
+
+def test_foreign_error_stage_does_not_open_segmentation(bench):
+    """Упала ДРУГАЯ стадия — «Выделение труб» красной не становится.
+
+    Без этой проверки правка «любая ошибка → segment» осталась бы зелёной.
+    """
+    ws, server = bench(SrvStatus.ERROR, "ocr", stages=[stage_row("ocr")])
+
+    assert sorted(ws._stage_errors) == ["ocr"]
+    assert ws._action_buttons["segment"].styleSheet() != dw._BTN_STYLE_RED
+    assert server.dispatched == []
+
+
+def test_completed_direction_does_not_fake_a_finished_segmentation(bench):
+    """Направление ЗАВЕРШЕНО, сегментация упала — красная всё равно она.
+
+    Обе стадии делят одну кнопку, и порядок наложений обязан оставлять
+    последнее слово за упавшей: иначе зелёная «Выделение труб» врала бы
+    о несделанной сегментации.
+    """
+    ws, _ = bench(SrvStatus.ERROR, "segmenting", stages=[
+        stage_row("cvat_validation", "completed"),
+        stage_row("direction_classification", "completed"),
+        stage_row("segmentation", "failed"),
+    ])
+
+    assert sorted(ws._stage_errors) == ["segment"]
+    assert ws._action_buttons["segment"].styleSheet() == dw._BTN_STYLE_RED
+
+
+def test_running_direction_holds_the_button_and_lets_it_go(bench):
+    """Заявленное СЛЕДСТВИЕ той же строки карты — бегущее направление.
+
+    До правки бегущая классификация кнопку не занимала вовсе: на
+    `validated_bbox` «Выделение труб» оставалась жёлтой, и второй клик
+    отправлял вторую цепочку. Теперь она глушится, как любая авто-стадия.
+
+    Вторая половина — что новой серой кнопки навсегда это не создаёт:
+    предел ожидания `_stage_stuck` (600 с, равен жёсткому лимиту задачи)
+    повисшую стадию отпускает.
+    """
+    ws, _ = bench(SrvStatus.VALIDATED_BBOX, None, stages=[
+        stage_row("direction_classification", "running", fresh=True),
+    ])
+    ws._on_stages_updated(UID, ws.api_client.get_stages(UID))
+    ws._update_buttons(DiagramStatus.VALIDATED_BBOX)
+    assert not ws._action_buttons["segment"].isEnabled(), (
+        "бегущее направление не глушит кнопку — вторая цепочка уйдёт по клику"
+    )
+
+    ws2, _ = bench(SrvStatus.VALIDATED_BBOX, None, stages=[
+        stage_row("direction_classification", "running", fresh=False),
+    ])
+    ws2._on_stages_updated(UID, ws2.api_client.get_stages(UID))
+    ws2._update_buttons(DiagramStatus.VALIDATED_BBOX)
+    assert ws2._action_buttons["segment"].isEnabled(), (
+        "повисшая стадия глушит кнопку навсегда — предел ожидания не работает"
+    )
+
+
+# ── сторож самого стенда ─────────────────────────────────────────────────
+
+def test_bench_judges_by_real_endpoint():
+    """Стенд судит настоящей корутиной эндпоинта, а не своей копией гейта."""
+    server = FakeServer(SrvStatus.SKELETONIZED)
+    with pytest.raises(APIError) as exc:
+        server.segment()
+    assert exc.value.status_code == 400
+    assert "skeletonized" in exc.value.message
