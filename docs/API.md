@@ -146,7 +146,9 @@ curl -X POST "http://localhost:8000/api/detection/{uid}/detect?model_id=yolov8m_
 | `uid` (path) | UUID | UID диаграммы |
 | `model_id` (query) | string, optional | ID модели детекции (default из конфига проекта) |
 
-**Precondition:** `status == uploaded`. **Transition:** `uploaded → detecting`.
+**Precondition:** `status == frame_cleaned` или `error + error_stage == detecting`.
+**Transition:** `frame_cleaned → detecting`, `error → detecting` (повтор после падения:
+сюда ведёт красная кнопка «🔄 Поиск элементов» — `/{uid}/retry` из UI не вызывается).
 
 ---
 

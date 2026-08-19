@@ -9,10 +9,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import obs
+from app.core.logging import get_logger
 from app.db import get_async_db
 from app.models import Diagram, DiagramStatus
 
 router = APIRouter()
+
+logger = get_logger(__name__)
 
 
 @router.post("/{uid}/detect")
@@ -25,10 +29,15 @@ async def start_detection(
     db: AsyncSession = Depends(get_async_db),
 ):
     """
-    Запустить YOLO детекцию.
+    Запустить YOLO детекцию — первый запуск и повтор после падения.
+
+    Preconditions:
+    - status == frame_cleaned (нормальный путь)
+    - status == error + error_stage == 'detecting' (повтор: сюда ведёт красная
+      кнопка «Поиск элементов» в клиенте — retry-эндпоинт ниже из UI не зовётся)
     
-    1. Проверяет status == uploaded
-    2. Обновляет status = detecting
+    1. Проверяет гейт статуса
+    2. Обновляет status = detecting и снимает ошибку
     3. Запускает Celery task
     """
     result = await db.execute(select(Diagram).where(Diagram.uid == uid))
@@ -37,10 +46,19 @@ async def start_detection(
     if not diagram:
         raise HTTPException(status_code=404, detail="Diagram not found")
     
-    if diagram.status != DiagramStatus.FRAME_CLEANED:
+    allowed = diagram.status == DiagramStatus.FRAME_CLEANED or (
+        diagram.status == DiagramStatus.ERROR
+        and diagram.error_stage == "detecting"
+    )
+
+    if not allowed:
         raise HTTPException(
             status_code=400,
-            detail=f"Cannot start detection: status is '{diagram.status.value}', expected 'frame_cleaned'"
+            detail=(
+                f"Cannot start detection: status is '{diagram.status.value}'"
+                + (f", error_stage='{diagram.error_stage}'" if diagram.error_stage else "")
+                + ". Expected: frame_cleaned, or error with error_stage='detecting'"
+            ),
         )
     
     # Валидация model_id (если указан) — проверяем что модель существует в конфиге
@@ -55,9 +73,18 @@ async def start_detection(
                 detail=f"Detection model '{model_id}' not found. Available: {available}"
             )
     
+    obs.bind(uid=str(uid), phase="detection")
+    if diagram.status == DiagramStatus.ERROR:
+        logger.info(
+            "Повторный запуск детекции после ошибки (error_stage=%s)",
+            diagram.error_stage, extra={"event": "retry"},
+        )
+
     # Обновляем статус ПЕРЕД запуском task (короткая транзакция)
     # ⚠️ НЕ оборачивать Celery send_task в ту же транзакцию!
     diagram.status = DiagramStatus.DETECTING
+    diagram.error_message = None
+    diagram.error_stage = None
     await db.commit()
     
     # Запускаем Celery task ВНЕ транзакции

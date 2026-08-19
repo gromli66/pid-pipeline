@@ -12,6 +12,12 @@
 Судится настоящая корутина эндпоинта: `AsyncSession` подделана (её поверхность
 здесь — `execute` + `commit`), `send_task` подменён, живой брокер и БД не нужны.
 
+Пункт 1.11 меняет в этой таблице РОВНО ОДНУ клетку — `error`+`detecting` на
+`/detect`: туда ведёт красная кнопка «🔄 Поиск элементов», а гейт требовал
+точного `frame_cleaned` и отвечал 400, из чего оператор не выходил без правки
+БД. Обе редакции таблицы лежат рядом (`ALLOWED_BEFORE` и `ALLOWED`), и их
+разницу стережёт отдельный тест.
+
 Числа абсолютные, ожидания — литералы. `ALLOWED` не вычисляется из проверяемого
 гейта: иначе набор остался бы зелёным при любом его значении (`PROTOCOL §3`).
 Порог заперт с двух сторон — и «пропускает то, что должен», и «не пропускает
@@ -35,9 +41,17 @@ TASK_NAME = "worker.tasks.detection.task_detect_yolo"
 STATUS_COUNT = 31
 
 # `POST /{uid}/detect`: какие пары (status, error_stage) гейт пропускает.
-# Литерал — снят чтением `app/api/detection.py:40-44`, не вычислен из него.
+# Литералы — сняты чтением `app/api/detection.py`, не вычислены из него.
+# ДО пункта 1.11 (зафиксировано коммитом 56b7c35, 85 тестов зелёные на
+# нетронутом коде):
+ALLOWED_BEFORE = frozenset({
+    ("frame_cleaned", None),
+})
+
+# ПОСЛЕ пункта 1.11. Разница обязана быть ровно в одной клетке — сторож ниже.
 ALLOWED = frozenset({
     ("frame_cleaned", None),
+    ("error", "detecting"),
 })
 
 # `POST /{uid}/retry`: та же таблица для второго эндпоинта файла.
@@ -119,9 +133,20 @@ def test_status_machine_size_is_locked():
     assert len(list(DiagramStatus)) == STATUS_COUNT
 
 
+def test_gate_changed_by_exactly_one_cell():
+    """Пункт 1.11 добавил ровно одну клетку и не отнял ни одной.
+
+    Оба множества — независимые литералы, поэтому правка одного без другого
+    краснит этот сторож: «переход вне зафиксированного набора» (`PROTOCOL §Гейты`)
+    ловится здесь, а не глазами ревизора.
+    """
+    assert ALLOWED - ALLOWED_BEFORE == {("error", "detecting")}
+    assert ALLOWED_BEFORE - ALLOWED == frozenset()
+
+
 def test_table_keys_name_real_statuses():
     """Сторож набора: ключ таблицы — существующий статус, а не опечатка."""
-    for value, _stage in ALLOWED | RETRY_ALLOWED:
+    for value, _stage in ALLOWED | ALLOWED_BEFORE | RETRY_ALLOWED:
         assert DiagramStatus(value).value == value
 
 
@@ -167,6 +192,23 @@ def test_detect_gate_on_error_by_stage(stage, dispatched):
         assert diagram.status is DiagramStatus.ERROR
         assert db.commits == 0
         assert dispatched == []
+
+
+def test_detect_retry_clears_error(dispatched):
+    """Повтор снимает ошибку вместе со сменой статуса.
+
+    Иначе диаграмма бежит в `detecting` с протухшим `error_stage='detecting'`,
+    и на нём стоят гейты обоих retry-эндпоинтов (`detection.py`, `diagrams.py`).
+    """
+    diagram = _diagram(DiagramStatus.ERROR, error_stage="detecting",
+                       error_message="Detection timed out (89 min limit)")
+    db = FakeDB(diagram)
+
+    asyncio.run(start_detection(UID, model_id=None, db=db))
+
+    assert diagram.status is DiagramStatus.DETECTING
+    assert diagram.error_stage is None
+    assert diagram.error_message is None
 
 
 def test_detect_missing_diagram_is_404(dispatched):

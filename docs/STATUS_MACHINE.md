@@ -111,6 +111,7 @@ stateDiagram-v2
     ocr_processing --> error : Worker: fail
     generating_fxml --> error : Worker: fail
 
+    error --> detecting : API: start_detection (повтор, error_stage=detecting)
     error --> uploaded : Rollback
     error --> detected : Rollback
     error --> validated_bbox : Rollback
@@ -126,7 +127,8 @@ stateDiagram-v2
 
 | Переход | Источник | Код |
 |---------|---------|-----|
-| `uploaded → detecting` | API | `app/api/detection.py`: `start_detection()` |
+| `frame_cleaned → detecting` | API | `app/api/detection.py`: `start_detection()` |
+| `error → detecting` | API | `app/api/detection.py`: `start_detection()` при `error_stage == "detecting"` |
 | `detecting → detected` | Worker | `worker/tasks/detection.py`: `task_detect()` |
 | `detected → validating_bbox` | API | `app/api/cvat.py`: `open_cvat_validation()` |
 | `validating_bbox → validated_bbox` | API | `app/api/cvat.py`: `fetch_cvat_annotations()` |
@@ -260,7 +262,7 @@ set_diagram_error(db, diagram_uid, message, stage)
 | `generating_fxml` | `fxml` |
 | `ocr` | `ocr` |
 
-Кнопка с ошибкой отображается красной с иконкой 🔄 (retry). Клик → откат до предыдущего этапа → повторный запуск.
+Кнопка с ошибкой отображается красной с иконкой 🔄 (retry). Клик → окно отчёта об ошибке → повторный запуск ТОГО ЖЕ этапа его штатным эндпоинтом запуска. Отката при этом не происходит: клиент зовёт `POST /api/detection/{uid}/detect`, `/api/segmentation/{uid}/segment` и т.д., а не retry-эндпоинты — те из UI не вызываются вовсе. Поэтому гейт статуса у эндпоинта запуска обязан пропускать `error` со своим `error_stage`, иначе оператор попадает в тупик (пункт 1.11 дороги).
 
 ### ProcessingStage
 
