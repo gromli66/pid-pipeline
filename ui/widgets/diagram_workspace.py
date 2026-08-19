@@ -497,6 +497,7 @@ class DiagramWorkspace(QWidget):
         self._diagram_name: str = ""
         self._junction_confirmed = False
         self._pipe_confirmed = False
+        self._masks_completion_sent = False  # команда о масках уже отправлена
         self._active_tab = None  # Текущий открытый tab-виджет
         self._active_tab_key = ""  # Ключ: "cvat", "junction", "pipe", "graph"
         self._btn_back_injected = None  # Кнопка ← Назад внутри вкладки
@@ -651,6 +652,7 @@ class DiagramWorkspace(QWidget):
         self._diagram_name = name
         self._junction_confirmed = False
         self._pipe_confirmed = False
+        self._masks_completion_sent = False
         self._stop_ocr_poll()
         self._ocr_notified = False
         self._fxml_save_prompted = True
@@ -1348,8 +1350,14 @@ class DiagramWorkspace(QWidget):
 
         self._close_tab_and_restore_header()
 
-        # Проверить завершение масок
-        self._check_masks_completion()
+        # Проверить завершение масок — только для вкладки труб: это двойная
+        # страховка на случай, когда сигнал `confirmed` до воркспейса не дошёл
+        # (`_detect_saved_mask` выше). Раньше вызов стоял безусловно, и закрытие
+        # ЛЮБОЙ вкладки при поднятом `_pipe_confirmed` отправляло на сервер
+        # команду о завершении валидации масок — в том числе когда оператор
+        # только что ОТКАЗАЛСЯ сохранять изменения (пункт 1.20 дороги).
+        if tab_key == "pipe":
+            self._check_masks_completion()
 
     def _force_close_tab(self):
         """Закрыть вкладку без вопросов (при смене диаграммы / cleanup)."""
@@ -1403,9 +1411,20 @@ class DiagramWorkspace(QWidget):
             self._pipe_confirmed = True
 
     def _check_masks_completion(self):
-        """Если pipe маска подтверждена → complete_mask_validation → скелетизация + junction detection."""
-        if not self._pipe_confirmed:
+        """Если pipe маска подтверждена → complete_mask_validation → скелетизация + junction detection.
+
+        Команда отправляется ОДИН раз на одно подтверждение. `_pipe_confirmed`
+        для этого не годится: он живёт до конца сеанса с диаграммой (его читают
+        бусина, гифка и кнопка, пока сервер не доехал до `validated_masks`),
+        поэтому раньше каждый следующий выход из вкладки слал команду заново.
+        Пока статус ещё `validating_masks`/`skeletonized`/`validated_masks`,
+        сервер не считает это «ушли вперёд» (`app/api/validation.py:481-503`)
+        и диспатчит скелетизацию повторно. Право доложить возвращает только
+        новое подтверждение — `_on_pipe_confirmed`.
+        """
+        if not self._pipe_confirmed or self._masks_completion_sent:
             return
+        self._masks_completion_sent = True
 
         try:
             logger.info("Pipe mask confirmed, calling complete_mask_validation")
@@ -2099,6 +2118,9 @@ class DiagramWorkspace(QWidget):
         """Pipe маска подтверждена (сигнал confirmed от PipeTab)."""
         logger.info("Pipe confirmed via signal")
         self._pipe_confirmed = True
+        # Новое подтверждение — новое право доложить серверу (после отката
+        # этапа оператор подтверждает повторно, и команда должна уйти снова).
+        self._masks_completion_sent = False
 
         self._close_tab_and_restore_header()
         self._check_masks_completion()
