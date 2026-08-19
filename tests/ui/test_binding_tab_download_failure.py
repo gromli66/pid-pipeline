@@ -566,23 +566,181 @@ def test_healthy_server_shows_no_binding_warning(raster, open_tab, dialogs):
     assert dialogs == []
 
 
-def test_binding_warning_does_not_block_the_save(raster, open_tab, dialogs):
-    """⛔ ОСТАТОК, названный прямо: предупреждение НЕ МЕШАЕТ записи.
+# =========================================================================
+# Пункт 1.x14 — запрет слепой перезаписи доехал и до вкладки привязок
+# =========================================================================
+# 1.x12 записал остаток прямо: «предупреждение НЕ МЕШАЕТ записи», потому что
+# запрет 1.x9 живёт в `BaseGraphTab._save_graph`, а эта вкладка от него не
+# наследуется (`OcrBindingTab(AppearanceMixin, QWidget)`). То есть вкладка
+# привязок повторяла ровно тот дефект, который 1.x9 закрыл у графовых:
+# оператор ВИДИТ, что открыл не свою работу, и первый же save её затирает.
+#
+# ⚠ Артефакта здесь ДВА, а не один (замер §89а): `_save_binding` пишет и
+# привязки (`save_ocr_binding`), и граф (`upload_validated_graph`). Дверь,
+# закрытая только со стороны привязок, оставила бы вторую половину настежь.
 
-    У графовой вкладки запрет слепой перезаписи ввёл 1.x9 — он живёт
-    в `BaseGraphTab._save_graph`, а эта вкладка от него не наследуется
-    (`OcrBindingTab(AppearanceMixin, QWidget)`). Гейт пункта 1.x12 требует
-    «модалка и строка в лог», запрет записи в него не входит и не сделан.
-    Заперто здесь как ИЗВЕСТНАЯ граница, чтобы не выглядело починенным.
+
+@pytest.fixture
+def answer(monkeypatch):
+    """Ответ оператора на вопрос о слепой перезаписи + журнал вопросов.
+
+    Возвращает список заголовков заданных вопросов; ответ настраивается
+    полем `.reply`. Утверждение о ФАКТЕ вызова, а не таймаут (`PROTOCOL §5`).
     """
-    api = _server(raster, binding=BINDING_SAVED,
-                  failures={"ocr_binding": APIError("gateway timeout", 504)})
+    class _Answer(list):
+        #: ответ по умолчанию
+        reply = QMessageBox.StandardButton.Cancel
+        def __init__(self):
+            super().__init__()
+            self._queue = iter(())
+
+        def answer_in_order(self, *replies):
+            self._queue = iter(replies)
+
+        def next_reply(self):
+            return next(self._queue, self.reply)
+
+    asked = _Answer()
+
+    def _question(parent, title, text, *a, **kw):
+        asked.append((title, text))
+        return asked.next_reply()
+
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(_question))
+    return asked
+
+
+def _unread_binding_server(raster):
+    """Сервер, у которого привязки НЕ отдались (не 404): состояние неизвестно."""
+    return _server(raster, binding=BINDING_SAVED,
+                   failures={"ocr_binding": APIError("gateway timeout", 504)})
+
+
+def _unread_graph_server(raster):
+    """То же для графа: сохранённый не отдался, открыт исходный."""
+    return _server(raster, binding=BINDING_SAVED,
+                   failures={"graph_validated": APIError("boom", 500)})
+
+
+def test_refused_blind_write_leaves_the_server_untouched(
+        raster, open_tab, dialogs, answer):
+    """Оператор сказал «нет» — на сервере остаётся ЕГО работа, а не пустота.
+
+    ⛔ Утверждается РАЗНИЦА (`PROTOCOL §3`): до правки `_save_binding`
+    возвращал True и клал на сервер 0 привязок вместо сохранённых там 2.
+    """
+    api = _unread_binding_server(raster)
+    tab = open_tab(api)
+    assert _bindings_on_server(api) == N_BINDINGS, "стенд начал не с работы оператора"
+
+    assert tab._save_binding() is False
+    assert answer, "запрета нет вовсе — вопрос не задан"
+    assert _bindings_on_server(api) == N_BINDINGS, (
+        "слепая запись прошла: работа оператора на сервере затёрта пустотой")
+    assert "ocr_binding" not in api.saves
+
+
+def test_refused_blind_write_blocks_the_graph_half_too(
+        raster, open_tab, dialogs, answer):
+    """Вторая половина двери: непрочитанный ГРАФ запирает ту же запись.
+
+    `_save_binding` пишет `graph_validated` шагом 5, и до правки этот путь
+    был открыт даже при закрытой двери привязок.
+    """
+    api = _unread_graph_server(raster)
+    tab = open_tab(api)
+
+    assert tab._save_binding() is False
+    assert any("граф" in text for _, text in answer), (
+        f"вопрос про граф не задан: {[t for _, t in answer]}")
+    assert "graph_validated" not in api.saves, (
+        "исходный граф записан поверх непрочитанного сохранённого")
+
+
+def test_confirmed_blind_write_goes_through(raster, open_tab, dialogs, answer):
+    """Обратная граница: «да» — решение оператора, запись обязана пройти."""
+    api = _unread_binding_server(raster)
+    tab = open_tab(api)
+    answer.reply = QMessageBox.StandardButton.Yes
+
+    assert tab._save_binding() is True
+    assert "ocr_binding" in api.saves
+    assert _bindings_on_server(api) == 0, (
+        "оператор разрешил перезапись, а она не прошла")
+
+
+def test_healthy_download_never_asks(raster, open_tab, dialogs, answer):
+    """Порог с другой стороны: привязки доехали — вопроса нет вовсе."""
+    api = _server(raster, binding=BINDING_SAVED)
     tab = open_tab(api)
 
     assert tab._save_binding() is True
-    assert _bindings_on_server(api) == 0, (
-        "поведение изменилось: запись больше не проходит — обновить границу "
-        "пункта и доки, а не тест")
+    assert answer == [], f"вопрос задан на здоровом сервере: {[t for t, _ in answer]}"
+
+
+def test_absent_binding_never_asks(raster, open_tab, dialogs, answer):
+    """404 — привязок законно нет (первый заход), запирать нечего."""
+    tab = open_tab(_server(raster))
+
+    assert tab._save_binding() is True
+    assert answer == [], "404 запер запись — первый заход стал невозможен"
+
+
+def test_refusal_is_repeated_on_the_next_attempt(raster, open_tab, dialogs,
+                                                 answer):
+    """«Нет» запрет НЕ снимает: следующая попытка спрашивает снова.
+
+    ⛔ Прогон ПОСЛЕ чужого действия оператора, а не с чистого листа
+    (`PROTOCOL §3`): вторая попытка идёт по вкладке, у которой уже есть
+    предыстория — один отказ и одно отменённое сохранение.
+    """
+    api = _unread_binding_server(raster)
+    tab = open_tab(api)
+
+    assert tab._save_binding() is False
+    asked_once = len(answer)
+    assert tab._save_binding() is False, "второй заход прошёл мимо запрета"
+    assert len(answer) > asked_once, "вопрос больше не задают — запрет испарился"
+    assert _bindings_on_server(api) == N_BINDINGS
+
+
+def test_permission_given_once_is_not_asked_again(raster, open_tab, dialogs,
+                                                  answer):
+    """«Да» снимает запрет насовсем — иначе автосейв спросит через 120 с.
+
+    Второе сохранение идёт ПОСЛЕ состоявшейся записи: проверяется путь,
+    на котором `_unreadable_on_server` уже не в начальном состоянии.
+    """
+    api = _unread_binding_server(raster)
+    tab = open_tab(api)
+    answer.reply = QMessageBox.StandardButton.Yes
+
+    assert tab._save_binding() is True
+    asked_once = len(answer)
+    assert tab._save_binding() is True
+    assert len(answer) == asked_once, (
+        "разрешение оператора не запомнено — вопрос вернулся")
+
+
+def test_refusal_after_permission_for_the_other_artifact_grants_nothing(
+        raster, open_tab, dialogs, answer):
+    """Оба артефакта непрочитаны, «да» первому и «нет» второму → не записано НИЧЕГО.
+
+    И разрешение первого не сохраняется: ничего не записано, значит и
+    разрешения оператор не давал — следующая попытка спросит снова про оба.
+    """
+    api = _server(raster, binding=BINDING_SAVED,
+                  failures={"ocr_binding": APIError("gateway timeout", 504),
+                            "graph_validated": APIError("boom", 500)})
+    tab = open_tab(api)
+    answer.answer_in_order(QMessageBox.StandardButton.Yes,
+                           QMessageBox.StandardButton.Cancel)
+
+    assert tab._save_binding() is False
+    assert len(answer) == 2, f"спросили не про оба артефакта: {len(answer)}"
+    assert api.saves == [], f"при отказе что-то всё же записано: {api.saves}"
+    assert tab._unreadable_on_server == {"ocr_binding", "graph_validated"}, (
+        "разрешение засчитано при отменённом сохранении")
 
 
 # =========================================================================
@@ -594,6 +752,16 @@ def test_binding_warning_does_not_block_the_save(raster, open_tab, dialogs):
 # диска это ложь о работе на ~50 секунд: ждать нечего, повторять нечего.
 # Граница та же, что у `swallow` (1.x10): `APIError` = отказ сервера, может
 # пройти; не-`APIError` = локальная запись, не пройдёт никогда.
+#
+# ── Пункт 1.x14 ──────────────────────────────────────────────────────────
+# 1.x12 закрыл только не-`APIError` и записал остаток прямо: «отказ сервера
+# может пройти со следующей попытки, и текст про OCR при нём остаётся прежним».
+# Остаток и оказался дефектом: 5xx (и обрыв связи, и отказ прав) — это НЕ «OCR
+# в процессе», а оператор видит именно эту фразу все ~50 секунд ретраев.
+# Правда про ожидание есть ровно у ОДНОГО кода: 404 = артефакта пока нет,
+# следующая попытка его застанет — так и написано в комментарии самого
+# `_on_download_error`. Поэтому пункт трогает ТЕКСТ, а не повторы: повтор при
+# шлюзовом отказе полезен и оставлен, лжёт не он.
 
 
 @pytest.fixture
@@ -668,15 +836,70 @@ def test_unfinished_ocr_still_waits_and_says_so(raster, open_tab_failing,
     assert "OCR в процессе" in tab.loading_label.text()
 
 
-def test_server_failure_still_waits(raster, open_tab_failing, retries, dialogs):
-    """Граница пункта: 5xx у обязательного артефакта — прежние 10 повторов.
+@pytest.mark.parametrize("exc,tail", [
+    pytest.param(APIError("Internal Server Error", 500), "Internal Server Error",
+                 id="server-500"),
+    pytest.param(APIError("Bad Gateway", 502), "Bad Gateway", id="gateway-502"),
+    pytest.param(APIError("Connection failed after 4 attempts", 0),
+                 "Connection failed", id="network"),
+    pytest.param(APIError("Not authenticated", 401), "Not authenticated",
+                 id="auth-401"),
+])
+def test_server_failure_does_not_claim_ocr_is_running(
+        raster, open_tab_failing, retries, dialogs, exc, tail):
+    """Пункт 1.x14: отказ сервера — не «OCR в процессе», а названная причина.
 
-    Пункт трогает ровно «повторами не лечится», то есть не-`APIError`. Отказ
-    сервера может пройти со следующей попытки, и текст про OCR при нём остаётся
-    прежним — это ИЗВЕСТНЫЙ остаток, а не недосмотр.
+    Перебор, а не пример: любой код, кроме 404, означает «сервер ответил
+    и отказал», и ни при одном из них OCR не «в процессе». До правки все
+    четыре клетки были неразличимы между собой И с честным ожиданием 404.
     """
-    api = _server(raster, failures={"ocr_result": APIError("boom", 502)})
+    api = _server(raster, failures={"ocr_result": exc})
     tab = open_tab_failing(api)
 
-    assert retries == [5000]
-    assert "OCR в процессе" in tab.loading_label.text()
+    text = tab.loading_label.text()
+    assert "OCR в процессе" not in text, f"ложь о работе OCR: {text!r}"
+    assert tail in text, f"оператор не видит причину отказа: {text!r}"
+
+
+@pytest.mark.parametrize("exc", [
+    APIError("Internal Server Error", 500),
+    APIError("Connection failed after 4 attempts", 0),
+])
+def test_server_failure_still_retries(raster, open_tab_failing, retries,
+                                      dialogs, exc):
+    """Обратная граница: правка трогает ТЕКСТ, а не повторы.
+
+    Шлюзовой отказ и обрыв связи проходят со следующей попытки, поэтому
+    повтор оставлен ровно таким, каким был, — и это проверяется, чтобы
+    «починка» не съела заодно полезное поведение.
+    """
+    api = _server(raster, failures={"ocr_result": exc})
+    open_tab_failing(api)
+
+    assert retries == [5000], "повтор при отказе сервера пропал вместе с текстом"
+
+
+def test_server_failure_leaves_a_log_line(raster, open_tab_failing, retries,
+                                          dialogs, caplog):
+    """Д2: причина отказа видна не только на экране, но и в логе клиента."""
+    with caplog.at_level(logging.WARNING, logger="ui.tabs.ocr_binding_tab"):
+        open_tab_failing(_server(
+            raster, failures={"ocr_result": APIError("Bad Gateway", 502)}))
+
+    lines = [r.getMessage() for r in caplog.records
+             if r.name == "ui.tabs.ocr_binding_tab" and r.levelno >= logging.WARNING]
+    assert any("Bad Gateway" in m for m in lines), \
+        f"в логе вкладки нет строки об отказе загрузки: {lines}"
+
+
+def test_retry_counter_is_visible_on_both_kinds_of_wait(
+        raster, open_tab_failing, retries, dialogs):
+    """Счётчик попыток остаётся на обеих ветках — оператор видит, сколько ждать."""
+    api = _server(raster)
+    del api.blobs["ocr_result"]                    # 404, честное ожидание
+    tab = open_tab_failing(api)
+    assert "1/10" in tab.loading_label.text()
+
+    api2 = _server(raster, failures={"ocr_result": APIError("boom", 503)})
+    tab2 = open_tab_failing(api2)
+    assert "1/10" in tab2.loading_label.text()
