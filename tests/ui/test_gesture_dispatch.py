@@ -256,23 +256,37 @@ def _edges(editor):
                        for e in editor.edges_data], sort_keys=True)
 
 
-def _visible_handles(editor):
-    """Число ВИДИМЫХ ручек размера на сцене.
+def _handle_centres(editor):
+    """Центры ВИДИМЫХ ручек размера, плоским отсортированным списком координат.
 
     Считаем по самой сцене (квадрат `HANDLE_SIZE` на слое `HANDLE_Z`), а не по
     полю `_resize_overlay`: ручки — это то, что видит оператор, и проверка
-    переживёт перенос ресайза с режима на оверлей (пункт 10.1).
+    переживёт перенос ресайза с режима на оверлей (пункт 10.1). Центр ручки —
+    угол правимой рамки (`resize_overlay._update_handle_positions`), поэтому по
+    этому же списку видно, НА КАКОМ узле сидят ручки.
     """
     from ui.editors.resize_overlay import ResizableNodeOverlay as R
 
-    n = 0
+    out = []
     for item in editor.scene.items():
         if isinstance(item, QGraphicsRectItem) and item.zValue() == R.HANDLE_Z:
             r = item.rect()
             if abs(r.width() - R.HANDLE_SIZE) < 0.6 and \
                     abs(r.height() - R.HANDLE_SIZE) < 0.6:
-                n += 1
-    return n
+                out.append((r.x() + r.width() / 2, r.y() + r.height() / 2))
+    return [c for xy in sorted(out) for c in xy]
+
+
+def _visible_handles(editor):
+    """Число ВИДИМЫХ ручек размера на сцене."""
+    return len(_handle_centres(editor)) // 2
+
+
+def _bbox_corners(editor, nid):
+    """Четыре угла рамки узла — в том же виде, что отдаёт `_handle_centres`."""
+    x1, y1, x2, y2 = editor.nodes[nid]["bbox"]
+    return [c for xy in sorted([(x1, y1), (x2, y1), (x1, y2), (x2, y2)])
+            for c in xy]
 
 
 def _depth(editor):
@@ -729,5 +743,6 @@ def test_click_from_resize_mode_still_switches_between_boxes(ed_poly):
     _tool_click(ed_poly, box_b)
 
     assert _visible_handles(ed_poly) == 4, "ручки не переехали на соседнюю рамку"
-    assert ed_poly._resizing_node == box_b
+    assert _handle_centres(ed_poly) == pytest.approx(_bbox_corners(ed_poly, box_b)), \
+        "ручки сидят не на той рамке, по которой кликнули"
     assert (_geom(ed_poly), _depth(ed_poly)) == (g0, depth0)
