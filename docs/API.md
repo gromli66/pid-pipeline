@@ -150,6 +150,11 @@ curl -X POST "http://localhost:8000/api/detection/{uid}/detect?model_id=yolov8m_
 **Transition:** `frame_cleaned → detecting`, `error → detecting` (повтор после падения:
 сюда ведёт красная кнопка «🔄 Поиск элементов» — `/{uid}/retry` из UI не вызывается).
 
+**Отправка задачи не удалась (брокер лёг): 503**, а состояние возвращается таким, каким было
+до вызова, — вместе с `error_message`/`error_stage`. Диаграмма не остаётся в `detecting`,
+поэтому повтор после подъёма брокера проходит. Правило общее для всех эндпоинтов запуска
+этапов, см. [STATUS_MACHINE.md §5](STATUS_MACHINE.md#5-error-handling).
+
 ---
 
 ## 5. CVAT
@@ -183,6 +188,9 @@ curl -X POST "http://localhost:8000/api/detection/{uid}/detect?model_id=yolov8m_
 | POST | `/{uid}/segment` | Запустить цепочку: segmentation → skeleton #1 |
 
 **Precondition:** `status == validated_bbox` (полный запуск) или `status == error` (smart retry — определяет `error_stage` и перезапускает с нужного шага: `segmenting` / `skeletonizing` / `detecting_junctions`).
+**Transition:** → `segmenting` (полный запуск и все стадии, кроме двух ниже), → `skeletonizing`
+(`error_stage == skeletonizing`), → `detecting_junctions` (`error_stage == detecting_junctions`).
+`error` пускается с ЛЮБЫМ `error_stage`: гейт судит только статус.
 
 ### Skeleton
 
@@ -191,6 +199,11 @@ curl -X POST "http://localhost:8000/api/detection/{uid}/detect?model_id=yolov8m_
 | Метод | Путь | Описание |
 |-------|------|----------|
 | POST | `/{uid}/skeletonize` | Ручной запуск/retry скелетизации |
+
+**Precondition:** `status ∈ {segmenting, validated_masks}` или `error + error_stage == skeletonizing`.
+**Transition:** → `skeletonizing`. ⚠ Из клиента не вызывается ни разу: метод
+`api_client.start_skeletonization` есть, вызывающих у него нет. Это единственный эндпоинт,
+принимающий `validated_masks`.
 
 ### Junction
 
@@ -201,6 +214,12 @@ curl -X POST "http://localhost:8000/api/detection/{uid}/detect?model_id=yolov8m_
 | POST | `/{uid}/detect-junctions` | Ручной запуск/retry CenterNet |
 
 **Precondition:** `status == skeletonized_final` или `error + error_stage == detecting_junctions`.
+**Transition:** → `detecting_junctions`. ⚠ У клиента нет даже метода для этого пути: детекция
+перекрёстков доезжает авто-цепочкой из `task_skeletonize_simple` и через `app/api/validation.py`.
+
+**Все три эндпоинта: отправка задачи не удалась (брокер лёг) — 503**, состояние возвращается
+таким, каким было до вызова, вместе с `error_message`/`error_stage`; в `*ING`-статусе диаграмма
+не остаётся. См. [STATUS_MACHINE.md §5](STATUS_MACHINE.md#5-error-handling).
 
 ---
 

@@ -128,10 +128,11 @@ ENTRY = "состояние до вызова"
 CLEARED = "поля ошибки стёрты"
 KEPT = "поля ошибки сохранены"
 
-# ЗАФИКСИРОВАНО ДО ПРАВКИ: отправка не защищена ничем. Исключение брокера уходит
-# наружу, диаграмма остаётся в целевом `*ING`-статусе, поля ошибки уже стёрты
-# переходом, коммит ровно один — тот, что записал переход.
-FAILURE = {
+# ДО пункта (зафиксировано коммитом b64035d, 331 тест зелёный на нетронутом коде):
+# отправка не защищена ничем. Исключение брокера уходит наружу, диаграмма
+# остаётся в целевом `*ING`-статусе, поля ошибки уже стёрты переходом, коммит
+# ровно один — тот, что записал переход.
+FAILURE_BEFORE = {
     "detect": (RAW, TARGET, CLEARED, 1),
     "retry": (RAW, TARGET, CLEARED, 1),
     "segment": (RAW, TARGET, CLEARED, 1),
@@ -139,9 +140,23 @@ FAILURE = {
     "junctions": (RAW, TARGET, CLEARED, 1),
 }
 
+# ПОСЛЕ пункта: отказ отправки возвращает состояние, каким оно было ДО вызова —
+# работа не начиналась, откатывать некуда, кроме исходной точки, — и отвечает 503
+# вместо 500. Коммитов два: переход и возврат. Разница с прежней редакцией обязана
+# быть ровно во всех пяти эндпоинтах — сторож ниже.
+FAILURE = {
+    "detect": (503, ENTRY, KEPT, 2),
+    "retry": (503, ENTRY, KEPT, 2),
+    "segment": (503, ENTRY, KEPT, 2),
+    "skeletonize": (503, ENTRY, KEPT, 2),
+    "junctions": (503, ENTRY, KEPT, 2),
+}
+
 # Второй замок тупика — кнопка стадии в клиенте после отказа отправки.
 # Инвариант ДАННЫХ (`_buttons_for_status`), без живого виджета.
-# "processing" — кнопка синяя и НЕ нажимается; "free" — доступна или зелёная.
+# "processing" — кнопка синяя и НЕ нажимается; "free" — доступна или зелёная;
+# "error" — статус `error`, порогов у него нет вовсе, кнопку красит `error_stage`
+# через `_error_key`, поэтому судится сохранность стадии.
 BUTTON_KEY = {
     "detect": "detect",
     "retry": "detect",
@@ -149,11 +164,25 @@ BUTTON_KEY = {
     "skeletonize": "segment",
     "junctions": "junction",
 }
-BUTTON_AFTER_FAILURE = {
+
+# ДО пункта: диаграмма садилась в `*ING`, и кнопка своей стадии гасла у всех пяти.
+BUTTON_AFTER_FAILURE_BEFORE = {
     "detect": "processing",
     "retry": "processing",
     "segment": "processing",
     "skeletonize": "processing",
+    "junctions": "processing",
+}
+
+# ПОСЛЕ пункта: вернулась исходная точка — вместе с ней вернулась и кнопка.
+# У перекрёстков она НЕ меняется, и это не недоделка: `skeletonized_final` сам
+# по себе «в процессе» для бусины перекрёстков, а эндпоинт из клиента не зовётся
+# вовсе — у `/api/junction/{uid}/detect-junctions` нет даже метода в `api_client`.
+BUTTON_AFTER_FAILURE = {
+    "detect": "free",
+    "retry": "error",
+    "segment": "free",
+    "skeletonize": "free",
     "junctions": "processing",
 }
 
@@ -357,10 +386,45 @@ def test_error_stage_vocabulary_is_complete():
 def test_every_endpoint_has_a_failure_rule():
     """Ни один эндпоинт таблицы не остался без объявленного исхода отказа."""
     assert set(FAILURE) == set(ENDPOINTS)
+    assert set(FAILURE_BEFORE) == set(ENDPOINTS)
     assert set(BUTTON_AFTER_FAILURE) == set(ENDPOINTS)
+    assert set(BUTTON_AFTER_FAILURE_BEFORE) == set(ENDPOINTS)
     assert set(BUTTON_KEY) == set(ENDPOINTS)
     assert set(SCENARIO_ENTRY) == set(ENDPOINTS)
     assert set(CALL) == set(ENDPOINTS)
+
+
+def test_dispatch_failure_changed_by_exactly_the_declared_cells():
+    """Пункт 1.13 переписал исход отказа у ВСЕХ ПЯТИ и ничего сверх того.
+
+    Обе редакции — независимые литералы, поэтому правка одной без другой
+    краснит этот сторож: «переход вне зафиксированного набора»
+    (`PROTOCOL §Гейты`) ловится здесь, а не глазами ревизора.
+    """
+    changed = {key for key in FAILURE if FAILURE[key] != FAILURE_BEFORE[key]}
+    assert changed == set(ENDPOINTS)
+
+    for key, value in FAILURE_BEFORE.items():
+        assert value == (RAW, TARGET, CLEARED, 1), key
+    for key, value in FAILURE.items():
+        assert value == (503, ENTRY, KEPT, 2), key
+
+
+def test_button_table_changed_only_where_the_button_exists():
+    """Кнопка вернулась у четырёх эндпоинтов из пяти — и это замер, не недоделка.
+
+    У перекрёстков исход не изменился: `skeletonized_final` сам по себе «в
+    процессе» для своей бусины, а эндпоинт из клиента не зовётся вовсе. Правка
+    там всё равно нужна — статус перестал застревать, — но кнопки, которая бы
+    от этого ожила, у него нет.
+    """
+    changed = {
+        key for key in BUTTON_AFTER_FAILURE
+        if BUTTON_AFTER_FAILURE[key] != BUTTON_AFTER_FAILURE_BEFORE[key]
+    }
+    assert changed == {"detect", "retry", "segment", "skeletonize"}
+    assert BUTTON_AFTER_FAILURE["junctions"] == "processing"
+    assert set(BUTTON_AFTER_FAILURE_BEFORE.values()) == {"processing"}
 
 
 # ── брокер жив: полная решётка 31 × 11 на каждый эндпоинт ────────────────
@@ -440,11 +504,12 @@ def test_dispatch_failure_over_every_status(endpoint, status, broker_down):
 
 
 def test_real_broker_exception_class_is_not_special(monkeypatch):
-    """Настоящее исключение kombu ведёт себя ровно как `OSError` из фикстуры.
+    """Настоящее исключение kombu ловится тем же швом, что `OSError` из фикстуры.
 
     Иначе таблица судила бы синтетический класс, а бой отдавал бы другой:
     `send_task` на мёртвый брокер бросает `kombu.exceptions.OperationalError`
-    (замер §79.2 — 4.27 с до отказа).
+    (замер §79.2 — 4.27 с до отказа). До правки это исключение уходило наружу
+    как есть — оператору 500 и диаграмма в `detecting` навсегда.
     """
     from kombu.exceptions import OperationalError
 
@@ -457,11 +522,13 @@ def test_real_broker_exception_class_is_not_special(monkeypatch):
 
     diagram = _diagram(DiagramStatus.FRAME_CLEANED)
     db = FakeDB(diagram)
-    with pytest.raises(OperationalError):
+    with pytest.raises(HTTPException) as exc:
         asyncio.run(start_detection(UID, model_id=None, db=db))
 
-    assert _state(diagram) == ("detecting", None, None)
-    assert db.commits == 1
+    assert exc.value.status_code == 503
+    assert "Error 111" in exc.value.detail, "причина отказа не доехала до оператора"
+    assert _state(diagram) == ("frame_cleaned", None, None)
+    assert db.commits == 2
 
 
 # ── второй замок: кнопка стадии после отказа отправки ────────────────────
@@ -470,11 +537,11 @@ def test_real_broker_exception_class_is_not_special(monkeypatch):
 def test_button_after_failed_dispatch(endpoint, broker_down):
     """Инвариант ДАННЫХ: в каком состоянии кнопка стадии после отказа.
 
-    Сегодня диаграмма садится в `*ING`-статус, и кнопка своей стадии уходит
-    в `processing` — она синяя и не нажимается, то есть повторить запуск
-    оператору нечем. Ни `_MANUAL_INPROGRESS` (только четыре ручных
-    `VALIDATING_*`), ни `_stage_stuck` (строки стадии нет — задача не
-    стартовала) этот статус не отпускают.
+    До правки диаграмма садилась в `*ING`-статус, и кнопка своей стадии уходила
+    в `processing` — синяя и не нажимается, то есть повторить запуск оператору
+    было нечем. Ни `_MANUAL_INPROGRESS` (только четыре ручных `VALIDATING_*`),
+    ни `_stage_stuck` (строки стадии нет — задача не стартовала) этот статус
+    не отпускают: выход был только правкой БД.
     """
     from ui.widgets.diagram_workspace import _buttons_for_status
 
@@ -487,23 +554,34 @@ def test_button_after_failed_dispatch(endpoint, broker_down):
 
     available, completed, processing = _buttons_for_status(diagram.status)
     key = BUTTON_KEY[endpoint]
+    expected = BUTTON_AFTER_FAILURE[endpoint]
 
-    if BUTTON_AFTER_FAILURE[endpoint] == "processing":
-        assert key in processing, "кнопка стадии доступна — тупик не воспроизведён"
+    if expected == "processing":
+        assert key in processing, "кнопка стадии доступна — таблица врёт"
         assert key not in (available | completed)
-    else:
+    elif expected == "free":
         assert key in (available | completed), "кнопка стадии серая"
+        assert key not in processing
+    else:
+        # Статус `error`: порогов у него нет, кнопку красит `error_stage`.
+        # Пустая стадия гасит В КЛИЕНТЕ все кнопки разом (`_error_key` → None),
+        # то есть возврат одного статуса завёл бы новый тупик класса 1.12.
+        assert diagram.status is DiagramStatus.ERROR
+        assert diagram.error_stage == entry[1]
+        assert diagram.error_message == entry[2]
+        assert (available, completed, processing) == (set(), set(), set())
 
 
 # ── повторный запуск после отказа ────────────────────────────────────────
 
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
 def test_second_launch_after_dead_broker(endpoint, broker_down, monkeypatch):
-    """Брокер поднялся — оператор жмёт кнопку ещё раз.
+    """Брокер поднялся — оператор жмёт кнопку ещё раз. Сценарий уровня дефекта.
 
-    Сегодня второй запуск отвечает 400: диаграмма уже в `*ING`-статусе, а его
-    гейт такой статус не принимает. Это и есть тупик пункта — из него нет
-    выхода без правки БД.
+    До правки второй запуск отвечал 400: диаграмма уже в `*ING`-статусе, а его
+    же гейт такой статус не принимает — тупик без выхода, кроме правки БД.
+    После правки вернулась исходная точка, и повтор проходит: тест судит
+    по таблице, а не по знанию редакции.
     """
     entry = SCENARIO_ENTRY[endpoint]
     diagram = _diagram(DiagramStatus(entry[0]), entry[1], entry[2])
@@ -537,6 +615,64 @@ def test_second_launch_after_dead_broker(endpoint, broker_down, monkeypatch):
         result = asyncio.run(CALL[endpoint](db))
         assert result["status"] == launch[0]
         assert sent == [launch[1]]
+
+
+# ── Д2: след отказа в логе ───────────────────────────────────────────────
+
+# Приёмник и фаза каждого эндпоинта: логгер модуля + метка `obs.bind`.
+LOG = {
+    "detect": ("app.api.detection", "detection"),
+    "retry": ("app.api.detection", "detection"),
+    "segment": ("app.api.segmentation", "segmentation"),
+    "skeletonize": ("app.api.skeleton", "skeleton"),
+    "junctions": ("app.api.junction", "junction"),
+}
+
+
+@pytest.mark.parametrize("endpoint", ENDPOINTS)
+def test_dead_broker_leaves_a_trace_with_uid(endpoint, broker_down):
+    """Д2: отказ отправки больше не молчит — строка с `uid` и точкой возврата.
+
+    До правки сервер не оставлял об этом ничего: наружу уходило исключение, а
+    диаграмма тихо оказывалась в статусе, из которого нет выхода. `uid` судится
+    настоящим механизмом — `ContextFilter` тянет его из `obs.bind`, — и фильтр
+    обязан отработать ВНУТРИ задачи: `asyncio.run` копирует контекст, и наружу
+    его правки не возвращаются.
+    """
+    import logging
+
+    from app.core.logging import ContextFilter
+
+    class _Capture(logging.Handler):
+        def __init__(self):
+            super().__init__(level=logging.DEBUG)
+            self.records = []
+            self.addFilter(ContextFilter())
+
+        def emit(self, record):
+            self.records.append(record)
+
+    logger_name, phase = LOG[endpoint]
+    entry = SCENARIO_ENTRY[endpoint]
+
+    handler = _Capture()
+    api_logger = logging.getLogger(logger_name)
+    previous_level = api_logger.level
+    api_logger.addHandler(handler)
+    api_logger.setLevel(logging.DEBUG)
+    try:
+        db = FakeDB(_diagram(DiagramStatus(entry[0]), entry[1], entry[2]))
+        with pytest.raises(HTTPException):
+            asyncio.run(CALL[endpoint](db))
+    finally:
+        api_logger.removeHandler(handler)
+        api_logger.setLevel(previous_level)
+
+    trace = [r for r in handler.records if getattr(r, "event", None) == "dispatch_failed"]
+    assert len(trace) == 1, "отказ отправки не оставил следа"
+    assert trace[0].uid == str(UID)
+    assert trace[0].phase == phase
+    assert entry[0] in trace[0].getMessage(), "точка возврата не названа"
 
 
 # ── прочие ветки тех же эндпоинтов ───────────────────────────────────────
