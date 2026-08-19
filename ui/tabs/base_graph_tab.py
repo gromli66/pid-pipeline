@@ -668,12 +668,18 @@ def _graph_jobs(want_canvas: bool) -> tuple[Job, ...]:
     прокси) обязан увести вкладку в ошибку, потому что тихо потерянный
     `graph_canvas` = «холст пересобран заново, прежние правки не сохранятся»,
     а тихо потерянные контуры = выброшенные правки оператора (см. `_on_downloaded`).
+
+    ⛔ `failure_key` у графа и холста (пункт 1.23) — то же различение 404/прочее,
+    что у контуров: 404 = сохранённой работы законно нет (первый заход), любой
+    другой отказ = она могла быть. Молча взять фолбэк = открыть оператору не его
+    работу, а `_save_graph` затрёт ею серверную.
     """
     jobs = [
         one(artifact("original_image", "original.png"), required=True),
         # Граф: предпочитаем validated (сохранённый), fallback на оригинальный.
         Job((artifact("graph_validated", "graph.json", key="graph_json"),
-             artifact("graph_json", "graph.json")), required=True),
+             artifact("graph_json", "graph.json")), required=True,
+            failure_key="saved_graph_download_failed"),
         one(artifact("coco_validated", "coco_validated.json"),
             swallow=(APIError,)),
     ]
@@ -682,7 +688,8 @@ def _graph_jobs(want_canvas: bool) -> tuple[Job, ...]:
     if want_canvas:
         jobs += [
             one(artifact("graph_canvas", "graph_canvas.json"),
-                swallow=(APIError,)),
+                swallow=(APIError,),
+                failure_key="canvas_download_failed"),
             one(artifact("contours_validated", "contours_validated.json"),
                 swallow=(APIError,),
                 failure_key="contours_download_failed"),
@@ -854,6 +861,20 @@ class BaseGraphTab(AppearanceMixin, QWidget):
         self._download_thread.wait()
         self.loading_label.hide()
 
+        if artifacts.get("saved_graph_download_failed"):
+            # Сохранённый граф МОГ лежать на сервере и просто не отдался (5xx,
+            # сеть, диск): открыт исходный, а `_save_graph` пишет обратно
+            # в graph_validated — прежняя валидация была бы затёрта молча.
+            logger.warning("graph_validated не скачался — открыт исходный граф")
+            QMessageBox.warning(
+                self, "Сохранённый граф не загружен",
+                "Не удалось скачать сохранённый граф — открыт ИСХОДНЫЙ, "
+                "без ваших прежних правок.\n\n"
+                "Сохранение из этой вкладки затрёт сохранённый граф на "
+                "сервере. Закройте вкладку и откройте её заново, когда связь "
+                "восстановится.",
+            )
+
         try:
             # Остаток раскладки (Э12): показывает только AdvancedGraphTab,
             # путь сохраняется здесь — artifacts дальше не передаются.
@@ -899,6 +920,21 @@ class BaseGraphTab(AppearanceMixin, QWidget):
                                 "(контуры/OCR/проверка схемы).\n\n"
                                 "Холст будет пересобран заново — прежние правки "
                                 "в нём не сохранятся.",
+                            )
+                        elif artifacts.get("canvas_download_failed"):
+                            # Холст МОГ лежать на сервере и просто не отдался:
+                            # пустота от 5xx неотличима от «холста нет», а цена
+                            # ошибки — ручная раскладка, затёртая первым Ctrl+S.
+                            logger.warning(
+                                "graph_canvas не скачался — холст пересобран заново")
+                            QMessageBox.warning(
+                                self, "Холст не загружен",
+                                "Не удалось скачать сохранённый холст «Ручной "
+                                "правки» — он будет пересобран заново, прежние "
+                                "правки в нём не сохранятся.\n\n"
+                                "Сохранение из этой вкладки затрёт холст на "
+                                "сервере. Закройте вкладку и откройте её "
+                                "заново, когда связь восстановится.",
                             )
                         canvas_graph = self.temp_dir / "graph_1920.json"
                         if _pretransform_to_canvas(
