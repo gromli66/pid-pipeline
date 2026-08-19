@@ -671,8 +671,8 @@ class DiagramWorkspace(QWidget):
         # Обновить бусины и кнопки
         self._refresh_status()
 
-        # #2: если диаграмма застряла в *ING без открытой вкладки — авто-откат
-        self._self_heal_stuck_stage()
+        # #2: прерванный ручной этап — сказать вслух, ничего не откатывая
+        self._note_unconfirmed_stage()
 
         # Подписаться на обновления (один раз)
         import warnings
@@ -711,27 +711,38 @@ class DiagramWorkspace(QWidget):
     # Refresh
     # =================================================================
 
-    def _self_heal_stuck_stage(self):
-        """Авто-откат диаграммы, застрявшей в *ING-статусе без открытой вкладки.
+    def _note_unconfirmed_stage(self):
+        """Сказать оператору, что ручной этап остался неподтверждённым.
 
-        Срабатывает при открытии диаграммы: если предыдущий сеанс редактирования
-        этапа был прерван (открыл, не сохранил, вышел не через «← Назад» / закрыл
-        приложение), статус остаётся *ING и бид «висит в процессе». Откатываем к
-        стабильному этапу, чтобы этап снова стал доступен.
+        Раньше здесь стоял авто-откат («самолечение», пункт 1.3 дороги): если
+        предыдущий сеанс редактирования этапа был прерван (открыл, не сохранил,
+        вышел не через «← Назад» / закрыл приложение), статус оставался *ING —
+        и клиент молча звал `rollback_diagram(uid, target)` БЕЗ preserve-флагов.
+        Для «Проверки схемы» это сносило `graph_validated`, оба контурных
+        артефакта, все четыре OCR-овых, холст (файл `graph_canvas.json` уходит
+        с диска) и FXML — девять артефактов из одиннадцати, замер §51.
+
+        Покупал этот откат ровно один цвет бусины: набор доступных/пройденных
+        кнопок у `*ING`-статуса и у стабильного совпадает побитово для всех
+        четырёх ручных этапов (§51), потому что кнопку и так держит
+        кликабельной поправка `_MANUAL_INPROGRESS` в `_update_buttons`. Бусину
+        теперь красит такая же поправка в `_update_beads`, а данные оператора
+        сносит только он сам — кнопкой пройденного этапа, с вопросом
+        (`_on_button_click`).
         """
         if self._active_tab is not None:
             return
         mi = _MANUAL_INPROGRESS.get(self._last_status)
         if not mi:
             return
-        _key, target = mi
-        try:
-            self.api_client.rollback_diagram(self._uid, target)
-            logger.info("Self-heal: %s застрял в %s → откат к %s",
-                        self._uid[:8], self._last_status.value, target)
-            self._refresh_status()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Self-heal откат не удался: %s", exc)
+        key, _target = mi
+        label = dict(self._BUTTON_DEFS).get(key, key)
+        logger.info("Этап «%s» остался неподтверждённым (%s) — данные не тронуты",
+                    label, self._last_status.value)
+        self.status_message.emit(
+            f"«{label}»: этап не завершён — можно продолжить с того же места",
+            5000,
+        )
 
     def _refresh_status(self):
         """Обновить бусины и кнопки из текущего статуса в БД."""
@@ -895,6 +906,18 @@ class DiagramWorkspace(QWidget):
         target = {}
         for idx, state in _beads_for_status(status):
             target[idx] = state
+
+        # Ручной *ING-этап без открытой вкладки — бусина «доступен», а не «в
+        # процессе»: в процессе ничего нет, оператор просто вышел, не завершив.
+        # Та же поправка, что держит кнопку кликабельной в _update_buttons (#3);
+        # раньше эту бусину гасил авто-откат, снесённый пунктом 1.3 дороги.
+        # Пока вкладка открыта — синяя «в процессе» честна, поэтому и условие.
+        if self._active_tab is None:
+            _mi = _MANUAL_INPROGRESS.get(status)
+            if _mi:
+                _idx = _KEY_IDX.get(_mi[0])
+                if _idx is not None and target.get(_idx) == BeadState.IN_PROGRESS:
+                    target[_idx] = BeadState.AVAILABLE
 
         # Перекрыть pipe/junction если подтверждены по отдельности
         if status == DiagramStatus.VALIDATING_MASKS:
@@ -1277,13 +1300,15 @@ class DiagramWorkspace(QWidget):
         # Запустить автосохранение
         self._autosave.start(tab_widget)
 
-    # Маппинг: tab_key → статус, из которого нужно откатить при закрытии без confirm
-    _VALIDATING_ROLLBACK = {
-        "frame": (DiagramStatus.CLEANING_FRAME, "uploaded"),
-        "junction": (DiagramStatus.VALIDATING_JUNCTIONS, "detected_junctions"),
-        "pipe":     (DiagramStatus.VALIDATING_MASKS, "skeletonized"),
-        "val_graph": (DiagramStatus.VALIDATING_GRAPH, "built"),
-    }
+    # Здесь была таблица `_VALIDATING_ROLLBACK` и вызовы `_rollback_if_validating()`
+    # из обоих путей закрытия: незакрытая вкладка откатывала статус `rollback_diagram`,
+    # то есть сносила артефакты всех последующих этапов. Снято пунктом 1.3 дороги.
+    # Ключи таблицы (`"val_graph"`) и вкладок (`"graph_val"`, `:1931`) разошлись, и для
+    # графовой вкладки ветка не срабатывала никогда — а для «Очистки рамки»
+    # срабатывала и уносила сохранённую оператором очистку вместе с `image_raw.png`.
+    # Чинить надо было не ключ: совпадение включило бы штатный откат со всеми
+    # последствиями. Замер §51: откат не менял НИ ОДНОЙ кнопки — только цвет бусины,
+    # и её теперь красит поправка `_MANUAL_INPROGRESS` в `_update_beads`.
 
     def _close_active_tab(self):
         """← Назад (из вкладки) → закрыть, вернуться к header."""
@@ -1321,9 +1346,6 @@ class DiagramWorkspace(QWidget):
         # Проверить _saved перед удалением (двойная страховка для масок)
         self._detect_saved_mask(tab)
 
-        # Откатить VALIDATING_* статус если вкладка закрыта без подтверждения
-        self._rollback_if_validating()
-
         self._close_tab_and_restore_header()
 
         # Проверить завершение масок
@@ -1333,37 +1355,9 @@ class DiagramWorkspace(QWidget):
         """Закрыть вкладку без вопросов (при смене диаграммы / cleanup)."""
         if self._active_tab:
             self._autosave.stop()
-            self._rollback_if_validating()
             self._remove_tab_widget()
             self.header_panel.setUpdatesEnabled(True)
             self._was_status_watching = False
-
-    def _rollback_if_validating(self):
-        """Откатить VALIDATING_* статус если вкладка не была подтверждена."""
-        tab = self._active_tab
-        tab_key = self._active_tab_key
-        if not tab or not tab_key:
-            return
-        confirmed = getattr(tab, '_confirmed', False)
-        if confirmed or tab_key not in self._VALIDATING_ROLLBACK:
-            return
-        validating_status, rollback_target = self._VALIDATING_ROLLBACK[tab_key]
-        try:
-            diagram = self.api_client.get_diagram(self._uid)
-            if diagram.status == validating_status:
-                preserve_ocr = tab_key == "val_graph"
-                preserve_contours = tab_key == "val_graph"
-                self.api_client.rollback_diagram(
-                    self._uid, rollback_target,
-                    preserve_ocr=preserve_ocr,
-                    preserve_contours=preserve_contours,
-                )
-                logger.info(
-                    "Rolled back %s → %s (tab %s force-closed)",
-                    validating_status.value, rollback_target, tab_key,
-                )
-        except Exception as exc:
-            logger.warning("Failed to rollback on force close: %s", exc)
 
     def _remove_tab_widget(self):
         """Убрать виджет вкладки из layout."""
