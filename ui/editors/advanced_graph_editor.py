@@ -832,6 +832,11 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             key for key, info in self.edge_perp_scores.items()
             if not info.get('is_good', True)
         ]
+        if edges_to_optimize:
+            # Точка возврата строится ниже — снять превью ДО неё (см.
+            # drop_uncommitted_preview). Пустой список команд не даёт:
+            # вваривать нечего, значит и картинку у оператора не отбираем.
+            self.drop_uncommitted_preview()
         for node_a, node_b in edges_to_optimize:
             if self.optimize_edge(node_a, node_b):
                 optimized += 1
@@ -855,6 +860,10 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         from modules.graph.core import edit_smooth
         from ui.editors.undo_manager import SnapshotCommand
 
+        # Незафиксированное превью «Размеров» — ДО снятия точки возврата,
+        # иначе оно вваривается в _before и перестаёт откатываться
+        # (см. drop_uncommitted_preview).
+        self.drop_uncommitted_preview()
         cmd = SnapshotCommand(self.model, self._redraw_all)
         cmd.description = "Сглаживание"
         cmd.execute()
@@ -2901,6 +2910,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             self.update_status("Нечего удалять")
             return
 
+        # Точка возврата — ниже; превью «Размеров» снимается до неё
+        # (см. drop_uncommitted_preview).
+        self.drop_uncommitted_preview()
         snap_cmd = AutoFixCommand(self.model, self._redraw_all)
         snap_cmd.description = "Удалить выделенное"
         snap_cmd.execute()
@@ -3885,6 +3897,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         """Graph-aware chain alignment: выровнять узлы по H/V цепочкам."""
         from ui.editors.undo_manager import SnapshotCommand
 
+        # Незафиксированное превью «Размеров» — ДО снятия точки возврата
+        # (см. drop_uncommitted_preview).
+        self.drop_uncommitted_preview()
         cmd = SnapshotCommand(self.model, self._redraw_all)
         cmd.execute()
         cmd.description = "Auto-Fix (chains)"
@@ -4166,15 +4181,20 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             "размерам", len(touched))
 
     def drop_uncommitted_preview(self) -> None:
-        """Снять незафиксированное превью «Размеров» перед записью графа (1.5).
+        """Снять незафиксированное превью «Размеров». Два зовущих:
 
-        Превью мутирует модель мимо стека команд, поэтому дёрти-флаг вкладки
-        его не видит (`base_graph_tab.has_unsaved_changes` считает
-        `undo_mgr.revision`). Пункт 1.4 научил редактор откатывать брошенное
-        превью при выходе из режима, но запись на сервер шла от модели КАК ЕСТЬ
-        — и сервер расходился с моделью: замер §50, «превью → Сохранить →
-        выход» оставлял на сервере bbox [-10.0, 188.0, 80.0, 278.0] при
-        исходных [25, 215, 45, 251] в модели.
+        • **запись графа** (1.5): `BaseGraphTab._save_graph` — превью идёт мимо
+          стека команд, дёрти-флаг вкладки его не видит, а запись шла от модели
+          КАК ЕСТЬ. Замер §50: «превью → Сохранить → выход» оставлял на сервере
+          bbox [-10.0, 188.0, 80.0, 278.0] при исходных [25, 215, 45, 251];
+        • **любая команда-на-месте** до того, как она снимет свою точку
+          возврата (доработка 1.4 по ревизии связки). `SnapshotCommand._before`
+          снимается с модели КАК ЕСТЬ, то есть вместе с превью: дальше
+          `undo_mgr.revision` растёт, базлайн объявляется протухшим и лечение
+          «протух → бросить без отката» превью уже не трогает. Замер §52:
+          «превью → Авто-выравнивание → Ctrl+Z» возвращал 90×90 вместо 20×36,
+          и то же уезжало на сервер. Поздним откатом это не лечится — `_before`
+          отравлен, Ctrl+Z вернул бы превью и из чистой модели.
 
         Панель не сбрасывается (`_update_resize_panel` затёр бы набранные
         оператором ширину/высоту медианами) — только модель и жёлтые рамки.
