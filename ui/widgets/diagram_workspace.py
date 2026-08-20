@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QStackedWidget, QApplication, QFileDialog, QInputDialog,
     QMenu, QDialog, QComboBox, QLineEdit, QDialogButtonBox,
 )
-from PySide6.QtCore import Qt, Signal, Slot, QTimer
+from PySide6.QtCore import Qt, Signal, Slot, QTimer, QThread
 from PySide6.QtGui import QAction, QFont
 
 from ui.services.api_client import APIClient, APIError, DiagramStatus
@@ -812,7 +812,11 @@ class DiagramWorkspace(QWidget):
         if (status == DiagramStatus.COMPLETED
                 and getattr(self, "_awaiting_fxml_save", False)):
             self._awaiting_fxml_save = False
+            # Путь экспорта снимаем ДО сохранения: _save_fxml_silently его гасит,
+            # а .prtx должен лечь рядом с тем же файлом.
+            _fxml_target = getattr(self, "_fxml_target_path", None)
             self._save_fxml_silently()
+            self._start_prtx_conversion(_fxml_target)
 
         # B6.4: При параллельных статусах — проверить готовность OCR по артефакту
         if not self._ocr_notified and status in (
@@ -2006,6 +2010,54 @@ class DiagramWorkspace(QWidget):
             )
         finally:
             self._fxml_target_path = None
+
+    def _start_prtx_conversion(self, export_path=None):
+        """Автоконвертор: собрать .prtx из того же валидированного графа.
+
+        Считает КЛИЕНТ: движок САПФИР лицензирован по железу машины и в
+        Linux-контейнере воркера виснет на модальном окне лицензии (замер
+        2026-08-20, подробности — ui/services/prtx_converter.py). Результат
+        уезжает в storage рядом с diagram.fxml и, если оператор выбирал путь
+        экспорта, ложится рядом с сохранённым .fxml.
+        """
+        from ui.services.prtx_converter import PrtxWorker, box_dir
+
+        if box_dir() is None:
+            self.status_message.emit(
+                "⚠ Коробка конвертера .prtx не найдена — схема не собрана", 6000)
+            return
+
+        # Повторная генерация FXML поверх бегущей сборки затёрла бы ссылку на
+        # живой QThread — он остался бы без владельца.
+        running = getattr(self, "_prtx_thread", None)
+        if running is not None and running.isRunning():
+            logger.info("PRTX: сборка уже идёт, повтор пропущен")
+            return
+
+        self.status_message.emit("⏳ Сборка расчётной схемы .prtx…", 4000)
+
+        self._prtx_thread = QThread()
+        self._prtx_worker = PrtxWorker(self.api_client, self._uid, export_path)
+        self._prtx_worker.moveToThread(self._prtx_thread)
+        self._prtx_thread.started.connect(self._prtx_worker.run)
+        self._prtx_worker.finished.connect(self._on_prtx_done)
+        self._prtx_worker.error.connect(self._on_prtx_error)
+        # Поток гасит сам работник — рабочая область живёт дольше конвертации,
+        # но связи со слотами Qt рвёт вместе с получателем (образец — pipe_tab).
+        self._prtx_worker.finished.connect(self._prtx_thread.quit)
+        self._prtx_worker.error.connect(self._prtx_thread.quit)
+        self._prtx_thread.start()
+
+    @Slot(str)
+    def _on_prtx_done(self, where: str):
+        self.status_message.emit(f"📐 Расчётная схема .prtx собрана: {where}", 8000)
+
+    @Slot(str)
+    def _on_prtx_error(self, message: str):
+        # Не окно: .prtx — производная от готового FXML, срыв сборки не должен
+        # перебивать оператору результат основного конвейера.
+        logger.error("PRTX conversion failed: %s", message)
+        self.status_message.emit(f"⚠ Расчётная схема .prtx не собрана: {message}", 10000)
 
     def _download_fxml(self):
         """Скачать сгенерированный FXML на компьютер пользователя (ручной фолбэк)."""

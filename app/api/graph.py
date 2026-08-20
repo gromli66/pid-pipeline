@@ -5,11 +5,12 @@ Endpoints:
 - POST /{uid}/build        — запустить построение графа
                              (VALIDATED_JUNCTIONS | BUILT | ERROR → BUILDING_GRAPH)
 - GET  /{uid}/result       — получить результат построения (node/edge count, artifacts)
+- POST /{uid}/prtx/upload  — принять .prtx, собранный клиентом (лежит рядом с FXML)
 """
 
 from uuid import UUID
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +18,7 @@ from app.core import obs
 from app.core.logging import get_logger
 from app.db import get_async_db
 from app.models import Diagram, DiagramStatus, Artifact, ArtifactType
+from app.services.storage import StorageService
 
 router = APIRouter()
 
@@ -292,3 +294,56 @@ async def generate_fxml(
         "task_id": task_id,
         "uid": str(uid),
     }
+
+
+@router.post("/{uid}/prtx/upload")
+async def upload_prtx(
+    uid: UUID,
+    file: UploadFile = File(..., description="Расчётная схема САПФИР (.prtx)"),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Принять .prtx, собранный клиентом, и положить рядом с FXML.
+
+    Движок САПФИР Windows-нативный и лицензия привязана к железу машины, поэтому
+    конвертацию делает клиент (см. ui/services/prtx_converter.py), а сервер только
+    хранит результат: fxml/diagram.prtx + артефакт PRTX (скачивается штатным
+    /api/diagrams/{uid}/download/prtx).
+    """
+    result = await db.execute(select(Diagram).where(Diagram.uid == uid))
+    diagram = result.scalar_one_or_none()
+
+    if not diagram:
+        raise HTTPException(status_code=404, detail="Diagram not found")
+
+    obs.bind(uid=str(uid), phase="generating_fxml")
+
+    content = await file.read()
+
+    storage = StorageService()
+    file_path, file_size = await storage.save_file(uid, "fxml", "diagram.prtx", content)
+
+    # Перевыпуск: старый артефакт снимаем, файл перезаписан по тому же пути
+    old_result = await db.execute(
+        select(Artifact).where(
+            Artifact.diagram_uid == uid,
+            Artifact.artifact_type == ArtifactType.PRTX,
+        )
+    )
+    old = old_result.scalar_one_or_none()
+    if old:
+        await db.delete(old)
+        await db.flush()
+
+    db.add(Artifact(
+        diagram_uid=uid,
+        artifact_type=ArtifactType.PRTX,
+        file_path=file_path,
+        file_size=file_size,
+        mime_type="application/octet-stream",
+    ))
+    await db.commit()
+
+    logger.info("PRTX uploaded for %s: %s (%d bytes)", uid, file_path, file_size)
+
+    return {"status": "saved", "file_path": file_path, "file_size": file_size, "uid": str(uid)}

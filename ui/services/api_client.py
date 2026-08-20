@@ -643,6 +643,19 @@ class APIClient:
             params["bridge_gap"] = bridge_gap
         return self._request("POST", f"/api/graph/{uid}/generate-fxml", params=params)
 
+    def upload_prtx(self, uid: str, file_path: Path) -> Dict[str, Any]:
+        """Залить собранный клиентом .prtx (ляжет рядом с FXML: fxml/diagram.prtx).
+
+        Движок САПФИР лицензирован по железу и в контейнере воркера не работает —
+        схему собирает клиент, см. ui/services/prtx_converter.py.
+        """
+        file_path = Path(file_path)
+        with open(file_path, "rb") as f:
+            files = {"file": (file_path.name, f, "application/octet-stream")}
+            return self._request(
+                "POST", f"/api/graph/{uid}/prtx/upload", files=files, timeout=120.0
+            )
+
     # === OCR ===
 
     def complete_simple_graph_validation(self, uid: str) -> Dict[str, Any]:
