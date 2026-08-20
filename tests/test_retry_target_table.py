@@ -109,8 +109,28 @@ TABLE_BEFORE = {
     "totally_unknown_stage": "uploaded",
 }
 
-# Действующая редакция: до правки судим по «до».
-TABLE = TABLE_BEFORE
+# ── редакция таблицы ПОСЛЕ правки ────────────────────────────────────────
+# Второй независимый литерал, а не выражение «TABLE_BEFORE плюс правки»:
+# иначе редакции перестали бы быть независимыми, и сторож разницы ниже
+# сравнивал бы литерал сам с собой.
+TABLE_AFTER = {
+    "building_graph": "validated_junctions",
+    "contour_extraction": "validated_graph",
+    "detecting": "frame_cleaned",
+    "detecting_junctions": "skeletonized_final",
+    "direction_classification": "validated_bbox",
+    "fetching_annotations": "validating_bbox",
+    "generating_fxml": "ocr_bound",
+    "ocr": "validated_graph",
+    "segmenting": "validated_bbox",
+    "skeletonizing": "segmenting",
+    "skeletonizing_simple": "validated_masks",
+    None: "uploaded",
+    "totally_unknown_stage": "uploaded",
+}
+
+# Действующая редакция.
+TABLE = TABLE_AFTER
 
 
 # ── поддельная сессия БД: гейт настоящий ─────────────────────────────────
@@ -236,19 +256,33 @@ def test_missing_diagram_is_404():
 # ── часть 3: кто падает в дефолт ─────────────────────────────────────────
 
 
-def test_written_values_that_fall_into_the_default():
-    """Сколько ЗАПИСЫВАЕМЫХ значений уводит оператора в начало конвейера.
+def test_no_written_value_falls_into_the_default():
+    """Ни одно ЗАПИСЫВАЕМОЕ значение больше не уводит в начало конвейера.
 
-    Это и есть предмет ноги 1.15. Число здесь абсолютное и меняется той же
-    правкой, что и карта: до правки — четыре, после — ноль.
+    Это и есть предмет ноги 1.15. Число абсолютное и меняется той же правкой,
+    что и карта: до правки в дефолт падали четыре значения, после — ноль.
     """
     fallen = sorted(s for s in WRITTEN if TABLE[s] == "uploaded")
-    assert fallen == [
-        "contour_extraction",
-        "direction_classification",
-        "generating_fxml",
-        "ocr",
-    ], fallen
+    assert fallen == [], fallen
+
+
+def test_the_edit_changed_exactly_four_cells():
+    """Сторож разницы: правка сдвинула РОВНО заявленное, и ничего больше.
+
+    Обе редакции лежат выше независимыми литералами; остальные 399 клеток
+    решётки проверяются прогоном по действующей карте (`test_retry_transition`).
+    """
+    diff = {
+        k: (TABLE_BEFORE[k], TABLE_AFTER[k])
+        for k in TABLE_BEFORE if TABLE_BEFORE[k] != TABLE_AFTER[k]
+    }
+    assert diff == {
+        "direction_classification": ("uploaded", "validated_bbox"),
+        "contour_extraction": ("uploaded", "validated_graph"),
+        "ocr": ("uploaded", "validated_graph"),
+        "generating_fxml": ("uploaded", "ocr_bound"),
+    }
+    assert len(TABLE_BEFORE) == len(TABLE_AFTER) == len(CASES) == 13
 
 
 def test_unknown_and_absent_values_still_land_at_the_start():

@@ -274,7 +274,29 @@ set_diagram_error(db, diagram_uid, message, stage)
 
 Эта таблица — **фолбэк**: она работает, когда `/stages` недоступен. Штатно клиент идёт другим путём — `_apply_error_status()` берёт из `/stages` последнюю попытку каждой стадии и маппит **`stage_type`** на ту же кнопку картой `_STAGE_TYPE_TO_KEY` (`direction_classification`, `segmentation`, `skeletonization` и `final_skeletonization` → `segment`; `layout` → `edit_graph`; единственный `StageType` без кнопки — `upload`). Обе карты обязаны знать один и тот же набор стадий: стадия, которой нет ни в одной, не показывается оператору вовсе — ни красной бусиной, ни окном отчёта (пункт 1.12 дороги: так молчала классификация направления).
 
-Кнопка с ошибкой отображается красной с иконкой 🔄 (retry). Клик → окно отчёта об ошибке → повторный запуск ТОГО ЖЕ этапа его штатным эндпоинтом запуска. Отката при этом не происходит: клиент зовёт `POST /api/detection/{uid}/detect`, `/api/segmentation/{uid}/segment` и т.д., а не retry-эндпоинты — те из UI не вызываются вовсе. Поэтому гейт статуса у эндпоинта запуска обязан пропускать `error` со своим `error_stage`, иначе оператор попадает в тупик (пункт 1.11 дороги).
+Кнопка с ошибкой отображается красной с иконкой 🔄 (retry). Клик → окно отчёта об ошибке → повторный запуск ТОГО ЖЕ этапа его штатным эндпоинтом запуска. Отката при этом не происходит: клиент зовёт `POST /api/detection/{uid}/detect`, `/api/segmentation/{uid}/segment` и т.д., а не retry-эндпоинты. Поэтому гейт статуса у эндпоинта запуска обязан пропускать `error` со своим `error_stage`, иначе оператор попадает в тупик (пункт 1.11 дороги).
+
+Из трёх retry-эндпоинтов (`detection.py:132`, `cvat.py:503`, `diagrams.py:427`) клиент зовёт **один** — и только когда нажать больше нечего (см. ниже). Прежняя редакция этого раздела говорила «те из UI не вызываются вовсе»: это было верно до пункта 1-36 (`6d170ec`), которым появилась страховка.
+
+### Выход из тупика: `POST /api/diagrams/{uid}/retry`
+
+Ветка включается по УСЛОВИЮ «ни одна из 13 кнопок не доступна», а не по списку значений (`_offer_error_retry`, пункт 1-36). Такое бывает, когда `/stages` недоступен, а в памяти клиента лежит ещё не протухшая **бегущая** строка той самой стадии: она держит кнопку в `processing` и гасит её раньше, чем фолбэк успевает покрасить в красный. Клиент в этой ветке не гадает — куда откатывать, решает сервер своей картой `error_stage → предыдущий статус` (`app/api/diagrams.py:449`):
+
+| `error_stage` | статус после retry | | `error_stage` | статус после retry |
+|---|---|---|---|---|
+| `detecting` | `frame_cleaned` | | `skeletonizing_simple` | `validated_masks` |
+| `creating_cvat_task` | `detected` | | `skeletonizing_final` | `validated_masks` |
+| `fetching_annotations` | `validating_bbox` | | `detecting_junctions` | `skeletonized_final` |
+| `direction_classification` | `validated_bbox` | | `building_graph` | `validated_junctions` |
+| `segmenting` | `validated_bbox` | | `contour_extraction` | `validated_graph` |
+| `skeletonizing` | `segmenting` | | `ocr` | `validated_graph` |
+| `validating_masks` | `skeletonized` | | `generating_fxml` | `ocr_bound` |
+
+Артефакты при этом НЕ удаляются — эндпоинт трогает только статус и снимает `error_message`/`error_stage` (откат с удалением артефактов — это `POST /api/diagrams/{uid}/rollback`, §4).
+
+⚠ **Дефолт этой карты — `UPLOADED`, то есть самое начало конвейера**, где оператору доступна ровно одна кнопка «Очистка рамки»: детекцию, CVAT-валидацию и валидацию масок пришлось бы пройти заново. Сегодня в дефолт падают только `error_stage = None` и значения, которых не пишет никто (динамический писатель `safe_dispatch` кладёт имя задачи — `worker/utils/db_helpers.py:146`, вызывающих в боевом коде у него нет). Все **11** значений, которые пишутся, картой покрыты — до пункта 1.15 дороги четыре из них (`direction_classification`, `ocr`, `contour_extraction`, `generating_fxml`) уходили в это самое начало. Перебор по полному множеству (31 статус × 13 значений) держит `tests/test_retry_target_table.py`, достижимость тупика и сам выход — `tests/ui/test_retry_exit_target.py`.
+
+Цели отката совпадают с клиентской картой `DiagramWorkspace._ROLLBACK_TARGET` («статус ПЕРЕД этим этапом») у всех значений, кроме четырёх исторических расхождений (`skeletonizing`, `skeletonizing_simple`, `detecting_junctions`, `fetching_annotations`) — они зафиксированы тестом как есть и сводятся вместе с реестром стадий (волна 5 дороги).
 
 ### Отказ отправки задачи (503)
 

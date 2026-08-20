@@ -122,6 +122,19 @@ curl -o pipe_mask.png http://localhost:8000/api/diagrams/{uid}/download/pipe_mas
 
 `artifact_type` — любое значение из `ArtifactType` enum (см. [ARCHITECTURE.md §6](ARCHITECTURE.md#6-артефакты-pipeline)).
 
+### Retry после ошибки
+
+```bash
+curl -X POST http://localhost:8000/api/diagrams/{uid}/retry
+# {"status": "validated_bbox", "message": "Status reset to validated_bbox"}
+```
+
+**Precondition:** `status == error` (иначе 400; диаграммы нет — 404).
+**Transition:** `error → <статус перед упавшим этапом>` по карте `error_stage → статус`;
+`error_message`/`error_stage` снимаются, артефакты НЕ удаляются. Полная карта, её дефолт
+и условие, при котором клиент вообще сюда ходит, —
+[STATUS_MACHINE.md §5](STATUS_MACHINE.md#выход-из-тупика-post-apidiagramsuidretry).
+
 ---
 
 ## 4. Detection
