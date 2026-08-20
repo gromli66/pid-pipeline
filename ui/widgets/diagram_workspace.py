@@ -509,6 +509,11 @@ class DiagramWorkspace(QWidget):
         self._btn_back_injected = None  # Кнопка ← Назад внутри вкладки
         self._ocr_notified = False  # B6.4: OCR ready notification sent
         self._was_status_watching = False  # Paused status polling while tab is open
+        # Отказы отправки, о которых сказал веер: ключ бусины → отпечаток строк
+        # `/stages` этого этапа, известных НА МОМЕНТ отказа (None — не прочитались).
+        # Отпечаток, а не флаг: `ProcessingStage` откатом не удаляются, поэтому
+        # строка прошлого прогона сняла бы свежий отказ и вернула бы молчание.
+        self._dispatch_refusals: Dict[str, Optional[frozenset]] = {}
 
         # OCR artifact polling timer (independent of status changes)
         self._ocr_poll_timer = QTimer(self)
@@ -677,6 +682,7 @@ class DiagramWorkspace(QWidget):
         self._awaiting_fxml_save = False
         self._fxml_target_path = None
         self._stage_errors = {}
+        self._dispatch_refusals = {}
         self._last_status = DiagramStatus.UPLOADED
 
         self.title_label.setText(f"Диаграмма — {name}")
@@ -952,9 +958,92 @@ class DiagramWorkspace(QWidget):
             if self._junction_confirmed:
                 target[BEAD_VAL_JUNCTION] = BeadState.COMPLETED
 
+        # Отказ отправки: сервер сказал, что задачи в очереди НЕТ. Держим бусину
+        # красной, пока не увидим свидетельство НОВЕЕ отказа — иначе оператор
+        # смотрит на «в процессе» там, где не отправлено ничего (пункт 1-48).
+        for key, seen in list(self._dispatch_refusals.items()):
+            idx = _KEY_IDX.get(key)
+            if idx is None or self._stage_ran_since_refusal(key, seen, target):
+                self._dispatch_refusals.pop(key, None)
+                continue
+            target[idx] = BeadState.ERROR
+
         # Применить — не описанные = UNAVAILABLE
         for i in range(NUM_BEADS):
             self.beads.set_state(i, target.get(i, BeadState.UNAVAILABLE))
+
+    def _stage_ran_since_refusal(self, key: str, seen, target: dict) -> bool:
+        """Появилось ли свидетельство, что этап всё-таки отработал ПОСЛЕ отказа.
+
+        Три источника, от самого надёжного к самому слабому:
+        этап дошёл до конца по статусу · артефакт OCR на диске · строка
+        `/stages`, которой на момент отказа НЕ БЫЛО.
+
+        Последнее условие и есть смысл отпечатка: откат `ProcessingStage`
+        не удаляет (`start_stage` кладёт новую попытку рядом), поэтому у
+        оператора, вернувшегося с `ocr_completed` и переподтвердившего
+        перекрёстки, строка `ocr` прошлого прогона уже лежит в `/stages` —
+        свидетельством о СВЕЖЕЙ отправке она не является.
+        """
+        idx = _KEY_IDX.get(key)
+        if idx is not None and target.get(idx) == BeadState.COMPLETED:
+            return True
+        if key == "ocr" and getattr(self, "_ocr_notified", False):
+            # Единственный этап с отдельной проверкой по артефакту (B6.4):
+            # результат на диске — доказательство сильнее любой стадии.
+            return True
+        if seen is None:
+            return False        # стадии на момент отказа не прочитались — не гадаем
+        for s in (getattr(self, "_last_stages", None) or []):
+            if (_STAGE_TYPE_TO_KEY.get(s.get("stage_type")) == key
+                    and s.get("id") not in seen):
+                return True
+        return False
+
+    def _note_dispatch_refusals(self, result: dict) -> list:
+        """Записать отказы отправки из ответа веера и вернуть их подписи.
+
+        Клиент не перечисляет поля ответа и не разбирает человеческий текст:
+        сервер называет отказавший этап словарём `ProcessingStage.stage_type`,
+        а перевод «этап → бусина» делает та же карта `_STAGE_TYPE_TO_KEY`,
+        которой клиент уже читает `/stages`. Новый этап веера доедет до своей
+        бусины без правки этого метода; этап без бусины — не молча, а строкой
+        в лог и подписью оператору под своим серверным именем.
+        """
+        labels = dict(self._BUTTON_DEFS)
+        refused = []
+        for stage_type in (result.get("dispatch_failed") or []):
+            key = _STAGE_TYPE_TO_KEY.get(stage_type)
+            if key is None:
+                logger.warning("Отказ отправки «%s»: бусины у этого этапа нет",
+                               stage_type)
+                refused.append(stage_type)
+                continue
+            self._dispatch_refusals[key] = self._known_stage_ids(key)
+            refused.append(labels.get(key, key))
+        if refused:
+            logger.warning("Веер не отправил: %s", ", ".join(refused))
+        return refused
+
+    def _known_stage_ids(self, key: str):
+        """Строки `/stages` этого этапа, существующие ДО отказа. None — не прочитались.
+
+        Про широту `except`: отпечаток нужен только чтобы НЕ снять отказ раньше
+        времени, и `None` здесь — консервативный ответ («свидетельству стадий
+        не верим»), а не потеря. Молчать при этом нельзя: без строки в логе
+        разница между «стадий нет» и «стадии не прочитались» пропадает.
+        """
+        try:
+            stages = self.api_client.get_stages(self._uid)
+        except Exception as exc:  # noqa: BLE001 — причина в логе, решение консервативно
+            logger.warning("Стадии не прочитаны при отказе отправки (%s: %s) — "
+                           "отказ снимется только концом этапа",
+                           type(exc).__name__, exc)
+            return None
+        return frozenset(
+            s.get("id") for s in stages
+            if _STAGE_TYPE_TO_KEY.get(s.get("stage_type")) == key
+        )
 
     # =================================================================
     # GIF активного этапа
@@ -2295,7 +2384,14 @@ class DiagramWorkspace(QWidget):
             if task_id:
                 msg += " → построение графа запущено"
                 self.status_provider.watch(self._uid)
-            self.status_message.emit(msg, 5000)
+            # Веер отправляет ДВЕ задачи, и отказ второй не откатывает первую
+            # (граница §5): про такой отказ сервер говорит полем, а не молчит
+            # `null`-ом. Без чтения этого поля оператор узнавал бы о неотправленном
+            # OCR только от страховки в «Проверке схемы» (пункт 1-48).
+            refused = self._note_dispatch_refusals(result)
+            if refused:
+                msg += f" · НЕ запущено: {', '.join(refused)}"
+            self.status_message.emit(msg, 10000 if refused else 5000)
         except Exception as exc:
             logger.error("complete_junction_validation failed: %s", exc)
             QMessageBox.warning(

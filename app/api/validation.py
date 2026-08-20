@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import obs
 from app.db import get_async_db
 from app.models import Diagram, DiagramStatus, Artifact, ArtifactType
+from app.models.stage import StageType
 from app.services.dispatch import async_safe_dispatch
 from app.services.layout_dispatch import dispatch_layout
 from app.services.storage import StorageService
@@ -690,6 +691,14 @@ async def complete_junction_validation(
     # Хвост сообщения про OCR: он единственный, чей отказ НЕ откатывается,
     # поэтому про него надо сказать словами, а не молчаливым `null`.
     ocr_note = ""
+    # ...и то же самое МАШИНЕ. Прозы клиенту мало: `ocr_task_id: null` одинаков
+    # у трёх исходов (ушёл / выключен конфигом / не ушёл), поэтому различить их
+    # можно было только подстрокой в англоязычном `message` — и клиент не
+    # различал (пункт 1-48, red-team №9 ревизии связки, MEASUREMENTS §104з).
+    # Этап называется словарём `ProcessingStage.stage_type`: этой же картой
+    # клиент уже читает `/stages`, поэтому новый этап веера доедет до своей
+    # бусины без правки клиента.
+    dispatch_failed: list[str] = []
     if not already_past:
         obs.bind(uid=str(uid), phase="validation")
         previous_state = (diagram.status, diagram.error_stage, diagram.error_message)
@@ -734,6 +743,7 @@ async def complete_junction_validation(
                     extra={"event": "dispatch_failed"},
                 )
                 ocr_note = ", OCR NOT started (broker unavailable)"
+                dispatch_failed.append(StageType.OCR.value)
             else:
                 ocr_note = ", OCR started"
         else:
@@ -753,6 +763,9 @@ async def complete_junction_validation(
         "task_id": task_id,
         "contour_task_id": contour_task_id,
         "ocr_task_id": ocr_task_id,
+        # Пусто = отказов отправки не было. Не `null`: отсутствие отказа —
+        # такой же факт, как отказ, и клиент обязан отличать его от «поля нет».
+        "dispatch_failed": dispatch_failed,
         "uid": str(uid),
     }
 
