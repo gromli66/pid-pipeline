@@ -18,6 +18,7 @@
 дереве, если считать «сколько всего верхнеуровневых» без привязки к моменту.
 """
 import os
+from collections import Counter
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -39,13 +40,16 @@ __all__ = ["blobs", "qapp"]      # фикстуры, взятые у сосед�
 
 
 def _top_level():
-    """id -> имя класса, снятые ОДНОВРЕМЕННО.
+    """СЧЁТ верхнеуровневых виджетов по классам.
 
-    Имена берутся тут же, а не при разборе провала: сироты держатся
-    питоньей ссылкой, и к моменту печати сообщения часть из них уже
-    исчезает — список выглядел бы пустым при ненулевом счёте.
+    ⛔ Ключом здесь нельзя брать `id()` питоньего объекта, и это замерено
+    базовым гейтом: `topLevelWidgets()` отдаёт КАЖДЫЙ РАЗ НОВЫЕ обёртки
+    над теми же C++ объектами, поэтому адреса двух снимков не сравнимы.
+    В одиночку набор был зелёным (обёрток мало, они переживали снимок),
+    а в компании давал «утекло 10 QFrame», которых никто не создавал.
+    Счёт по классам от личности обёртки не зависит вовсе.
     """
-    return {id(w): type(w).__name__ for w in QApplication.topLevelWidgets()}
+    return Counter(type(w).__name__ for w in QApplication.topLevelWidgets())
 
 
 @pytest.fixture
@@ -103,10 +107,10 @@ def test_closed_ocr_tab_leaves_no_top_level_widgets(open_and_close):
     """
     before, after = open_and_close()
 
-    leaked = sorted(after[i] for i in set(after) - set(before))
+    leaked = after - before          # Counter: остаются только приросты
     assert not leaked, (
         "закрытая вкладка привязки OCR оставила у оператора "
-        f"{len(leaked)} верхнеуровневых виджет(ов): {leaked}"
+        f"{sum(leaked.values())} верхнеуровневых виджет(ов): {dict(leaked)}"
     )
 
 
