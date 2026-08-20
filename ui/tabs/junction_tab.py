@@ -220,9 +220,7 @@ class JunctionTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
         self._download_thread.started.connect(self._downloader.run)
         self._downloader.finished.connect(self._on_downloaded)
         self._downloader.error.connect(self._on_download_error)
-        self._downloader.progress.connect(
-            lambda msg: self.status_label.setText(msg)
-        )
+        self._downloader.progress.connect(self._on_download_progress)
         # Гасит поток САМ поток, а не слот вкладки: связи со слотами Qt рвёт
         # вместе с разрушаемой вкладкой, и уйти из неё до конца загрузки
         # значило оставить бегущий `QThread` навсегда (пункт 1.x17).
@@ -256,6 +254,17 @@ class JunctionTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
             return
         from PySide6.QtGui import QColor
         ed.set_skeleton_color(QColor(0, 255, 0))
+
+    @Slot(str)
+    def _on_download_progress(self, msg: str):
+        """Ход загрузки — в GUI-потоке (пункт 1.x17).
+
+        Лямбда, связанная БЕЗ получателя-`QObject`, принадлежит отправителю,
+        а отправитель переехал `moveToThread` в рабочий поток — то есть
+        `setText` красил виджет оттуда, на каждом артефакте. Со `@Slot`-ом
+        вкладки `Qt.AutoConnection` разворачивается в очередь GUI-потока.
+        """
+        self.status_label.setText(msg)
 
     @Slot(dict)
     def _on_downloaded(self, artifacts: dict):

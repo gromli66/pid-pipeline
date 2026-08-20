@@ -639,9 +639,7 @@ class OcrBindingTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
         self._download_thread.started.connect(self._downloader.run)
         self._downloader.finished.connect(self._on_download_finished)
         self._downloader.error.connect(self._on_download_error)
-        self._downloader.progress.connect(
-            lambda msg: self.loading_label.setText(msg)
-        )
+        self._downloader.progress.connect(self._on_download_progress)
         # Гасит поток САМ поток, а не слот вкладки: связи со слотами Qt рвёт
         # вместе с разрушаемой вкладкой, и уйти из неё до конца загрузки
         # значило оставить бегущий `QThread` навсегда (пункт 1.x17).
@@ -649,6 +647,17 @@ class OcrBindingTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
         self._downloader.error.connect(self._download_thread.quit)
 
         self._download_thread.start()
+
+    @Slot(str)
+    def _on_download_progress(self, msg: str):
+        """Ход загрузки — в GUI-потоке (пункт 1.x17).
+
+        Лямбда, связанная БЕЗ получателя-`QObject`, принадлежит отправителю,
+        а отправитель переехал `moveToThread` в рабочий поток — то есть
+        `setText` красил виджет оттуда, на каждом артефакте. Со `@Slot`-ом
+        вкладки `Qt.AutoConnection` разворачивается в очередь GUI-потока.
+        """
+        self.loading_label.setText(msg)
 
     @Slot(dict)
     def _on_download_finished(self, artifacts: dict):

@@ -864,9 +864,7 @@ class BaseGraphTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
         self._download_thread.started.connect(self._downloader.run)
         self._downloader.finished.connect(self._on_downloaded)
         self._downloader.error.connect(self._on_download_error)
-        self._downloader.progress.connect(
-            lambda msg: self.status_label.setText(msg)
-        )
+        self._downloader.progress.connect(self._on_download_progress)
         # Гасит поток САМ поток, а не слот вкладки. Связи со слотами Qt рвёт
         # вместе с получателем, а вкладку РАЗРУШАЮТ («← Назад» →
         # `_remove_tab_widget`), причём `cleanup()` не зовёт ни один путь
@@ -875,6 +873,19 @@ class BaseGraphTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
         self._downloader.finished.connect(self._download_thread.quit)
         self._downloader.error.connect(self._download_thread.quit)
         self._download_thread.start()
+
+    @Slot(str)
+    def _on_download_progress(self, msg: str):
+        """Ход загрузки — в GUI-потоке (пункт 1.x17).
+
+        Раньше здесь стояла лямбда, связанная БЕЗ получателя-`QObject`:
+        такая связь принадлежит отправителю, а отправитель переехал
+        `moveToThread` в рабочий поток — то есть `setText` красил виджет
+        оттуда, на каждом артефакте. Со `@Slot`-ом вкладки
+        `Qt.AutoConnection` разворачивается в очередь GUI-потока, и связь
+        заодно рвётся вместе с разрушенной вкладкой.
+        """
+        self.status_label.setText(msg)
 
     @Slot(dict)
     def _on_downloaded(self, artifacts: dict):
