@@ -116,12 +116,29 @@ def rasters(qapp, tmp_path_factory) -> dict:
         p.end()
         return img
 
+    def lines_plus_square() -> QImage:
+        """Сохранённая оператором маска труб: скелет ПЛЮС дорисованный участок."""
+        img = lines()
+        p = QPainter(img)
+        p.setPen(QPen(Qt.PenStyle.NoPen))
+        p.setBrush(QColor("white"))
+        p.drawRect(40 - SQ // 2, 60 - SQ // 2, SQ, SQ)
+        p.end()
+        return img
+
     return {
         "original_image": _png(original, root / "original.png"),
         "junction_mask": _png(squares([(120, 200)]), root / "junction.png"),
+        # сырая маска перекрёстков от сборщика: ДВА пятна вместо одного —
+        # по их числу видно, чья маска доехала до оператора
+        "junction_mask_raw": _png(squares([(120, 200), (260, 120)]),
+                                  root / "junction_raw.png"),
         "bridge_mask": _png(squares(BRIDGE_SQUARES), root / "bridge.png"),
         "skeleton": _png(lines(), root / "skeleton.png"),
         "pipe_mask": _png(lines(), root / "pipe.png"),
+        # сохранённая оператором маска труб отличается от сырого скелета —
+        # иначе «у оператора оказался фолбэк» ненаблюдаемо
+        "pipe_validated": _png(lines_plus_square(), root / "pipe_validated.png"),
         "points": json.dumps(POINTS_SAVED).encode(),
         "coco": json.dumps({"annotations": []}).encode(),
     }
@@ -160,6 +177,11 @@ class FakeAPI:
         self.saves.append(mask_type)
         return {}
 
+    def upload_updated_nodes(self, uid, file_path):
+        self.blobs["coco_validated"] = Path(file_path).read_bytes()
+        self.saves.append("coco_validated")
+        return {}
+
 
 def _junction_server(rasters, **failures):
     """Сервер, на котором лежит сохранённая работа оператора."""
@@ -174,9 +196,15 @@ def _junction_server(rasters, **failures):
 
 
 def _pipe_server(rasters, **failures):
+    """Сервер вкладки труб: сохранённая маска оператора ОТЛИЧАЕТСЯ от сырой.
+
+    `skeleton_mask` — второй кандидат цепочки (фолбэк сборщика); до пункта 1-41
+    подмена сохранённой маски этим фолбэком проходила молча.
+    """
     return FakeAPI({
         "original_image": rasters["original_image"],
-        "pipe_mask_validated": rasters["skeleton"],
+        "pipe_mask_validated": rasters["pipe_validated"],
+        "skeleton_mask": rasters["skeleton"],
         "coco_validated": rasters["coco"],
         "pipe_mask": rasters["pipe_mask"],
     }, failures)
@@ -186,15 +214,24 @@ def _pipe_server(rasters, **failures):
 def dialogs(monkeypatch):
     """Все модалки вкладки → список (title, text).
 
-    Отвечает `Yes`: единственный вопрос на пути тестов — подтверждение
-    «Применить размер ко ВСЕМ мостам», и оператор в контрольном сценарии
-    на него соглашается. Для `warning`/`critical` возврат никто не читает.
+    По умолчанию отвечает `Yes`: единственный вопрос на старом пути тестов —
+    подтверждение «Применить размер ко ВСЕМ мостам», и оператор в контрольном
+    сценарии на него соглашается. Для `warning`/`critical` возврат никто
+    не читает.
+
+    `dialogs.answer` переключает ответ СЛЕДУЮЩИХ диалогов: пункт 1-41 завёл
+    у этих вкладок вопрос о слепой перезаписи, и обе его ветки («да» снимает
+    запрет насовсем, «нет» отменяет запись) обязаны проверяться отдельно.
     """
-    seen = []
+
+    class _Seen(list):
+        answer = QMessageBox.StandardButton.Yes
+
+    seen = _Seen()
 
     def _rec(parent, title, text, *a, **kw):
         seen.append((title, text))
-        return QMessageBox.StandardButton.Yes
+        return seen.answer
 
     for name in ("warning", "critical", "information", "question"):
         monkeypatch.setattr(QMessageBox, name, staticmethod(_rec))
@@ -458,14 +495,46 @@ def test_absent_bridge_mask_still_opens_the_tab_silently(
     assert dialogs == [], "404 — законный первый заход, пугать оператора нечем"
 
 
-def test_server_failure_on_bridge_mask_is_still_swallowed(
-        rasters, open_junction, dialogs):
-    """5xx тоже глотается: пункт двигает границу по диску, а не по серверу.
+# =========================================================================
+# 4. Пункт 1-41: молчащий 5xx на ЧТЕНИИ у вкладок масок
+#
+# 1.x12 подвинул границу по ДИСКУ и осадок назвал прямо: «сохранённые мосты
+# могли лежать на сервере, и вкладка откроется без них так же молча, как при
+# 404; лечится это не `swallow`, а `failure_key`». Тест, стороживший тот
+# остаток как ФАКТ, заменён здесь на приёмку: 404 по-прежнему молчит, а любой
+# другой отказ виден оператору И ЗАПИРАЕТ запись (та же дверь, что 1.x9
+# у графовой вкладки и 1.x14 у привязки).
+#
+# ⚠ Поток вкладки в этих сценариях не поднимается, и это не слепота вида 1-43:
+# проверяемое поведение — что вкладка сделала с ПОЛУЧЕННЫМ словарём артефактов
+# и что ушло на сервер при сохранении. Ни одна его стадия от того, бежит ли
+# загрузочный поток, не зависит; стадии жизни потока сторожит
+# `test_tab_close_stops_threads.py`.
+# =========================================================================
 
-    ⛔ Осадок назван прямо: сохранённые мосты могли лежать на сервере, и
-    вкладка откроется без них так же молча, как при 404. Лечится это не
-    `swallow`, а `failure_key` — у вкладок масок он не заводился (гейт пункта
-    его требует только у `ocr_binding`).
+#: заголовки предупреждений — по ним оператор отличает отказ от «его нет»
+TITLE_JUNCTION = "Сохранённая маска перекрёстков не загружена"
+TITLE_BRIDGE = "Сохранённая маска мостов не загружена"
+TITLE_POINTS = "Сохранённые центры не загружены"
+TITLE_PIPE = "Сохранённая маска труб не загружена"
+TITLE_BLIND = "Сохранение затрёт серверную копию"
+
+
+def _titles(dialogs):
+    return [title for title, _ in dialogs]
+
+
+def _junction_on_server(api, tmp: Path) -> int:
+    return _white_pixels(api.blobs["junction_mask_validated"], tmp)
+
+
+def test_server_failure_on_bridge_mask_is_visible_and_locks_the_write(
+        rasters, open_junction, dialogs, tmp_path):
+    """5xx у маски мостов: оператор предупреждён, «нет» спасает его работу.
+
+    До пункта 1-41 обе половины молчали: задание не несло `failure_key`,
+    вкладка открывалась с ПУСТОЙ маской мостов (`bridge_mask` тоже 502),
+    а `_save_masks` слал эту пустоту на сервер безусловно.
     """
     api = _junction_server(rasters,
                            bridge_mask_validated=APIError("bad gateway", 502),
@@ -473,5 +542,185 @@ def test_server_failure_on_bridge_mask_is_still_swallowed(
 
     tab, error = open_junction(api)
 
+    assert error is None and tab is not None, "5xx необязательного — не отказ вкладки"
+    assert TITLE_BRIDGE in _titles(dialogs), (
+        f"оператор не предупреждён об отказе 502: {_titles(dialogs)}")
+
+    dialogs.clear()
+    dialogs.answer = QMessageBox.StandardButton.Cancel
+    assert tab._save_masks() is False, "запись не заперта — вопроса не было"
+    assert TITLE_BLIND in _titles(dialogs), (
+        f"вопрос о слепой перезаписи не задан: {_titles(dialogs)}")
+    assert "bridge_mask_validated" not in api.saves, "пустота ушла на сервер"
+    assert _bridge_on_server(api, tmp_path) == BRIDGE_WHITE, (
+        "сохранённые мосты оператора затёрты из-за отказа СЕРВЕРА")
+
+
+def test_operator_may_allow_the_blind_overwrite_and_is_asked_once(
+        rasters, open_junction, dialogs, tmp_path):
+    """Порог с другой стороны — и ПОСЛЕ предыстории, а не с чистого листа.
+
+    «Да» — решение оператора: запись проходит. Второе сохранение вопроса уже
+    не задаёт (запрет снят насовсем), то есть проверяется взаимодействие
+    с предысторией сессии, а не поведение свежего объекта (`PROTOCOL §3`).
+    """
+    api = _junction_server(rasters,
+                           bridge_mask_validated=APIError("bad gateway", 502),
+                           bridge_mask=APIError("bad gateway", 502))
+
+    tab, error = open_junction(api)
     assert error is None and tab is not None
-    assert dialogs == []
+
+    tab._editor.current_class = 2
+    tab._editor.set_square_size(SQ)
+    tab._editor.add_square(200, 240)              # работа оператора вслепую
+
+    dialogs.clear()
+    dialogs.answer = QMessageBox.StandardButton.Yes
+    assert tab._save_masks() is True, "оператор разрешил — запись обязана пройти"
+    assert TITLE_BLIND in _titles(dialogs)
+    assert _bridge_on_server(api, tmp_path) == SQ * SQ, (
+        "на сервер ушло не то, что нарисовал оператор поверх пустоты")
+
+    dialogs.clear()
+    tab._editor.add_square(260, 240)
+    assert tab._save_masks() is True
+    assert TITLE_BLIND not in _titles(dialogs), (
+        "вопрос вернулся после «да» — запрет обязан сниматься насовсем")
+
+
+def test_server_failure_on_saved_junction_mask_is_visible_and_locks_the_write(
+        rasters, open_junction, dialogs, tmp_path):
+    """5xx у ОБЯЗАТЕЛЬНОЙ цепочки: фолбэк на сырую маску сборщика.
+
+    Цепочка `junction_mask_validated` → `junction_mask` брала фолбэк молча,
+    хотя это ровно дефект 1.23 в другой вкладке: оператору открывали НЕ ЕГО
+    работу, а `_save_masks` писал её обратно поверх сохранённой.
+    """
+    api = _junction_server(rasters,
+                           junction_mask_validated=APIError("bad gateway", 502))
+    api.blobs["junction_mask"] = rasters["junction_mask_raw"]   # фолбэк сборщика
+
+    tab, error = open_junction(api)
+
+    assert error is None and tab is not None, "фолбэк обязан состояться"
+    assert TITLE_JUNCTION in _titles(dialogs), (
+        f"подмена сохранённой маски сырой прошла молча: {_titles(dialogs)}")
+
+    dialogs.clear()
+    dialogs.answer = QMessageBox.StandardButton.Cancel
+    assert tab._save_masks() is False
+    assert "junction_mask_validated" not in api.saves
+    assert _junction_on_server(api, tmp_path) == SQ * SQ, (
+        "сохранённая маска перекрёстков затёрта сырой из-за отказа сервера")
+
+
+def test_server_failure_on_points_is_visible_and_locks_the_write(
+        rasters, open_junction, dialogs):
+    """5xx у центров: цена — подмена применённого размера машинным."""
+    api = _junction_server(
+        rasters,
+        junction_points_validated=APIError("bad gateway", 502),
+        junction_points=APIError("bad gateway", 502))
+
+    tab, error = open_junction(api)
+
+    assert error is None and tab is not None
+    assert TITLE_POINTS in _titles(dialogs), (
+        f"отказ 502 у центров прошёл молча: {_titles(dialogs)}")
+
+    dialogs.clear()
+    dialogs.answer = QMessageBox.StandardButton.Cancel
+    assert tab._save_masks() is False
+    assert "junction_points_validated" not in api.saves
+    assert _bridge_size_on_server(api) == SQ, (
+        f"размер мостов подменён машинным дефолтом {SQUARE_SIZE}")
+
+
+def test_unreadable_points_file_is_visible_and_locks_the_write(
+        rasters, open_junction, dialogs):
+    """«Файл лёг, но не читается» — класс, которого семья не закрывала.
+
+    Отказы сети, диска и сервера закрыты 0.5 → 1.23 → 1.x10 → 1.x12 → 1.x14,
+    а ПОРЧА СОДЕРЖИМОГО скачанного проходила мимо всех слоёв: `_load_points`
+    ловил `(OSError, ValueError)` строкой в лог, `ensure_points` доопределял
+    центры машинным дефолтом, и `_upload_points` отправлял их обратно.
+    """
+    api = _junction_server(rasters)
+    api.blobs["junction_points_validated"] = b'{"junctions": [{"x": 1,'  # обрыв
+
+    tab, error = open_junction(api)
+
+    assert error is None and tab is not None, "битый файл вкладку не роняет"
+    assert TITLE_POINTS in _titles(dialogs), (
+        f"нечитаемый points.json прошёл молча: {_titles(dialogs)}")
+
+    dialogs.clear()
+    dialogs.answer = QMessageBox.StandardButton.Cancel
+    assert tab._save_masks() is False
+    assert "junction_points_validated" not in api.saves, (
+        "машинные центры ушли поверх нечитаемого файла оператора")
+
+
+def test_server_failure_on_saved_pipe_mask_is_visible_and_locks_the_write(
+        rasters, open_pipe, dialogs, tmp_path):
+    """Вкладка труб: 5xx у сохранённой маски → фолбэк на сырой скелет.
+
+    Цена измерима: у оператора в редакторе оказывается скелет сборщика, а
+    `_save_mask` пишет его обратно в `pipe_mask_validated`.
+    """
+    saved_white = _white_pixels(rasters["pipe_validated"], tmp_path)
+    raw_white = _white_pixels(rasters["skeleton"], tmp_path)
+    assert saved_white != raw_white, "стенд не различает сохранённое и сырое"
+
+    api = _pipe_server(rasters,
+                       pipe_mask_validated=APIError("bad gateway", 502))
+
+    tab, error = open_pipe(api)
+
+    assert error is None and tab is not None, "фолбэк обязан состояться"
+    assert TITLE_PIPE in _titles(dialogs), (
+        f"подмена сохранённой маски труб скелетом прошла молча: {_titles(dialogs)}")
+
+    dialogs.clear()
+    dialogs.answer = QMessageBox.StandardButton.Cancel
+    assert tab._save_mask() is False
+    assert "pipe_mask_validated" not in api.saves
+    assert _white_pixels(api.blobs["pipe_mask_validated"], tmp_path) == saved_white, (
+        "сохранённая маска труб затёрта сырым скелетом из-за отказа сервера")
+
+
+def test_absent_saved_pipe_mask_still_opens_the_tab_silently(
+        rasters, open_pipe, dialogs):
+    """Порог с другой стороны: 404 сохранённой маски — законный первый заход."""
+    api = _pipe_server(rasters)
+    del api.blobs["pipe_mask_validated"]
+
+    tab, error = open_pipe(api)
+
+    assert error is None and tab is not None
+    assert dialogs == [], "404 — первый заход на этап, пугать оператора нечем"
+
+
+def test_server_failure_on_pipe_coco_does_not_lock_the_write(
+        rasters, open_pipe, dialogs):
+    """Граница «глотаем осознанно»: COCO вкладки труб запись НЕ затирает.
+
+    `upload_updated_nodes` вызывается только при `has_coco_changes`, а
+    `PolylineMaskEditor.save_coco` без прочитанного `coco_full_data` отдаёт
+    `False` (`:927`) — то есть запись ГЕЙТИРОВАНА успешным чтением, и слепой
+    перезаписи здесь быть не может. Поэтому у задания стоит явное
+    «глотаем осознанно», а не `failure_key`; тест запирает это замером.
+    """
+    api = _pipe_server(rasters, coco_validated=APIError("bad gateway", 502))
+
+    tab, error = open_pipe(api)
+
+    assert error is None and tab is not None
+    assert dialogs == [], f"лишнее предупреждение по COCO: {_titles(dialogs)}"
+
+    tab._editor.coco_annotations.append({"id": 1, "bbox": [1, 1, 2, 2]})
+    tab._editor._coco_dirty = True                # оператор добавил узел
+    assert tab._save_mask() is True
+    assert "coco_validated" not in api.saves, (
+        "непрочитанный COCO ушёл на сервер — запись НЕ гейтирована чтением")
