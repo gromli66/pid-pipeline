@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import obs
 from app.db import get_async_db
 from app.models import Diagram, DiagramStatus, Artifact, ArtifactType
 from app.services.dispatch import async_safe_dispatch
@@ -50,6 +51,35 @@ MASK_STORAGE_MAP = {
     "pipe_mask_validated": ("segmentation", "pipe_mask_validated.png"),
     "junction_points_validated": ("junction", "points_validated.json"),
 }
+
+
+async def _restore_and_fail(db, diagram, previous_state, what: str):
+    """Отправка не удалась: вернуть состояние до вызова и сказать правду.
+
+    `async_safe_dispatch` глотает исключение брокера и отдаёт `None` (причина —
+    строкой выше, в логе `app.services.dispatch`). Здесь принимается решение,
+    а не ловится исключение: работа не начиналась, значит откатывать некуда,
+    кроме исходной точки — она заведомо внутри `Precondition` эндпоинта,
+    поэтому повтор после подъёма брокера проходит.
+
+    Возвращаются ВСЕ ТРИ поля, которые записал переход, а не один статус: вход
+    `error` иначе вернулся бы с пустым `error_stage`, а на этом сочетании клиент
+    гасит все кнопки разом (`_error_key → None`).
+
+    След кладётся ДО коммита возврата: на бою БД умирает вместе с брокером
+    (одна машина, один рестарт), и тогда коммит падает сам — след, стоящий
+    после него, не ляжет никогда (замер ноги 1.13, §91).
+    """
+    logger.warning(
+        "Отправка %s не удалась — возвращаю состояние в '%s'",
+        what, previous_state[0].value, extra={"event": "dispatch_failed"},
+    )
+    diagram.status, diagram.error_stage, diagram.error_message = previous_state
+    await db.commit()
+    raise HTTPException(
+        status_code=503,
+        detail=f"Worker unavailable: не удалось поставить задачу ({what})",
+    )
 
 
 @router.post("/{uid}/masks/start")
@@ -493,6 +523,8 @@ async def complete_mask_validation(
 
     task_id = None
     if not already_past:
+        obs.bind(uid=str(uid), phase="validation")
+        previous_state = (diagram.status, diagram.error_stage, diagram.error_message)
         diagram.status = DiagramStatus.VALIDATED_MASKS
         diagram.error_message = None
         diagram.error_stage = None
@@ -502,6 +534,11 @@ async def complete_mask_validation(
             "worker.tasks.skeleton.task_skeletonize_simple",
             args=[str(uid)],
         )
+        if task_id is None:
+            # Молчаливый `None` здесь дороже всего: `validated_masks` не лежит
+            # в `_MANUAL_INPROGRESS`, а бусина перекрёстков при нём «в процессе»,
+            # то есть доступных кнопок у оператора не остаётся ни одной.
+            await _restore_and_fail(db, diagram, previous_state, "скелетизации")
 
     return {
         "status": "validated_masks",
@@ -650,18 +687,25 @@ async def complete_junction_validation(
     task_id = None
     contour_task_id = None
     ocr_task_id = None
+    # Хвост сообщения про OCR: он единственный, чей отказ НЕ откатывается,
+    # поэтому про него надо сказать словами, а не молчаливым `null`.
+    ocr_note = ""
     if not already_past:
+        obs.bind(uid=str(uid), phase="validation")
+        previous_state = (diagram.status, diagram.error_stage, diagram.error_message)
         diagram.status = DiagramStatus.VALIDATED_JUNCTIONS
         diagram.error_message = None
         diagram.error_stage = None
         await db.commit()
 
-        # Auto-dispatch graph build + SAM2 contours + OCR (all parallel)
+        # Auto-dispatch graph build + OCR (parallel)
         task_id = await async_safe_dispatch(
             "worker.tasks.graph.task_build_graph",
             args=[str(uid)],
             queue="gpu",
         )
+        if task_id is None:
+            await _restore_and_fail(db, diagram, previous_state, "сборки графа")
 
         # SAM2 contours are NOT auto-run anymore -- they are triggered on
         # demand from the contours step (optionally for a selected subset of
@@ -678,10 +722,34 @@ async def complete_junction_validation(
                 args=[str(uid)],
                 queue="ocr",
             )
+            if ocr_task_id is None:
+                # Возвращать состояние ЗДЕСЬ нельзя: сборка графа уже в брокере,
+                # и возврат осиротил бы бегущую задачу. Поэтому граница — отказ
+                # OCR не откат, а честный ответ плюс след; штатное восстановление
+                # даёт тот же OCR из `graph/complete-simple` (docs/API.md §7
+                # называет его idempotent safety net).
+                logger.warning(
+                    "Отправка OCR не удалась — состояние НЕ возвращаю, "
+                    "сборка графа уже поставлена (%s)", task_id,
+                    extra={"event": "dispatch_failed"},
+                )
+                ocr_note = ", OCR NOT started (broker unavailable)"
+            else:
+                ocr_note = ", OCR started"
+        else:
+            ocr_note = ", OCR disabled"
 
     return {
         "status": "validated_junctions",
-        "message": "Junction validation completed, graph build + contours + OCR started",
+        # Сообщение обещает ровно то, что сделано. Прежняя редакция обещала
+        # «graph build + contours + OCR started» всегда — при том что
+        # `contour_task_id` захардкожен `None` (SAM2 давно ручной), а OCR мог
+        # не уйти вовсе.
+        "message": (
+            "Junction validation completed"
+            if already_past
+            else f"Junction validation completed, graph build started{ocr_note}"
+        ),
         "task_id": task_id,
         "contour_task_id": contour_task_id,
         "ocr_task_id": ocr_task_id,
@@ -763,6 +831,8 @@ async def complete_simple_graph_validation(
 
     # Статус → VALIDATED_GRAPH. Контуры идут СЛЕДУЮЩИМ шагом; авто-пропуск
     # OCR (если отключён) происходит ПОСЛЕ контуров — в complete_contour_validation.
+    obs.bind(uid=str(uid), phase="validation")
+    previous_state = (diagram.status, diagram.error_stage, diagram.error_message)
     diagram.status = DiagramStatus.VALIDATED_GRAPH
     diagram.error_message = None
     diagram.error_stage = None
@@ -780,6 +850,11 @@ async def complete_simple_graph_validation(
             args=[str(uid)],
             queue="ocr",
         )
+        if task_id is None:
+            # Здесь OCR — единственная задача шага, и возвращать есть куда:
+            # точка входа `validating_graph` лежит в `_MANUAL_INPROGRESS`,
+            # то есть вкладка открывается повторно и подтверждение уходит снова.
+            await _restore_and_fail(db, diagram, previous_state, "OCR")
 
     return {
         "status": diagram.status.value,
@@ -1060,6 +1135,8 @@ async def complete_graph_validation(
     # Обновляем статус
     # Если пришли из OCR_BOUND (после привязки + редактор) → сразу GENERATING_FXML
     # Если из более ранних статусов → VALIDATED_GRAPH (Simple flow → OCR)
+    obs.bind(uid=str(uid), phase="validation")
+    previous_state = (diagram.status, diagram.error_stage, diagram.error_message)
     if returned_after_contours:
         diagram.status = DiagramStatus.GENERATING_FXML
     else:
@@ -1076,6 +1153,13 @@ async def complete_graph_validation(
         "worker.tasks.graph.task_generate_fxml",
         args=[str(uid)],
     )
+    if task_id is None:
+        # Путь «после контуров» — второй тупик пункта: `generating_fxml` не лежит
+        # в `_MANUAL_INPROGRESS`, кнопка FXML при нём «в процессе», и клиент
+        # (`diagram_workspace.py:2378`) сам красит этот статус после 200.
+        # Возврат состояния НЕ отменяет уже поставленную раскладку — она
+        # идемпотентна по `source_sha` и на повторе ответит «та же истина».
+        await _restore_and_fail(db, diagram, previous_state, "генерации FXML")
 
     return {
         "status": "validated_graph",

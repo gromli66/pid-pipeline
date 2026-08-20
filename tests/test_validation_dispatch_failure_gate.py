@@ -173,6 +173,17 @@ FAILURE_BEFORE = {
     "complete": (OK, TARGET_RULE, CLEARED, 1, 1),
 }
 
+# ПОСЛЕ пункта: отказ отправки ПЕРВОЙ задачи шага возвращает состояние, каким оно
+# было ДО вызова, и отвечает 503 вместо ложного 200. Коммитов два: переход и возврат.
+# У перекрёстков попытка ОДНА, а не две: до OCR управление уже не доходит.
+# Редакция независима от `FAILURE_BEFORE` — правка одной без другой краснит сторож.
+FAILURE = {
+    "masks": (503, ENTRY_RULE, KEPT, 2, 1),
+    "junctions": (503, ENTRY_RULE, KEPT, 2, 1),
+    "simple": (503, ENTRY_RULE, KEPT, 2, 1),
+    "complete": (503, ENTRY_RULE, KEPT, 2, 1),
+}
+
 # ── второй замок: кнопки оператора после отказа отправки ─────────────────
 #
 # Инвариант ДАННЫХ (`_buttons_for_status`), без живого виджета. Значение — множество
@@ -184,6 +195,10 @@ BUTTONS_AFTER_FAILURE_BEFORE = {
     "complete": {"contours"},       # прямой путь → validated_graph
 }
 BUTTONS_AFTER_FAILURE_BEFORE_AC = set()   # complete после контуров: generating_fxml — пусто
+
+# ПОСЛЕ пункта состояние возвращается в точку входа, значит и кнопки — её.
+# Это `BUTTONS_AT_ENTRY`; отдельной таблицей не дублируется, но факт совпадения
+# утверждается тестом `test_buttons_after_failed_dispatch`.
 
 # Достижимая точка входа для сценариев: клетка, которой оператор реально пользуется.
 SCENARIO_ENTRY = {
@@ -439,6 +454,39 @@ def test_error_stage_vocabulary_size():
     assert ERROR_STAGES[0] is None
 
 
+def test_dispatch_failure_changed_by_exactly_the_declared_cells():
+    """Нога 1.16 переписала исход отказа у ВСЕХ ЧЕТЫРЁХ и ничего сверх того.
+
+    Обе редакции — независимые литералы, поэтому правка одной без другой
+    краснит этот сторож: «переход вне зафиксированного набора»
+    (`PROTOCOL §Гейты`) ловится здесь, а не глазами ревизора.
+    """
+    changed = {key for key in FAILURE if FAILURE[key] != FAILURE_BEFORE[key]}
+    assert changed == set(ENDPOINTS)
+
+    for key, value in FAILURE_BEFORE.items():
+        assert value[:4] == (OK, TARGET_RULE, CLEARED, 1), key
+    for key, value in FAILURE.items():
+        assert value == (503, ENTRY_RULE, KEPT, 2, 1), key
+
+    # Число попыток отправки изменилось РОВНО у перекрёстков: до правки за упавшей
+    # сборкой графа уходил ещё и OCR, теперь до него управление не доходит.
+    assert {k for k in FAILURE if FAILURE[k][4] != FAILURE_BEFORE[k][4]} == {"junctions"}
+
+
+def test_button_table_changed_at_both_dead_ends():
+    """Кнопки вернулись там, где их не было: у масок и у пути «после контуров».
+
+    У двух других эндпоинтов множество доступных кнопок меняется тоже (вперёд
+    против точки входа), но тупиком они не были — это записано отдельно, чтобы
+    «стало лучше» не перепутали с «было сломано».
+    """
+    dead_ends = {e for e in ENDPOINTS if not BUTTONS_AFTER_FAILURE_BEFORE[e]}
+    assert dead_ends == {"masks"}
+    assert BUTTONS_AFTER_FAILURE_BEFORE_AC == set()
+    assert BUTTONS_AT_ENTRY["masks"] == {"pipe"}, "возврат не вернул кнопку"
+
+
 # ── брокер жив: полная решётка 31 × 11 на каждый эндпоинт ────────────────
 
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
@@ -491,7 +539,7 @@ def test_completion_over_every_status(endpoint, status, dispatched,
 def test_dispatch_failure_over_every_status(endpoint, status, broker_down,
                                             ocr_enabled, no_layout):
     """Отказ отправки: у пропущенных клеток — исход из таблицы, у прочих 400."""
-    outcome, status_rule, fields_rule, commits, attempts = FAILURE_BEFORE[endpoint]
+    outcome, status_rule, fields_rule, commits, attempts = FAILURE[endpoint]
 
     for stage in ERROR_STAGES:
         broker_down.clear()
@@ -543,9 +591,10 @@ def test_dispatch_failure_over_every_status(endpoint, status, broker_down,
 def test_buttons_after_failed_dispatch(endpoint, broker_down, ocr_enabled, no_layout):
     """Инвариант ДАННЫХ: что оператор может нажать после отказа отправки.
 
-    У масок и у пути «после контуров» доступных кнопок НЕТ ВООБЩЕ: `validated_masks`
-    и `generating_fxml` не лежат в `_MANUAL_INPROGRESS`, а бусины своих этапов при
-    них «в процессе» — синие и не нажимаются. Выход был только правкой БД.
+    До правки у масок доступных кнопок не оставалось НИ ОДНОЙ: `validated_masks`
+    не лежит в `_MANUAL_INPROGRESS`, а бусина перекрёстков при нём «в процессе» —
+    синяя и не нажимается; выход был только правкой БД. После возврата состояния
+    кнопки — те же, что в точке входа, то есть работа оператора продолжается.
     """
     from ui.widgets.diagram_workspace import _buttons_for_status
 
@@ -553,34 +602,36 @@ def test_buttons_after_failed_dispatch(endpoint, broker_down, ocr_enabled, no_la
     diagram = _diagram(DiagramStatus(entry))
     db = FakeDB(diagram)
 
-    try:
+    with pytest.raises(HTTPException) as exc:
         asyncio.run(CALL[endpoint](db))
-    except HTTPException:
-        pass
+    assert exc.value.status_code == 503, endpoint
 
+    assert diagram.status.value == entry, "состояние не вернулось в точку входа"
     available, _completed, _processing = _buttons_for_status(diagram.status)
-    assert available == BUTTONS_AFTER_FAILURE_BEFORE[endpoint], endpoint
+    assert available == BUTTONS_AT_ENTRY[endpoint], endpoint
 
 
 def test_buttons_after_failed_dispatch_after_contours(broker_down, ocr_enabled, no_layout):
     """Тот же замок на пути «возврат в проверку схемы ПОСЛЕ контуров».
 
-    Клетка отдельная, потому что у неё другой целевой статус (`generating_fxml`)
-    и другой набор кнопок, а решётка выше идёт по общей точке входа.
+    Клетка отдельная, потому что до правки у неё был другой целевой статус
+    (`generating_fxml`, второй тупик пункта), а решётка выше идёт по общей
+    точке входа.
     """
     from ui.widgets.diagram_workspace import _buttons_for_status
 
     diagram = _diagram(DiagramStatus(SCENARIO_ENTRY_AC))
     db = FakeDB(diagram)
 
-    try:
+    with pytest.raises(HTTPException) as exc:
         asyncio.run(complete_graph_validation(UID, db=db))
-    except HTTPException:
-        pass
+    assert exc.value.status_code == 503
 
-    assert diagram.status.value == TARGET_AFTER_CONTOURS
+    assert diagram.status.value == SCENARIO_ENTRY_AC
+    assert diagram.status.value != TARGET_AFTER_CONTOURS
     available, _completed, _processing = _buttons_for_status(diagram.status)
-    assert available == BUTTONS_AFTER_FAILURE_BEFORE_AC
+    assert available != BUTTONS_AFTER_FAILURE_BEFORE_AC, "тупик остался тупиком"
+    assert available == {"edit_graph"}
 
 
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
@@ -610,10 +661,8 @@ def test_second_attempt_after_dead_broker(endpoint, broker_down, monkeypatch,
     diagram = _diagram(DiagramStatus(SCENARIO_ENTRY[endpoint]))
     db = FakeDB(diagram)
 
-    try:
+    with pytest.raises(HTTPException):
         asyncio.run(CALL[endpoint](db))
-    except HTTPException:
-        pass
 
     from worker.celery_app import celery_app
 
@@ -675,7 +724,8 @@ def test_real_broker_exception_class_is_not_special(exc_class, message, monkeypa
 
     Иначе таблица судила бы синтетический класс, а бой отдавал бы другой — и хуже
     того, боевой класс тут не тот, которого ждёшь: не `OperationalError` брокера,
-    а `RuntimeError` мёртвого result-бэкенда.
+    а `RuntimeError` мёртвого result-бэкенда. Широту держит сам
+    `async_safe_dispatch` (`except Exception`), и сузить её без красного нельзя.
     """
     from worker.celery_app import celery_app
 
@@ -686,20 +736,23 @@ def test_real_broker_exception_class_is_not_special(exc_class, message, monkeypa
 
     diagram = _diagram(DiagramStatus.VALIDATING_MASKS)
     db = FakeDB(diagram)
-    result = asyncio.run(complete_mask_validation(UID, db=db))
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(complete_mask_validation(UID, db=db))
 
-    assert result["task_id"] is None
-    assert _state(diagram) == ("validated_masks", None, None)
-    assert db.commits == 1
+    assert exc.value.status_code == 503
+    assert _state(diagram) == ("validating_masks", None, None)
+    assert db.commits == 2
 
 
 # ── ложный успех: чем именно он лжёт ─────────────────────────────────────
 
-def test_task_id_none_means_two_different_things(monkeypatch, ocr_enabled, no_layout):
-    """`task_id: null` сегодня — И «ушли вперёд», И «брокер лёг». Это и есть дефект.
+def test_task_id_none_means_exactly_already_past(monkeypatch, ocr_enabled, no_layout):
+    """`task_id: null` в ответе 200 означает РОВНО «цепочка ушла вперёд».
 
-    Клиент (`diagram_workspace.py:1592-1595`) читает его буквально и печатает
-    «цепочка уже запущена» в обоих случаях.
+    До правки тот же ответ отдавал и мёртвый брокер, и клиент
+    (`diagram_workspace.py:1592-1595`) печатал «цепочка уже запущена» в обоих
+    случаях — ложный успех, ради которого пункт и делается. Теперь второй случай
+    отвечает 503, и фраза клиента стала правдой.
 
     Брокер здесь переключается ВНУТРИ теста, а не двумя фикстурами: обе ставят
     один и тот же `celery_app.send_task`, и вторая молча отменяла бы первую
@@ -717,6 +770,10 @@ def test_task_id_none_means_two_different_things(monkeypatch, ocr_enabled, no_la
     past_db = FakeDB(past)
     past_result = asyncio.run(complete_mask_validation(UID, db=past_db))
 
+    assert past_result["task_id"] is None
+    assert past_result["status"] == "validated_masks"
+    assert past_db.commits == 0
+
     def _dead(name, **rest):
         raise OSError("[Errno 111] Connection refused")
 
@@ -724,37 +781,50 @@ def test_task_id_none_means_two_different_things(monkeypatch, ocr_enabled, no_la
 
     dead = _diagram(DiagramStatus.VALIDATING_MASKS)
     dead_db = FakeDB(dead)
-    dead_result = asyncio.run(complete_mask_validation(UID, db=dead_db))
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(complete_mask_validation(UID, db=dead_db))
 
-    assert past_result["task_id"] is None and dead_result["task_id"] is None
-    assert past_result["status"] == dead_result["status"] == "validated_masks"
-    assert past_result["message"] == dead_result["message"]
-    # Различить их клиенту нечем: совпадает ВСЁ, кроме уида и того, чего он не видит.
-    assert past_db.commits == 0 and dead_db.commits == 1
+    assert exc.value.status_code == 503, "отказ брокера снова выдаёт себя за успех"
+    assert _state(dead) == ("validating_masks", None, None)
+    assert dead_db.commits == 2
 
 
-def test_junction_message_promises_what_it_did_not_do(broker_down, ocr_enabled):
-    """Сообщение перекрёстков обещает контуры и OCR независимо от того, что ушло.
+def test_junction_message_promises_only_what_it_did(dispatched, ocr_enabled):
+    """Сообщение перекрёстков обещает ровно сделанное.
 
-    `contour_task_id` захардкожен `None` (SAM2 давно ручной), OCR мог не уйти —
-    а текст один и тот же.
+    Прежняя редакция обещала «graph build + contours + OCR started» ВСЕГДА —
+    при том что `contour_task_id` захардкожен `None` (SAM2 давно ручной).
+    Контуры из текста ушли, OCR называется по факту.
     """
     diagram = _diagram(DiagramStatus.VALIDATING_JUNCTIONS)
     db = FakeDB(diagram)
     result = asyncio.run(complete_junction_validation(UID, db=db))
 
     assert result["message"] == (
-        "Junction validation completed, graph build + contours + OCR started")
-    assert result["task_id"] is None
+        "Junction validation completed, graph build started, OCR started")
+    assert "contours" not in result["message"]
+    assert result["task_id"] == "task-0001"
     assert result["contour_task_id"] is None
-    assert result["ocr_task_id"] is None
+    assert result["ocr_task_id"] == "task-0001"
 
 
-def test_ocr_failure_alone_is_silent(monkeypatch, ocr_enabled):
-    """Граф ушёл, OCR не ушёл — ответ об этом не говорит ничего.
+def test_junction_message_says_nothing_when_already_past(dispatched, ocr_enabled):
+    """«Ушли вперёд» — ни одного обещания: ничего и не отправлялось."""
+    diagram = _diagram(DiagramStatus.BUILT)
+    db = FakeDB(diagram)
+    result = asyncio.run(complete_junction_validation(UID, db=db))
 
-    Ветка отдельная: откатывать её нельзя (задача сборки графа уже в брокере),
-    поэтому лечится она не возвратом состояния, а правдой в ответе и следом.
+    assert result["message"] == "Junction validation completed"
+    assert dispatched == []
+
+
+def test_ocr_failure_alone_is_named_and_traced(monkeypatch, ocr_enabled):
+    """Граф ушёл, OCR не ушёл — ответ это ГОВОРИТ, и в логе есть след.
+
+    Ветка отдельная и это заявленная граница: откатывать её нельзя — задача
+    сборки графа уже в брокере, возврат осиротил бы её. Поэтому лечится она
+    не возвратом состояния, а правдой в ответе и следом; штатное восстановление
+    даёт тот же OCR из `graph/complete-simple` (idempotent safety net).
     """
     from worker.celery_app import celery_app
 
@@ -773,13 +843,41 @@ def test_ocr_failure_alone_is_silent(monkeypatch, ocr_enabled):
 
     diagram = _diagram(DiagramStatus.VALIDATING_JUNCTIONS)
     db = FakeDB(diagram)
-    result = asyncio.run(complete_junction_validation(UID, db=db))
+    trace = _traces("junctions", db)
 
     assert sent == [GRAPH_TASK, OCR_TASK]
-    assert result["task_id"] == "task-0001"
-    assert result["ocr_task_id"] is None
     assert _state(diagram) == ("validated_junctions", None, None)
-    assert db.commits == 1
+    assert db.commits == 1, "состояние всё-таки вернули — граф остался сиротой"
+
+    assert len(trace) == 1, "отказ OCR остался молчаливым"
+    assert trace[0].uid == str(UID)
+    assert "OCR" in trace[0].getMessage()
+    assert "НЕ возвращаю" in trace[0].getMessage()
+
+
+def test_ocr_disabled_is_not_a_failure(dispatched, monkeypatch):
+    """OCR выключен конфигом — это не отказ: ни следа, ни жалобы в сообщении."""
+    import app.services.project_loader as project_loader
+
+    class _Ocr:
+        enabled = False
+
+    class _Config:
+        ocr = _Ocr()
+
+    class _Loader:
+        def load(self, code):
+            return _Config()
+
+    monkeypatch.setattr(project_loader, "get_project_loader", lambda: _Loader())
+
+    diagram = _diagram(DiagramStatus.VALIDATING_JUNCTIONS)
+    db = FakeDB(diagram)
+    trace = _traces("junctions", db)
+
+    assert [c["name"] for c in dispatched] == [GRAPH_TASK], "OCR всё-таки ушёл"
+    assert dispatched[0]["args"] == [str(UID)]
+    assert trace == []
 
 
 # ── Д2: следа отказа сегодня нет ─────────────────────────────────────────
@@ -823,14 +921,22 @@ def _traces(endpoint, db, expected_exc=None):
 
 
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
-def test_dead_broker_leaves_no_trace(endpoint, broker_down, ocr_enabled, no_layout):
-    """Д2 сегодня не выполнен: об отказе отправки логгер эндпоинта молчит.
+def test_dead_broker_leaves_a_trace_with_uid(endpoint, broker_down, ocr_enabled, no_layout):
+    """Д2: отказ отправки больше не молчит — строка с `uid` и точкой возврата.
 
-    Единственная строка о нём уходит в чужой логгер (`app.services.dispatch`,
-    `Failed to dispatch …`) и не несёт ни `uid`, ни точки возврата.
+    До правки логгер эндпоинта об этом не говорил ничего: единственная строка
+    уходила в чужой логгер (`app.services.dispatch`, `Failed to dispatch …`)
+    и не несла ни `uid`, ни точки возврата.
     """
-    db = FakeDB(_diagram(DiagramStatus(SCENARIO_ENTRY[endpoint])))
-    assert _traces(endpoint, db) == []
+    entry = SCENARIO_ENTRY[endpoint]
+    db = FakeDB(_diagram(DiagramStatus(entry)))
+
+    trace = _traces(endpoint, db, HTTPException)
+
+    assert len(trace) == 1, "отказ отправки не оставил следа"
+    assert trace[0].uid == str(UID)
+    assert trace[0].phase == "validation"
+    assert entry in trace[0].getMessage(), "точка возврата не названа"
 
 
 class _DBGone(RuntimeError):
@@ -847,15 +953,30 @@ class _DeadDB(FakeDB):
 
 
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
-def test_dead_db_and_dead_broker_today(endpoint, broker_down, ocr_enabled, no_layout):
-    """Брокер и БД легли вместе: сегодня второго коммита нет вовсе.
+def test_dispatch_failed_trace_survives_a_dead_db(endpoint, broker_down,
+                                                  ocr_enabled, no_layout):
+    """Д2 в САМОЙ тяжёлой ветке: БД легла ВМЕСТЕ с брокером — след всё равно есть.
 
-    Возврата состояния не существует, поэтому и падать нечему — диаграмма просто
-    уезжает вперёд. Клетка «второй commit падает» появляется только с правкой.
+    Брокер и БД на бою падают вместе (одна машина, одна сеть, один рестарт).
+    Тогда возврат состояния записать не удаётся: второй `commit` падает следом
+    и уносит исключение наружу. След, стоящий ПОСЛЕ этого коммита, не ляжет
+    никогда — в логе остался бы только traceback БД, по которому не видно,
+    что отказала ОТПРАВКА.
+
+    Состояние диаграммы здесь не судится намеренно: возврат не записан, она
+    остаётся впереди ровно как до пункта — не хуже, чем было. Судится СЛЕД,
+    потому что в этой ветке он единственное, что вообще остаётся.
     """
-    db = _DeadDB(_diagram(DiagramStatus(SCENARIO_ENTRY[endpoint])))
-    asyncio.run(CALL[endpoint](db))
-    assert db.commits == 1, endpoint
+    entry = SCENARIO_ENTRY[endpoint]
+    db = _DeadDB(_diagram(DiagramStatus(entry)))
+
+    trace = _traces(endpoint, db, _DBGone)
+
+    assert db.commits == 2, "возврат состояния даже не попытались записать"
+    assert len(trace) == 1, "отказ отправки не оставил следа: БД унесла его с собой"
+    assert trace[0].uid == str(UID)
+    assert trace[0].phase == "validation"
+    assert entry in trace[0].getMessage(), "точка возврата не названа"
 
 
 # ── прочие ветки тех же эндпоинтов ───────────────────────────────────────
@@ -920,9 +1041,11 @@ def test_layout_is_dispatched_only_after_contours(broker_down, ocr_enabled, no_l
     из шести точек, которая `None` проверяет), здесь — только факт вызова.
     """
     direct = FakeDB(_diagram(DiagramStatus.VALIDATING_GRAPH))
-    asyncio.run(complete_graph_validation(UID, db=direct))
+    with pytest.raises(HTTPException):
+        asyncio.run(complete_graph_validation(UID, db=direct))
     assert no_layout == []
 
     after = FakeDB(_diagram(DiagramStatus.OCR_BOUND))
-    asyncio.run(complete_graph_validation(UID, db=after))
-    assert no_layout == [str(UID)]
+    with pytest.raises(HTTPException):
+        asyncio.run(complete_graph_validation(UID, db=after))
+    assert no_layout == [str(UID)], "раскладка ставится ДО отправки FXML"
