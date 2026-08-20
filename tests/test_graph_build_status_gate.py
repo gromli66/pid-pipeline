@@ -402,16 +402,75 @@ def test_missing_skeleton_auto_dispatches_and_keeps_status(dispatched):
     assert [c["name"] for c in dispatched] == [SKELETON_TASK]
 
 
-def test_missing_skeleton_survives_dead_broker(broker_down):
-    """Та же ветка при мёртвом брокере: 200, статус цел (исключение проглочено)."""
-    diagram = _diagram(DiagramStatus.VALIDATED_JUNCTIONS)
+@pytest.mark.parametrize("status", [
+    DiagramStatus.VALIDATED_JUNCTIONS, DiagramStatus.BUILT, DiagramStatus.ERROR,
+], ids=lambda s: s.value)
+def test_missing_skeleton_does_not_lie_about_a_dead_broker(status, broker_down):
+    """Та же ветка при мёртвом брокере: 503, а не «skeletonizing» из ниоткуда.
+
+    ⛔ Прежняя редакция этого теста запирала дефект как норму: «200, статус цел
+    (исключение проглочено)». Замер ноги 1.16 (§99) показал, чем это было на
+    самом деле — ответ «skeletonizing» при НУЛЕ поставленных задач во всех трёх
+    допустимых статусах, а клиент (`diagram_workspace._start_graph_build`)
+    печатал «📊 Построение графа запущено» и уходил ждать.
+
+    Статус тут не меняется ни до, ни после правки — работа не начиналась, значит
+    и возвращать нечего: чинится только правда ответа. Перебор по ВСЕМ трём
+    статусам, а не по одному: ветка одна, но достижима из каждого.
+    """
+    diagram = _diagram(
+        status,
+        error_stage="building_graph" if status is DiagramStatus.ERROR else None,
+        error_message="boom" if status is DiagramStatus.ERROR else None,
+    )
     db = FakeDB(diagram, skeleton=None)
 
-    result = asyncio.run(start_graph_building(UID, db=db))
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(start_graph_building(UID, db=db))
 
-    assert result["status"] == "skeletonizing"
-    assert diagram.status is DiagramStatus.VALIDATED_JUNCTIONS
+    assert exc.value.status_code == 503
+    assert "Connection refused" in exc.value.detail, "причина отказа потеряна"
+    assert _state(diagram) == _pre_state(status), "состояние тронуто, а работы не было"
     assert db.commits == 0
+
+
+def test_missing_skeleton_dead_broker_leaves_a_trace(broker_down):
+    """Д2 у той же ветки: след с `uid` есть и называет статус, на котором стоим.
+
+    Метка фазы поднята в начало эндпоинта именно ради этой ветки — до правки
+    `obs.bind` стоял ниже, и строка ушла бы без `uid`.
+    """
+    import logging
+
+    from app.core.logging import ContextFilter
+
+    class _Capture(logging.Handler):
+        def __init__(self):
+            super().__init__(level=logging.DEBUG)
+            self.records = []
+            self.addFilter(ContextFilter())
+
+        def emit(self, record):
+            self.records.append(record)
+
+    handler = _Capture()
+    api_logger = logging.getLogger("app.api.graph")
+    previous_level = api_logger.level
+    api_logger.addHandler(handler)
+    api_logger.setLevel(logging.DEBUG)
+    try:
+        db = FakeDB(_diagram(DiagramStatus.VALIDATED_JUNCTIONS), skeleton=None)
+        with pytest.raises(HTTPException):
+            asyncio.run(start_graph_building(UID, db=db))
+    finally:
+        api_logger.removeHandler(handler)
+        api_logger.setLevel(previous_level)
+
+    trace = [r for r in handler.records if getattr(r, "event", None) == "dispatch_failed"]
+    assert len(trace) == 1, "отказ авто-скелетизации не оставил следа"
+    assert trace[0].uid == str(UID)
+    assert trace[0].phase == "graph_build"
+    assert "validated_junctions" in trace[0].getMessage()
 
 
 def test_dead_broker_leaves_a_trace_with_uid(broker_down):

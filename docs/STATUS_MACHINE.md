@@ -348,11 +348,36 @@ set_diagram_error(db, diagram_uid, message, stage)
 | `POST /api/segmentation/{uid}/segment` | тот же |
 | `POST /api/skeleton/{uid}/skeletonize` | тот же |
 | `POST /api/junction/{uid}/detect-junctions` | тот же |
+| `POST /api/validation/{uid}/masks/complete` | тот же |
+| `POST /api/validation/{uid}/junctions/complete` | тот же (по отказу сборки графа; про OCR — ниже) |
+| `POST /api/validation/{uid}/graph/complete-simple` | тот же |
+| `POST /api/validation/{uid}/graph/complete` | тот же |
+| `POST /api/graph/{uid}/build` | тот же |
 
-Это не откат из §4 — этапа не было, откатывать нечего. Заперто таблицей переходов
-`tests/test_stage_dispatch_failure_gate.py`: пять эндпоинтов × 31 статус × 11 значений
-`error_stage`, в двух ветках (брокер жив и брокер лёг). У эндпоинтов `app/api/graph.py`
-такая защита стояла и раньше.
+Это не откат из §4 — этапа не было, откатывать нечего. Заперто двумя таблицами переходов:
+`tests/test_stage_dispatch_failure_gate.py` (пять эндпоинтов запуска стадий) и
+`tests/test_validation_dispatch_failure_gate.py` (четыре эндпоинта завершения валидации) —
+каждая по 31 статусу × 11 значений `error_stage`, в двух ветках (брокер жив и брокер лёг).
+
+⚠ **У эндпоинтов завершения валидации отказ выглядел ИНАЧЕ, и это была отдельная болезнь**
+(нога 1.16, MEASUREMENTS §99). Они отправляют не напрямую, а через
+`app/services/dispatch.async_safe_dispatch`, который исключение брокера ГЛОТАЕТ и возвращает
+`None`. `None` не проверял никто, поэтому наружу уходило **200 с `task_id: null`** — тот же
+ответ, каким отвечает идемпотентное «цепочка уже ушла вперёд». Отличить одно от другого
+клиенту было нечем, и он печатал оператору «✅ … (цепочка уже запущена)»
+(`ui/widgets/diagram_workspace.py`), а `graph/complete` он и вовсе сам красил
+в `generating_fxml` и уходил в опрос. Два статуса при этом — тупики без единой доступной
+кнопки: `validated_masks` и `generating_fxml` не лежат в `_MANUAL_INPROGRESS`, а бусины
+своих этапов при них «в процессе». **Теперь `task_id: null` в ответе 200 означает ровно
+одно — «ушли вперёд»**, а отказ отправки отвечает 503 и возвращает состояние.
+
+**Ветка, где возврата НЕТ и это осознанная граница: параллельный OCR
+в `junctions/complete`.** Задача сборки графа к этому моменту уже в брокере, и возврат
+состояния осиротил бы её. Поэтому отказ OCR не откатывает ничего: он назван в ответе
+(`"OCR NOT started (broker unavailable)"`, `ocr_task_id: null`) и оставляет след
+`event=dispatch_failed`. Штатное восстановление даёт следующий шаг — тот же OCR из
+`graph/complete-simple`, который [API.md §7](API.md) называет idempotent safety net.
+Заперто `test_ocr_failure_alone_is_named_and_traced`.
 
 **Ветка, где обещание выше не выполняется: БД легла ВМЕСТЕ с брокером** (на бою это один и тот
 же отказ — одна машина, один рестарт). Коммит возврата тогда падает сам, состояние остаётся
@@ -360,7 +385,8 @@ set_diagram_error(db, diagram_uid, message, stage)
 и не хуже. Единственное, что остаётся в этой ветке, — **след**: `logger.exception` с
 `event=dispatch_failed` стоит ДО коммита возврата специально ради неё, иначе исключение БД
 уносило бы наружу и его, и в логе не было бы сказано, что отказала ОТПРАВКА. Заперто
-`test_dispatch_failed_trace_survives_a_dead_db`.
+`test_dispatch_failed_trace_survives_a_dead_db` — и у эндпоинтов запуска стадий,
+и у эндпоинтов завершения валидации (одноимённый тест в каждой из двух таблиц).
 
 ### ProcessingStage
 

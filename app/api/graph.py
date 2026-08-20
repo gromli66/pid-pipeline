@@ -45,6 +45,10 @@ async def start_graph_building(
     if not diagram:
         raise HTTPException(status_code=404, detail="Diagram not found")
 
+    # Метка фазы поднята сюда из перехода ниже: ветка авто-скелетизации тоже
+    # пишет в лог, и без привязки её строка ушла бы без `uid`.
+    obs.bind(uid=str(uid), phase="graph_build")
+
     # ---- Race condition fix: auto-chain уже запустил task ----
     # Если статус уже BUILDING_GRAPH — task уже в очереди,
     # просто возвращаем OK вместо ошибки.
@@ -80,7 +84,13 @@ async def start_graph_building(
     skeleton_artifact = skel_result.scalar_one_or_none()
 
     if not skeleton_artifact:
-        # Auto-dispatch: запускаем скелетонизацию и сообщаем клиенту
+        # Auto-dispatch: запускаем скелетонизацию и сообщаем клиенту.
+        # Прежняя редакция глотала отказ брокера (`except Exception: pass`) и всё
+        # равно отвечала «skeletonizing» — при НУЛЕ поставленных задач, во всех
+        # трёх допустимых статусах (замер 1.16, §99). Клиент печатал оператору
+        # «📊 Построение графа запущено» и уходил ждать того, чего не будет.
+        # Статус здесь не менялся, поэтому возвращать нечего: чинится только
+        # правда ответа.
         try:
             from worker.celery_app import celery_app
 
@@ -88,8 +98,17 @@ async def start_graph_building(
                 "worker.tasks.skeleton.task_skeletonize_simple",
                 args=[str(uid)],
             )
-        except Exception:
-            pass  # worker может быть недоступен
+        except Exception as exc:  # noqa: BLE001 — на бою это RuntimeError
+            # (мёртвый result-бэкенд), а не OperationalError брокера:
+            # docs/STATUS_MACHINE.md §5. Узкий класс промахнулся бы.
+            logger.warning(
+                "Авто-скелетизация не поставлена (%s) — статус остался '%s'",
+                exc, diagram.status.value, extra={"event": "dispatch_failed"},
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=f"Worker unavailable: скелетизация не поставлена ({exc})",
+            )
 
         return {
             "status": "skeletonizing",
@@ -104,7 +123,6 @@ async def start_graph_building(
     # отправка задачи упадёт, вернуть надо всё, что переход записал, а не один
     # статус — иначе диаграмма останется в ERROR с пустым error_stage, и клиент
     # погасит ВСЕ кнопки (ui/widgets/diagram_workspace.py: _error_key).
-    obs.bind(uid=str(uid), phase="graph_build")
     previous_state = (diagram.status, diagram.error_stage, diagram.error_message)
     diagram.status = DiagramStatus.BUILDING_GRAPH
     diagram.error_message = None
