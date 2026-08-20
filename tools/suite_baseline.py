@@ -37,10 +37,24 @@
       то есть без этих проверок читается как «всё починилось»;
     * git не ответил про исчезнувшие файлы — отличить откат пункта от тихой
       пропажи нечем (`shrinkage()`).
+    * **прогон ЗАВИС** — pytest не вернулся за `RUN_TIMEOUT` (сбор — за
+      `COLLECT_TIMEOUT`) и убит стендом (пункт 1-47). Последняя строка вывода
+      в этом случае — `unjudged=hang`; на чём повис, называет дамп
+      `faulthandler` в хвосте.
 До 1-30 третьего исхода у `--check` не было вовсе: путь чтения умел только
 «доказано/опровергнуто» и на сломанной обстановке отдавал ту же единицу, что
 на доказанной регрессии, — вызывающий не мог отличить «чини код» от «чини
 обстановку».
+
+⛔ **Четвёртый отказ прибора: прогон не возвращается ВООБЩЕ (пункт 1-47).**
+1-44 научил стенд честной полярности для СОСТОЯВШЕГОСЯ и для ОБОРВАННОГО
+прогона, но зависший не даёт кода возврата вовсе, и сессия сидит без вердикта
+неограниченно долго. Таймаут в `_pytest` стоял и до пункта (1800 с), только
+не был перехвачен: `TimeoutExpired` улетал трейсбеком, а трейсбек — это
+exit 1, то есть «в наборе новый красный» (замер §116.3). Теперь стенд
+возвращается сам, отдаёт 2 «судить нечем» с меткой `unjudged=hang` и НАЗЫВАЕТ
+кадр — тем же `faulthandler`, которым пункт 1-43 назвал упавший тест
+при крахе, только взведённым по времени (`faulthandler_timeout`).
 
 ⛔ **Порядок причин (пункт GATE-8).** Прогон не состоялся (`run_rc` вне
 `{0, 1}`, нет итоговой строки, счётчики не сходятся с числом разобранных id)
@@ -93,8 +107,58 @@ from tools import corpus                                      # noqa: E402
 
 BASELINE = REPO / "tools" / "bench" / "suite_baseline.json"
 
-PYTEST_RUN = ["-q", "--tb=no", "-rEf", "-p", "no:cacheprovider"]
+# ⛔ **Третий исход прогона (пункт 1-47): он может не вернуться ВООБЩЕ.**
+# Замер архитектора 2026-08-20: прогон шёл 22 минуты при обычных ~5.5, CPU
+# процесса 18.1 с за всё это время, прирост за контрольные 40 с — РОВНО 0.00 с;
+# процесс не считал, а стоял. Снаружи такое не читается ничем: захват копится
+# до конца прогона, файл вывода 0 байт, — значит таймаут обязан жить ВНУТРИ
+# стенда, а не в терминале того, кто его запустил.
+#
+# Таймера два, и они про разное:
+#   TEST_TIMEOUT — окно ОДНОГО теста в дочернем pytest, сторожит его штатный
+#     `faulthandler_timeout` самого pytest. По срабатыванию он вываливает стеки
+#     всех нитей с файлом, строкой и именем тест-функции — тот же механизм,
+#     которым назван упавший тест при КРАХЕ (пункт 1-43), — и прогон НЕ рвёт.
+#     Поэтому ложное срабатывание стоит только лишних строк в выводе, а не
+#     убитого годного прогона: медленный, но живой тест печатает дамп и идёт
+#     дальше (замер §116.2).
+#   RUN_TIMEOUT / COLLECT_TIMEOUT — потолок на весь дочерний вызов. Возвращает
+#     управление именно он; имя к этому моменту уже лежит в захвате.
+# ⛔ Порядок TEST_TIMEOUT < RUN_TIMEOUT обязателен, иначе стенд вернётся
+# раньше, чем дамп успеет назвать кадр (заперто тестом).
+#
+# Числа. Полный прогон на этой машине — 3028 собранных; два замера входа
+# (§116.1) дошли до 97 % и оборвались крахом за 304 с и 265 с, соседние сессии
+# видели 311–404 с. RUN_TIMEOUT взят больше ДВОЙНОГО к худшему наблюдению
+# и меньше потолка задания CI (`timeout-minutes: 30` на ВСЕ шаги): слишком
+# короткий потолок убивал бы годные прогоны, а это ложь в обратную сторону.
+# TEST_TIMEOUT: один тест из 3028 длиной 120 с — это 40 % всего прогона,
+# то есть уже не медленный тест, а стоящий.
+TEST_TIMEOUT = 120
+RUN_TIMEOUT = 900
+COLLECT_TIMEOUT = 300
+
+PYTEST_RUN = ["-q", "--tb=no", "-rEf", "-p", "no:cacheprovider",
+              "-o", f"faulthandler_timeout={TEST_TIMEOUT}"]
 PYTEST_COLLECT = ["-q", "--collect-only", "-p", "no:cacheprovider"]
+
+# Прогон не вернулся вовсе. Настоящий процесс таким кодом не отвечает: на
+# Windows код возврата беззнаковый, на POSIX отрицательный — это номер сигнала
+# (1…64). Значение вне обоих множеств, поэтому спутать его не с чем.
+RC_HUNG = -1000
+
+# Последняя строка вывода при exit 2 — ЧЕМ именно судить нечем. Та же идиома,
+# что у `layout_determinism.py` (`unjudged=corpus` / `unjudged=environment`),
+# метка ASCII: её грепает bash на windows-раннере.
+# ⛔ Почему метка, а не ЧЕТВЁРТЫЙ код возврата. Действие вызывающего у краха и
+# у зависания одно и то же — «перегони» (`PROTOCOL §Гейты`), а контракт
+# «0 доказано · 1 опровергнуто · 2 судить нечем» общий у всех четырёх стендов
+# дороги (`PROTOCOL §5`); четвёртый код пришлось бы вписывать в PROTOCOL,
+# который исполнителю закрыт красным флагом №5, и до тех пор сессия, увидев
+# код вне {0,1,2}, не знала бы, что делать. Разделять надо ПОПУЛЯЦИИ — крах
+# это пункт 1-46, зависание 1-47, — и ровно это метка и даёт: она отличима
+# грепом и в логе CI, и локально, а полярность остаётся честной.
+MARK_UNJUDGED_HANG = "unjudged=hang"
 
 # Прогон вправе вернуть только «всё зелено» (0) или «есть упавшие» (1). 2 —
 # прерван, 3 — внутренняя ошибка, 4 — ошибка вызова, 5 — не собрано ни одного
@@ -139,7 +203,7 @@ _PARAM_TAIL = re.compile(r"\[([^\[\]]+)\]\s*$")
 _TEST_ID = re.compile(r"^(.+?\.py)::")
 
 
-def _pytest(args: list[str]) -> tuple[str, int]:
+def _pytest(args: list[str], timeout: float | None = None) -> tuple[str, int]:
     # -X utf8 обязателен: без него режим кодировки решает консоль, а результат
     # набора от неё зависит. Замерено 2026-08-17: test_refactoring.py:697
     # читает файл с кириллицей через read_text() без encoding — под cp1251
@@ -149,16 +213,32 @@ def _pytest(args: list[str]) -> tuple[str, int]:
     # PYTEST_ADDOPTS у родителя выпалывается: `-x` или `-k` из окружения
     # обрезали бы прогон, а обрезанный прогон — это ложное «позеленело».
     env = {k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"}
-    proc = subprocess.run(
-        [sys.executable, "-X", "utf8", "-m", "pytest", *args],
-        cwd=str(REPO),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=1800,
-        env=env,
-    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-X", "utf8", "-m", "pytest", *args],
+            cwd=str(REPO),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=RUN_TIMEOUT if timeout is None else timeout,
+            env=env,
+        )
+    except subprocess.TimeoutExpired as exc:
+        # ⛔ Пункт 1-47. Таймаут здесь стоял и раньше (1800 с), но НЕ был
+        # перехвачен: `TimeoutExpired` улетал наружу трейсбеком, и стенд
+        # отдавал код 1 — «в наборе новый красный». Замерено 2026-08-20
+        # (§116.3): ровно та ложь полярностью, которую пункт 1-44 снял
+        # у ОБОРВАННОГО прогона, только у ЗАВИСШЕГО. Дочерний процесс убит,
+        # захваченное к этому моменту — всё, что есть, и в нём лежит дамп
+        # `faulthandler` с именем повисшего теста.
+        # `TimeoutExpired` отдаёт захват как `bytes | str` (у `run()` он не
+        # знает про `text=True`), поэтому склейка идёт через явную проверку.
+        captured = [exc.stdout, exc.stderr]
+        return "".join(
+            part.decode("utf-8", "replace") if isinstance(part, bytes) else (part or "")
+            for part in captured
+        ), RC_HUNG
     return (proc.stdout or "") + (proc.stderr or ""), proc.returncode
 
 
@@ -168,14 +248,25 @@ def parse_red(text: str) -> set[str]:
 
 
 def parse_totals(text: str) -> dict[str, int]:
-    """Счётчики из итоговой строки pytest («38 failed, 661 passed, ...»)."""
-    tail = [ln for ln in text.splitlines() if " in " in ln and ("passed" in ln or "failed" in ln)]
-    if not tail:
-        return {}
-    totals: dict[str, int] = {}
-    for count, kind in _TOTAL.findall(tail[-1]):
-        totals["errors" if kind == "error" else kind] = int(count)
-    return totals
+    """Счётчики из итоговой строки pytest («38 failed, 661 passed, ...»).
+
+    ⛔ Берётся последняя РАЗБИРАЕМАЯ строка, а не последняя похожая (пункт
+    1-47). С этого пункта в захвате живут дампы `faulthandler`, и кадр вида
+    `File "tests/ui/x.py", line 295 in test_failed_saved_graph_warns` подходит
+    под «есть " in " и есть "failed"», а счётчиков не несёт: слепой `tail[-1]`
+    отдал бы пустой словарь, то есть «нет итоговой строки» — ложное «судить
+    нечем» на ЗДОРОВОМ прогоне. Имён с `failed`/`passed` в наборе 35
+    (греп 2026-08-20, §116.4), плюс файл `test_persist_failed_attempt.py`.
+    """
+    for line in reversed(text.splitlines()):
+        if " in " not in line or ("passed" not in line and "failed" not in line):
+            continue
+        totals: dict[str, int] = {}
+        for count, kind in _TOTAL.findall(line):
+            totals["errors" if kind == "error" else kind] = int(count)
+        if totals:
+            return totals
+    return {}
 
 
 def parse_collected(text: str) -> int:
@@ -355,6 +446,12 @@ def floor_problems(base: dict, per_file: dict[str, int]
     return problems, notes, unjudged
 
 
+# Маркеры аварийного блока `faulthandler`. Первые два — смерть процесса
+# (пункт 1-43), третий — таймаут одного теста: `Timeout (0:02:00)!` (пункт
+# 1-47). Механизм один и тот же, поэтому и окно у них одно.
+CRASH_MARKERS = ("Windows fatal exception", "Fatal Python error", "Timeout (")
+
+
 def crash_excerpt(text: str, tail: int = 25) -> str:
     """Хвост прогона, но с НАЧАЛА фатального блока, если он есть.
 
@@ -367,11 +464,18 @@ def crash_excerpt(text: str, tail: int = 25) -> str:
     и краш-прогон 1.x17 назвал по ней `test_unsaved_question.py:223`.
 
     Поэтому при обрыве печатается не конец текста, а окно ОТ маркера краха.
+
+    ⛔ Маркер берётся ПОСЛЕДНИЙ (пункт 1-47): у зависшего прогона дампов может
+    быть несколько — медленный, но живой тест тоже печатает свой и идёт дальше.
+    Интересен всегда последний: у зависания это повисший тест, у краха — сам
+    крах (он и так последнее, что процесс успевает написать).
     """
     lines = text.splitlines()
-    for i, line in enumerate(lines):
-        if "Windows fatal exception" in line or "Fatal Python error" in line:
-            return "\n".join(lines[max(0, i - 2):i + tail])
+    marks = [i for i, line in enumerate(lines)
+             if any(mark in line for mark in CRASH_MARKERS)]
+    if marks:
+        i = marks[-1]
+        return "\n".join(lines[max(0, i - 2):i + tail])
     return "\n".join(lines[-tail:])
 
 
@@ -402,7 +506,14 @@ def verdict(red: set[str], totals: dict[str, int], run_rc: int) -> list[str]:
     """
     fail: list[str] = []
 
-    if run_rc not in RUN_RC_OK:
+    if run_rc == RC_HUNG:
+        fail.append(
+            f"прогон ЗАВИС: pytest не вернулся за {RUN_TIMEOUT} с и убит стендом. "
+            f"На чём повис — в дампе `faulthandler` ниже (окно одного теста "
+            f"{TEST_TIMEOUT} с). Если дампа ниже НЕТ — зависание пришлось не "
+            "на тест: на сбор, на финал сессии или на сам интерпретатор"
+        )
+    elif run_rc not in RUN_RC_OK:
         fail.append(
             f"прогон не завершился штатно: pytest вернул {run_rc} "
             f"(штатные — {RUN_RC_OK}: 0 всё зелено, 1 есть упавшие). "
@@ -500,7 +611,18 @@ def _measure() -> tuple[set[str], dict[str, int], int, dict[str, int], int, str,
     «чини обстановку (это пункт 0.0), а не код».
     """
     run_text, run_rc = _pytest(PYTEST_RUN)
-    collect_text, collect_rc = _pytest(PYTEST_COLLECT)
+    collect_text, collect_rc = _pytest(PYTEST_COLLECT, COLLECT_TIMEOUT)
+    if collect_rc == RC_HUNG:
+        # Отдельная ветка, а не «сбор сломан»: у зависшего сбора код возврата
+        # тоже не нулевой, и общая ветка обвинила бы пункт 0.0 — то есть два
+        # судьи одного стенда на одном условии сказали бы разное (`PROTOCOL
+        # §Гейты`, разбор `lint_gate`). Имени тут не бывает: окно теста
+        # сторожит прогон, а у сбора тестов ещё нет.
+        print(f"[СУДИТЬ НЕЧЕМ] СБОР ЗАВИС: pytest --collect-only не вернулся "
+              f"за {COLLECT_TIMEOUT} с и убит стендом")
+        print("\nхвост сбора:\n" + crash_excerpt(collect_text))
+        print(MARK_UNJUDGED_HANG)
+        sys.exit(EXIT_UNJUDGED)
     if collect_rc != 0:
         print(f"[СУДИТЬ НЕЧЕМ] сбор pytest сломан (exit {collect_rc}) — "
               f"это пункт 0.0, а не база")
@@ -512,6 +634,12 @@ def _measure() -> tuple[set[str], dict[str, int], int, dict[str, int], int, str,
 
 def cmd_write() -> int:
     red, totals, collected, per_file, local, run_text, run_rc = _measure()
+    if run_rc == RC_HUNG:
+        print(f"[СУДИТЬ НЕЧЕМ] прогон ЗАВИС — не вернулся за {RUN_TIMEOUT} с и убит "
+              f"стендом; снимать базу с убитого прогона нельзя:\n"
+              + crash_excerpt(run_text))
+        print(MARK_UNJUDGED_HANG)
+        return EXIT_UNJUDGED
     if run_rc not in RUN_RC_OK:
         print(f"[СУДИТЬ НЕЧЕМ] прогон вернул {run_rc} — снимать базу с оборванного "
               f"прогона нельзя:\n" + run_text[-2000:])
@@ -589,6 +717,8 @@ def cmd_check() -> int:
         for msg in dead:
             print(f"\n[СУДИТЬ НЕЧЕМ] {msg}")
         print("\nхвост прогона:\n" + crash_excerpt(run_text))
+        if run_rc == RC_HUNG:
+            print(MARK_UNJUDGED_HANG)
         return EXIT_UNJUDGED
 
     # Дальше прогон СОСТОЯЛСЯ, и приоритет 1-30/1-25 в силе: сломанный состав —

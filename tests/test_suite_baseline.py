@@ -93,7 +93,7 @@ def _check_stand(monkeypatch, run, collect="tests/test_alpha.py::test_one\n\n1 t
     ловушка «покраснел сосед», что поймана в 1-28.
     """
     monkeypatch.setattr(sb, "_pytest",
-                        lambda args: (collect, 0) if "--collect-only" in args else run)
+                        lambda args, timeout=None: (collect, 0) if "--collect-only" in args else run)
     monkeypatch.setattr(sb, "_load_baseline", lambda: dict(base, min_collected=1))
 
 
@@ -413,7 +413,7 @@ def _stand(tmp_path, monkeypatch, report, collected=738, base=BASE, was=1):
             "tests/test_alpha.py": [was, sb.file_digest(tmp_path / "tests" / "test_alpha.py")]})
         path.write_text(json.dumps(base, ensure_ascii=False), encoding="utf-8")
 
-    def fake_pytest(args):
+    def fake_pytest(args, timeout=None):
         if "--collect-only" in args:
             return (f"tests/test_alpha.py::test_one\n\n{collected} tests collected in 1.0s\n", 0)
         return (report, 1)
@@ -726,7 +726,7 @@ def test_broken_collection_on_write_is_unjudgeable(tmp_path, monkeypatch):
     """
     _stand(tmp_path, monkeypatch, REPORT)
     monkeypatch.setattr(sb, "_pytest",
-                        lambda args: ("", 4) if "--collect-only" in args else (REPORT, 1))
+                        lambda args, timeout=None: ("", 4) if "--collect-only" in args else (REPORT, 1))
 
     with pytest.raises(SystemExit) as exc:
         sb.cmd_write()
@@ -745,7 +745,7 @@ def test_broken_collection_on_check_is_unjudgeable(tmp_path, monkeypatch, capsys
     """
     _stand(tmp_path, monkeypatch, REPORT)
     monkeypatch.setattr(sb, "_pytest",
-                        lambda args: ("", 4) if "--collect-only" in args else (REPORT, 1))
+                        lambda args, timeout=None: ("", 4) if "--collect-only" in args else (REPORT, 1))
 
     with pytest.raises(SystemExit) as exc:
         sb.cmd_check()
@@ -757,7 +757,7 @@ def test_broken_collection_on_check_is_unjudgeable(tmp_path, monkeypatch, capsys
 def test_killed_run_on_write_is_unjudgeable(tmp_path, monkeypatch, capsys):
     """Убитый прогон — тоже «судить нечем» (2), а не отказ."""
     path = _stand(tmp_path, monkeypatch, REPORT)
-    monkeypatch.setattr(sb, "_pytest", lambda args: (
+    monkeypatch.setattr(sb, "_pytest", lambda args, timeout=None: (
         ("tests/test_alpha.py::test_one\n\n738 tests collected in 1.0s\n", 0)
         if "--collect-only" in args else (REPORT, 77)))
     before = path.read_text(encoding="utf-8")
@@ -765,3 +765,234 @@ def test_killed_run_on_write_is_unjudgeable(tmp_path, monkeypatch, capsys):
     assert sb.cmd_write() == 2
     assert "СУДИТЬ НЕЧЕМ" in capsys.readouterr().out
     assert path.read_text(encoding="utf-8") == before
+
+
+# ─────────────────── зависание прогона (пункт 1-47) ───────────────────
+#
+# 1-44 научил стенд честной полярности для СОСТОЯВШЕГОСЯ и для ОБОРВАННОГО
+# прогона (0 · 1 · 2). Зависший не даёт кода возврата ВООБЩЕ: замер архитектора
+# 2026-08-20 — 22 минуты при обычных ~5.5, прирост CPU РОВНО 0.00 с за
+# контрольные 40. Сессия, поймавшая такое, сидит без вердикта неограниченно
+# долго; это дыра в контракте стенда, а не ещё один краш.
+
+#: Дамп `faulthandler` по таймауту ОДНОГО теста — ровно та форма, что снята
+#: с живого зонда (socketpair, §116.2). Шапка `Timeout (0:02:00)!`, следом имя
+#: повисшего теста с файлом и строкой, и следом — внутренности `pytest`,
+#: которых заведомо больше, чем длина слепого хвоста.
+HANG_RUN = (
+    "tests/ui/test_alpha.py::test_one PASSED\n"
+    "Timeout (0:02:00)!\n"
+    "\n"
+    "Thread 0x00000504 (most recent call first):\n"
+    '  File "tests/ui/test_hangs.py", line 16 in test_sits_on_a_socketpair\n'
+    + "".join('  File "_pytest/runner.py", line %d in pytest_runtest_call\n' % i
+             for i in range(30))
+)
+
+HUNG_TEST = "test_sits_on_a_socketpair"
+
+
+def test_hung_run_is_unjudgeable_and_names_the_frame(monkeypatch, capsys):
+    """⛔ Прогон не вернулся — вердикт 2 с меткой `unjudged=hang` И ИМЕНЕМ КАДРА.
+
+    Три вещи разом, и каждая ловит свою ложь:
+      * код 2, а не 1: без перехвата `TimeoutExpired` улетал трейсбеком, а
+        трейсбек — это exit 1, «в наборе новый красный» (замер §116.3);
+      * ни одного `[ПРОВАЛ]`: у зависшего прогона красных не разобрано, и
+        все 22 из базы выглядят «позеленевшими» — тот же артефакт обрыва,
+        за который GATE-8 разворачивал полярность;
+      * имя кадра в выводе: по «повис и молчит» причину не ищет никто.
+
+    Фикстура заперта с обеих сторон, с которых сторож ослеп бы:
+      * красных в базе ЗАВЕДОМО больше порога `MAX_FIXED` — иначе ветка
+        «позеленело» не исполнилась бы вовсе и тест был бы зелен на дефекте
+        (грабли 1-44: `MANY_RED` там несла 3 при пороге 10);
+      * имя лежит ВНЕ последних 25 строк — иначе его напечатал бы и слепой
+        хвост, и правка окна от маркера ничего бы не значила (грабли 1-43).
+    """
+    assert len(MANY_RED) > sb.MAX_FIXED, "фикстура ниже порога — тест ослеп бы"
+    blind = "\n".join(HANG_RUN.splitlines()[-25:])
+    assert HUNG_TEST not in blind, (
+        "фикстура слабее боевой: имя видно и слепому хвосту — сторож ослеп бы"
+    )
+
+    _check_stand(monkeypatch, (HANG_RUN, sb.RC_HUNG), base=BIG_BASE)
+
+    assert sb.cmd_check() == 2
+    out = capsys.readouterr().out
+    assert "ЗАВИС" in out, "стенд не сказал, что прогон завис"
+    assert HUNG_TEST in out, "стенд не назвал кадр — по такому выводу причину не ищут"
+    assert sb.MARK_UNJUDGED_HANG in out, "нет метки популяции: зависание не отличить от краха"
+    assert "[ПРОВАЛ]" not in out, "покраснел не тот механизм: провал вместо «судить нечем»"
+    assert "[позеленело]" not in out, "зависший прогон починки не наблюдал — это артефакт обрыва"
+
+
+def test_dead_run_is_not_labelled_a_hang(monkeypatch, capsys):
+    """Обратная полярность метки: КРАХ — это популяция 1-46, а не зависание.
+
+    Ради этого разделения метка и заведена вместо четвёртого кода возврата:
+    оба исхода дают вызывающему одно действие («перегони»), а различать надо
+    популяции — крах и зависание уже путали дважды.
+    """
+    _check_stand(monkeypatch, (CRASH_RUN, 3221225477), base=BIG_BASE)
+
+    assert sb.cmd_check() == 2
+    out = capsys.readouterr().out
+    assert sb.MARK_UNJUDGED_HANG not in out, "крах помечен как зависание — популяции слились"
+
+
+def test_hung_run_on_write_is_unjudgeable(monkeypatch, capsys, tmp_path):
+    """Пересъём с зависшего прогона — тоже «судить нечем», и база не тронута.
+
+    Два судьи одного стенда на одном условии обязаны говорить одно
+    (`PROTOCOL §Гейты`, разбор `lint_gate`): до пункта путь ЗАПИСИ на том же
+    зависании отвечал бы «прогон вернул -1000», то есть врал бы про причину.
+    """
+    path = _stand(tmp_path, monkeypatch, REPORT)
+    monkeypatch.setattr(sb, "_pytest", lambda args, timeout=None: (
+        ("tests/test_alpha.py::test_one\n\n738 tests collected in 1.0s\n", 0)
+        if "--collect-only" in args else (HANG_RUN, sb.RC_HUNG)))
+    before = path.read_text(encoding="utf-8")
+
+    assert sb.cmd_write() == 2
+    out = capsys.readouterr().out
+    assert "ЗАВИС" in out and sb.MARK_UNJUDGED_HANG in out
+    assert HUNG_TEST in out, "путь записи кадра не назвал"
+    assert path.read_text(encoding="utf-8") == before, "база переписана с убитого прогона"
+
+
+def test_hung_collect_does_not_blame_item_0_0(monkeypatch, capsys):
+    """Зависший СБОР — своя причина, а не «сбор сломан, это пункт 0.0».
+
+    У зависшего сбора код возврата тоже не нулевой, и общая ветка обвинила бы
+    давно закрытый пункт — та же форма, что «гейт врёт про код там, где сломана
+    обстановка».
+    """
+    monkeypatch.setattr(sb, "_pytest", lambda args, timeout=None: (
+        ("", sb.RC_HUNG) if "--collect-only" in args else (REPORT, 1)))
+
+    with pytest.raises(SystemExit) as exc:
+        sb.cmd_check()
+
+    assert exc.value.code == 2
+    out = capsys.readouterr().out
+    assert "СБОР ЗАВИС" in out and sb.MARK_UNJUDGED_HANG in out
+    assert "0.0" not in out, "зависание сбора списано на пункт 0.0"
+
+
+def test_totals_survive_a_faulthandler_frame_that_looks_like_a_summary():
+    """⛔ Кадр дампа НЕ должен читаться как итоговая строка pytest.
+
+    С пункта 1-47 в захвате живут дампы, а слепой «последняя похожая строка»
+    ловил кадр `… line 295 in test_failed_saved_graph_warns`: там есть " in "
+    и есть "failed", а счётчиков нет — итог получался пустым, и стенд отдавал
+    «нет итоговой строки», то есть ЛОЖНОЕ «судить нечем» на здоровом прогоне.
+    Имён с `failed`/`passed` в наборе 35 (греп 2026-08-20, §116.4).
+    """
+    text = (
+        "13 failed, 937 passed, 14 skipped, 9 errors in 291.55s\n"
+        "Timeout (0:02:00)!\n"
+        "Thread 0x00000504 (most recent call first):\n"
+        '  File "tests/ui/test_x.py", line 295 in test_failed_saved_graph_warns\n'
+    )
+    assert sb.parse_totals(text) == {"failed": 13, "passed": 937,
+                                     "skipped": 14, "errors": 9}
+
+
+def test_test_window_is_inside_the_run_ceiling():
+    """Порог заперт с двух сторон: дамп обязан успеть до того, как стенд убьёт.
+
+    Поднимут `TEST_TIMEOUT` выше потолка прогона — стенд вернётся молча, без
+    имени, и пункт 1-47 тихо откатится. Числа абсолютные: вычислять одно из
+    другого нельзя, иначе проверка зелена при любых значениях.
+    """
+    assert sb.TEST_TIMEOUT < sb.RUN_TIMEOUT
+    assert sb.RC_HUNG not in sb.RUN_RC_OK
+    assert f"faulthandler_timeout={sb.TEST_TIMEOUT}" in sb.PYTEST_RUN
+
+
+# ── зонды на НАСТОЯЩЕМ дочернем процессе: обе стороны временного порога ──
+#
+# ⛔ Сторож с порогом проверяется фикстурой ПО ТУ СТОРОНУ порога, иначе он
+# декоративен (`PROTOCOL §3`, замер 1-44). Порог здесь — ВРЕМЯ, значит фикстур
+# нужно две: одна не возвращается никогда, вторая возвращается позже окна
+# теста, но раньше потолка прогона. Синтетический вывод обеих не заменяет:
+# он не доказывает, что дамп `faulthandler` вообще ДОЕЗЖАЕТ до родителя через
+# убийство дочернего процесса, — а замер архитектора говорит ровно обратное
+# про обычный захват («файл вывода 0 байт»).
+
+#: Кадр выбран не наугад: у зависания, пойманного живым (пятая ревизия 1-6),
+#: py-spy показал `socketpair`.
+HANG_SOURCE = (
+    "import socket\n"
+    "\n"
+    "def test_sits_on_a_socketpair():\n"
+    "    a, _b = socket.socketpair()\n"
+    "    a.recv(1)          # никто не пишет — блокировка навсегда\n"
+)
+
+#: Медленный, но ЖИВОЙ тест: дамп по окну теста напечатает, прогон завершит.
+#: ⛔ В имени НАРОЧНО стоит `failed`: кадр дампа `… line 4 in test_..._failed_…`
+#: подходит под слепое «последняя строка с " in " и "failed"», и на таком имени
+#: разбор счётчиков ломается, а на нейтральном — нет (замер зонда C, §116.5).
+#: Таких имён в наборе 35, то есть фикстура тут слабее боевой не была бы.
+SLOW_SOURCE = (
+    "import time\n"
+    "\n"
+    "def test_slow_but_alive_after_a_failed_step():\n"
+    "    time.sleep(3)\n"
+)
+
+# Окно теста в зонде — секунды вместо боевых 120: дамп должен успеть до того,
+# как родитель убьёт дочерний процесс. Запас между ними восьмикратный, и он
+# на СТАРТ дочернего pytest (замер: 0.5 с на этой машине) — не на само
+# ожидание, поэтому загруженность машины его не съедает.
+PROBE_TEST_WINDOW = 2
+PROBE_RUN_CEILING = 10
+
+
+def _probe_args(path, window):
+    return [*sb.PYTEST_RUN, "-o", f"faulthandler_timeout={window}", str(path)]
+
+
+def test_hung_child_returns_and_carries_the_frame(tmp_path):
+    """⛔ ЗОНД ПЕРВОЙ ПОЛЯРНОСТИ: заведомо висящий тест.
+
+    Стенд обязан ВЕРНУТЬСЯ САМ за назначенное время и принести имя. До пункта
+    1-47 здесь не было ни того, ни другого: `TimeoutExpired` улетал наружу
+    трейсбеком (то есть exit 1 — «новый красный»), а вывода у зависшего
+    прогона нет вовсе — захват копится до конца.
+    """
+    probe = tmp_path / "test_hang_probe.py"
+    probe.write_text(HANG_SOURCE, encoding="utf-8")
+
+    text, rc = sb._pytest(_probe_args(probe, PROBE_TEST_WINDOW), PROBE_RUN_CEILING)
+
+    assert rc == sb.RC_HUNG, "стенд не распознал зависание"
+    assert "test_sits_on_a_socketpair" in sb.crash_excerpt(text), (
+        "дамп до родителя не доехал или окно печатается не от маркера — "
+        "имени в выводе нет, а значит стенд молчит о том, на чём повис"
+    )
+
+
+def test_slow_but_alive_child_is_not_called_hung(tmp_path):
+    """⛔ ЗОНД ВТОРОЙ ПОЛЯРНОСТИ, и он не менее важен первого.
+
+    Полный прогон идёт 265–304 с, а разброс времени набора на загруженной
+    машине — 154…297 с: слишком короткий потолок убил бы ГОДНЫЕ прогоны, и
+    гейт стал бы врать в обратную сторону. Здесь тест переживает окно теста
+    (дамп напечатан), но укладывается в потолок прогона — вердикт «завис»
+    не имеет права появиться, а счётчики обязаны разобраться ПОВЕРХ дампа.
+    """
+    probe = tmp_path / "test_slow_probe.py"
+    probe.write_text(SLOW_SOURCE, encoding="utf-8")
+
+    text, rc = sb._pytest(_probe_args(probe, 1), PROBE_RUN_CEILING * 6)
+
+    assert rc != sb.RC_HUNG, "живой прогон объявлен зависшим — ложное срабатывание"
+    assert rc in sb.RUN_RC_OK
+    assert "Timeout (" in text, "дамп не напечатан — фикстура не перешла окно теста"
+    assert sb.parse_totals(text).get("passed") == 1, (
+        "счётчики не разобраны поверх дампа — здоровый прогон читался бы "
+        "как «нет итоговой строки», то есть ложное «судить нечем»"
+    )
