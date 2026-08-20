@@ -23,6 +23,14 @@
 последовательность, что бывает в бою: строку приносит опрос провайдера, пока
 стадия ещё шла, а к моменту её падения `/stages` моргнул.
 
+⭐ Доработка по возврату ревизии связки (§104.12, пересъём §107.2): к проверке
+«в целевом статусе дверь есть» добавлен СКВОЗНОЙ сценарий — тот же воркспейс,
+та же бегущая строка, реальный клик, и только потом вопрос про кнопки. Прежняя
+редакция спрашивала про целевой статус на СВЕЖЕМ воркспейсе с чистыми стадиями,
+где предусловие лекарства выполнено по построению («свежий объект», `PROTOCOL §3`),
+и потому не видела, что у двух значений из четырёх дверь глушит та же строка,
+что создала тупик.
+
 ⚠ Модалка `QMessageBox.question` из `_on_error_retry` подменена с утверждением
 о ФАКТЕ вызова (`PROTOCOL §5`): без подмены красный прогон не падает, а виснет.
 Виджеты набор сносит сам, детерминированно, — брошенные на сборщик мусора
@@ -314,9 +322,16 @@ def test_target_status_has_a_door(stage, stage_type, target, door, bench):
     Иначе откат менял бы один тупик на другой. У трёх значений дверь —
     кнопка самой упавшей стадии; у `ocr` прямой кнопки в этом статусе нет
     (она появляется только с `ocr_completed`, а это была бы неправда: OCR
-    не завершался). Там дверь общая: OCR переотправляется подтверждением
-    валидации перекрёстков (`app/api/validation.py:660-679`), и кнопка
-    `junction` в целевом статусе доступна.
+    не завершался).
+
+    ⛔ Дверь для `ocr` НАЗВАНА ЗАНОВО по замеру ревизии связки (§104.10,
+    пересняно мной — §107.1). Прежняя редакция этой докстроки и комментарий
+    карты называли дверью подтверждение валидации перекрёстков — его гейт
+    `validated_graph` не пускает ВООБЩЕ, ответ 400. Настоящая дверь —
+    `POST /api/validation/{uid}/graph/complete-simple`: `validated_graph`
+    он пускает, «ушли вперёд» у него пустое, и OCR уходит заново. В клиенте
+    это кнопка «Проверка схемы» (`val_graph`), и здесь утверждается именно
+    она, а не любая доступная.
     """
     ws, _ = bench(SrvStatus(target), None, stages_error=False)
 
@@ -325,7 +340,115 @@ def test_target_status_has_a_door(stage, stage_type, target, door, bench):
     if door is not None:
         assert door in keys, f"в '{target}' нет кнопки '{door}': {keys}"
     else:
-        assert "ocr" not in keys and "junction" in keys, keys
+        assert "ocr" not in keys, keys
+        assert "val_graph" in keys, (
+            f"в '{target}' нет двери переотправки OCR («Проверка схемы»): {keys}"
+        )
+
+
+# ── часть 3б: СКВОЗНОЙ сценарий — тот же воркспейс после клика ───────────
+#
+# Замер §107.2, абсолютные литералы. Ключевое: `_last_stages` клик по страховке
+# НЕ чистит (`_on_error_retry` зовёт только `_refresh_status`), поэтому та же
+# бегущая строка, что создала тупик, продолжает глушить свою кнопку и в целевом
+# статусе — до `WAIT_LIMIT_S` = 600 с.
+ENABLED_AFTER_CLICK = {
+    "direction_classification": ["cvat", "detect", "frame"],
+    "contour_extraction": ["cvat", "detect", "frame", "graph", "junction",
+                           "pipe", "segment", "val_graph"],
+    "ocr": ["contours", "cvat", "detect", "frame", "graph", "junction",
+            "pipe", "segment", "val_graph"],
+    "generating_fxml": ["contours", "cvat", "detect", "edit_graph", "frame",
+                        "graph", "junction", "ocr", "ocr_binding", "pipe",
+                        "segment", "val_graph"],
+}
+
+# То же место, но бегущая строка уже закрыта опросом. Разница двух таблиц —
+# и есть цена глушения; ниже она утверждается поимённо.
+ENABLED_AFTER_CLICK_WITHOUT_THE_ROW = {
+    "direction_classification": ["cvat", "detect", "frame", "segment"],
+    "contour_extraction": ["contours", "cvat", "detect", "frame", "graph",
+                           "junction", "pipe", "segment", "val_graph"],
+    "ocr": ["contours", "cvat", "detect", "frame", "graph", "junction",
+            "pipe", "segment", "val_graph"],
+    "generating_fxml": ["contours", "cvat", "detect", "edit_graph", "frame",
+                        "graph", "junction", "ocr", "ocr_binding", "pipe",
+                        "segment", "val_graph"],
+}
+
+
+@pytest.mark.parametrize("stage,stage_type,target,door", CASES, ids=IDS)
+def test_the_click_lands_in_the_same_workspace(stage, stage_type, target, door, bench):
+    """Сквозной сценарий: тупик → реальный клик → кнопки В ТОМ ЖЕ воркспейсе.
+
+    Почему отдельно от `test_target_status_has_a_door`: тот строит НОВЫЙ
+    воркспейс с чистыми стадиями, то есть проверяет статус, а не путь оператора
+    (ловушка «свежий объект», `PROTOCOL §3`). Здесь воркспейс тот же самый,
+    предыстория та же, и клик настоящий — а значит виден шов между откатом
+    сервера и памятью клиента.
+    """
+    ws, server = bench(SrvStatus.ERROR, stage, stale=[running_row(stage_type)])
+    assert enabled_keys(ws) == [], "порог: до клика тупик"
+
+    ws.btn_error_retry.click()
+
+    assert server.retries == 1
+    assert server.diagram.status.value == target
+    assert not ws.btn_error_retry.isVisible(), (
+        "страховка осталась висеть после успешного отката"
+    )
+    assert enabled_keys(ws) == ENABLED_AFTER_CLICK[stage], (
+        f"'{stage}': после клика доступны {enabled_keys(ws)}"
+    )
+
+
+@pytest.mark.parametrize("stage,stage_type,target,door", CASES, ids=IDS)
+def test_the_running_row_survives_the_rollback_and_mutes_its_own_door(
+        stage, stage_type, target, door, bench):
+    """⛔ ГРАНИЦА, ЗАЯВЛЕННАЯ И НЕ ПОЧИНЕННАЯ: у двух значений из четырёх дверь
+    целевого статуса глушит ТА ЖЕ строка, что создала тупик.
+
+    Клик по страховке меняет статус на сервере, но `_last_stages` в памяти
+    клиента остаётся прежним, а `_update_buttons` переводит кнопку бегущей
+    стадии в `processing` независимо от статуса. Итог поимённо:
+
+    * `direction_classification` → `validated_bbox`, но `segment` глухая:
+      оператору кликабельны только `cvat`/`detect`/`frame` — зелёные ОТКАТЫ
+      с удалением артефактов (`POST /rollback`), то есть выход есть, но
+      дорогой;
+    * `contour_extraction` → `validated_graph`, но `contours` глухая;
+    * `ocr` и `generating_fxml` — двери живы: их строка глушит кнопку,
+      которой в целевом статусе и так нет.
+
+    Утверждается РАЗНИЦА, а не совпадение (`PROTOCOL §3`): тот же клик со
+    следующим опросом, закрывшим строку, отдаёт дверь обратно. Значит гасит
+    именно строка, а не статус.
+
+    Механизм СТАРШЕ ноги (`_update_buttons`, пункт 1.17 дороги — там же
+    заведена узкая ветка для ручных этапов). Лечится он не в карте сервера,
+    а в клиенте: чистить стадии, которые сервер только что объявил
+    недействительными. Пункт не тронут, граница названа в
+    `docs/STATUS_MACHINE.md §5`; покраснеет здесь, когда её починят.
+    """
+    ws, server = bench(SrvStatus.ERROR, stage, stale=[running_row(stage_type)])
+    ws.btn_error_retry.click()
+
+    muted = door is not None and door not in enabled_keys(ws)
+    assert muted == (stage in ("direction_classification", "contour_extraction")), (
+        f"'{stage}': состав глушения разошёлся с замером — "
+        f"дверь '{door}', доступны {enabled_keys(ws)}"
+    )
+
+    # Та же клетка, но строку закрыл следующий опрос стадий.
+    ws.status_provider.stages_updated.emit(UID, [])
+    ws._refresh_status()
+
+    assert enabled_keys(ws) == ENABLED_AFTER_CLICK_WITHOUT_THE_ROW[stage]
+    if door is not None:
+        assert door in enabled_keys(ws), (
+            f"'{stage}': дверь '{door}' не вернулась даже без бегущей строки — "
+            f"значит гасит не строка, и граница описана неверно"
+        )
 
 
 # ── часть 4: сторож двух карт ────────────────────────────────────────────

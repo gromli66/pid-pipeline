@@ -474,10 +474,15 @@ async def retry_operation(
         # Phase 7: Graph
         "building_graph": DiagramStatus.VALIDATED_JUNCTIONS,
         # Phase 8: контуры, OCR и FXML. Цели — те же, что у отката по кнопке
-        # в клиенте (`_ROLLBACK_TARGET`, «статус ПЕРЕД этим этапом»): у OCR
-        # своей кнопки в `validated_graph` нет — она появляется только с
-        # `ocr_completed`, а это была бы неправда, — и его переотправляет
-        # подтверждение валидации перекрёстков.
+        # в клиенте (`_ROLLBACK_TARGET`, «статус ПЕРЕД этим этапом»).
+        # ⚠ У OCR своей кнопки в `validated_graph` нет — она появляется только
+        # с `ocr_completed`, а это была бы неправда. Дверь там ДРУГАЯ, и она
+        # снята исполнением (§107): OCR переотправляет `POST /graph/
+        # complete-simple` (кнопка «Проверка схемы», `val_graph`) — его гейт
+        # `validated_graph` пускает и перехода «ушли вперёд» у него нет.
+        # Прежняя редакция этого комментария называла дверью подтверждение
+        # перекрёстков: его гейт `validated_graph` НЕ пускает вовсе — 400
+        # (`app/api/validation.py: complete_junction_validation`).
         "contour_extraction": DiagramStatus.VALIDATED_GRAPH,
         "ocr": DiagramStatus.VALIDATED_GRAPH,
         "generating_fxml": DiagramStatus.OCR_BOUND,
