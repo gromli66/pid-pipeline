@@ -18,8 +18,14 @@
 Тем же устроены и два потока РАСПОЗНАВАНИЯ (`advanced_graph_tab.py:471`,
 `ocr_binding_tab.py:435`): гасит их `_cleanup_recog_thread`, а зовут его
 только слоты `_on_recognize_done` / `_on_recognize_error` той же вкладки.
-Потоков всего шесть, и здесь проверяются пять из них: у `OcrBindingTab`
-взят загрузочный, у `AdvancedGraphTab` — распознавания.
+
+⛔ Потоков не шесть, а СЕМЬ: седьмой — `_ContourExtractWorker`
+(`contour_tab.py:37`, поднимается в `:285`). Он найден сверкой адресов по
+коду, в списке пункта его не было, и он опаснее прочих: гасит его
+`_stop_recog_worker` из `closeEvent`, а разрушение вкладки `closeEvent`
+НЕ поднимает; сам поток опрашивает сервер до **600 с**.
+Здесь проверяются шесть из семи: у `OcrBindingTab` взят загрузочный,
+у `AdvancedGraphTab` — распознавания, у `ContourTab` — контурный.
 
 Цена ЗАМЕРЕНА (§102), а не выведена: процесс, доживший до выхода с бегущим
 `QThread`, падает на разрушении этого потока — `0xC0000409`, 8 прогонов
@@ -97,6 +103,11 @@ class HoldingAPI:
         #: её ловят на втором потоке.
         self._recog_gate = threading.Event()
         self._recog_entered = threading.Event()
+        #: третий затвор — распознавание КОНТУРОВ: у него свой поток
+        #: (`_ContourExtractWorker`), и это седьмой поток вкладок, а не
+        #: шестой из строки пункта.
+        self._contour_gate = threading.Event()
+        self._contour_entered = threading.Event()
         self.calls = []
         if not hold:
             self._gate.set()
@@ -166,6 +177,27 @@ class HoldingAPI:
 
     def download_ocr_validation(self, uid, dest):
         return self._endpoint("ocr_validation", dest)
+
+    # -- поверхность вкладки контуров --
+    def wait_until_extracting(self):
+        return self._contour_entered.wait(HOLD_S)
+
+    def release_extraction(self):
+        self._contour_gate.set()
+
+    def extract_contours(self, uid, ann_ids):
+        self.calls.append("extract_contours")
+        self._contour_entered.set()
+        self._contour_gate.wait(HOLD_S)
+        return {"status": "started"}
+
+    def get_contours_status(self, uid):
+        """Распознавание ЕЩЁ ИДЁТ — то состояние, в котором оператор уходит.
+
+        С `has_auto: True` поток кончился бы сам, первым же опросом, и дефект
+        стал бы невидим: на дефектном дереве набор был бы зелёным.
+        """
+        return {"has_auto": False}
 
     def recognize_boxes(self, uid, boxes):
         self.calls.append("recognize_boxes")
@@ -480,6 +512,53 @@ def test_closing_tab_during_recognition_stops_its_thread(bench):
     assert _join(thread), (
         "поток распознавания пережил свою вкладку: гасить его больше некому"
     )
+
+
+def test_closing_tab_during_contour_recognition_stops_its_thread(bench,
+                                                                monkeypatch):
+    """СЕДЬМОЙ поток — распознавание контуров — обязан кончиться так же.
+
+    Сценарий боевой и самый дорогой из трёх: оператор запустил SAM2 на всех
+    узлах (на CPU это минуты), не дождался и ушёл. `_ContourExtractWorker`
+    опрашивает сервер до 600 с, гасит его `_stop_recog_worker` — и зовут его
+    только `closeEvent` и слот `_on_recognition_done`. Разрушение вкладки
+    `closeEvent` не поднимает, а связь со слотом Qt рвёт.
+
+    ⛔ Сервер отвечает `has_auto: False`, то есть «распознавание ещё идёт».
+    С `True` поток кончился бы первым же опросом сам, и набор был бы зелёным
+    на дефектном дереве — подмена обязана проживать ТУ стадию жизни, в
+    которой дефект существует (`PROTOCOL §3`).
+    """
+    monkeypatch.setattr("ui.tabs.contour_tab.QMessageBox", FakeMsgBox)
+    ws, api = bench(DiagramStatus.VALIDATED_GRAPH, hold=False)
+
+    tab = _open(ws, "contours")
+    assert _join(tab._download_thread), "загрузка вкладки контуров не кончилась"
+    QApplication.processEvents()
+    assert tab._editor is not None, "обстановка не та: редактор не собрался"
+
+    FakeMsgBox.answer = QMessageBox.StandardButton.Yes   # «Распознать все?»
+    tab.btn_recog_all.click()
+    FakeMsgBox.answer = QMessageBox.StandardButton.No    # дальше — как обычно
+
+    worker = tab._recog_worker
+    assert worker is not None, "жест «Распознать все» не поднял поток"
+    assert api.wait_until_extracting(), "поток не дошёл до сервера"
+
+    try:
+        _back(ws)
+        assert ws._active_tab is None, "вкладка не закрылась"
+
+        api.release_extraction()
+        assert _join(worker), (
+            "поток распознавания контуров пережил свою вкладку: гасить его "
+            "некому, а опрашивать сервер он будет ещё десять минут"
+        )
+    finally:
+        # Предохранитель, не утверждение: на дефектном дереве поток остаётся
+        # бежать, и процесс упал бы на его разрушении, унеся весь прогон.
+        worker.stop()
+        _join(worker)
 
 
 # ── контроль честности ───────────────────────────────────────────────────
