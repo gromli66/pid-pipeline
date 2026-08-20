@@ -463,14 +463,14 @@ class _ProbeHandler(http.server.BaseHTTPRequestHandler):
     """
 
     hits: list = []          # заполняется классом, читается снаружи
-    app = None
+    app: Celery | None = None
     hold = LEG_E_SERVER_HOLD
 
     def _serve(self, method: str) -> None:
         type(self).hits.append(method)
-        if type(self).app is not None:
-            type(self).app.send_task(TASK_NAME, args=[str(uuid.uuid4())],
-                                     queue=PROBE_QUEUE)
+        app = type(self).app
+        if app is not None:
+            app.send_task(TASK_NAME, args=[str(uuid.uuid4())], queue=PROBE_QUEUE)
         time.sleep(type(self).hold)
         try:
             self.send_response(503)
