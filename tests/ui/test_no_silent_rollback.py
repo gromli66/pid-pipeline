@@ -44,7 +44,7 @@ import pytest                                            # noqa: E402
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QObject, Signal               # noqa: E402
+from PySide6.QtCore import QEvent, QObject, Signal       # noqa: E402
 from PySide6.QtWidgets import (                          # noqa: E402
     QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QWidget,
 )
@@ -210,12 +210,24 @@ def bench(qapp, monkeypatch):
     monkeypatch.setattr("ui.tabs.simple_graph_tab.SimpleGraphTab", StubTab)
     monkeypatch.setattr("ui.tabs.frame_tab.FrameTab", StubTab)
 
+    made = []
+
     def _make(status, artifacts):
         server = FakeServer(status, artifacts)
         ws = dw.DiagramWorkspace(FakeAPI(server), FakeStatusProvider())
+        made.append(ws)
         return ws, server
 
-    return _make
+    yield _make
+
+    # Свои воркспейсы набор сносит сам, детерминированно (`PROTOCOL §5`,
+    # форма 1-36): брошенные виджеты живут до конца процесса и штрафуют
+    # СОСЕДА — доставку событий и его же `processEvents()`.
+    for ws in made:
+        ws.hide()
+        ws.setParent(None)
+        ws.deleteLater()
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 def _open_close_open(ws, key):
