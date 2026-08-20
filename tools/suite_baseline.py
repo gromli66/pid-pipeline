@@ -355,6 +355,26 @@ def floor_problems(base: dict, per_file: dict[str, int]
     return problems, notes, unjudged
 
 
+def crash_excerpt(text: str, tail: int = 25) -> str:
+    """Хвост прогона, но с НАЧАЛА фатального блока, если он есть.
+
+    ⛔ Слепой хвост в 25 строк УПАВШИЙ ТЕСТ НЕ НАЗЫВАЕТ, и это замерено
+    (пункт 1.x17, §102): блок `faulthandler` длиннее хвоста — первые его
+    строки несут файл, номер строки и имя тест-функции, а следом идут
+    два десятка строк внутренностей `pytest`, которые хвост и показывает.
+    Прежняя запись «строки Windows fatal exception с именем теста в выводе
+    нет» (§101) была выводом ИЗ ЭТОГО ОБРЕЗАНИЯ, а не фактом: строка есть,
+    и краш-прогон 1.x17 назвал по ней `test_unsaved_question.py:223`.
+
+    Поэтому при обрыве печатается не конец текста, а окно ОТ маркера краха.
+    """
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if "Windows fatal exception" in line or "Fatal Python error" in line:
+            return "\n".join(lines[max(0, i - 2):i + tail])
+    return "\n".join(lines[-tail:])
+
+
 def compare(base_red: set[str], cur_red: set[str]) -> tuple[list[str], list[str]]:
     """(новые красные — это регрессия, позеленевшие — повод пересъёмки базы)."""
     return sorted(cur_red - base_red), sorted(base_red - cur_red)
@@ -568,7 +588,7 @@ def cmd_check() -> int:
     if dead:
         for msg in dead:
             print(f"\n[СУДИТЬ НЕЧЕМ] {msg}")
-        print("\nхвост прогона:\n" + "\n".join(run_text.splitlines()[-25:]))
+        print("\nхвост прогона:\n" + crash_excerpt(run_text))
         return EXIT_UNJUDGED
 
     # Дальше прогон СОСТОЯЛСЯ, и приоритет 1-30/1-25 в силе: сломанный состав —
@@ -607,10 +627,10 @@ def cmd_check() -> int:
         for nid in fixed:
             print(f"  - {nid}")
     if bad:
-        print("\nхвост прогона:\n" + "\n".join(run_text.splitlines()[-25:]))
+        print("\nхвост прогона:\n" + crash_excerpt(run_text))
         return EXIT_REFUTED
     if unjudged:
-        print("\nхвост прогона:\n" + "\n".join(run_text.splitlines()[-25:]))
+        print("\nхвост прогона:\n" + crash_excerpt(run_text))
         return EXIT_UNJUDGED
     print("\n[OK] новых красных нет")
     return 0
