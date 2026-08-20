@@ -680,6 +680,7 @@ class DiagramWorkspace(QWidget):
         self._ocr_notified = False
         self._fxml_save_prompted = True
         self._awaiting_fxml_save = False
+        self._prtx_armed = False
         self._fxml_target_path = None
         self._stage_errors = {}
         self._dispatch_refusals = {}
@@ -806,17 +807,32 @@ class DiagramWorkspace(QWidget):
         # Армируем сохранение, как только началась генерация FXML
         if status == DiagramStatus.GENERATING_FXML:
             self._awaiting_fxml_save = True
+
+        # Автоконвертор .prtx взводим ШИРЕ, чем сохранение FXML: на сам
+        # GENERATING_FXML опрос (2 с) почти никогда не попадает — генерация
+        # FXML занимает 0.1 с (замер по 75 стадиям, max 1.3 с), и на авто-пути
+        # после «Проверки схемы» клиент видит VALIDATED_GRAPH → COMPLETED.
+        # Признак «конвейер дошёл до конца при нас» — увиденный ранее НЕ-готовый
+        # статус; при открытии уже готовой схемы взвода нет и сборка не
+        # запускается (иначе .prtx пересобирался бы на каждом открытии).
+        if status != DiagramStatus.COMPLETED:
+            self._prtx_armed = True
+
         # По завершении генерации — тихо сохранить в заранее выбранный путь
         # (без второго окна). Не завязано на переход статуса (на готовой схеме
         # перехода нет).
-        if (status == DiagramStatus.COMPLETED
-                and getattr(self, "_awaiting_fxml_save", False)):
-            self._awaiting_fxml_save = False
+        if status == DiagramStatus.COMPLETED:
+            _awaiting = getattr(self, "_awaiting_fxml_save", False)
+            _armed = getattr(self, "_prtx_armed", False)
             # Путь экспорта снимаем ДО сохранения: _save_fxml_silently его гасит,
             # а .prtx должен лечь рядом с тем же файлом.
             _fxml_target = getattr(self, "_fxml_target_path", None)
-            self._save_fxml_silently()
-            self._start_prtx_conversion(_fxml_target)
+            if _awaiting:
+                self._awaiting_fxml_save = False
+                self._save_fxml_silently()
+            if _awaiting or _armed:
+                self._prtx_armed = False
+                self._start_prtx_conversion(_fxml_target)
 
         # B6.4: При параллельных статусах — проверить готовность OCR по артефакту
         if not self._ocr_notified and status in (
