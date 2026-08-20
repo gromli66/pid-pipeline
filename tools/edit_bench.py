@@ -32,11 +32,6 @@ through, corner, corner4, conn_off, poly_off, adrift.
 на записи он, наоборот, снимает отказ (утверждение о росте — это утверждение
 о ТОМ ЖЕ холсте). Старый плоский вид `{файл: counts}` читается как
 «отпечатков нет», то есть тоже «судить нечем» — до первого пересъёма.
-
-⛔ Те же три исхода — и на ВХОДНЫХ ДАННЫХ (пункт 1-42): битый холст (не
-разобрался json, файл не прочитан, разобрался, но это не холст) и пустой
-замер дают «судить нечем», а не трейсбек с кодом 1. Ошибка самого судьи
-`edit_checks` при этом НЕ глушится — см. `canvas_problem()`.
 """
 from __future__ import annotations
 
@@ -136,55 +131,12 @@ def input_drift(inputs: dict[str, str], base: dict) -> dict[str, str]:
     return drift
 
 
-def canvas_problem(graph) -> str | None:
-    """Почему по этому холсту судить нечем, или None — холст годен.
-
-    Корпус лежит ВНЕ git (`.gitignore:37`), то есть холст — это ДАННЫЕ,
-    а не код: битый файл обязан давать «судить нечем» (exit 2), а не трейсбек
-    с кодом 1, неотличимый от доказанного роста дефектов (`PROTOCOL §5`).
-    Та же дыра, что 1-30 закрыл у дочернего прогона ПР1, только на входных
-    данных, а не на среде.
-
-    Проверяется РОВНО то, чего касаются `graph_access.edges()` и
-    `nodes_by_id()`; шире — значит ловить своей проверкой ошибки судьи,
-    а их прятать нельзя: поломка `edit_checks` должна оставаться красной.
-    """
-    if not isinstance(graph, dict):
-        return f"холст не объект json, а {type(graph).__name__}"
-    nodes = graph.get("nodes", [])
-    if not isinstance(nodes, list):
-        return f"поле nodes не список, а {type(nodes).__name__}"
-    for n in nodes:
-        if not isinstance(n, dict):
-            return f"узел не объект json, а {type(n).__name__}"
-        if "id" not in n:
-            return "у узла нет поля id"
-    links = graph.get("edges") if "edges" in graph else graph.get("links", [])
-    if not isinstance(links, list):
-        return f"поле рёбер не список, а {type(links).__name__}"
-    for e in links:
-        if not isinstance(e, dict):
-            return f"ребро не объект json, а {type(e).__name__}"
-    return None
-
-
 def measure_file(path: Path) -> dict:
-    """Счётчики и находки по холсту.
-
-    `ValueError` — холст не годен для суда (не разобрался или не похож
-    на холст); `main()` читает это как «судить нечем», см. `canvas_problem`.
-    """
     graph = json.loads(path.read_text(encoding="utf-8"))
-    problem = canvas_problem(graph)
-    if problem is not None:
-        raise ValueError(problem)
     return edit_checks.check_canvas(graph)
 
 
 def _print_table(rows: dict[str, dict]):
-    if not rows:                       # пустой набор: `max()` падал ValueError
-        print("таблица пуста: ни один холст не измерен")
-        return
     name_w = max(len(n) for n in rows) + 2
     head = "файл".ljust(name_w) + " ".join(h.rjust(8) for h, _k, _d in COLS)
     print(head)
@@ -375,22 +327,13 @@ def main() -> int:
     if not paths:
         ap.error("нет входных файлов (--all или список)")
 
-    rows, measured, unjudged_input = {}, [], []
+    rows, measured = {}, []
     for p in paths:
         if not p.exists():
             print(f"{p}: нет файла — пропуск")
             continue
-        try:
-            rows[p.name] = measure_file(p)
-        except (OSError, ValueError) as exc:
-            # Битый холст — сломанные ДАННЫЕ, а не регресс кода: трейсбек
-            # с кодом 1 говорил бы «дефекты выросли» (`PROTOCOL §5`).
-            print(f"[СУДИТЬ НЕЧЕМ] {p.name}: холст не разобран — {exc}")
-            unjudged_input.append(f"{p.name}: {exc}")
-            continue
+        rows[p.name] = measure_file(p)
         measured.append(p)
-    if not rows:
-        unjudged_input.append("ни один холст не измерен — судить не по чему")
     inputs = input_fingerprints(measured)
 
     _print_table(rows)
@@ -409,10 +352,6 @@ def main() -> int:
             print(f"[ВХОД НЕ ТОТ] {name}: {why}; вердикт эталона об этом "
                   "холсте к нынешним данным не относится")
         unjudged, refused = write_blocked(rows, read_baseline(), inputs)
-        if unjudged_input:
-            unjudged.append(
-                "судить нечем по холстам: " + "; ".join(unjudged_input)
-                + " — пересъём записал бы эталон без них")
         for msg in unjudged:
             print(f"[СУДИТЬ НЕЧЕМ] {msg}")
         for msg in refused:
@@ -431,12 +370,8 @@ def main() -> int:
         if not BASELINE.exists():
             print("базы нет — сначала --write-baseline")
             return 2
-        code = _compare(rows, read_baseline(), inputs)
-        if code == 0 and unjudged_input:
-            print(f"судить нечем по холстам: {'; '.join(unjudged_input)}")
-            return 2
-        return code            # доказанный рост сильнее неполноты (1-25)
-    return 2 if unjudged_input else 0
+        return _compare(rows, read_baseline(), inputs)
+    return 0
 
 
 if __name__ == "__main__":
