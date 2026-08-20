@@ -27,6 +27,7 @@ from ui.services.artifact_downloader import (
     ArtifactDownloader, Job, artifact, one,
 )
 from ui.editors.base_graph_editor import BaseGraphEditor
+from ui.tabs.blind_overwrite import BlindOverwriteGuard
 from ui.tabs.save_mode import NonInteractiveSaveMixin
 from ui.widgets.appearance_panel import AppearanceMixin
 from ui.widgets.toolbar_buttons import (
@@ -692,7 +693,10 @@ def _graph_jobs(want_canvas: bool) -> tuple[Job, ...]:
              artifact("graph_json", "graph.json")), required=True,
             failure_key="saved_graph_download_failed"),
         one(artifact("coco_validated", "coco_validated.json"),
-            swallow=(APIError,)),
+            swallow=(APIError,),
+            silent_ok="COCO обратно на сервер графовая вкладка не пишет: "
+                      "потеря стоит оператору рамок узлов на подложке, "
+                      "а не его работы"),
     ]
     # WYSIWYG-вкладка: свой артефакт-холст, если он уже сохранялся,
     # плюс выбранные контуры — их вливает пересборка холста (фолбэк).
@@ -709,7 +713,8 @@ def _graph_jobs(want_canvas: bool) -> tuple[Job, ...]:
 
 
 
-class BaseGraphTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
+class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
+                   AppearanceMixin, QWidget):
     """Базовый класс вкладки редактора графа P&ID.
 
     Template method:
@@ -763,7 +768,7 @@ class BaseGraphTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
         self._saved_revision: int = 0
         # Артефакты, чьё состояние на сервере НЕИЗВЕСТНО: скачать не удалось
         # не по 404. Запись в них ждёт явного «да» оператора (1.x9).
-        self._unreadable_on_server: set[str] = set()
+        self._init_blind_overwrite()
 
         self._setup_ui()
         self._download_artifacts()
@@ -1206,45 +1211,11 @@ class BaseGraphTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
             "остаться ваша прежняя валидация.",
     }
 
-    def _confirm_blind_overwrite(self, artifact: str) -> bool:
-        """Разрешена ли запись в артефакт, чьё состояние на сервере неизвестно.
-
-        Предупреждения 1.23 записи не мешали: оператор ВИДЕЛ, что открыл не
-        свою работу, и первый же save молча затирал серверную. Сюда сходятся
-        все боевые входы на запись — кнопка 💾, «Подтвердить» и
-        автосохранение (раз в 120 с, включено по умолчанию), поэтому запрет
-        стоит один и здесь. Ctrl+S редактора с 1.19 жмёт ту же кнопку 💾
-        (`_save_from_hotkey`), то есть тоже приходит сюда, а не мимо.
-
-        «Да» снимает запрет насовсем: решение принял оператор. «Нет» его
-        оставляет, и вопрос вернётся при следующей попытке записи.
-
-        ⛔ Сохранение ПО ТАЙМЕРУ вопроса не задаёт (пункт 1-38): «Да» вслепую
-        снял бы запрет насовсем, то есть автосохранение отменило бы защиту
-        без оператора. Тик отказывается и говорит об этом строкой; запрет
-        при этом остаётся взведённым, и ручной заход спросит снова.
-        """
-        if artifact not in self._unreadable_on_server:
-            return True
-        if not self._save_interactive:
-            self._refuse_save("⚠️ Автосохранение отменено: серверная копия "
-                              "не прочитана — сохраните вручную")
-            return False
-        reply = QMessageBox.question(
-            self, "Сохранение затрёт серверную копию",
-            f"{self._BLIND_WRITE_WARNING[artifact]}\n\nСохранить всё равно?",
-            QMessageBox.StandardButton.Yes
-            | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            logger.warning("запись в %s отменена оператором: серверная копия "
-                           "не прочитана", artifact)
-            return False
-        logger.warning("оператор разрешил перезапись %s поверх непрочитанной "
-                       "серверной копии", artifact)
-        self._unreadable_on_server.discard(artifact)
-        return True
+    # `_confirm_blind_overwrite` — общая дверь `BlindOverwriteGuard`
+    # (`ui/tabs/blind_overwrite.py`, пункт 1-41). Сюда сходятся все боевые
+    # входы на запись: кнопка 💾, «Подтвердить» и автосохранение; Ctrl+S
+    # редактора с 1.19 жмёт ту же кнопку 💾 (`_save_from_hotkey`), то есть
+    # тоже приходит сюда, а не мимо.
 
     def _save_from_hotkey(self):
         """Ctrl+S редактора = нажатие кнопки 💾, а не отдельный путь записи.

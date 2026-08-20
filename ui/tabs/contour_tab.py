@@ -405,8 +405,24 @@ class ContourTab(BaseGraphTab):
     # =================================================================
 
     def _save_graph(self) -> bool:
-        """Override: save graph AND contours_validated.json."""
+        """Override: save graph AND contours_validated.json.
+
+        ⛔ **Половина записи — это НЕ сохранение** (пункт 1-41). Раньше при
+        отказе второй половины метод возвращал `True`, а дёрти-флаг был уже
+        погашен первой: `BaseGraphTab._save_graph` при успехе ставит
+        `_saved_revision = undo_mgr.revision`, и `has_unsaved_changes()`
+        считает ровно это. Значит `confirm_discard_active_tab` вопроса
+        не задавал — вкладка закрывалась молча, и подтверждения контуров,
+        которых нет на сервере, исчезали без следа в UI.
+
+        Политика взята у соседа: `JunctionTab._save_masks` при непрошедшей
+        записи центров `_saved` не взводит и возвращает `False` (пункт 1.x14).
+        Графовая половина при этом НЕ откатывается — она на сервере, откатывать
+        её нечем и незачем; оператор теряет ровно контуры, и ровно про них ему
+        и говорят.
+        """
         # 1. Save graph (with updated segmentation + centroid)
+        saved_before = self._saved_revision
         if not super()._save_graph():
             return False
 
@@ -416,16 +432,21 @@ class ContourTab(BaseGraphTab):
             return True
         except Exception as exc:
             logger.error("Failed to save contours: %s", exc)
+            # Дёрти-флаг возвращается на место: сохранённой вкладка при
+            # непрошедшей записи контуров не считается, и при уходе спросят.
+            self._saved_revision = saved_before
             # По таймеру — строкой, а не модалкой посреди работы (1-38).
             if self._save_interactive:
                 QMessageBox.warning(
-                    self, "Ошибка",
-                    f"Граф сохранён, но контуры не сохранены:\n{exc}",
+                    self, "Контуры не сохранены",
+                    f"Граф сохранён, а контуры — НЕТ:\n{exc}\n\n"
+                    "Подтверждения контуров остались только в этой вкладке. "
+                    "Сохраните ещё раз, когда причина устранена.",
                 )
             else:
                 self._refuse_save(
                     f"⚠️ Автосохранение: граф сохранён, контуры — нет ({exc})")
-            return True  # graph saved OK, contours failed
+            return False
 
     def _save_contours_validated(self):
         """Build and upload contours_validated.json."""
@@ -572,4 +593,9 @@ class ContourTab(BaseGraphTab):
                 len(samples), from_sam2, from_sam2_edited, from_manual,
             )
         except Exception as exc:
+            # ГЛОТАЕМ ОСОЗНАННО (пункт 1-41): `contours_training` — данные для
+            # дообучения SAM2, они не читаются ни клиентом, ни конвейером и
+            # целиком выводятся из `contours_validated`, который уже записан.
+            # Отказ здесь не стоит оператору ничего из его работы, а модалка
+            # про артефакт, о котором он не знает, была бы шумом.
             logger.warning("Failed to upload contours_training: %s", exc)

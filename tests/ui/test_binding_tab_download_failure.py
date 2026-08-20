@@ -903,3 +903,160 @@ def test_retry_counter_is_visible_on_both_kinds_of_wait(
     api2 = _server(raster, failures={"ocr_result": APIError("boom", 503)})
     tab2 = open_tab_failing(api2)
     assert "1/10" in tab2.loading_label.text()
+
+
+# =========================================================================
+# Пункт 1-41 — ТРЕТИЙ записываемый артефакт вкладки: `ocr_validation`
+# =========================================================================
+# Популяция «предупреждение есть, запрета нет» закрывалась 1.x9 и 1.x14 по
+# ДВУМ артефактам (`ocr_binding`, `graph_validated`), а множество ЗАПИСЫВАЕМЫХ
+# этой вкладкой шире: `_save_binding` шагом 6 (`:1848`) кладёт на сервер ещё
+# и `ocr_validation`. Его задание (`_ARTIFACTS`, `:95`) `failure_key` не несёт,
+# то есть 5xx и 404 неразличимы — и подтверждения оператора, сделанные в
+# прошлый заход, уходят с сервера при первой же записи из этого.
+#
+# Цена условна и названа прямо: запись идёт только `if self._classifications`,
+# то есть теряет работу тот оператор, который в этот заход поработал в режиме
+# валидации хотя бы над одним блоком. Ровно этот сценарий здесь и проигран.
+#
+# ⛔ Второй класс отказа того же артефакта — «файл лёг, но не читается»:
+# разбор `ocr_validation` стоит в СВОЁМ `try` (`:823-824`) и уходил строкой
+# в лог, мимо общего обработчика загрузки, который поднимает модалку.
+
+N_CLASSIFIED = 2                # подтверждений в сохранённой работе оператора
+
+TITLE_VALIDATION = "Сохранённые подтверждения не загружены"
+
+
+def _validation_blob(n: int) -> bytes:
+    return json.dumps({
+        "version": 1,
+        "classifications": [
+            {"block_idx": i, "block_type": "kks", "match_quality": "exact",
+             "color": "green", "confirm_status": "confirmed",
+             "original_text": f"10LBA1{i}", "corrected_text": f"10LBA1{i}"}
+            for i in range(n)
+        ],
+    }).encode()
+
+
+VALIDATION_SAVED = _validation_blob(N_CLASSIFIED)
+
+
+def _classifications_on_server(api) -> int:
+    stored = json.loads(api.blobs["ocr_validation"].decode())
+    return len(stored["classifications"])
+
+
+def _validation_server(raster, **failures):
+    """Сервер, на котором лежат подтверждения оператора прошлого захода."""
+    api = _server(raster, binding=BINDING_SAVED, failures=failures or None)
+    api.blobs["ocr_validation"] = VALIDATION_SAVED
+    return api
+
+
+def _operator_classifies_one_block(tab):
+    """Оператор поработал в режиме валидации: одно подтверждение.
+
+    Идёт через `set_validation_results` — публичный вход, которым результаты
+    валидации попадают в редактор; `_save_binding` шагом 6 забирает их именно
+    оттуда (`if self.editor._validation_results`).
+    """
+    from modules.ocr_validation.result import (
+        BlockClassification, BlockType, ConfirmStatus, MatchQuality,
+        ValidationColor,
+    )
+    cl = BlockClassification(
+        block_idx=0, block_type=BlockType.KKS,
+        match_quality=MatchQuality.EXACT, color=ValidationColor.GREEN,
+        confirm_status=ConfirmStatus.CONFIRMED,
+    )
+    cl.original_text = "10LBA10"
+    tab.editor.set_validation_results([cl])
+
+
+def test_saved_validation_arrives_when_server_is_healthy(raster, open_tab,
+                                                         dialogs):
+    """Контроль честности: подтверждения прошлого захода доезжают до вкладки."""
+    tab = open_tab(_validation_server(raster))
+
+    assert len(tab._classifications) == N_CLASSIFIED
+    assert dialogs == []
+
+
+def test_validation_save_reaches_the_server_and_the_reader_sees_it(
+        raster, open_tab, dialogs, answer):
+    """Контроль честности записи: экзамен сдаёт РАЗНИЦА, а не совпадение.
+
+    ⛔ «После сохранения на сервере столько же» зелено и при обезвреженной
+    записи (`PROTOCOL §3`, замеры §76.7 и §82.14). Поэтому оператор оставляет
+    ОДНО подтверждение, и у читателя обязано остаться одно, а не два.
+    """
+    api = _validation_server(raster)
+    tab = open_tab(api)
+    assert _classifications_on_server(api) == N_CLASSIFIED
+
+    _operator_classifies_one_block(tab)
+    assert tab._save_binding() is True
+
+    assert "ocr_validation" in api.saves, "запись подтверждений до сервера не дошла"
+    assert _classifications_on_server(api) == 1, (
+        "запись не видна читателю — на таком стенде «подтверждения целы» "
+        "ничего не значит")
+
+
+def test_missing_validation_is_silent(raster, open_tab, dialogs):
+    """404 = подтверждений законно нет (первый заход) — молча."""
+    tab = open_tab(_server(raster, binding=BINDING_SAVED))
+
+    assert tab._classifications == []
+    assert dialogs == [], "404 — законный первый заход, пугать оператора нечем"
+
+
+def test_failed_validation_download_warns_and_locks_the_write(
+        raster, open_tab, dialogs, answer):
+    """5xx: оператор видит отказ, «нет» спасает подтверждения прошлого захода."""
+    api = _validation_server(
+        raster, ocr_validation=APIError("gateway timeout", 504))
+    tab = open_tab(api)
+
+    assert tab._classifications == [], "стенд не воспроизвёл отказ чтения"
+    assert TITLE_VALIDATION in _titles(dialogs), (
+        f"отказ 504 у подтверждений прошёл молча: {_titles(dialogs)}")
+
+    _operator_classifies_one_block(tab)
+    assert tab._save_binding() is False, "запись не заперта — вопроса не было"
+    assert "ocr_validation" not in api.saves
+    assert _classifications_on_server(api) == N_CLASSIFIED, (
+        "подтверждения оператора затёрты из-за отказа СЕРВЕРА при чтении")
+
+
+def test_unreadable_validation_file_warns_and_locks_the_write(
+        raster, open_tab, dialogs, answer):
+    """«Файл лёг, но не читается» — тот же запрет, другой класс отказа."""
+    api = _validation_server(raster)
+    api.blobs["ocr_validation"] = b'{"version": 1, "classifications": [{'
+
+    tab = open_tab(api)
+
+    assert tab._classifications == []
+    assert TITLE_VALIDATION in _titles(dialogs), (
+        f"нечитаемый ocr_validation.json прошёл молча: {_titles(dialogs)}")
+
+    _operator_classifies_one_block(tab)
+    assert tab._save_binding() is False
+    assert "ocr_validation" not in api.saves
+
+
+def test_operator_may_allow_the_validation_overwrite(raster, open_tab,
+                                                     dialogs, answer):
+    """Порог с другой стороны: «да» — решение оператора, запись проходит."""
+    api = _validation_server(
+        raster, ocr_validation=APIError("gateway timeout", 504))
+    tab = open_tab(api)
+    answer.reply = QMessageBox.StandardButton.Yes
+
+    _operator_classifies_one_block(tab)
+    assert tab._save_binding() is True
+    assert _classifications_on_server(api) == 1, (
+        "оператор разрешил перезапись, а она не состоялась")

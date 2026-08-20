@@ -398,16 +398,30 @@ def test_masks_optional_non_api_error_stops_the_tab(kind, failing, tmp_path):
 
 @pytest.mark.parametrize("kind,failing", MASK_OPTIONAL_JOBS)
 def test_masks_optional_server_failure_is_still_swallowed(kind, failing, tmp_path):
-    """Порог с другой стороны: отказ СЕРВЕРА у вкладок масок терпим и молчит.
+    """Порог с другой стороны: отказ СЕРВЕРА у вкладок масок вкладку не роняет.
 
     Правка 1.x12 не «ужесточает вообще»: 5xx у необязательного артефакта
     вкладку не роняет — он глотается так же, как 404 (раздел 5).
+
+    ⛔ **Но МОЛЧАТЬ он с пункта 1-41 перестал.** Прежняя редакция этого теста
+    запирала как ФАКТ, что у вкладок масок `failure_key` не заводится, и сама
+    называла остаток: артефакты, которые вкладка пишет ОБРАТНО, при 5xx
+    подменялись фолбэком (или пустотой) неотличимо от 404. Теперь такой отказ
+    приезжает во вкладку флагом и запирает слепую запись; глотание осталось
+    ровно там, где артефакт обратно не уходит (`skeleton`, `coco`, `pipe_mask`
+    — у них `silent_ok` с причиной).
     """
     api = FakeAPI(failures={name: APIError("bad gateway", 502) for name in failing})
     artifacts, error, _ = run_download(kind, tmp_path, api)
     assert error is None
     assert artifacts is not None
-    assert not [k for k, v in artifacts.items() if v is True],         "у вкладок масок `failure_key` не заводился — пункт его не ставил"
+
+    jobs = _downloader(kind, api, "uid-0", tmp_path).jobs
+    expected = {j.failure_key for j in jobs
+                if j.failure_key and j.fetches[0].source in failing}
+    raised = {k for k, v in artifacts.items() if v is True}
+    assert raised == expected, (
+        f"флаги отказа разошлись с объявленными в заданиях: {raised} != {expected}")
 
 
 # ---------------------------------------------------------------------------

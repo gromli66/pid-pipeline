@@ -573,7 +573,13 @@ def test_pipe_save_opens_a_modal_when_the_operator_saves(monkeypatch, tmp_path):
         _editor=types.SimpleNamespace(save_mask=refuse),
         temp_dir=tmp_path,
         _save_interactive=True,          # жест оператора, не тик таймера
+        # Дверь запрета слепой перезаписи (пункт 1-41) — НАСТОЯЩАЯ, просто
+        # пустая: непрочитанного здесь нет, и запирать ей нечего.
+        _unreadable_on_server=set(),
+        _BLIND_WRITE_ARTIFACTS=pt.PipeTab._BLIND_WRITE_ARTIFACTS,
     )
+    fake_tab._confirm_blind_overwrite = types.MethodType(
+        pt.PipeTab._confirm_blind_overwrite, fake_tab)
 
     result = pt.PipeTab._save_mask(fake_tab)
 

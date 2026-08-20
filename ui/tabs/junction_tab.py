@@ -19,6 +19,7 @@ from ui.services.api_client import APIClient, APIError
 from ui.services.artifact_downloader import (
     ArtifactDownloader, Job, artifact, one,
 )
+from ui.tabs.blind_overwrite import BlindOverwriteGuard
 from ui.tabs.save_mode import NonInteractiveSaveMixin
 from ui.widgets.appearance_panel import AppearanceMixin
 from ui.widgets.toolbar_buttons import (
@@ -45,24 +46,79 @@ _ARTIFACTS = (
     one(artifact("original_image", "original.png"), required=True),
     Job((artifact("junction_mask_validated", "junction_mask.png",
                   key="junction_mask"),
-         artifact("junction_mask", "junction_mask.png")), required=True),
+         artifact("junction_mask", "junction_mask.png")), required=True,
+        failure_key="junction_mask_download_failed"),
     Job((artifact("bridge_mask_validated", "bridge_mask.png", key="bridge_mask"),
-         artifact("bridge_mask", "bridge_mask.png")), swallow=(APIError,)),
+         artifact("bridge_mask", "bridge_mask.png")), swallow=(APIError,),
+        failure_key="bridge_mask_download_failed"),
     Job((artifact("skeleton_final", "skeleton.png", key="skeleton"),
-         artifact("skeleton", "skeleton.png")), swallow=(APIError,)),
+         artifact("skeleton", "skeleton.png")), swallow=(APIError,),
+        silent_ok="скелет обратно на сервер вкладка не пишет: он подложка "
+                  "для глаза оператора, а не его работа"),
     one(artifact("coco_validated", "coco_validated.json"),
-        swallow=(APIError,)),
+        swallow=(APIError,),
+        silent_ok="COCO обратно на сервер эта вкладка не пишет (пишет вкладка "
+                  "труб): потеря стоит рамок узлов на подложке"),
     Job((artifact("junction_points_validated", "points.json", key="points"),
          artifact("junction_points", "points.json", key="points")),
-        swallow=(APIError,)),
+        swallow=(APIError,), failure_key="points_download_failed"),
 )
 
 
-class JunctionTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
+class JunctionTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
+                  AppearanceMixin, QWidget):
     """Вкладка валидации junction/bridge масок."""
 
     confirmed = Signal()          # Подтверждено
     status_message = Signal(str)  # Сообщение для статусбара
+
+    #: чем грозит запись в артефакт, чью серверную копию не прочитали
+    _BLIND_WRITE_WARNING = {
+        "junction_mask_validated":
+            "Сохранённую маску перекрёстков скачать не удалось — открыта "
+            "ИСХОДНАЯ, без ваших правок.\n\n"
+            "Сохранение затрёт на сервере маску, в которой могла остаться "
+            "ваша прежняя работа.",
+        "bridge_mask_validated":
+            "Сохранённую маску мостов скачать не удалось — открыта ИСХОДНАЯ "
+            "или пустая.\n\n"
+            "Сохранение затрёт на сервере маску, в которой могли остаться "
+            "ваши мосты.",
+        "junction_points_validated":
+            "Сохранённые центры перекрёстков и мостов прочитать не удалось — "
+            "они доопределены машинно.\n\n"
+            "Сохранение затрёт на сервере применённый вами размер квадратов, "
+            "и ужатые квадраты экстрактор больше не разберёт.",
+    }
+
+    #: что вкладка считает «серверную копию прочитать не удалось».
+    #: Ключи — `Job.failure_key` из `_ARTIFACTS`; ключ центров приходит ещё
+    #: и от разбора скачанного файла (`_load_points`).
+    _UNREADABLE_FLAGS = (
+        ("junction_mask_download_failed", "junction_mask_validated",
+         "Сохранённая маска перекрёстков не загружена",
+         "Не удалось скачать сохранённую маску перекрёстков — открыта "
+         "ИСХОДНАЯ, без ваших правок.\n\n"
+         "Сохранение из этой вкладки затрёт её на сервере. Закройте вкладку "
+         "и откройте её заново, когда связь восстановится."),
+        ("bridge_mask_download_failed", "bridge_mask_validated",
+         "Сохранённая маска мостов не загружена",
+         "Не удалось скачать сохранённую маску мостов — открыта ИСХОДНАЯ "
+         "или пустая.\n\n"
+         "Сохранение из этой вкладки затрёт её на сервере. Закройте вкладку "
+         "и откройте её заново, когда связь восстановится."),
+        ("points_download_failed", "junction_points_validated",
+         "Сохранённые центры не загружены",
+         "Не удалось прочитать сохранённые центры перекрёстков и мостов — "
+         "они доопределены машинно.\n\n"
+         "Сохранение из этой вкладки затрёт применённый вами размер квадратов. "
+         "Закройте вкладку и откройте её заново, когда связь восстановится."),
+    )
+
+    #: артефакты, в которые пишет `_save_masks`
+    _BLIND_WRITE_ARTIFACTS = ("junction_mask_validated",
+                              "bridge_mask_validated",
+                              "junction_points_validated")
 
     def __init__(
         self,
@@ -84,6 +140,9 @@ class JunctionTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
         self._saved = False
         self._confirmed = False
         self._undo_baseline = 0
+        # Артефакты, чью серверную копию прочитать не удалось: запись в них
+        # заперта до явного «да» оператора (пункт 1-41, механизм 1.x9).
+        self._init_blind_overwrite()
 
         self._setup_ui()
         self._download_artifacts()
@@ -272,6 +331,14 @@ class JunctionTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
         self._download_thread.wait()
         self.loading_label.hide()
 
+        # Не-404 при загрузке = сохранённая работа МОГЛА лежать на сервере и
+        # просто не отдаться, а вкладка собрана вслепую: маски и центры уходят
+        # обратно `_save_masks` БЕЗУСЛОВНО. До пункта 1-41 задания вкладки
+        # `failure_key` не несли вовсе — 5xx и 404 были неразличимы, и первое
+        # же сохранение затирало работу оператора (замер 1.x12: 1200 белых
+        # пикселей мостов → 0; размер квадратов 20 → машинные 15).
+        self._note_unreadable(artifacts)
+
         try:
             from ui.editors.square_mask_editor import SquareMaskEditor
 
@@ -326,7 +393,16 @@ class JunctionTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
             self._editor.undo()
 
     def _load_points(self, path) -> None:
-        """Центры квадратов: файл → редактор; без файла — доопределить из масок."""
+        """Центры квадратов: файл → редактор; без файла — доопределить из масок.
+
+        ⛔ «Файл лёг, но не читается» — отказ того же смысла, что 5xx, и до
+        пункта 1-41 он проходил мимо всей семьи: она закрывала отказы сети,
+        диска и сервера, а порчу СОДЕРЖИМОГО скачанного — нет. Цена та же,
+        что у потерянных центров (замер 1.x12): `ensure_points` доопределяет
+        их машинным дефолтом, а `_upload_points` отправляет обратно, подменяя
+        применённый оператором размер. Поэтому нечитаемый файл поднимает тот
+        же флаг, что и неотдавшийся: запись ждёт явного «да».
+        """
         import json
 
         if self._editor is None:
@@ -337,6 +413,7 @@ class JunctionTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
                     self._editor.load_points(json.load(f))
             except (OSError, ValueError) as exc:
                 logger.warning("points.json не прочитан (%s) — центры из масок", exc)
+                self._note_unreadable({"points_download_failed": True})
         self._editor.ensure_points()
         # Спинбокс показывает последний применённый размер (из points-файла).
         sizes = getattr(self._editor, "_applied_size", {})
@@ -382,6 +459,13 @@ class JunctionTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
     def _save_masks(self) -> bool:
         """Сохранить маски на сервер. Возвращает True при успехе."""
         if not self._editor:
+            return False
+
+        # Артефакт, чью серверную копию прочитать не удалось, пишется только
+        # с явного «да» оператора (пункт 1-41, механизм 1.x9). Запрет
+        # адресный: спрашивается ровно про то, что пишет этот метод.
+        if not self._confirm_blind_overwrite(*self._BLIND_WRITE_ARTIFACTS):
+            self.status_label.setText("Сохранение отменено")
             return False
 
         try:
