@@ -472,12 +472,20 @@ def test_contour_tick_never_opens_the_contours_modal(
 
 def test_contour_manual_save_still_opens_the_contours_modal(
         contour_tab, contours_refused, dialogs):
-    """Обратная граница той же двери."""
+    """Обратная граница той же двери.
+
+    ⛔ Возврат стал `False` (пункт 1-41): половина записи — не сохранение,
+    и дёрти-флаг обязан остаться поднятым, иначе вкладка закроется без
+    вопроса и подтверждения контуров исчезнут. Заголовок модалки при этом
+    называет ПОТЕРЯННУЮ половину, а не «Ошибка» вообще.
+    """
     tab, _api = contour_tab
 
-    assert tab._save_graph() is True
+    assert tab._save_graph() is False
+    assert tab.has_unsaved_changes() is True, (
+        "дёрти-флаг погашен графовой половиной — уход будет молчаливым")
 
-    assert _titles(dialogs) == ["Ошибка"], (
+    assert _titles(dialogs) == ["Контуры не сохранены"], (
         f"ручное сохранение промолчало о потере контуров: {dialogs}")
 
 

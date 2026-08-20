@@ -187,15 +187,24 @@ def test_a_new_ability_of_the_door_is_seen_by_every_writing_tab(monkeypatch):
     """
     from ui.tabs.blind_overwrite import BlindOverwriteGuard
 
-    seen = []
+    def _new_ability(self, *artifacts):
+        return "новое умение двери"
+
     monkeypatch.setattr(BlindOverwriteGuard, "_confirm_blind_overwrite",
-                        lambda self, *a: seen.append(type(self).__name__) or True)
+                        _new_ability)
+    monkeypatch.setattr(BlindOverwriteGuard, "_ability_added_by_this_test",
+                        _new_ability, raising=False)
 
-    for name, cls in _tab_classes().items():
-        assert cls._confirm_blind_overwrite(object.__new__(cls)) is True
+    blind = {name: cls._confirm_blind_overwrite
+             for name, cls in _tab_classes().items()}
+    fresh = {name: getattr(cls, "_ability_added_by_this_test", None)
+             for name, cls in _tab_classes().items()}
 
-    assert sorted(seen) == sorted(_tab_classes()), (
-        f"умение двери увидели не все вкладки: {seen}")
+    assert set(blind.values()) == {_new_ability}, (
+        f"правка ОДНОЙ двери дошла не до всех вкладок: "
+        f"{ {n: d for n, d in blind.items() if d is not _new_ability} }")
+    assert set(fresh.values()) == {_new_ability}, (
+        f"новое умение двери увидели не все вкладки: {fresh}")
 
 
 def test_every_writing_tab_keeps_the_registry_of_unreadable_artifacts():

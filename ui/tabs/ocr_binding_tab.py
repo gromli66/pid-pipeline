@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, Slot, Qt, QThread, QTimer
 from PySide6.QtGui import QColor
+from ui.tabs.blind_overwrite import BlindOverwriteGuard
 from ui.tabs.save_mode import NonInteractiveSaveMixin
 from ui.widgets.appearance_panel import AppearanceMixin
 
@@ -89,12 +90,15 @@ _ARTIFACTS = (
         required=True, failure_key="saved_graph_download_failed"),
     Job((artifact("coco_validated", "coco_validated.json", key="coco"),
          artifact("coco_predicted", "coco_predicted.json", key="coco")),
-        swallow=(APIError,)),
+        swallow=(APIError,),
+        silent_ok="COCO обратно на сервер эта вкладка не пишет: подмена "
+                  "validated на predicted стоит оператору только рамок узлов "
+                  "на подложке, а не его работы"),
     one(endpoint("download_ocr_binding", "ocr_binding.json", "binding"),
         swallow=(APIError,), failure_key="binding_download_failed"),
     one(endpoint("download_ocr_validation", "ocr_validation.json",
                  "ocr_validation"),
-        swallow=(APIError,)),
+        swallow=(APIError,), failure_key="ocr_validation_download_failed"),
 )
 
 
@@ -179,7 +183,8 @@ class _SubTabToolbar(QWidget):
 # Main OcrBindingTab
 # =====================================================================
 
-class OcrBindingTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
+class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
+                    AppearanceMixin, QWidget):
     """
     Вкладка привязки OCR текста к узлам графа.
 
@@ -234,7 +239,7 @@ class OcrBindingTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
 
         #: артефакты, чью серверную копию прочитать не удалось: запись в них
         #: заперта до явного «да» оператора (пункт 1.x14, механизм 1.x9)
-        self._unreadable_on_server: set[str] = set()
+        self._init_blind_overwrite()
 
         # Confirmation flags per sub-tab
         self._kks_confirmed = False
@@ -681,39 +686,9 @@ class OcrBindingTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
         # в такой артефакт запирается до явного «да» (пункт 1.x14): у графовых
         # вкладок это сделал 1.x9, а сюда запрет не доехал — эта вкладка
         # не наследует `BaseGraphTab`, и предупреждения ниже записи не мешали.
-        for flag, name in (("saved_graph_download_failed", "graph_validated"),
-                           ("binding_download_failed", "ocr_binding")):
-            if artifacts.get(flag):
-                self._unreadable_on_server.add(name)
-
-        if artifacts.get("saved_graph_download_failed"):
-            # Сохранённый граф МОГ лежать на сервере и просто не отдался (5xx,
-            # сеть, диск): открыт исходный, а `_save_binding` пишет обратно
-            # в graph_validated — прежняя работа была бы затёрта молча.
-            logger.warning("graph_validated не скачался — открыт исходный граф")
-            QMessageBox.warning(
-                self, "Сохранённый граф не загружен",
-                "Не удалось скачать сохранённый граф — открыт ИСХОДНЫЙ, "
-                "без ваших прежних правок.\n\n"
-                "Сохранение из этой вкладки затрёт сохранённый граф на "
-                "сервере. Закройте вкладку и откройте её заново, когда связь "
-                "восстановится.",
-            )
-
-        if artifacts.get("binding_download_failed"):
-            # Привязки МОГЛИ лежать на сервере и просто не отдаться (5xx, сеть):
-            # вкладка открыта пустой, а `_save_binding` пишет их обратно
-            # безусловно — прежняя работа была бы затёрта молча.
-            logger.warning("ocr_binding не скачался — вкладка открыта "
-                           "без сохранённых привязок")
-            QMessageBox.warning(
-                self, "Сохранённые привязки не загружены",
-                "Не удалось скачать сохранённые привязки — вкладка открыта "
-                "БЕЗ них.\n\n"
-                "Сохранение из этой вкладки затрёт привязки на сервере. "
-                "Закройте вкладку и откройте её заново, когда связь "
-                "восстановится.",
-            )
+        # ⛔ Третий записываемый артефакт (`ocr_validation`) добавлен 1-41:
+        # популяция закрывалась по ДВУМ, а `_save_binding` пишет ТРИ.
+        self._note_unreadable(artifacts)
 
         try:
             # Загрузить OCR данные
@@ -821,7 +796,15 @@ class OcrBindingTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
                         self._classifications.append(cl)
                     logger.info("Loaded %d previous classifications", len(self._classifications))
                 except Exception as exc:
+                    # «Файл лёг, но не читается» — отказ того же смысла, что
+                    # 5xx: серверная копия НЕИЗВЕСТНА, а `_save_binding` пишет
+                    # `ocr_validation` обратно. До пункта 1-41 этот класс шёл
+                    # мимо всех слоёв семьи: она закрывала сеть, диск и сервер,
+                    # а порчу СОДЕРЖИМОГО скачанного — нет.
                     logger.warning("Failed to load ocr_validation: %s", exc)
+                    self._classifications = []
+                    self._note_unreadable(
+                        {"ocr_validation_download_failed": True})
 
             # П3: подтянуть контуры узлов (реальная форма после этапа контуров)
             node_contours = {}
@@ -1633,67 +1616,53 @@ class OcrBindingTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
             "прежних правок.\n\n"
             "Сохранение затрёт на сервере сохранённый граф, в котором могла "
             "остаться ваша прежняя валидация.",
+        "ocr_validation":
+            "Сохранённые подтверждения блоков прочитать не удалось — вкладка "
+            "открыта БЕЗ них.\n\n"
+            "Сохранение затрёт на сервере подтверждения, сделанные вами "
+            "в прошлый заход.",
     }
 
-    def _confirm_blind_overwrite(self) -> bool:
-        """Разрешена ли запись в артефакты, чьё состояние на сервере неизвестно.
+    #: артефакты, в которые пишет `_save_binding`; вопрос задаётся сразу за все
+    #: — частичная запись оставила бы вкладку «сохранённой» при непрошедшей
+    #: половине. Третий, `ocr_validation`, добавлен пунктом 1-41: множество
+    #: ЗАПИСЫВАЕМЫХ вкладкой артефактов шире двух, которые закрыл 1.x14.
+    _BLIND_WRITE_ARTIFACTS = ("ocr_binding", "graph_validated", "ocr_validation")
 
-        Зеркало `BaseGraphTab._confirm_blind_overwrite` (пункт 1.x9), которого
-        этой вкладке не досталось: она не наследует `BaseGraphTab`, а
-        предупреждения 1.23/1.x12 записи не мешали — оператор ВИДЕЛ, что открыл
-        не свою работу, и первый же save её молча затирал.
+    #: что вкладка считает «серверную копию прочитать не удалось» (см. §5.7
+    #: `UI_GUIDE`). Ключи — `Job.failure_key` из `_ARTIFACTS`.
+    _UNREADABLE_FLAGS = (
+        ("saved_graph_download_failed", "graph_validated",
+         "Сохранённый граф не загружен",
+         "Не удалось скачать сохранённый граф — открыт ИСХОДНЫЙ, "
+         "без ваших прежних правок.\n\n"
+         "Сохранение из этой вкладки затрёт сохранённый граф на сервере. "
+         "Закройте вкладку и откройте её заново, когда связь восстановится."),
+        ("binding_download_failed", "ocr_binding",
+         "Сохранённые привязки не загружены",
+         "Не удалось скачать сохранённые привязки — вкладка открыта БЕЗ "
+         "них.\n\n"
+         "Сохранение из этой вкладки затрёт привязки на сервере. Закройте "
+         "вкладку и откройте её заново, когда связь восстановится."),
+        ("ocr_validation_download_failed", "ocr_validation",
+         "Сохранённые подтверждения не загружены",
+         "Не удалось прочитать сохранённые подтверждения блоков — вкладка "
+         "открыта БЕЗ них.\n\n"
+         "Сохранение из этой вкладки затрёт их на сервере. Закройте вкладку "
+         "и откройте её заново, когда связь восстановится."),
+    )
 
-        Спрашивается сразу за оба артефакта, потому что `_save_binding` пишет
-        ОБА: привязки (`save_ocr_binding`) и граф (`upload_validated_graph`).
-        Отказ по любому отменяет сохранение целиком — частичная запись оставила
-        бы вкладку в состоянии «сохранено» при непрошедшей половине.
-
-        Сюда сходятся все три боевых входа на запись: кнопка 💾, «Подтвердить»
-        и автосохранение (`_SAVE_METHODS["OcrBindingTab"] = "_save_binding"`,
-        раз в 120 с, включено по умолчанию).
-
-        «Да» снимает запрет насовсем: решение принял оператор. «Нет» его
-        оставляет, и вопрос вернётся при следующей попытке записи.
-
-        ⛔ Сохранение ПО ТАЙМЕРУ вопроса не задаёт (пункт 1-38): «Да» вслепую
-        снял бы запрет насовсем, то есть автосохранение отменило бы защиту
-        без оператора. Тик отказывается и говорит об этом строкой; запрет
-        при этом остаётся взведённым, и ручной заход спросит снова.
-        """
-        allowed = []
-        for artifact in ("ocr_binding", "graph_validated"):
-            if artifact not in self._unreadable_on_server:
-                continue
-            if not self._save_interactive:
-                self._refuse_save("⚠️ Автосохранение отменено: серверная копия "
-                                  "не прочитана — сохраните вручную")
-                return False
-            reply = QMessageBox.question(
-                self, "Сохранение затрёт серверную копию",
-                f"{self._BLIND_WRITE_WARNING[artifact]}\n\nСохранить всё равно?",
-                QMessageBox.StandardButton.Yes
-                | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Cancel,
-            )
-            if reply != QMessageBox.StandardButton.Yes:
-                logger.warning("запись в %s отменена оператором: серверная "
-                               "копия не прочитана", artifact)
-                return False
-            allowed.append(artifact)
-
-        # Запрет снимается только когда разрешены ВСЕ: «да» за первый артефакт
-        # при «нет» за второй ничего не записало, и молча пускать по нему
-        # следующий тик автосохранения было бы разрешением, которого оператор
-        # не давал.
-        for artifact in allowed:
-            logger.warning("оператор разрешил перезапись %s поверх "
-                           "непрочитанной серверной копии", artifact)
-            self._unreadable_on_server.discard(artifact)
-        return True
+    # `_confirm_blind_overwrite` — общая дверь `BlindOverwriteGuard`
+    # (`ui/tabs/blind_overwrite.py`, пункт 1-41). До него дверь была
+    # реализована здесь вторично: эта вкладка не наследует `BaseGraphTab`,
+    # и запрет 1.x9 пришлось повторять — готовое расхождение того класса,
+    # что 1-18 нашёл у дверей вопроса о несохранённом (4 клетки из 4).
+    # Сюда сходятся все три боевых входа на запись: кнопка 💾, «Подтвердить»
+    # и автосохранение (`_SAVE_METHODS["OcrBindingTab"] = "_save_binding"`).
 
     def _save_binding(self) -> bool:
         """Сохранить привязки и обновлённые OCR-блоки на сервер."""
-        if not self._confirm_blind_overwrite():
+        if not self._confirm_blind_overwrite(*self._BLIND_WRITE_ARTIFACTS):
             self.status_label.setText("Сохранение отменено")
             return False
 

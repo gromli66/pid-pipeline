@@ -19,6 +19,7 @@ from ui.services.api_client import APIClient, APIError
 from ui.services.artifact_downloader import (
     ArtifactDownloader, Job, artifact, one,
 )
+from ui.tabs.blind_overwrite import BlindOverwriteGuard
 from ui.tabs.save_mode import NonInteractiveSaveMixin
 from ui.widgets.appearance_panel import AppearanceMixin
 from ui.widgets.toolbar_buttons import (
@@ -45,18 +46,49 @@ logger = logging.getLogger(__name__)
 _ARTIFACTS = (
     one(artifact("original_image", "original.png"), required=True),
     Job((artifact("pipe_mask_validated", "mask.png"),
-         artifact("skeleton_mask", "mask.png")), required=True),
+         artifact("skeleton_mask", "mask.png")), required=True,
+        failure_key="pipe_mask_download_failed"),
     one(artifact("coco_validated", "coco_validated.json"),
-        swallow=(APIError,)),
-    one(artifact("pipe_mask", "pipe_mask.png"), swallow=(APIError,)),
+        swallow=(APIError,),
+        silent_ok="запись COCO ГЕЙТИРОВАНА чтением: `upload_updated_nodes` "
+                  "идёт только при `has_coco_changes`, а `save_coco` без "
+                  "прочитанного `coco_full_data` отдаёт False — слепой "
+                  "перезаписи здесь быть не может"),
+    one(artifact("pipe_mask", "pipe_mask.png"), swallow=(APIError,),
+        silent_ok="маска сегментации обратно на сервер не уходит: по ней "
+                  "считается стартовая ширина кисти, и только"),
 )
 
 
-class PipeTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
+class PipeTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
+              AppearanceMixin, QWidget):
     """Вкладка валидации pipe маски."""
 
     confirmed = Signal()          # Подтверждено
     status_message = Signal(str)  # Сообщение для статусбара
+
+    #: чем грозит запись в артефакт, чью серверную копию не прочитали
+    _BLIND_WRITE_WARNING = {
+        "pipe_mask_validated":
+            "Сохранённую маску труб скачать не удалось — открыт ИСХОДНЫЙ "
+            "скелет сборщика, без ваших правок.\n\n"
+            "Сохранение затрёт на сервере маску, в которой могла остаться "
+            "ваша прежняя работа.",
+    }
+
+    #: что вкладка считает «серверную копию прочитать не удалось»
+    _UNREADABLE_FLAGS = (
+        ("pipe_mask_download_failed", "pipe_mask_validated",
+         "Сохранённая маска труб не загружена",
+         "Не удалось скачать сохранённую маску труб — открыт ИСХОДНЫЙ скелет "
+         "сборщика, без ваших правок.\n\n"
+         "Сохранение из этой вкладки затрёт её на сервере. Закройте вкладку "
+         "и откройте её заново, когда связь восстановится."),
+    )
+
+    #: артефакт, в который пишет `_save_mask`. COCO сюда не входит осознанно:
+    #: его запись гейтирована чтением (см. `silent_ok` у задания).
+    _BLIND_WRITE_ARTIFACTS = ("pipe_mask_validated",)
 
     def __init__(
         self,
@@ -79,6 +111,9 @@ class PipeTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
         self._confirmed = False
         self._undo_baseline = 0
         self._project_code: Optional[str] = None
+        # Артефакты, чью серверную копию прочитать не удалось: запись в них
+        # заперта до явного «да» оператора (пункт 1-41, механизм 1.x9).
+        self._init_blind_overwrite()
 
         self._setup_ui()
         self._download_artifacts()
@@ -273,6 +308,12 @@ class PipeTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
         self._download_thread.wait()
         self.loading_label.hide()
 
+        # Не-404 у сохранённой маски = она МОГЛА лежать на сервере и просто
+        # не отдаться, а вкладка взяла фолбэк — сырой скелет сборщика, который
+        # `_save_mask` пишет обратно в `pipe_mask_validated`. До пункта 1-41
+        # цепочка `failure_key` не несла: 5xx и 404 были неразличимы.
+        self._note_unreadable(artifacts)
+
         try:
             from ui.editors.polyline_mask_editor import PolylineMaskEditor
 
@@ -420,6 +461,12 @@ class PipeTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
     def _save_mask(self) -> bool:
         """Сохранить маску + обновлённый COCO на сервер. Возвращает True при успехе."""
         if not self._editor:
+            return False
+
+        # Артефакт, чью серверную копию прочитать не удалось, пишется только
+        # с явного «да» оператора (пункт 1-41, механизм 1.x9).
+        if not self._confirm_blind_overwrite(*self._BLIND_WRITE_ARTIFACTS):
+            self.status_label.setText("Сохранение отменено")
             return False
 
         try:
