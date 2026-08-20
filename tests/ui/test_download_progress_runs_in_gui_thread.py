@@ -104,13 +104,20 @@ def tab_bench(qapp, blobs, monkeypatch):
         api.release()
         if hasattr(tab, "cleanup"):
             tab.cleanup()
-        thread = getattr(tab, "_download_thread", None)
-        if thread is not None:
-            _pump(lambda: not thread.isRunning())
+        # ⛔ Поток перечитывается КАЖДЫЙ РАЗ: вкладка привязки OCR на отказе
+        # заводит НОВЫЙ загрузчик через `QTimer.singleShot(5000, ...)`, и
+        # ссылка, взятая один раз, дождалась бы не того. Бегущий `QThread`
+        # на выходе процесса — abort, уносящий весь прогон (§102).
+        _pump(lambda: not _running(tab))
         tab.hide()
         tab.setParent(None)
         tab.deleteLater()
     QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+def _running(tab) -> bool:
+    thread = getattr(tab, "_download_thread", None)
+    return thread is not None and thread.isRunning()
 
 
 def _pump(done, seconds=PUMP_S):

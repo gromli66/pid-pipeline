@@ -81,6 +81,23 @@ SQ = 20
 #: в исправном дереве поток кончается сразу, в дефектном — не кончается вовсе.
 JOIN_MS = 5000
 HOLD_S = 30
+#: Потолок ожидания в teardown — щедрый: там уже ничего не утверждается,
+#: там платят за то, чтобы процесс дожил до выхода целым.
+TEARDOWN_MS = 20000
+
+#: ⛔ ВСЕ потоки, поднятые за тест. Набор обязан дождаться КАЖДОГО, а не только
+#: тех, о которых утверждает: процесс, доживший до выхода с бегущим `QThread`,
+#: падает abort-ом (`0xC0000409`) и уносит ВЕСЬ прогон — на чужой машине это
+#: читается как «инфраструктура моргнула», а не как красный тест. Замерено
+#: этой же сессией: первая сборка ветки на раннере CI упала ровно так (§102).
+_STARTED: list = []
+
+
+def _track(thread):
+    """Записать поток в реестр teardown и вернуть его же."""
+    if thread is not None and all(thread is not t for t in _STARTED):
+        _STARTED.append(thread)
+    return thread
 
 
 # ── подставной сервер, который умеет ДЕРЖАТЬ загрузку ────────────────────
@@ -341,6 +358,7 @@ def bench(qapp, monkeypatch, blobs):
     FakeMsgBox.answer = QMessageBox.StandardButton.No
     monkeypatch.setattr(dw, "QMessageBox", FakeMsgBox)
 
+    _STARTED.clear()
     made = []
 
     def _make(status, hold=True):
@@ -357,11 +375,22 @@ def bench(qapp, monkeypatch, blobs):
     # в `download_artifact` и утащил бы за собой весь прогон.
     for ws, api in made:
         api.release()
+        api.release_recognition()
+        api.release_extraction()
         ws.cleanup()
         ws.hide()
         ws.setParent(None)
         ws.deleteLater()
     QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    # ⛔ И только теперь — дождаться КАЖДОГО поднятого потока. Утверждений
+    # здесь нет: тесты своё уже сказали, это плата за то, чтобы процесс дожил
+    # до выхода целым (см. `_STARTED`).
+    for thread in _STARTED:
+        stop = getattr(thread, "stop", None)
+        if callable(stop):
+            stop()
+        _join(thread, TEARDOWN_MS)
+    _STARTED.clear()
 
 
 # ── жесты оператора ──────────────────────────────────────────────────────
@@ -370,6 +399,7 @@ def _open(ws, key):
     """Открыть этап тем же вызовом, что зарегистрирован за его кнопкой."""
     ws._original_handlers[key]()
     assert ws._active_tab is not None, f"вкладка «{key}» не открылась"
+    _track(getattr(ws._active_tab, "_download_thread", None))
     return ws._active_tab
 
 
@@ -501,7 +531,7 @@ def test_closing_tab_during_recognition_stops_its_thread(bench):
     tab._editor.get_pending_ocr_boxes = lambda: ([1], [[10, 10, 60, 30]])
     tab.btn_recognize.click()
 
-    thread = tab._recog_thread
+    thread = _track(tab._recog_thread)
     assert thread is not None, "жест «Распознать» не поднял поток"
     assert api.wait_until_recognizing(), "поток не дошёл до распознавания"
 
@@ -541,7 +571,7 @@ def test_closing_tab_during_contour_recognition_stops_its_thread(bench,
     tab.btn_recog_all.click()
     FakeMsgBox.answer = QMessageBox.StandardButton.No    # дальше — как обычно
 
-    worker = tab._recog_worker
+    worker = _track(tab._recog_worker)
     assert worker is not None, "жест «Распознать все» не поднял поток"
     assert api.wait_until_extracting(), "поток не дошёл до сервера"
 
