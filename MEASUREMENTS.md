@@ -7137,3 +7137,190 @@ Current thread 0x000025f8 (most recent call first):
    `pytest --collect-only` его не собирает (имя вне `testpaths`), но в сборку клиента
    PyInstaller он поедет. Не трогал.
 3. ⚠ **Эталон `lint_gate` по-прежнему протух в ту же сторону, что и в §95л.4** — см. 102м.
+
+## 112. Пункт 1-41 дороги (1.x16) — пятое поколение семьи `swallow`/`failure_key`: перечень заменён сторожем (2026-08-20)
+
+Ветка `road/1.x16`, коммиты `7c8b46b` (сценарии до правки) + `70a4c4f` (правка).
+
+### 112а. ПЕРВАЯ РАБОТА — ЧИСЛО. Свип по ВСЕМ `Job` и ВСЕМ путям записи
+
+Команды, которыми снят список (область: `ui/`, без `_scratch/`, `__pycache__`):
+
+```bash
+# все задания загрузчика
+grep -rn --include=*.py -E "\b(Job|one)\(" ui/ app/ worker/ modules/
+# инвентарь методов APIClient и все вызовы пишущих
+grep -n -E "^\s{4}def [a-z_]+\(" ui/services/api_client.py
+grep -rn --include=*.py -E "\.(upload_diagram|save_cleaned_image|upload_validated_mask|upload_updated_nodes|upload_validated_graph|upload_canvas_graph|upload_ocr_result|save_ocr_binding|save_ocr_validation|upload_contours_validated|upload_contours_training|reupload_original)\(" ui/
+# все точки разбора скачанного
+grep -rn --include=*.py -E "json\.load\(|cv2\.imread\(|\.read_text\(|Image\.open\(" ui/
+```
+
+Популяция: **21 задание** в 4 вкладках (base_graph 5 при `want_canvas=True`, junction 6,
+ocr_binding 6, pipe 4) и **14 вызовов записи** в 6 файлах.
+
+Таблица «записываемый артефакт × кто пишет × как читается × `failure_key`» — 10 клеток
+(артефакт, который вкладка И читает заданием, И пишет обратно):
+
+| # | артефакт | пишет | читает | `failure_key` ДО правки |
+|---|---|---|---|---|
+| 1 | `graph_validated` | `base_graph_tab.py:1298` | `_graph_jobs` цепочка | ✔ `saved_graph_download_failed` |
+| 2 | `graph_canvas` | `base_graph_tab.py:1296` | `_graph_jobs` | ✔ `canvas_download_failed` |
+| 3 | `graph_validated` | `ocr_binding_tab.py:1831` | `_ARTIFACTS` цепочка | ✔ `saved_graph_download_failed` |
+| 4 | `ocr_binding` | `ocr_binding_tab.py:1745` | `_ARTIFACTS` | ✔ `binding_download_failed` |
+| 5 | `ocr_validation` | `ocr_binding_tab.py:1848` | `_ARTIFACTS:95` | ✖ |
+| 6 | `junction_mask_validated` | `junction_tab.py:395` | `_ARTIFACTS:46` цепочка | ✖ |
+| 7 | `bridge_mask_validated` | `junction_tab.py:400` | `_ARTIFACTS:49` цепочка | ✖ |
+| 8 | `junction_points_validated` | `junction_tab.py:461` | `_ARTIFACTS:55` цепочка | ✖ |
+| 9 | `pipe_mask_validated` | `pipe_tab.py:433` | `_ARTIFACTS:47` цепочка | ✖ |
+| 10 | `coco_validated` | `pipe_tab.py:442` | `_ARTIFACTS:49` | ✖ (но запись ГЕЙТИРОВАНА чтением, см. 112в) |
+
+⭐ **ОТВЕТ ЧИСЛОМ: остатков не 3 и не 4, а ШЕСТЬ** — записываемых артефактов, чьё чтение
+молчало (строки 5–10). Строка QUEUE называла их ДВУМЯ пунктами: «третий артефакт
+`ocr_validation`» = клетка 5, «молчащий 5xx у вкладок масок» = клетки 6–10, то есть ПЯТЬ
+заданий, а не одно. Плюс два адреса вне этой популяции (`contour_tab.py:428`,
+`_confirm_blind_overwrite` в двух реализациях) и один недостижимый (112г).
+
+### 112б. Второе число: сколько мест глотают отказ ЧТЕНИЯ УЖЕ СКАЧАННОГО
+
+Популяция — 21 точка разбора из грепа выше, разобрана поштучно.
+**Молчат ОДИННАДЦАТЬ**; у остальных отказ виден оператору.
+
+| место | что разбирает | отказ виден? |
+|---|---|---|
+| `editors/graph_data.py:88-91` | COCO | ✖ `except Exception: pass` |
+| `editors/polyline_mask_editor.py:320-328` | COCO | ✖ `return False` игнорируется вызывающим |
+| `editors/square_mask_editor.py:313-321` | COCO | ✖ то же |
+| `tabs/base_graph_tab.py:117-122` | холст + источник (импорт текста) | ✖ строка в лог |
+| `tabs/base_graph_tab.py:420-424` | холст (посадка концов) | ✖ строка в лог |
+| `tabs/base_graph_tab.py:608-611` | холст (`has_layout`) | ✖ молча `False` |
+| `tabs/base_graph_tab.py:636-640` | холст + источник (`is_stale`) | ✖ молча «устарел» |
+| `tabs/base_graph_tab.py:664-667` | холст (контуры устарели) | ✖ то же |
+| **`tabs/junction_tab.py:333-339`** | `points.json` | ✖ ← адрес пункта |
+| **`tabs/ocr_binding_tab.py:791-824`** | `ocr_validation.json` | ✖ ← НАХОДКА, в строке не значилась |
+| `tabs/ocr_binding_tab.py:828-839` | `contours_validated.json` | ✖ строка в лог |
+| `editors/contour_editor.py:126-155` | `contours_auto.json` | ✔ строка статуса вкладки |
+| `editors/contour_editor.py:161-…` | `contours_validated.json` | — МЁРТВЫЙ КОД: `load_applied_state` не зовёт никто |
+| `tabs/ocr_binding_tab.py:718-788` (4 разбора) | ocr_result / граф / привязки / COCO | ✔ общий `except` → `QMessageBox.critical` |
+
+Из одиннадцати **ДВА сидят на записываемом артефакте вкладки** — они и закрыты пунктом
+(`points.json`, `ocr_validation.json`). Остальные девять либо про артефакты, которые вкладка
+обратно не пишет, либо про холст, где отказ разбора уже ведёт к консервативному решению
+(«устарел» → пересборка). Названы строкой, кода не трогал (`PROTOCOL §4`).
+
+### 112в. Замер, снявший клетку 10 с повестки
+
+`pipe_tab._save_mask` шлёт COCO только при `has_coco_changes`, а
+`PolylineMaskEditor.save_coco` (`:927`) без прочитанного `coco_full_data` отдаёт `False`;
+`coco_full_data` инициализируется `None` (`:220`) и обнуляется при неудачном разборе
+(`:328`). Значит **запись гейтирована чтением** — слепой перезаписи здесь быть не может.
+Поэтому у задания стоит `silent_ok`, а не `failure_key`; порог заперт сценарием
+`test_server_failure_on_pipe_coco_does_not_lock_the_write` (5xx COCO + правка оператора →
+`upload_updated_nodes` не зовётся).
+
+### 112г. Адрес №6 строки — В ДЕРЕВЕ ОТСУТСТВУЕТ
+
+`ocr_note` веера («OCR NOT started») не существует на этой ветке:
+
+```bash
+grep -rn --include=*.py "ocr_note" app/ worker/ ui/ modules/ tests/   # 0 попаданий
+git log --all --oneline -S "ocr_note" -- app/ worker/ ui/             # 6e852e9 (нога 1.16)
+git merge-base --is-ancestor road/1.16 dev                            # НЕТ, не влита
+git merge-base --is-ancestor road/1.15 dev                            # НЕТ, не влита
+```
+
+Поле введено коммитом `6e852e9` на ветке `road/1.16`, которая в `dev` не влита (строка 1-13
+QUEUE: «ноги 1.15 и 1.16 ЖДУТ РЕВИЗИИ СВЯЗКОЙ»). Клиентская половина проверена и подтверждена:
+`_on_junction_confirmed` (`diagram_workspace.py:2255-2262`) читает из ответа ТОЛЬКО `task_id`.
+То есть адрес не опровергнут — он **недостижим до мержа 1.15+1.16**, и правка по нему в этой
+ветке была бы правкой несуществующего контракта. Отдельным пунктом или довеском к приёмке связки.
+
+### 112д. Сверка остальных пяти адресов по коду (шаг 2, ДО первой строки правки)
+
+| адрес из строки | в дереве | вердикт |
+|---|---|---|
+| `contour_tab.py:415` | `:415` = `self._save_contours_validated()`, дефектная строка `:428` | ✔ адрес точный |
+| `junction_tab.py:323` | `_load_points` `:328`, глотание `:337-339` | ✔ дрейф +5 строк |
+| `ocr_validation` без `failure_key` | `ocr_binding_tab.py:95-97` | ✔ |
+| 5xx чтения у вкладок масок | 5 заданий (112а) | ✔ и мест ПЯТЬ, а не одно |
+| задвоенный `_confirm_blind_overwrite` | `base_graph_tab.py:1209` + `ocr_binding_tab.py:1638`; задвоены также `_BLIND_WRITE_WARNING` и `_unreadable_on_server` | ✔ |
+
+### 112е. Д1: 18 красных на нетронутом коде
+
+Коммит `7c8b46b` — тесты ДО правки. Красных **18**:
+6 в `test_mask_tabs_download_failure.py` · 2 в `test_binding_tab_download_failure.py` ·
+2 в `test_contour_partial_save.py` · 8 в `test_write_path_policy.py`.
+Контроли честности стенда (запись ДОХОДИТ и ВИДНА через РАЗНИЦУ, `PROTOCOL §3`) при этом
+были зелёными и до, и после — их и должно быть.
+
+⛔ **Адрес 1 воспроизведён, как требовала строка.** `ContourTab`: отказ
+`upload_contours_validated` → `_save_graph()` вернул **True**, `has_unsaved_changes()` →
+**False**, то есть `confirm_discard_active_tab` (`diagram_workspace.py:1444`) вопроса
+не задал бы. Сценарий с предысторией (успешное сохранение, потом отказ) краснел так же.
+
+### 112ж. Зонды — пять, каждый красит СВОЁ и только своё
+
+Дерево восстанавливалось **копией файла**, не `git checkout` (`PROTOCOL §5`).
+
+| зонд | что сломано | покраснело |
+|---|---|---|
+| 1 | `failure_key` мостов подменён ложным `silent_ok` | 2 в `test_mask_tabs_download_failure` |
+| 2 | `contour_tab`: `return True` + флаг не восстанавливается | 2 в `test_contour_partial_save` + 1 в `test_autosave_non_interactive` |
+| 3 | вторая копия двери возвращена в `BaseGraphTab` | 2 в `test_write_path_policy` (тождество + «новое умение») |
+| 4 | разбор скачанного снова молчит (обе вкладки) | 2: `test_unreadable_points_file…` + `test_unreadable_validation_file…` |
+| 5 | сам сторож обезврежен (`if False`) | 1: `test_a_silent_job_cannot_be_built_without_a_declaration` |
+
+После восстановления — **179 passed** по семи затронутым файлам.
+
+### 112з. Чужие тесты, которые правка потребовала переписать (не «заодно», а следствие)
+
+Четыре красных в базовом гейте после правки — все тесты, запиравшие остаток КАК ФАКТ:
+
+* `test_artifact_downloader.py::test_masks_optional_server_failure_is_still_swallowed`
+  (2 параметра) — утверждал `not [k for k,v in artifacts.items() if v is True]` с текстом
+  «у вкладок масок `failure_key` не заводился — пункт его не ставил». Переписан на сверку
+  поднятых флагов с ОБЪЯВЛЕННЫМИ в заданиях;
+* `test_autosave_non_interactive.py::test_contour_manual_save_still_opens_the_contours_modal`
+  — ждал `_save_graph() is True` при непрошедших контурах;
+* `test_unsaved_question.py::test_pipe_save_opens_a_modal_when_the_operator_saves` — зовёт
+  `PipeTab._save_mask` на `SimpleNamespace`; стенду выдана НАСТОЯЩАЯ дверь через
+  `types.MethodType`, а не заглушка.
+
+### 112и. Гейты
+
+| гейт | результат |
+|---|---|
+| `python -X utf8 tools/suite_baseline.py --check` | **exit 0**, `[OK] новых красных нет`; собрано **2279** (было 2252), состав красных 13 failed + 9 errors — тот же |
+| `python -X utf8 tools/lint_gate.py --check` | **exit 0**, 172 нарушения при эталоне 174, mypy 0 ошибок |
+
+⚠ **«Долг оплачен» в отчёте линтера моей правкой НЕ вызван — измерено, а не заявлено.**
+`lint_gate` напечатал `ui/tabs/junction_tab.py: 2 -> 1` и `ui/tabs/advanced_graph_tab.py: 2 -> 1`.
+Второй файл в моём диффе отсутствует вовсе. Для первого снят прямой замер:
+
+```bash
+git show HEAD:ui/tabs/junction_tab.py > <копия>
+python -m ruff check --select BLE001,E722 --no-cache <копия>                  # Found 1 error
+python -m ruff check --select BLE001,E722 --no-cache ui/tabs/junction_tab.py  # Found 1 error
+```
+
+До правки 1, после правки 1 — эталон протух раньше, ровно как записано в §102м. Д6 не делал:
+рядом чужие сессии (`PROTOCOL Д6`).
+
+⚠ **Полный `tests/ui` в одиночку дал крах `access violation`** с кадром в
+`test_tab_close_stops_threads.py`; повторный прогон тех же файлов — 114 passed, базовый гейт
+целиком — exit 0. Своим я его не объявляю и чужим тоже: это популяция открытого пункта 1-46
+(«дерево как есть» даёт крах раз из четырёх, §102и), и доказательства «не моё» у меня нет.
+
+### 112к. Форма сторожа — почему это не перечень
+
+`Job.__post_init__` отвергает задание, способное смолчать об отказе и не объявившее политику.
+«Способно смолчать» = цепочка длиннее одного кандидата (берётся фолбэк) ИЛИ необязательное
+с непустым `swallow`. Обязательное из одного кандидата отказ поднимает наверх — от него
+объявления не требуется (порог заперт `test_a_job_that_cannot_be_silent_needs_no_declaration`).
+
+Перебор в `test_every_job_declares_its_read_policy` идёт СПИСКОМ, снятым `glob` по
+`ui/tabs/*.py`: у каждого модуля берутся кортежи заданий уровня модуля и функции-построители
+`*_jobs` со всеми сочетаниями булевых аргументов. Порог самого перебора заперт отдельно
+(`test_the_sweep_finds_every_tab_that_downloads_anything`: ≥20 заданий и все четыре вкладки),
+чтобы молчащий `glob` не читался как «чисто». Но лечение на этом переборе не держится:
+новое задание, добавленное завтра в любом модуле, не построится без объявления.
