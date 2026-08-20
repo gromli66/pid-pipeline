@@ -82,9 +82,13 @@ class AutoSaveService(QObject):
             return
 
         success = self._call_save(self._tab)
+        # Вкладка, у которой на время тика отняли право спрашивать, отвечает
+        # СТРОКОЙ (пункт 1-38). Её строка точнее общей и в успехе (граф
+        # записан, контуры — нет), и в отказе (запрет 1-33 вслепую не снимают).
+        refusal = getattr(self._tab, 'save_refusal', "")
         if success:
             ts = datetime.now().strftime("%H:%M:%S")
-            msg = f"💾 Автосохранено в {ts}"
+            msg = refusal or f"💾 Автосохранено в {ts}"
             logger.info("Autosave OK for %s", type(self._tab).__name__)
             # Обновить status_label на вкладке
             if hasattr(self._tab, 'status_label'):
@@ -94,7 +98,8 @@ class AutoSaveService(QObject):
         else:
             logger.warning("Autosave failed for %s", type(self._tab).__name__)
             if hasattr(self._tab, 'status_label'):
-                self._tab.status_label.setText("⚠️ Автосохранение не удалось")
+                self._tab.status_label.setText(
+                    refusal or "⚠️ Автосохранение не удалось")
 
     def _call_save(self, tab) -> bool:
         """Вызвать метод сохранения вкладки."""
@@ -102,7 +107,12 @@ class AutoSaveService(QObject):
         method_name = _SAVE_METHODS.get(class_name)
         if method_name and hasattr(tab, method_name):
             try:
-                result = getattr(tab, method_name)()
+                # Тик таймера — не жест оператора: диалоги на этом пути
+                # запрещены. Лечить их здесь нечем — они сидят у самих методов
+                # сохранения, поэтому сервис только отнимает у вкладки право
+                # спрашивать, а отказывается и объясняется она сама (1-38).
+                with tab.non_interactive_save():
+                    result = getattr(tab, method_name)()
                 return bool(result)
             except Exception as exc:
                 logger.warning("Autosave exception in %s.%s: %s",

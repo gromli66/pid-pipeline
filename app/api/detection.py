@@ -82,6 +82,11 @@ async def start_detection(
 
     # Обновляем статус ПЕРЕД запуском task (короткая транзакция)
     # ⚠️ НЕ оборачивать Celery send_task в ту же транзакцию!
+    # Состояние до перехода держим целиком: если отправка упадёт, вернуть надо
+    # всё, что переход записал, а не один статус — иначе диаграмма останется
+    # в ERROR с пустым error_stage, и клиент погасит ВСЕ кнопки
+    # (ui/widgets/diagram_workspace.py: _error_key).
+    previous_state = (diagram.status, diagram.error_stage, diagram.error_message)
     diagram.status = DiagramStatus.DETECTING
     diagram.error_message = None
     diagram.error_stage = None
@@ -89,14 +94,32 @@ async def start_detection(
     
     # Запускаем Celery task ВНЕ транзакции
     from worker.celery_app import celery_app
-    task = celery_app.send_task(
-        "worker.tasks.detection.task_detect_yolo",
-        args=[str(uid)],
-        kwargs={
-            "project_code": diagram.project_code or "thermohydraulics",
-            "model_id": model_id,
-        },
-    )
+    try:
+        task = celery_app.send_task(
+            "worker.tasks.detection.task_detect_yolo",
+            args=[str(uid)],
+            kwargs={
+                "project_code": diagram.project_code or "thermohydraulics",
+                "model_id": model_id,
+            },
+        )
+    except Exception as exc:
+        # Брокер недоступен — возвращаем состояние, каким оно было до вызова.
+        # Без этого диаграмма оставалась в DETECTING навсегда: задачи нет,
+        # значит некому ни упасть в error, ни дойти до конца, а кнопка
+        # «Поиск элементов» при *ING-статусе даже не нажимается.
+        # След — ДО коммита возврата: на бою БД падает вместе с брокером, и тогда
+        # исключение коммита унесло бы наружу единственную запись об отказе ОТПРАВКИ.
+        logger.exception(
+            "Отправка детекции не удалась (%s) — возвращаю состояние в '%s'",
+            exc, previous_state[0].value, extra={"event": "dispatch_failed"},
+        )
+        diagram.status, diagram.error_stage, diagram.error_message = previous_state
+        await db.commit()
+        raise HTTPException(
+            status_code=503,
+            detail=f"Worker unavailable: {exc}",
+        )
     
     return {
         "status": "detecting",
@@ -138,7 +161,10 @@ async def retry_detection(
     # Использовать предыдущую модель если model_id не указан
     effective_model_id = model_id or diagram.detection_model
     
-    # Сбрасываем ошибку
+    # Сбрасываем ошибку. Пред-вызовное состояние — на случай отказа отправки
+    # (тот же шов, что в /detect выше).
+    obs.bind(uid=str(uid), phase="detection")
+    previous_state = (diagram.status, diagram.error_stage, diagram.error_message)
     diagram.status = DiagramStatus.DETECTING
     diagram.error_message = None
     diagram.error_stage = None
@@ -146,14 +172,28 @@ async def retry_detection(
     
     # Запускаем Celery task
     from worker.celery_app import celery_app
-    task = celery_app.send_task(
-        "worker.tasks.detection.task_detect_yolo",
-        args=[str(uid)],
-        kwargs={
-            "project_code": diagram.project_code or "thermohydraulics",
-            "model_id": effective_model_id,
-        },
-    )
+    try:
+        task = celery_app.send_task(
+            "worker.tasks.detection.task_detect_yolo",
+            args=[str(uid)],
+            kwargs={
+                "project_code": diagram.project_code or "thermohydraulics",
+                "model_id": effective_model_id,
+            },
+        )
+    except Exception as exc:
+        # След — ДО коммита возврата: на бою БД падает вместе с брокером, и тогда
+        # исключение коммита унесло бы наружу единственную запись об отказе ОТПРАВКИ.
+        logger.exception(
+            "Отправка повтора детекции не удалась (%s) — возвращаю состояние в '%s'",
+            exc, previous_state[0].value, extra={"event": "dispatch_failed"},
+        )
+        diagram.status, diagram.error_stage, diagram.error_message = previous_state
+        await db.commit()
+        raise HTTPException(
+            status_code=503,
+            detail=f"Worker unavailable: {exc}",
+        )
     
     return {
         "status": "detecting",

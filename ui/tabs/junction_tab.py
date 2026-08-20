@@ -19,6 +19,7 @@ from ui.services.api_client import APIClient, APIError
 from ui.services.artifact_downloader import (
     ArtifactDownloader, Job, artifact, one,
 )
+from ui.tabs.save_mode import NonInteractiveSaveMixin
 from ui.widgets.appearance_panel import AppearanceMixin
 from ui.widgets.toolbar_buttons import (
     make_undo_button, make_save_button, make_confirm_button,
@@ -57,7 +58,7 @@ _ARTIFACTS = (
 )
 
 
-class JunctionTab(AppearanceMixin, QWidget):
+class JunctionTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
     """Вкладка валидации junction/bridge масок."""
 
     confirmed = Signal()          # Подтверждено
@@ -386,7 +387,14 @@ class JunctionTab(AppearanceMixin, QWidget):
                 self.uid, "bridge_mask_validated", bridge_path
             )
 
-            self._upload_points()
+            if not self._upload_points():
+                # Причину и цену оператор уже увидел. Маски на сервере
+                # остались — откатывать их нечем и незачем, но сохранённой
+                # вкладка НЕ считается: `_saved` не взводится, значит
+                # `has_unsaved_changes()` жив и при закрытии спросят.
+                self.status_label.setText(
+                    "Маски сохранены, центры перекрёстков и мостов — НЕТ")
+                return False
 
             self._saved = True
             self._undo_baseline = len(self._editor.undo_stack)
@@ -394,22 +402,40 @@ class JunctionTab(AppearanceMixin, QWidget):
             return True
 
         except Exception as exc:
-            QMessageBox.warning(
-                self, "Ошибка",
-                f"Не удалось сохранить junction маски:\n{exc}"
-            )
+            # По таймеру — строкой, а не модалкой посреди работы (1-38).
+            if self._save_interactive:
+                QMessageBox.warning(
+                    self, "Ошибка",
+                    f"Не удалось сохранить junction маски:\n{exc}"
+                )
+            else:
+                self._refuse_save(f"⚠️ Автосохранение не удалось: {exc}")
             return False
         finally:
             QApplication.restoreOverrideCursor()
 
-    def _upload_points(self):
-        """Отправить центры квадратов рядом с масками.
+    def _upload_points(self) -> bool:
+        """Отправить центры квадратов рядом с масками. True — центры на сервере.
 
         Без этого правленые центры умирают вместе с вкладкой: при переоткрытии
         доопределение пошло бы из устаревшего points.json, а экстрактор с
         дефолтным окном 15 не находит окна в квадратах, ужатых до <15 — фича
         ломала бы собственный фундамент.
-        Старый сервер типа не знает — не роняем сохранение масок из-за этого.
+
+        ⛔ Отказ ЗАПИСИ здесь больше не глотается (пункт 1.x14) — это зеркало
+        семьи 0.5 → 1.23 → 1.x10 → 1.x12 с другой стороны. Граница у ЧТЕНИЯ
+        проходит по `APIError` потому, что там он мог означать «артефакта
+        законно нет» (404); на ЗАПИСИ такого прочтения нет ни у одного класса
+        отказа — и старый сервер, не знающий типа, и 5xx, и обрыв сети, и
+        локальный диск означают ровно одно: работа оператора до сервера
+        не доехала. Замер §89б: до правки все четыре класса были неразличимы
+        и молчали, вкладка объявляла «сохранены» при 20 на сервере против
+        применённых оператором 24.
+
+        Сохранение масок при этом НЕ откатывается — они уже на сервере;
+        отказ называется отдельно, потому что общий обработчик `_save_masks`
+        сказал бы «не удалось сохранить junction маски», а это была бы
+        новая неправда: маски-то записаны.
         """
         import json
 
@@ -421,8 +447,25 @@ class JunctionTab(AppearanceMixin, QWidget):
             self.api_client.upload_validated_mask(
                 self.uid, "junction_points_validated", path
             )
-        except Exception as exc:
+            return True
+        except Exception as exc:  # noqa: BLE001 — класс отказа цены не меняет
             logger.warning("Центры не сохранены на сервер: %s", exc)
+            # По таймеру — строкой, а не модалкой посреди работы (1-38).
+            if self._save_interactive:
+                QMessageBox.warning(
+                    self, "Центры не сохранены",
+                    "Маски записаны, а центры перекрёстков и мостов — нет:\n"
+                    f"{exc}\n\n"
+                    "При следующем открытии вкладки применённый вами размер "
+                    "квадратов будет заменён машинным, и ужатые квадраты "
+                    "экстрактор не разберёт.\n\n"
+                    "Сохраните ещё раз, когда причина устранена."
+                )
+            else:
+                self._refuse_save(
+                    "⚠️ Автосохранение: маски записаны, центры перекрёстков "
+                    f"и мостов — НЕТ ({exc})")
+            return False
 
     @Slot()
     def _on_confirm(self):

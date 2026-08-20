@@ -17,9 +17,17 @@
 | A | `visibility_timeout` < длительности | доставок ≥ 2 | дубль воспроизводится — «как на бою сегодня» |
 | B | `visibility_timeout` > длительности | ровно 1 | порог заперт с двух сторон: стенд не красит всегда |
 | C | боевой `celery_app`, воркер не нужен | 7200 на КАНАЛЕ и > самого длинного `time_limit` | опция доезжает до kombu, а не лежит в конфиге |
+| D | боевой эндпоинт запуска против ЖИВОГО брокера и против МЁРТВОГО | живой: ровно 1 сообщение в очереди, статус `detecting`, 1 коммит; мёртвый: 503, состояние вернулось, в очереди пусто | пункт 1.13: «коммит статуса до `send_task`» — что отказ реален и что исправный путь не сломан |
 
 Нога C красная до правки (канал отдавал 3600) и зелёная после — это и есть зонд
-гейта. Ноги A и B — зонд друг другу.
+гейта. Ноги A и B — зонд друг другу; в ноге D зонд друг другу — её две стороны.
+
+Нога D не зависит от планировщика брокера (в отличие от A), поэтому судится и на
+Windows: отказ соединения детерминирован на любой ОС. Ей нужна среда, где
+импортируется `app.api` — а это НЕ контейнер воркера: `pid_worker` падает на
+`python-multipart` (зависимость API, в его образе её нет), а в `pid_api` нет
+каталога `tools/`. Оба случая нога отдаёт как «судить нечем», не как провал.
+Живой брокер при host-прогоне — тот же контейнерный Redis (порт 6380), своя база 15.
 
 Безопасность. Стенд ходит в **отдельную базу Redis 15** и свою очередь
 `probe_redelivery`; боевых очередей локального стека (`default`/`gpu`/`ocr`/
@@ -48,9 +56,10 @@ Redis нужен живой, поэтому в CI стенда нет — там
 `tests/test_worker/test_broker_visibility.py`, они в CI.
 
 Запуск (из корня репо, локальный стек поднят):
-    python -X utf8 tools/redelivery_bench.py --check      # A + B + C
+    python -X utf8 tools/redelivery_bench.py --check      # A + B + C + D
     python -X utf8 tools/redelivery_bench.py --leg A      # только воспроизведение дубля
     python -X utf8 tools/redelivery_bench.py --leg C      # только конфиг (брокер не нужен)
+    python -X utf8 tools/redelivery_bench.py --leg D      # только запуск этапа (пункт 1.13)
 
 ⛔ Воркер стенда руками не поднимают: приложение `app` строится только при
 запуске скриптом или при `PROBE_LOG` в окружении (его ставит `run_leg`) —
@@ -62,12 +71,14 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
 import uuid
 from pathlib import Path
+from typing import cast
 
 from celery import Celery
 
@@ -279,6 +290,151 @@ def run_leg(vt: int, sleep_s: int, expect_duplicate: bool, pool: str,
 
 
 # --------------------------------------------------------------------------- #
+# Нога D: запуск этапа против живого и против мёртвого брокера (пункт 1.13)
+# --------------------------------------------------------------------------- #
+
+DEAD_BROKER = "redis://127.0.0.1:6399/15"        # порт заведомо закрыт
+
+# Драйвер ноги D. Отдельным ПРОЦЕССОМ, потому что `worker.celery_app` читает
+# `CELERY_BROKER_URL` при импорте: подменить брокер у уже импортированного
+# приложения — значит судить не тот объект, который работает на бою.
+_DISPATCH_DRIVER = '''# -*- coding: utf-8 -*-
+"""Один запуск детекции настоящей корутиной эндпоинта (нога D стенда)."""
+import asyncio
+import json
+import os
+import sys
+import time
+import uuid
+
+sys.path.insert(0, os.environ["BENCH_REPO"])
+
+from worker.celery_app import celery_app
+
+url = str(celery_app.conf.broker_url)
+if not url.rstrip("/").endswith("/15"):
+    print(json.dumps({"error": "брокер не пинится на базу 15: " + url}))
+    raise SystemExit(3)
+
+from fastapi import HTTPException
+from app.api.detection import start_detection
+from app.models import Diagram, DiagramStatus
+
+UID = uuid.UUID(os.environ["BENCH_UID"])
+
+
+class _Result:
+    def __init__(self, obj):
+        self._obj = obj
+
+    def scalar_one_or_none(self):
+        return self._obj
+
+
+class FakeDB:
+    def __init__(self, diagram):
+        self.diagram = diagram
+        self.commits = 0
+
+    async def execute(self, stmt):
+        return _Result(self.diagram)
+
+    async def commit(self):
+        self.commits += 1
+
+
+diagram = Diagram()
+diagram.uid = UID
+diagram.status = DiagramStatus.FRAME_CLEANED
+diagram.error_stage = None
+diagram.error_message = None
+diagram.project_code = "thermohydraulics"
+diagram.detection_model = None
+db = FakeDB(diagram)
+
+started = time.time()
+out = {"broker": url}
+try:
+    result = asyncio.run(start_detection(UID, model_id=None, db=db))
+    out["outcome"] = "sent"
+    out["task_id"] = result["task_id"]
+except HTTPException as exc:
+    out["outcome"] = "http {}".format(exc.status_code)
+    out["detail"] = str(exc.detail)[:200]
+except Exception as exc:
+    out["outcome"] = "raw {}.{}".format(type(exc).__module__, type(exc).__name__)
+    out["detail"] = str(exc)[:200]
+out.update(status=diagram.status.value, error_stage=diagram.error_stage,
+           error_message=diagram.error_message, commits=db.commits,
+           elapsed=round(time.time() - started, 2))
+print(json.dumps(out, ensure_ascii=False))
+'''
+
+
+def _probe_db_messages() -> dict:
+    """Что лежит в базе стенда: {ключ-очередь: сколько сообщений}."""
+    import redis
+
+    client = redis.Redis.from_url(probe_broker_url())
+    try:
+        found = {}
+        keys = cast("list[bytes]", client.keys("*"))
+        for key in keys:
+            name = key.decode()
+            if client.type(name) == b"list":
+                found[name] = client.llen(name)
+        return found
+    finally:
+        client.close()
+
+
+def leg_dispatch_failure() -> dict:
+    """Нога D: одна отправка через боевой эндпоинт — на живом брокере и на мёртвом.
+
+    Поддельный брокер в тестах доказывает ветку отказа, но не доказывает, что
+    исправный путь доносит сообщение до РЕАЛЬНОГО брокера. Здесь обе стороны
+    судятся одной и той же корутиной `start_detection`, а очередь пересчитывается
+    снаружи, в базе 15.
+    """
+    workdir = Path(tempfile.mkdtemp(prefix="dispatch_probe_"))
+    driver = workdir / "driver.py"
+    driver.write_text(_DISPATCH_DRIVER, encoding="utf-8")
+    uid = str(uuid.uuid4())
+
+    def _run(broker_url: str) -> dict:
+        env = dict(os.environ)
+        env.update(CELERY_BROKER_URL=broker_url, CELERY_RESULT_BACKEND=broker_url,
+                   BENCH_REPO=str(REPO), BENCH_UID=uid, PYTHONPATH=str(REPO),
+                   PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
+        proc = subprocess.run([sys.executable, "-X", "utf8", str(driver)], cwd=str(REPO),
+                              env=env, capture_output=True, text=True,
+                              encoding="utf-8", timeout=300)
+        rows = [ln for ln in (proc.stdout or "").splitlines() if ln.startswith("{")]
+        if not rows:
+            return {"error": (proc.stderr or proc.stdout or "")[-300:]}
+        return json.loads(rows[-1])
+
+    import redis
+
+    try:
+        _flush_probe_db()
+    except redis.exceptions.RedisError as exc:   # живого Redis нет — судить нечем
+        return {"unknown": "живой брокер недоступен: {}".format(exc)}
+
+    try:
+        alive = _run(probe_broker_url())
+        alive["queued"] = _probe_db_messages()
+        _flush_probe_db()
+        dead = _run(DEAD_BROKER)
+        dead["queued"] = _probe_db_messages()
+        _flush_probe_db()
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+    return {"alive": alive, "dead": dead}
+
+
+# --------------------------------------------------------------------------- #
 # Отчёт и приёмка
 # --------------------------------------------------------------------------- #
 
@@ -345,6 +501,44 @@ def verdict(legs: dict) -> tuple[int, list[str]]:
             bad += 0 if ok else 1
             lines.append("{} {}".format("OK    " if ok else "ПРОВАЛ", text))
 
+    d = legs.get("D")
+    if d is not None and d.get("unknown"):
+        unknown += 1
+        lines.append("НЕЧЕМ  D: {}".format(d["unknown"]))
+    elif d is not None and (d["alive"].get("error") or d["dead"].get("error")):
+        # Драйвер не отработал вовсе — это обстановка, а не приговор коду.
+        unknown += 1
+        lines.append("НЕЧЕМ  D: драйвер не отработал: {}".format(
+            d["alive"].get("error") or d["dead"].get("error")))
+    elif d is not None:
+        alive, dead = d["alive"], d["dead"]
+        queued_alive = sum(alive.get("queued", {}).values())
+        queued_dead = sum(dead.get("queued", {}).values())
+        checks_d = (
+            (alive.get("outcome") == "sent",
+             "D-жив: исправный путь ответил «{}» (нужно sent)".format(alive.get("outcome"))),
+            (alive.get("status") == "detecting" and alive.get("commits") == 1,
+             "D-жив: состояние «{}» при {} коммите (нужно detecting при 1)".format(
+                 alive.get("status"), alive.get("commits"))),
+            (queued_alive == 1,
+             "D-жив: в очередях базы {} сообщений {} (нужно ровно 1)".format(
+                 queued_alive, alive.get("queued"))),
+            (dead.get("outcome") == "http 503",
+             "D-мёртв: ответ «{}» за {} с (нужно http 503, а не исключение наружу)".format(
+                 dead.get("outcome"), dead.get("elapsed"))),
+            (dead.get("status") == "frame_cleaned" and dead.get("error_stage") is None
+             and dead.get("commits") == 2,
+             "D-мёртв: состояние «{}»/{} при {} коммитах "
+             "(нужно frame_cleaned/None при 2)".format(
+                 dead.get("status"), dead.get("error_stage"), dead.get("commits"))),
+            (queued_dead == 0,
+             "D-мёртв: в очередях базы {} сообщений {} (нужно 0)".format(
+                 queued_dead, dead.get("queued"))),
+        )
+        for ok, text in checks_d:
+            bad += 0 if ok else 1
+            lines.append("{} {}".format("OK    " if ok else "ПРОВАЛ", text))
+
     lines.append("\nнарушений критериев приёмки: {}{}".format(
         bad, " · судить нечем: {}".format(unknown) if unknown else ""))
     return (1 if bad else (2 if unknown else 0)), lines
@@ -353,7 +547,7 @@ def verdict(legs: dict) -> tuple[int, list[str]]:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description="Б10: передоставка задачи брокером (visibility_timeout)")
-    parser.add_argument("--leg", choices=["A", "B", "C"], default=None,
+    parser.add_argument("--leg", choices=["A", "B", "C", "D"], default=None,
                         help="прогнать одну ногу вместо всех")
     parser.add_argument("--pool", default=_default_pool(),
                         help="пул воркера стенда (по умолчанию prefork, на Windows threads)")
@@ -365,7 +559,7 @@ def main(argv=None) -> int:
                         help="вердикт по критериям приёмки, exit 1 при нарушении")
     args = parser.parse_args(argv)
 
-    wanted = [args.leg] if args.leg else ["A", "B", "C"]
+    wanted = [args.leg] if args.leg else ["A", "B", "C", "D"]
     print("брокер стенда: {} · очередь: {} · задача: {}".format(
         probe_broker_url(), PROBE_QUEUE, TASK_NAME))
 
@@ -378,6 +572,25 @@ def main(argv=None) -> int:
                   c["conf"], c["channel"], c["task_time_limit"]))
         print("        самый длинный time_limit: {} ({}), задач с лимитом {}".format(
             c["longest_limit"], c["longest_task"], c["limits_found"]))
+    if "D" in wanted:
+        print("нога D: запуск детекции против живого брокера и против мёртвого — идёт…")
+        legs["D"] = leg_dispatch_failure()
+        d = legs["D"]
+        if d.get("unknown"):
+            print("        {}".format(d["unknown"]))
+        else:
+            for side in ("alive", "dead"):
+                row = d[side]
+                if row.get("error"):
+                    print("        {:5s} драйвер не отработал: {}".format(
+                        side, row["error"]))
+                    continue
+                print("        {:5s} {} -> {} за {} с; состояние {} / {}; "
+                      "коммитов {}; в очередях {}".format(
+                          side, row.get("broker"), row.get("outcome"), row.get("elapsed"),
+                          row.get("status"), row.get("error_stage"),
+                          row.get("commits"), row.get("queued")))
+
     for leg in ("A", "B"):
         if leg not in wanted:
             continue

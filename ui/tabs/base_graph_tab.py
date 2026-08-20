@@ -27,6 +27,7 @@ from ui.services.artifact_downloader import (
     ArtifactDownloader, Job, artifact, one,
 )
 from ui.editors.base_graph_editor import BaseGraphEditor
+from ui.tabs.save_mode import NonInteractiveSaveMixin
 from ui.widgets.appearance_panel import AppearanceMixin
 from ui.widgets.toolbar_buttons import (
     make_undo_button, make_redo_button, make_save_button, make_confirm_button,
@@ -708,7 +709,7 @@ def _graph_jobs(want_canvas: bool) -> tuple[Job, ...]:
 
 
 
-class BaseGraphTab(AppearanceMixin, QWidget):
+class BaseGraphTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
     """Базовый класс вкладки редактора графа P&ID.
 
     Template method:
@@ -1199,9 +1200,18 @@ class BaseGraphTab(AppearanceMixin, QWidget):
 
         «Да» снимает запрет насовсем: решение принял оператор. «Нет» его
         оставляет, и вопрос вернётся при следующей попытке записи.
+
+        ⛔ Сохранение ПО ТАЙМЕРУ вопроса не задаёт (пункт 1-38): «Да» вслепую
+        снял бы запрет насовсем, то есть автосохранение отменило бы защиту
+        без оператора. Тик отказывается и говорит об этом строкой; запрет
+        при этом остаётся взведённым, и ручной заход спросит снова.
         """
         if artifact not in self._unreadable_on_server:
             return True
+        if not self._save_interactive:
+            self._refuse_save("⚠️ Автосохранение отменено: серверная копия "
+                              "не прочитана — сохраните вручную")
+            return False
         reply = QMessageBox.question(
             self, "Сохранение затрёт серверную копию",
             f"{self._BLIND_WRITE_WARNING[artifact]}\n\nСохранить всё равно?",
@@ -1274,10 +1284,14 @@ class BaseGraphTab(AppearanceMixin, QWidget):
             return True
 
         except Exception as exc:
-            QMessageBox.warning(
-                self, "Ошибка",
-                f"Не удалось сохранить граф:\n{exc}"
-            )
+            # По таймеру — строкой, а не модалкой посреди работы (1-38).
+            if self._save_interactive:
+                QMessageBox.warning(
+                    self, "Ошибка",
+                    f"Не удалось сохранить граф:\n{exc}"
+                )
+            else:
+                self._refuse_save(f"⚠️ Автосохранение не удалось: {exc}")
             return False
         finally:
             QApplication.restoreOverrideCursor()

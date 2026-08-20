@@ -19,6 +19,7 @@ from ui.services.api_client import APIClient, APIError
 from ui.services.artifact_downloader import (
     ArtifactDownloader, Job, artifact, one,
 )
+from ui.tabs.save_mode import NonInteractiveSaveMixin
 from ui.widgets.appearance_panel import AppearanceMixin
 from ui.widgets.toolbar_buttons import (
     make_undo_button, make_save_button, make_confirm_button,
@@ -51,7 +52,7 @@ _ARTIFACTS = (
 )
 
 
-class PipeTab(AppearanceMixin, QWidget):
+class PipeTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
     """Вкладка валидации pipe маски."""
 
     confirmed = Signal()          # Подтверждено
@@ -433,10 +434,14 @@ class PipeTab(AppearanceMixin, QWidget):
             return True
 
         except Exception as exc:
-            QMessageBox.warning(
-                self, "Ошибка",
-                f"Не удалось сохранить:\n{exc}"
-            )
+            # По таймеру — строкой, а не модалкой посреди работы (1-38).
+            if self._save_interactive:
+                QMessageBox.warning(
+                    self, "Ошибка",
+                    f"Не удалось сохранить:\n{exc}"
+                )
+            else:
+                self._refuse_save(f"⚠️ Автосохранение не удалось: {exc}")
             return False
         finally:
             QApplication.restoreOverrideCursor()

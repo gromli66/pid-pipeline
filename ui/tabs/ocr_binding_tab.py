@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, Slot, Qt, QThread, QTimer
 from PySide6.QtGui import QColor
+from ui.tabs.save_mode import NonInteractiveSaveMixin
 from ui.widgets.appearance_panel import AppearanceMixin
 
 from ui.services.api_client import APIClient, APIError
@@ -174,7 +175,7 @@ class _SubTabToolbar(QWidget):
 # Main OcrBindingTab
 # =====================================================================
 
-class OcrBindingTab(AppearanceMixin, QWidget):
+class OcrBindingTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
     """
     Вкладка привязки OCR текста к узлам графа.
 
@@ -226,6 +227,10 @@ class OcrBindingTab(AppearanceMixin, QWidget):
         self._diameter_matcher = None
         self._auto_bind_diameters_data = None
         self._retry_count = 0
+
+        #: артефакты, чью серверную копию прочитать не удалось: запись в них
+        #: заперта до явного «да» оператора (пункт 1.x14, механизм 1.x9)
+        self._unreadable_on_server: set[str] = set()
 
         # Confirmation flags per sub-tab
         self._kks_confirmed = False
@@ -640,6 +645,16 @@ class OcrBindingTab(AppearanceMixin, QWidget):
         self._download_thread.quit()
         self._download_thread.wait()
 
+        # Не-404 при загрузке = на сервере МОГЛА лежать работа оператора,
+        # которую прочитать не удалось, а открытое собрано вслепую. Запись
+        # в такой артефакт запирается до явного «да» (пункт 1.x14): у графовых
+        # вкладок это сделал 1.x9, а сюда запрет не доехал — эта вкладка
+        # не наследует `BaseGraphTab`, и предупреждения ниже записи не мешали.
+        for flag, name in (("saved_graph_download_failed", "graph_validated"),
+                           ("binding_download_failed", "ocr_binding")):
+            if artifacts.get(flag):
+                self._unreadable_on_server.add(name)
+
         if artifacts.get("saved_graph_download_failed"):
             # Сохранённый граф МОГ лежать на сервере и просто не отдался (5xx,
             # сеть, диск): открыт исходный, а `_save_binding` пишет обратно
@@ -826,11 +841,24 @@ class OcrBindingTab(AppearanceMixin, QWidget):
         # та же граница по `APIError`, что у `swallow`, — повторами не лечится,
         # а десять попыток по 5 с показывают «⏳ OCR в процессе» почти минуту:
         # оператор всё это время видит ложь о работе вместо причины отказа.
-        if isinstance(self._downloader.last_error, APIError) \
-                and self._retry_count < 10:
+        exc = self._downloader.last_error
+        if isinstance(exc, APIError) and self._retry_count < 10:
             self._retry_count += 1
-            self.loading_label.setText(
-                f"⏳ OCR в процессе... (попытка {self._retry_count}/10)")
+            if exc.status_code == 404:
+                self.loading_label.setText(
+                    f"⏳ OCR в процессе... (попытка {self._retry_count}/10)")
+            else:
+                # ⛔ Пункт 1.x14: «в процессе» правдиво ровно у 404 — там
+                # артефакта ПОКА нет. Сервер, который ответил и отказал
+                # (5xx, обрыв связи, отказ прав), про работу OCR не говорит
+                # ничего, и выдавать его отказ за неё — ложь на всё время
+                # ретраев. Повтор при этом оставлен: шлюзовой отказ и обрыв
+                # проходят со следующей попытки, лжёт не он, а текст.
+                logger.warning("артефакт не отдался (%s) — повтор %d/10",
+                               exc, self._retry_count)
+                self.loading_label.setText(
+                    f"⚠ Сервер не отдаёт данные: {error_msg}\n"
+                    f"повтор через 5 с (попытка {self._retry_count}/10)")
             QTimer.singleShot(5000, self._start_download)
         else:
             self.loading_label.setText(f"❌ Ошибка: {error_msg}")
@@ -1562,8 +1590,82 @@ class OcrBindingTab(AppearanceMixin, QWidget):
     # Save & Confirm
     # =================================================================
 
+    #: чем грозит запись в артефакт, чью серверную копию не прочитали
+    _BLIND_WRITE_WARNING = {
+        "ocr_binding":
+            "Сохранённые привязки не удалось скачать — вкладка открыта БЕЗ "
+            "них.\n\n"
+            "Сохранение затрёт на сервере привязки, в которых могла остаться "
+            "ваша прежняя работа.",
+        "graph_validated":
+            "Сохранённый граф не удалось скачать — открыт ИСХОДНЫЙ, без ваших "
+            "прежних правок.\n\n"
+            "Сохранение затрёт на сервере сохранённый граф, в котором могла "
+            "остаться ваша прежняя валидация.",
+    }
+
+    def _confirm_blind_overwrite(self) -> bool:
+        """Разрешена ли запись в артефакты, чьё состояние на сервере неизвестно.
+
+        Зеркало `BaseGraphTab._confirm_blind_overwrite` (пункт 1.x9), которого
+        этой вкладке не досталось: она не наследует `BaseGraphTab`, а
+        предупреждения 1.23/1.x12 записи не мешали — оператор ВИДЕЛ, что открыл
+        не свою работу, и первый же save её молча затирал.
+
+        Спрашивается сразу за оба артефакта, потому что `_save_binding` пишет
+        ОБА: привязки (`save_ocr_binding`) и граф (`upload_validated_graph`).
+        Отказ по любому отменяет сохранение целиком — частичная запись оставила
+        бы вкладку в состоянии «сохранено» при непрошедшей половине.
+
+        Сюда сходятся все три боевых входа на запись: кнопка 💾, «Подтвердить»
+        и автосохранение (`_SAVE_METHODS["OcrBindingTab"] = "_save_binding"`,
+        раз в 120 с, включено по умолчанию).
+
+        «Да» снимает запрет насовсем: решение принял оператор. «Нет» его
+        оставляет, и вопрос вернётся при следующей попытке записи.
+
+        ⛔ Сохранение ПО ТАЙМЕРУ вопроса не задаёт (пункт 1-38): «Да» вслепую
+        снял бы запрет насовсем, то есть автосохранение отменило бы защиту
+        без оператора. Тик отказывается и говорит об этом строкой; запрет
+        при этом остаётся взведённым, и ручной заход спросит снова.
+        """
+        allowed = []
+        for artifact in ("ocr_binding", "graph_validated"):
+            if artifact not in self._unreadable_on_server:
+                continue
+            if not self._save_interactive:
+                self._refuse_save("⚠️ Автосохранение отменено: серверная копия "
+                                  "не прочитана — сохраните вручную")
+                return False
+            reply = QMessageBox.question(
+                self, "Сохранение затрёт серверную копию",
+                f"{self._BLIND_WRITE_WARNING[artifact]}\n\nСохранить всё равно?",
+                QMessageBox.StandardButton.Yes
+                | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                logger.warning("запись в %s отменена оператором: серверная "
+                               "копия не прочитана", artifact)
+                return False
+            allowed.append(artifact)
+
+        # Запрет снимается только когда разрешены ВСЕ: «да» за первый артефакт
+        # при «нет» за второй ничего не записало, и молча пускать по нему
+        # следующий тик автосохранения было бы разрешением, которого оператор
+        # не давал.
+        for artifact in allowed:
+            logger.warning("оператор разрешил перезапись %s поверх "
+                           "непрочитанной серверной копии", artifact)
+            self._unreadable_on_server.discard(artifact)
+        return True
+
     def _save_binding(self) -> bool:
         """Сохранить привязки и обновлённые OCR-блоки на сервер."""
+        if not self._confirm_blind_overwrite():
+            self.status_label.setText("Сохранение отменено")
+            return False
+
         try:
             QApplication.setOverrideCursor(Qt.WaitCursor)
 
@@ -1730,10 +1832,14 @@ class OcrBindingTab(AppearanceMixin, QWidget):
             # Единственный след ошибки — файл лога клиента: в собранном .exe
             # sys.stderr = None, и печать трассировки в консоль пропадает.
             logger.error("Не удалось сохранить привязки OCR: %s", exc, exc_info=True)
-            QMessageBox.warning(
-                self, "Ошибка",
-                f"Не удалось сохранить привязки:\n{exc}"
-            )
+            # По таймеру — строкой, а не модалкой посреди работы (1-38).
+            if self._save_interactive:
+                QMessageBox.warning(
+                    self, "Ошибка",
+                    f"Не удалось сохранить привязки:\n{exc}"
+                )
+            else:
+                self._refuse_save(f"⚠️ Автосохранение не удалось: {exc}")
             return False
         finally:
             QApplication.restoreOverrideCursor()

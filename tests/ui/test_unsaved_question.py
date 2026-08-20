@@ -28,8 +28,8 @@
 сносит сам и детерминированно (пятый исход зонда, замер 1-32): брошенные на
 сборщик мусора Qt-виджеты детонируют у того, кто первым крутит очередь событий.
 """
+import contextlib
 import os
-import time
 import types
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -496,18 +496,27 @@ def test_header_back_is_unreachable_while_a_tab_is_open(window):
 
 # ── ГРАНИЦА пункта: фоновый диалог автосохранения ───────────────────────
 #
-# Заявлено отдельно и НЕ лечится здесь. Диалог поднимает не сервис, а сами
-# методы сохранения: `QMessageBox.warning` на отказе есть у всех пяти
-# (`BaseGraphTab._save_graph`, `ContourTab._save_graph`, `JunctionTab.
-# _save_masks`, `PipeTab._save_mask`, `OcrBindingTab._save_binding`), а
-# `_save_graph` вдобавок спрашивает о записи вслепую (пункт 1.23). Лечение —
-# неинтерактивный режим сохранения у ПЯТИ классов вкладок; два из этих файлов
-# в работе у соседних пунктов, и Р-9(г) запрещает их трогать. Два теста ниже
-# запирают ФАКТ, а не одобряют его: когда придёт пункт лечения, красное здесь
-# скажет, что фоновый тик замолчал.
+# Была заявлена отдельно и вылечена пунктом 1-38: диалог поднимает не сервис,
+# а сами методы сохранения (`QMessageBox.warning` на отказе есть у всех пяти,
+# а `_save_graph` вдобавок спрашивает о записи вслепую — 1.23/1-33), поэтому
+# лечение — неинтерактивный режим у классов вкладок, а не заглушка в сервисе.
+# Два теста ниже стерегут ДВЕ половины шва, которые пункт 1-38 не тронул
+# и тронуть не имел права: тик обязан доходить до метода сохранения вкладки,
+# а у ОПЕРАТОРА модалка на отказе обязана остаться. Что тик молчит и объясняет
+# отказ строкой — предмет `test_autosave_non_interactive.py`.
 
 def test_autosave_tick_reaches_the_tab_save_method(qapp, monkeypatch):
-    """Таймер (не жест оператора) доходит до метода сохранения вкладки."""
+    """Таймер (не жест оператора) доходит до метода сохранения вкладки.
+
+    ⛔ Тик подаётся ДЕТЕРМИНИРОВАННО — сигналом `timeout`, а не ожиданием
+    по стенным часам. Прежняя редакция ждала тик `QTimer(10 мс)` с дедлайном
+    `time.monotonic() + 5` и на загруженной машине краснела БЕЗ дефекта
+    (замер 1-39: 1 падение из 6 прогонов рядом с чужим набором, 0 из 3 без
+    него, разброс времени набора 154…297 с; правило `PROTOCOL §3`). Что таймер
+    срабатывает по времени — контракт Qt, а не наш; наше здесь ровно два шва:
+    `start()` завёл таймер боевым интервалом, и `timeout` подключён к пути
+    сохранения.
+    """
     saves = []
 
     class PipeTab(QWidget):
@@ -516,33 +525,43 @@ def test_autosave_tick_reaches_the_tab_save_method(qapp, monkeypatch):
         def has_unsaved_changes(self):
             return True
 
+        def non_interactive_save(self):
+            """Режим 1-38: сервис отнимает у вкладки право спрашивать."""
+            saves.append("режим")
+            return contextlib.nullcontext()
+
         def _save_mask(self):
             saves.append("tick")
             return False
 
     monkeypatch.setattr(UISettings, "autosave_enabled",
                         property(lambda self: True))
+    monkeypatch.setattr(UISettings, "autosave_interval_sec",
+                        property(lambda self: 120))
     tab = PipeTab()
     service = AutoSaveService()
     service.start(tab)
-    service._timer.setInterval(10)      # 120 с боевого интервала не ждут
-    deadline = time.monotonic() + 5
-    while not saves and time.monotonic() < deadline:
-        qapp.processEvents()
+
+    assert service._timer.isActive(), "start() не завёл таймер автосохранения"
+    assert service._timer.interval() == 120_000, (
+        f"таймер заведён не боевым интервалом: {service._timer.interval()}")
+
+    service._timer.timeout.emit()
     service.stop()
     tab.deleteLater()
     qapp.processEvents()
 
-    assert saves == ["tick"], (
+    assert saves == ["режим", "tick"], (
         f"тик автосохранения не дошёл до сохранения вкладки: {saves}"
     )
 
 
-def test_pipe_save_opens_a_modal_when_the_server_refuses(monkeypatch, tmp_path):
-    """Боевое сохранение на отказе поднимает модальный диалог.
+def test_pipe_save_opens_a_modal_when_the_operator_saves(monkeypatch, tmp_path):
+    """У ОПЕРАТОРА боевое сохранение на отказе поднимает модальный диалог.
 
-    Вызывается настоящая `PipeTab._save_mask` — со стороны сервиса её ничто
-    не глушит, значит вместе с тестом выше это «модалка по таймеру».
+    Вторая половина шва: режим 1-38 отнимает вопрос у таймера, а не у
+    оператора. Вызывается настоящая `PipeTab._save_mask` на пути жеста —
+    здесь её ничто не глушит и глушить не должно.
     """
     monkeypatch.setattr(pt, "QMessageBox", FakeMsgBox)
     FakeMsgBox.calls = []
@@ -553,6 +572,7 @@ def test_pipe_save_opens_a_modal_when_the_server_refuses(monkeypatch, tmp_path):
     fake_tab = types.SimpleNamespace(
         _editor=types.SimpleNamespace(save_mask=refuse),
         temp_dir=tmp_path,
+        _save_interactive=True,          # жест оператора, не тик таймера
     )
 
     result = pt.PipeTab._save_mask(fake_tab)
