@@ -41,7 +41,7 @@ import pytest                                              # noqa: E402
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QEvent, QObject, Signal         # noqa: E402
+from PySide6.QtCore import QObject, Signal                 # noqa: E402
 from PySide6.QtWidgets import (                            # noqa: E402
     QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QWidget,
 )
@@ -186,10 +186,6 @@ def window(qapp, monkeypatch):
     yield win
     win.hide()
     win.deleteLater()
-    # Отложенное удаление ДОСТАВЛЯЕТ набор сам (`PROTOCOL §5`, форма 1-36):
-    # один `deleteLater()` только ставит окно в очередь, а выпивает её тот
-    # сосед, кто первым крутит `processEvents()`, — и платит за это временем.
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 def _open_tab(win, unsaved=False, save_ok=True):
