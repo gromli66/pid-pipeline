@@ -4160,22 +4160,36 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
 
     def _preview_still_in_model(self) -> bool:
         """Превью, вписанное последним `_apply_sizes_from_base`, ещё в модели
-        ЦЕЛИКОМ — у каждого узла набора и в каждом поле.
+        ЦЕЛИКОМ — у каждого узла набора, в каждом поле И В КАЖДОМ ПИНЕ.
 
         Прямой ответ вместо косвенного: `model.restore` пересобирает словари
         и кладёт в них состояние ДО превью — отпечатки расходятся, и базлайн
         переиспользовать нельзя. Правка НА МЕСТЕ чужого узла отпечатков набора
         не трогает — базлайн цел.
 
+        ⛔ Пины — ВТОРАЯ ПОЛОВИНА превью, и до пятого возврата пункта их здесь
+        не было: сторож судил по четырём узловым полям, а откат, вернувший
+        ОДНИ ПИНЫ, оставался невидим. Базлайн объявлялся живым, пересъёма не
+        было, и `_apply_sizes_from_base` безусловно писал ПРОТУХШУЮ пиновую
+        базу — то есть отменял чужой Ctrl+Z (замер `MEASUREMENTS §110.18`:
+        пин 33.0 при стеке 0, след второго тика 148.5 вместо 45.0; отмена до
+        дна стека давала 33.0, и 10.0 было недостижимо). Отпечаток у пинов
+        уже был (`_resize_pin_preview`) — здесь его просто СПРАШИВАЮТ, ровно
+        как узловой, поэтому вопрос «какие команды пишут пины» снят и на этом
+        пути тоже.
+
         Агрегат остаётся ровно там, где вопрос ДЕЙСТВИТЕЛЬНО про весь набор:
         «можно ли взять базлайн как есть». Что именно откатывать, решается
-        поэлементно — `_preview_live_fields()`.
+        поэлементно — `_preview_live_fields()` для узлов и
+        `_rollback_owned_resize_pins()` для пинов.
         """
         if not self._resize_preview_geom:
             return False
         live = self._preview_live_fields()
-        return all(len(live.get(nid, ())) == len(key)
-                   for nid, key in self._resize_preview_geom.items())
+        if not all(len(live.get(nid, ())) == len(key)
+                   for nid, key in self._resize_preview_geom.items()):
+            return False
+        return self._snapshot_resize_pins() == self._resize_pin_preview
 
     def _resize_baseline_alive(self) -> bool:
         """Базлайн снят и всё ещё описывает текущее состояние схемы.
@@ -4236,8 +4250,13 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         """Вернуть пины набора к базлайну — БЕЗУСЛОВНО.
 
         Зовущий один: `_apply_sizes_from_base`, и там безусловность и есть
-        механизм идемпотентности (базлайн на этом пути заведомо жив: оба
-        входа сначала спрашивают `_resize_baseline_alive()`).
+        механизм идемпотентности. Предпосылка — «базлайн жив ⇒ ПИНОВАЯ база
+        актуальна»: оба входа (`preview_resize`, `apply_resize`) сначала
+        спрашивают `_resize_baseline_alive()`, а тот с пятого возврата пункта
+        сверяет и пиновый отпечаток тоже. ⛔ До этого предпосылка держалась
+        не сторожем, а ПЕРЕЧНЕМ команд («команды, пишущей только пины, не
+        существует»), и на команде-наследнике ломалась: безусловная запись
+        протухшей базы отменяла чужой Ctrl+Z (`MEASUREMENTS §110.18`).
         ⛔ Для ОТКАТА превью этот метод не годится — см.
         `_rollback_owned_resize_pins`.
         """
@@ -4283,6 +4302,16 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         отпечаток `_resize_pin_preview` говорит, что в пине оставило превью.
         Совпало — след наш, снимаем; разошлось — пин тронул кто-то ещё,
         не трогаем. Поэтому список выше — доказательство, а не условие.
+
+        ⛔ ЗАМЕРЕНО, ГДЕ ИМЕННО ЭТО ВЕРНО (пятый возврат пункта). Прямой ответ
+        здесь снимал вопрос только на пути ЗАПИСИ (`drop_uncommitted_preview`
+        → `_rollback_owned_preview`; зонд ревизора §110.16/.17). Тот же
+        инвариант потребляют ещё два пути — пересъём базлайна в
+        `preview_resize` и в `apply_resize`, — и там он держался на перечне,
+        пока `_preview_still_in_model` не научился спрашивать пиновый
+        отпечаток (§110.18 → §115). Потребители перечислены грепом
+        `_resize_baseline_alive` по этому файлу, зонд прогнан на каждом:
+        `tests/ui/test_preview_after_foreign_action.py`, половина Д.
         """
         from ui.editors import port_model
 
@@ -4431,7 +4460,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             for nid in self._resize_base if nid in self.nodes
         }
         # То же для пинов: `_rollback_owned_resize_pins` снимает след только
-        # там, где он совпал с этим отпечатком (четвёртый возврат пункта).
+        # там, где он совпал с этим отпечатком (четвёртый возврат пункта),
+        # и `_preview_still_in_model` этим же отпечатком судит, жив ли
+        # базлайн со стороны пинов (пятый возврат, §110.18).
         self._resize_pin_preview = self._snapshot_resize_pins()
 
     def _refresh_node_visual(self, node_id: str):

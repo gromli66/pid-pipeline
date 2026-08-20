@@ -78,6 +78,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox     # noqa: E402
 from PySide6.QtGui import QImage, QColor                    # noqa: E402
 
 from tools import corpus                                    # noqa: E402
+from ui.editors.undo_manager import Command                  # noqa: E402
 
 # ── корпус боксов: та же фикстура, что у первой доработки ────────────────
 BOX_UID = "d74eb9f1"        # 66 узлов / 63 ребра, корпус-фикстура в git
@@ -1308,3 +1309,218 @@ def test_pin_the_foreign_undo_removed_is_not_resurrected(box_tab, dialogs):
     sent = _sent_edges(box_tab)[PIN_EDGE]
     assert sent["pin_source"] is None
     assert _pin(ed) is None
+
+
+# =========================================================================
+# ПОЛОВИНА Д — НАСЛЕДНИК: команда, чей `undo` пишет ТОЛЬКО пины.
+#              Пятый возврат пункта (§110.18), объём — один пункт.
+#
+# Четвёртая доработка сняла зависимость лечения от перечня команд: у пинов
+# появился свой отпечаток (`_resize_pin_preview`), и откат превью спрашивает
+# «наш ли это след?» напрямую. Пятая ревизия проверила это зондом и
+# подтвердила — НО ТОЛЬКО НА ПУТИ ЗАПИСИ (§110.16/.17). Тот же инвариант
+# потребляет путь ПЕРЕСЪЁМА базлайна, а там сторож `_preview_still_in_model`
+# смотрел ТОЛЬКО узловые отпечатки: откат, вернувший ОДНИ ПИНЫ, для него
+# невидим, базлайн объявлялся живым — и `_apply_sizes_from_base` безусловно
+# писал протухшую пиновую базу, отменяя чужой Ctrl+Z (§110.18).
+#
+# ⛔ Сегодня такой команды в дереве НЕТ: перебор 24 строк (`MEASUREMENTS
+# §106.3`) даёт ровно одну команду-на-месте, пишущую пины
+# (`ResizeNodeCommand`), и она ВСЕГДА пишет ещё и bbox/centroid — узловая ось
+# убивает базлайн раньше (§110.21). Поэтому дефект недостижим штатным жестом,
+# а обещание наследнику живёт в доках. Защёлка ставится здесь: команду-
+# наследника заводит САМ ТЕСТ, и лечение обязано держаться без неё в перечне.
+#
+# ⭐ Потребители инварианта перечислены грепом, а не выборкой:
+#   grep -n "_resize_baseline_alive" ui/editors/advanced_graph_editor.py
+# даёт двух зовущих — `preview_resize` и `apply_resize`; путь записи
+# (`drop_uncommitted_preview` → `_rollback_owned_preview`) агрегата не
+# спрашивает вовсе. Ниже прогон на КАЖДОМ из трёх.
+# =========================================================================
+
+PIN_ONLY_DX = 33.0                     # что вписала команда-наследник
+PIN_ONLY_IN_PREVIEW = 148.5            # 33.0 × (90/20) — след превью поверх неё
+PIN_AFTER_CLEAN_PREVIEW = 45.0         # 10.0 × (90/20) — след превью с ЧИСТОГО пина
+
+
+class _PinOnlyCommand(Command):
+    """Команда-НАСЛЕДНИК: правит НА МЕСТЕ и пишет ТОЛЬКО пин.
+
+    Узловой геометрии не касается вовсе — именно эта ось и была слепой
+    зоной сторожа базлайна. Ребро ищется по ключу при каждом вызове:
+    `model.restore` подменяет `edges_data` новыми словарями, и сохранённая
+    ссылка стала бы сиротой (тот же класс, что `find_edge_data`
+    у `ResizeNodeCommand._apply_pins`).
+    """
+
+    def __init__(self, editor, key, role, new_dx, new_dy):
+        self._editor = editor
+        self._key = key
+        self._role = role
+        self._new = {"dx": float(new_dx), "dy": float(new_dy)}
+        self._old = None
+
+    def _edge(self):
+        return next(e for e in self._editor.edges_data
+                    if (e.get("source"), e.get("target")) == self._key)
+
+    def _write(self, pin):
+        from ui.editors import port_model
+        edge = self._edge()
+        if pin is None:
+            port_model.clear_edge_pin(edge, self._role)
+        else:
+            edge[port_model.PIN_KEYS[self._role]] = dict(pin)
+
+    def execute(self):
+        from ui.editors import port_model
+        cur = port_model.edge_pin(self._edge(), self._role)
+        self._old = dict(cur) if cur is not None else None
+        self._write(self._new)
+
+    def undo(self):
+        self._write(self._old)
+
+    @property
+    def description(self):
+        return "PinOnly " + "|".join(self._key)
+
+
+def _pin_only_command(editor, dx=PIN_ONLY_DX):
+    """ЧУЖОЕ действие оператора-наследника: команда, пишущая ТОЛЬКО пины."""
+    cmd = _PinOnlyCommand(editor, PIN_EDGE, PIN_ROLE, dx, PIN_DY)
+    editor.undo_mgr.execute(cmd)
+    assert _pin(editor) == {"dx": dx, "dy": PIN_DY}, \
+        "команда не вписала пин — тест бессмыслен"
+    assert _last_step(editor) == "PinOnly node_11|node_13", "в стеке не тот шаг"
+    assert editor.nodes[BOX_NID]["bbox"] == BOX_BBOX, \
+        "команда тронула геометрию узла — она перестала быть пиновой"
+
+
+def _preview_over_pin_only(editor):
+    """«Размеры» + превью 90×90 поверх пина, вписанного наследником."""
+    _open_resize(editor, BOX_CLASS)
+    assert BOX_NID in editor._resize_sel, "узел с пином не попал в набор"
+    _box_preview(editor)
+    assert _pin(editor) == {"dx": PIN_ONLY_IN_PREVIEW, "dy": PIN_DY}, \
+        "превью не тронуло пин — тест бессмыслен"
+
+
+def test_save_after_an_undo_that_returned_only_pins_keeps_that_pin(
+        box_tab, dialogs):
+    """Потребитель 1 — путь ЗАПИСИ (`drop_uncommitted_preview`).
+
+    Замер ревизора §110.16: здесь лечение уже держалось, потому что откат
+    превью спрашивает состояние напрямую. Тест запирает это НА КОМАНДЕ,
+    КОТОРОЙ НЕТ В ПЕРЕЧНЕ: пропадёт прямой вопрос — покраснеет.
+    """
+    ed = box_tab._editor
+    _set_pin(ed)
+    _pin_only_command(ed)
+    _preview_over_pin_only(ed)
+
+    ed.undo()                                     # Ctrl+Z по команде-наследнику
+    assert _pin(ed) == {"dx": PIN_DX, "dy": PIN_DY}, \
+        "чужой откат не вернул пин — тест бессмыслен"
+
+    assert box_tab._save_graph() is True
+    assert dialogs == []
+    assert ed.undo_mgr.stack_depth == 0
+
+    sent = _sent_edges(box_tab)[PIN_EDGE]
+    assert sent["pin_source"] == {"dx": PIN_DX, "dy": PIN_DY}
+    assert sent["pin_source"] != {"dx": PIN_ONLY_DX, "dy": PIN_DY}
+    assert sent["pin_source"] != {"dx": PIN_ONLY_IN_PREVIEW, "dy": PIN_DY}
+    assert _sent_geom(box_tab)[BOX_NID][0] == pytest.approx(BOX_BBOX, abs=TOL)
+    assert _sent_edges(box_tab) == _model_edges(ed)
+
+
+def test_second_preview_after_an_undo_that_returned_only_pins_keeps_that_pin(
+        box_tab, dialogs):
+    """Потребитель 2 — ПЕРЕСЪЁМ в `preview_resize` (§110.18, пятый возврат).
+
+    Второй тик бегунка после чужого Ctrl+Z. Узловой геометрии откат не
+    касался, поэтому сторож базлайна считал его живым и пересъёма не делал,
+    а `_apply_sizes_from_base` безусловно возвращал пин к ПРОТУХШЕЙ базе:
+    след второго тика был 148.5 (= 33.0 × 4.5) вместо 45.0 (= 10.0 × 4.5),
+    и на сервер уезжало 33.0 при стеке 0 — Ctrl+Z оператора отменён.
+    """
+    ed = box_tab._editor
+    _set_pin(ed)
+    _pin_only_command(ed)
+    _preview_over_pin_only(ed)
+
+    ed.undo()
+    assert _pin(ed) == {"dx": PIN_DX, "dy": PIN_DY}, \
+        "чужой откат не вернул пин — тест бессмыслен"
+
+    ed.preview_resize(width=SIDE, height=SIDE)    # второй тик бегунка
+    assert dialogs == []
+    # Базлайн пересняли с ЧИСТОГО пина: след превью считается от 10.0.
+    assert _pin(ed) == {"dx": PIN_AFTER_CLEAN_PREVIEW, "dy": PIN_DY}
+    assert _pin(ed) != {"dx": PIN_ONLY_IN_PREVIEW, "dy": PIN_DY}
+
+    assert box_tab._save_graph() is True
+    assert dialogs == []
+    sent = _sent_edges(box_tab)[PIN_EDGE]
+    assert sent["pin_source"] == {"dx": PIN_DX, "dy": PIN_DY}
+    assert sent["pin_source"] != {"dx": PIN_ONLY_DX, "dy": PIN_DY}
+    assert _sent_geom(box_tab)[BOX_NID][0] == pytest.approx(BOX_BBOX, abs=TOL)
+    assert _sent_edges(box_tab) == _model_edges(ed)
+
+
+def test_apply_after_an_undo_that_returned_only_pins_returns_to_that_pin(
+        box_tab, dialogs):
+    """Потребитель 3 — ПЕРЕСЪЁМ в `apply_resize`; цена выше, чем у второго.
+
+    Пересъёма не было → `cmd._before` брался ПРОТУХШИМ, то есть в ТОЧКУ
+    ВОЗВРАТА вмуровывался пин 33.0. Отмена до дна стека возвращала рамку
+    20×36 и пин 33.0 — состояние, из которого 10.0 недостижимо никаким
+    числом Ctrl+Z (та же форма, что квадрат масштаба на полигонах, §97.2).
+    """
+    ed = box_tab._editor
+    _set_pin(ed)
+    _pin_only_command(ed)
+    _preview_over_pin_only(ed)
+
+    ed.undo()
+    ed.apply_resize(width=SIDE, height=SIDE)
+
+    assert dialogs == []
+    assert _size(ed, BOX_NID) == pytest.approx((SIDE, SIDE), abs=TOL)
+    assert _pin(ed) == {"dx": PIN_AFTER_CLEAN_PREVIEW, "dy": PIN_DY}
+
+    while ed.undo_mgr.can_undo:
+        ed.undo()
+
+    assert _size(ed, BOX_NID) == pytest.approx((BOX_W, BOX_H), abs=TOL)
+    assert _pin(ed) == {"dx": PIN_DX, "dy": PIN_DY}
+    assert _pin(ed) != {"dx": PIN_ONLY_DX, "dy": PIN_DY}
+
+
+def test_second_preview_without_an_undo_keeps_what_the_pin_command_wrote(
+        box_tab, dialogs):
+    """Обратная полярность того же сторожа: чужого отката НЕ БЫЛО.
+
+    Без неё лечение выродилось бы в «пересъём на каждом тике»: базлайн
+    объявлялся бы мёртвым всегда, и превью стало бы новой нормой — на
+    полигонах это масштаб в квадрате. Пин обязан остаться при значении,
+    которое вписала команда оператора (33.0), а свой след — сняться.
+    """
+    ed = box_tab._editor
+    _set_pin(ed)
+    _pin_only_command(ed)
+    _preview_over_pin_only(ed)
+
+    ed.preview_resize(width=SIDE, height=SIDE)    # второй тик, стек не двигали
+    assert dialogs == []
+    # Идемпотентность: тик не домножает уже домноженное.
+    assert _pin(ed) == {"dx": PIN_ONLY_IN_PREVIEW, "dy": PIN_DY}
+
+    assert box_tab._save_graph() is True
+    assert dialogs == []
+    sent = _sent_edges(box_tab)[PIN_EDGE]
+    assert sent["pin_source"] == {"dx": PIN_ONLY_DX, "dy": PIN_DY}
+    assert sent["pin_source"] != {"dx": PIN_ONLY_IN_PREVIEW, "dy": PIN_DY}
+    assert sent["pin_source"] != {"dx": PIN_DX, "dy": PIN_DY}
+    assert _sent_geom(box_tab)[BOX_NID][0] == pytest.approx(BOX_BBOX, abs=TOL)
