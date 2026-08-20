@@ -48,7 +48,57 @@ ALL_METHODS = ["POST"] + IDEMPOTENT_METHODS
 # из проверяемой константы, останется зелёным при любом её значении
 # (`PROTOCOL §3`, поймано инъекцией в 0.4).
 ATTEMPTS_WITH_RETRY = 4      # max_retries=3 + первая попытка
-ATTEMPTS_WITHOUT = 1
+ATTEMPTS_WITHOUT = 1         # отказ сразу, повтор за оператором
+
+# Решётка ожиданий выписана ПОЭЛЕМЕНТНО, а не вычислена из той же логики,
+# что и код: агрегатное правило («POST не повторяется, кроме…») выглядит
+# верным ровно до тех пор, пока множество однородно (`PROTOCOL §3`, замер
+# 1-6 третий возврат). Здесь у каждой из 28 клеток стоит своё число.
+EXPECTED_ATTEMPTS = {
+    ("POST", "ConnectError"): ATTEMPTS_WITH_RETRY,
+    ("POST", "ConnectTimeout"): ATTEMPTS_WITH_RETRY,
+    ("POST", "PoolTimeout"): ATTEMPTS_WITH_RETRY,
+    ("POST", "ReadTimeout"): ATTEMPTS_WITHOUT,
+    ("POST", "ReadError"): ATTEMPTS_WITHOUT,
+    ("POST", "WriteError"): ATTEMPTS_WITHOUT,
+    ("POST", "RemoteProtocolError"): ATTEMPTS_WITHOUT,
+    ("GET", "ConnectError"): ATTEMPTS_WITH_RETRY,
+    ("GET", "ConnectTimeout"): ATTEMPTS_WITH_RETRY,
+    ("GET", "PoolTimeout"): ATTEMPTS_WITH_RETRY,
+    ("GET", "ReadTimeout"): ATTEMPTS_WITH_RETRY,
+    ("GET", "ReadError"): ATTEMPTS_WITH_RETRY,
+    ("GET", "WriteError"): ATTEMPTS_WITH_RETRY,
+    ("GET", "RemoteProtocolError"): ATTEMPTS_WITH_RETRY,
+    ("PUT", "ConnectError"): ATTEMPTS_WITH_RETRY,
+    ("PUT", "ConnectTimeout"): ATTEMPTS_WITH_RETRY,
+    ("PUT", "PoolTimeout"): ATTEMPTS_WITH_RETRY,
+    ("PUT", "ReadTimeout"): ATTEMPTS_WITH_RETRY,
+    ("PUT", "ReadError"): ATTEMPTS_WITH_RETRY,
+    ("PUT", "WriteError"): ATTEMPTS_WITH_RETRY,
+    ("PUT", "RemoteProtocolError"): ATTEMPTS_WITH_RETRY,
+    ("DELETE", "ConnectError"): ATTEMPTS_WITH_RETRY,
+    ("DELETE", "ConnectTimeout"): ATTEMPTS_WITH_RETRY,
+    ("DELETE", "PoolTimeout"): ATTEMPTS_WITH_RETRY,
+    ("DELETE", "ReadTimeout"): ATTEMPTS_WITH_RETRY,
+    ("DELETE", "ReadError"): ATTEMPTS_WITH_RETRY,
+    ("DELETE", "WriteError"): ATTEMPTS_WITH_RETRY,
+    ("DELETE", "RemoteProtocolError"): ATTEMPTS_WITH_RETRY,
+}
+
+
+def test_the_grid_covers_every_cell_of_the_product():
+    """Решётка полна: добавят метод или класс отказа — скажет, а не смолчит.
+
+    Без этого сторожа новая строка в `ALL_METHODS`/`ALL_FAILURES` дала бы
+    `KeyError` внутри одной клетки, а выпавшая — прошла бы незамеченной.
+    """
+    from itertools import product
+
+    assert len(EXPECTED_ATTEMPTS) == 28
+    assert set(EXPECTED_ATTEMPTS) == set(product(ALL_METHODS, ALL_FAILURES))
+    # Порог заперт с двух сторон: в решётке есть обе стороны границы.
+    assert ATTEMPTS_WITHOUT in EXPECTED_ATTEMPTS.values()
+    assert ATTEMPTS_WITH_RETRY in EXPECTED_ATTEMPTS.values()
 
 
 def _raiser(name: str):
@@ -98,13 +148,14 @@ def test_how_many_times_a_failing_request_reaches_the_transport(
     finally:
         client.close()
 
-    assert len(seen) == ATTEMPTS_WITH_RETRY, (
+    expected = EXPECTED_ATTEMPTS[(method, failure)]
+    assert len(seen) == expected, (
         "{} × {}: попыток {}, ожидалось {}".format(
-            method, failure, len(seen), ATTEMPTS_WITH_RETRY)
+            method, failure, len(seen), expected)
     )
 
 
-def test_the_client_retries_post_after_the_operators_previous_click(monkeypatch):
+def test_the_second_click_does_not_duplicate_after_the_first_one_failed(monkeypatch):
     """⛔ Сценарий ПОСЛЕ чужого действия оператора, не на свежем клиенте.
 
     Тест на СВЕЖЕМ объекте не проверяет взаимодействие с предысторией
@@ -134,8 +185,16 @@ def test_the_client_retries_post_after_the_operators_previous_click(monkeypatch)
     finally:
         client.close()
 
-    assert len(calls["save"]) == ATTEMPTS_WITH_RETRY
-    assert len(calls["complete"]) == ATTEMPTS_WITH_RETRY
+    assert len(calls["save"]) == ATTEMPTS_WITH_RETRY, (
+        "полезный повтор «API ещё не поднят» обязан пережить правку"
+    )
+    assert len(calls["complete"]) == ATTEMPTS_WITHOUT, (
+        "второй клик по уже пожившему клиенту продублировал эффект"
+    )
+    # ⛔ Утверждается РАЗНИЦА, а не совпадение с состоянием «до»
+    # (`PROTOCOL §3`): до правки оба числа были 4, и равенство было зелёным
+    # ровно потому, что дефект жив.
+    assert len(calls["save"]) != len(calls["complete"])
 
 
 def test_the_live_battle_profile_by_the_letter(monkeypatch):
@@ -153,12 +212,17 @@ def test_the_live_battle_profile_by_the_letter(monkeypatch):
 
     client = _client(httpx.MockTransport(handler), monkeypatch, timeout=60.0)
     try:
-        with pytest.raises(APIError):
+        with pytest.raises(APIError) as failure:
             client._request("POST", "/api/validation/u/masks/complete")
     finally:
         client.close()
 
-    assert len(seen) == ATTEMPTS_WITH_RETRY
+    assert len(seen) == ATTEMPTS_WITHOUT, (
+        "один клик оператора снова собирает конкурентные обработчики"
+    )
+    # Сообщение называет ФАКТИЧЕСКОЕ число попыток: «after 4 attempts» после
+    # единственной было бы неправдой ровно там, где разбирают инцидент.
+    assert "after 1 attempts" in str(failure.value)
 
 
 def test_the_defaults_of_the_client_are_the_ones_the_border_was_measured_on():
@@ -180,3 +244,70 @@ def test_health_check_is_the_only_call_that_opts_out_of_retries():
     src = Path(inspect.getfile(APIClient)).read_text(encoding="utf-8")
     assert len(re.findall(r"retries=0", src)) == 1
     assert len(re.findall(r"retries=1", src)) == 3
+
+
+def test_an_endpoint_the_client_does_not_even_have_is_protected_too(monkeypatch):
+    """⭐ Лечение не держится на перечне «таких POST ровно 36».
+
+    Адрес выдуман — такого эндпоинта в клиенте нет и не было. Защита всё
+    равно работает, потому что вопрос задан состоянию («соединение было?»),
+    а не списку. Значит POST, который заведут завтра, защищён с рождения,
+    и ошибка в числе 36 перестаёт быть дефектом (`PROTOCOL §3`, замеры 1-41
+    и 1-6 доработка 4).
+    """
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.method)
+        raise httpx.ReadTimeout("сервер думает", request=request)
+
+    client = _client(httpx.MockTransport(handler), monkeypatch)
+    try:
+        with pytest.raises(APIError):
+            client._request("POST", "/api/чего-нибудь/нового/{uid}/start")
+    finally:
+        client.close()
+
+    assert len(seen) == ATTEMPTS_WITHOUT
+
+
+def test_the_refusal_to_retry_leaves_a_trace_with_the_address(monkeypatch, caplog):
+    """Д2: у неповторённого запроса остаётся след, и в нём адрес с uid.
+
+    Иначе «клиент не дошёл» и «клиент сдался нарочно» в логе неразличимы —
+    а разбирают инцидент именно по логу.
+    """
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("60 с вышли", request=request)
+
+    client = _client(httpx.MockTransport(handler), monkeypatch)
+    uid = "5f2c1a7e-0000-4000-8000-000000000001"
+    try:
+        with caplog.at_level("WARNING", logger="ui.services.api_client"):
+            with pytest.raises(APIError):
+                client._request("POST", f"/api/validation/{uid}/masks/complete")
+    finally:
+        client.close()
+
+    trace = [r.getMessage() for r in caplog.records]
+    assert any(uid in line and "ReadTimeout" in line for line in trace), trace
+    assert any("POST" in line for line in trace), trace
+
+
+def test_a_successful_call_says_nothing(monkeypatch, caplog):
+    """Порог с другой стороны: удачный POST молчит.
+
+    Без этого сторож «след есть» был бы зелён и у болтливого клиента,
+    который пишет предупреждение на каждый успешный запрос.
+    """
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "started"})
+
+    client = _client(httpx.MockTransport(handler), monkeypatch)
+    try:
+        with caplog.at_level("WARNING", logger="ui.services.api_client"):
+            assert client._request("POST", "/api/graph/u/build") == {"status": "started"}
+    finally:
+        client.close()
+
+    assert [r.getMessage() for r in caplog.records] == []
