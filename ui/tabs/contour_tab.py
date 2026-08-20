@@ -284,6 +284,14 @@ class ContourTab(BaseGraphTab):
         QApplication.setOverrideCursor(Qt.WaitCursor)
         self._recog_worker = _ContourExtractWorker(self.api_client, self.uid, ann_ids)
         self._recog_worker.done.connect(self._on_recognition_done)
+        # Гасит поток разрушение САМОЙ вкладки, а не её слоты: `closeEvent`
+        # при закрытии вкладки не поднимается вовсе (`_remove_tab_widget`
+        # делает `setParent(None)` + `deleteLater()`), а связь с
+        # `_on_recognition_done` Qt рвёт вместе с получателем. Получатель
+        # ЭТОЙ связи — сам поток, поэтому она вкладку переживает: иначе
+        # брошенный воркер опрашивает сервер ещё до 600 с, а процесс падает
+        # на его разрушении (пункт 1.x17, замер §102ж).
+        self.destroyed.connect(self._recog_worker.stop)
         self._recog_worker.start()
 
     def _stop_recog_worker(self):

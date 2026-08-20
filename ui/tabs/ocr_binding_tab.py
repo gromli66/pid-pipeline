@@ -135,12 +135,16 @@ class _SubTabToolbar(QWidget):
         self.custom_layout.setSpacing(4)
         layout.addLayout(self.custom_layout)
 
-        # скрытые кнопки удаления/перемещения (совместимость с обработчиками)
-        self.btn_del = QPushButton()
+        # Скрытые кнопки удаления/перемещения (совместимость с обработчиками).
+        # Родитель обязателен: в раскладку они не кладутся, а виджет без
+        # родителя и без раскладки — ВЕРХНЕУРОВНЕВЫЙ и живёт до конца
+        # процесса. `setVisible(False)` ниже держит их скрытыми и при
+        # показе родителя (пункт 1.x17).
+        self.btn_del = QPushButton(self)
         self.btn_del.setCheckable(True)
         self.btn_del.setVisible(False)
         self.btn_del.clicked.connect(self.delete_clicked.emit)
-        self.btn_move = QPushButton()
+        self.btn_move = QPushButton(self)
         self.btn_move.setCheckable(True)
         self.btn_move.setVisible(False)
         self.btn_move.clicked.connect(self.move_clicked.emit)
@@ -309,7 +313,13 @@ class OcrBindingTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
         layout.addWidget(self.loading_label)
 
         # === Sub-tab 1: KKS ===
-        self.kks_toolbar = _SubTabToolbar()
+        # ⛔ Родитель и явное `hide()` обязательны: подвкладку убрал П3
+        # (`addTab` ниже закомментирован, самого `sub_tabs` в коде уже нет),
+        # то есть панель не попадает ни в чью раскладку и без родителя
+        # остаётся ВЕРХНЕУРОВНЕВЫМ виджетом до конца процесса — по две штуки
+        # на каждое открытие вкладки, у оператора (пункт 1.x17).
+        self.kks_toolbar = _SubTabToolbar(self)
+        self.kks_toolbar.hide()
         self.kks_toolbar.hint_label.setText(
             "Ctrl+drag: привязка/слияние | Ctrl+ПКМ: отвязка | Ctrl+2×клик: текст | Shift+клик: подтвердить"
         )
@@ -342,7 +352,9 @@ class OcrBindingTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
         # self.sub_tabs.addTab(self.kks_toolbar, "🏷 KKS")
 
         # === Sub-tab 2: Diameter ===
-        self.diam_toolbar = _SubTabToolbar()
+        # Родитель и `hide()` — по той же причине, что у `kks_toolbar` выше.
+        self.diam_toolbar = _SubTabToolbar(self)
+        self.diam_toolbar.hide()
         self.diam_toolbar.hint_label.setText(
             "Ctrl+drag: привязка к ребру | Ctrl+ПКМ: отвязка | Ctrl+2×клик: текст"
         )
@@ -438,6 +450,11 @@ class OcrBindingTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
         self._recog_thread.started.connect(self._recog_worker.run)
         self._recog_worker.finished.connect(self._on_recognize_done)
         self._recog_worker.error.connect(self._on_recognize_error)
+        # Гасит поток САМ поток: `_cleanup_recog_thread` зовут только слоты
+        # выше, а связи с ними Qt рвёт вместе с разрушаемой вкладкой
+        # (пункт 1.x17).
+        self._recog_worker.finished.connect(self._recog_thread.quit)
+        self._recog_worker.error.connect(self._recog_thread.quit)
         self._recog_thread.start()
 
     def _cleanup_recog_thread(self):
@@ -634,11 +651,25 @@ class OcrBindingTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
         self._download_thread.started.connect(self._downloader.run)
         self._downloader.finished.connect(self._on_download_finished)
         self._downloader.error.connect(self._on_download_error)
-        self._downloader.progress.connect(
-            lambda msg: self.loading_label.setText(msg)
-        )
+        self._downloader.progress.connect(self._on_download_progress)
+        # Гасит поток САМ поток, а не слот вкладки: связи со слотами Qt рвёт
+        # вместе с разрушаемой вкладкой, и уйти из неё до конца загрузки
+        # значило оставить бегущий `QThread` навсегда (пункт 1.x17).
+        self._downloader.finished.connect(self._download_thread.quit)
+        self._downloader.error.connect(self._download_thread.quit)
 
         self._download_thread.start()
+
+    @Slot(str)
+    def _on_download_progress(self, msg: str):
+        """Ход загрузки — в GUI-потоке (пункт 1.x17).
+
+        Лямбда, связанная БЕЗ получателя-`QObject`, принадлежит отправителю,
+        а отправитель переехал `moveToThread` в рабочий поток — то есть
+        `setText` красил виджет оттуда, на каждом артефакте. Со `@Slot`-ом
+        вкладки `Qt.AutoConnection` разворачивается в очередь GUI-потока.
+        """
+        self.loading_label.setText(msg)
 
     @Slot(dict)
     def _on_download_finished(self, artifacts: dict):

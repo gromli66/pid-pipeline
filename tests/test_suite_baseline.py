@@ -119,6 +119,54 @@ def test_killed_run_on_check_is_unjudgeable(monkeypatch, capsys, run_rc):
     assert "[позеленело]" not in out, "мёртвый прогон починки не наблюдал — это артефакт обрыва"
 
 
+#: Настоящий вывод краха `tests/ui` (прогон пункта 1.x17, 2026-08-20), сжатый
+#: до формы: строка теста с маркером краха, шапка `faulthandler` с ФАЙЛОМ,
+#: СТРОКОЙ и ИМЕНЕМ тест-функции — и следом внутренности `pytest`, которых
+#: заведомо больше, чем длина хвоста.
+CRASH_RUN = (
+    "tests/ui/test_square_size_ops.py::test_load_points_accepts_worker_format PASSED\n"
+    "tests/ui/test_unsaved_question.py::test_frame_tab_with_edits_is_asked_on_back "
+    "Windows fatal exception: access violation\n"
+    "\n"
+    "Current thread 0x000025f8 (most recent call first):\n"
+    '  File "tests/ui/test_unsaved_question.py", line 223 in _open_frame_tab\n'
+    '  File "tests/ui/test_unsaved_question.py", line 238 in '
+    "test_frame_tab_with_edits_is_asked_on_back\n"
+    + "".join('  File "_pytest/runner.py", line %d in pytest_runtest_call\n' % i
+             for i in range(30))
+)
+
+CRASHED_TEST = "test_frame_tab_with_edits_is_asked_on_back"
+
+
+def test_dead_run_names_the_test_that_died(monkeypatch, capsys):
+    """⛔ Стенд обязан НАЗЫВАТЬ упавший тест, а не печатать хвост вслепую.
+
+    Замер 1.x17 (§102): полный прогон `tests/ui` падает `0xC0000005` примерно
+    раз из двух, и имя виновника В ВЫВОДЕ ЕСТЬ — его печатает `faulthandler`
+    вместе с файлом и строкой. Но блок длиннее хвоста в 25 строк, поэтому
+    хвост показывал одни внутренности `pytest`, и §101 записал это как «строки
+    с именем теста нет ни локально, ни в CI». Строка была; слеп был хвост.
+
+    Фикстура заперта с той стороны, с которой ослепла бы: имя обязано быть
+    ВНЕ последних 25 строк, иначе сторож зелен и без правки (та же грань, что
+    `assert len(MANY_RED) > MAX_FIXED` в соседнем тесте).
+    """
+    blind = "\n".join(CRASH_RUN.splitlines()[-25:])
+    assert CRASHED_TEST not in blind, (
+        "фикстура слабее боевой: имя видно и слепому хвосту — сторож ослеп бы"
+    )
+
+    _check_stand(monkeypatch, (CRASH_RUN, 3221225477), base=BIG_BASE)
+    assert sb.cmd_check() == 2
+
+    out = capsys.readouterr().out
+    assert "Windows fatal exception" in out, "блок краха в вывод не попал"
+    assert CRASHED_TEST in out, (
+        "стенд не назвал упавший тест — по такому выводу корень не ищется"
+    )
+
+
 def test_truncated_tail_on_check_is_unjudgeable(monkeypatch, capsys):
     """Та же ложь при ШТАТНОМ коде возврата — значит коротить обязан весь `verdict()`.
 
