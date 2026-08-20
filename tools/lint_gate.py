@@ -29,6 +29,12 @@
 такой прогон умирал `RuntimeError` — трейсбеком и кодом 1, то есть тем же
 кодом, что доказанный рост долга. Полярность была безопасная (громко и
 красным), но перепутанная: тут чинят обстановку, а не код.
+
+⛔ Пункт GATE-8 доделал ту же полярность на пути ЧТЕНИЯ: пустой счёт при
+непустом эталоне — тоже убитый прогон, и `--check` печатал по нему `[ПРОВАЛ]`
+и отдавал 1, тогда как `--write-baseline` на ТОМ ЖЕ условии говорил «судить
+нечем» и отдавал 2. Условие теперь одно на оба пути (`measurement_dead()`)
+и стоит ПЕРВЫМ: на мёртвом прогоне сравнивать не с чем.
 """
 from __future__ import annotations
 
@@ -119,9 +125,35 @@ def debt_grown(counts: dict[str, int],
             if n > known.get(f, 0)}
 
 
+def measurement_dead(counts: dict[str, int], base: dict) -> str | None:
+    """Почему замер ruff не годен, или None — замер состоялся.
+
+    Ноль нарушений при непустом эталоне — это не долг в 174 места, оплаченный
+    между двумя прогонами, а убитый ruff: пустой вывод, сорванный разбор,
+    потерянный конфиг. Арифметика ОДНА на оба пути (пункт GATE-8): до него это
+    условие жило в двух местах и два судьи одного стенда разошлись формой —
+    `write_blocked()` называл его «судить нечем» и отдавал 2, а `verdict()`
+    печатал `[ПРОВАЛ]` и отдавал 1, то есть тот же код, что доказанный рост
+    долга. Тот же урок, что у `debt_grown` и у пола набора в
+    `suite_baseline.floor_problems`.
+    """
+    was = base.get("ruff", {}).get("total")
+    if was and not counts:
+        return (f"ноль нарушений при непустом эталоне ({was}) — прогон ruff убит: "
+                "долг такого размера не оплачивается между двумя прогонами")
+    return None
+
+
 def verdict(counts: dict[str, int], mypy_bad: int,
-            base: dict) -> tuple[bool, list[str]]:
-    """-> (гейт пройден, строки отчёта). Отделено от печати ради теста."""
+            base: dict) -> tuple[int, list[str]]:
+    """-> (код вердикта, строки отчёта). Отделено от печати ради теста.
+
+    Три исхода (`PROTOCOL §5`), а не два — как на пути записи: 0 — долг не
+    вырос, 1 — опровергнуто (вырос долг ruff или грязен mypy), 2 — СУДИТЬ
+    НЕЧЕМ. ⛔ Ветка «замер не состоялся» стоит ПЕРВОЙ и КОРОТИТ вердикт
+    (пункт GATE-8): на мёртвом прогоне сравнивать не с чем, и `[долг оплачен]`
+    по каждому файлу эталона был бы не наблюдением, а следом обрыва.
+    """
     known = base.get("ruff", {}).get("per_file", {})
     grown = debt_grown(counts, known)
     paid = {f: (n, counts.get(f, 0)) for f, n in known.items()
@@ -131,9 +163,10 @@ def verdict(counts: dict[str, int], mypy_bad: int,
     lines = [f"ruff {'/'.join(base.get('ruff', {}).get('select', ['?']))}: "
              f"{total} нарушений в {len(counts)} файлах"
              + (f" (эталон {was})" if was is not None else "")]
-    if was and not counts:
-        lines.append("[ПРОВАЛ] ноль нарушений при непустом эталоне — прогон убит")
-        return False, lines
+    dead = measurement_dead(counts, base)
+    if dead:
+        lines.append(f"[СУДИТЬ НЕЧЕМ] {dead}")
+        return EXIT_UNJUDGED, lines
     for f, (before, now) in sorted(grown.items()):
         lines.append(f"[ПРОВАЛ] {f}: широких except {before} -> {now}")
     for f, (before, now) in sorted(paid.items()):
@@ -143,7 +176,7 @@ def verdict(counts: dict[str, int], mypy_bad: int,
         lines.append("[ПРОВАЛ] mypy на своём списке обязан быть чистым")
     if not grown and not mypy_bad:
         lines.append("[OK] долг не вырос")
-    return (not grown and not mypy_bad), lines
+    return (EXIT_REFUTED if grown or mypy_bad else 0), lines
 
 
 def write_blocked(counts: dict[str, int],
@@ -164,9 +197,9 @@ def write_blocked(counts: dict[str, int],
     ruff = base.get("ruff", {})
     if not ruff:                                    # первый снимок
         return [], []
-    if ruff.get("total") and not counts:
-        return ["ноль нарушений при непустом эталоне — прогон ruff убит, "
-                "а пересъём записал бы пустой долг"], []
+    dead = measurement_dead(counts, base)           # арифметика общая (GATE-8)
+    if dead:
+        return [f"{dead}, а пересъём записал бы пустой долг"], []
     grown = debt_grown(counts, ruff.get("per_file", {}))
     if grown:
         return [], ["долг широких except вырос против эталона — пересъём его "
@@ -219,13 +252,13 @@ def main() -> int:
         print(f"эталон переснят: {BASELINE} ({sum(counts.values())} нарушений)")
         return 0
 
-    ok, lines = verdict(counts, mypy_bad, read_baseline())
+    code, lines = verdict(counts, mypy_bad, read_baseline())
     print("\n".join(lines))
     if mypy_bad and mypy_tail:
         print(mypy_tail)
-    if not args.check:
+    if not args.check:            # голый отчёт гейтом не является — всегда 0
         return 0
-    return 0 if ok else EXIT_REFUTED
+    return code
 
 
 if __name__ == "__main__":

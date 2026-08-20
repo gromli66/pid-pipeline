@@ -24,47 +24,57 @@ BASE = {"ruff": {"select": ["BLE001", "E722"], "total": 5,
 
 
 def _lines(counts, mypy_bad=0, base=BASE):
-    ok, lines = lint_gate.verdict(counts, mypy_bad, base)
-    return ok, "\n".join(lines)
+    """-> (код вердикта, текст). Код, а не «да/нет»: исходов три (пункт GATE-8)."""
+    code, lines = lint_gate.verdict(counts, mypy_bad, base)
+    return code, "\n".join(lines)
 
 
 def test_no_growth_is_green():
-    ok, text = _lines({"app/api/validation.py": 3, "ui/tabs/frame_tab.py": 2})
-    assert ok
+    code, text = _lines({"app/api/validation.py": 3, "ui/tabs/frame_tab.py": 2})
+    assert code == 0
     assert "[OK]" in text
 
 
 def test_growth_in_dirty_file_fails():
     """Главный сценарий: файл уже в долгу, туда дописали ещё один except."""
-    ok, text = _lines({"app/api/validation.py": 4, "ui/tabs/frame_tab.py": 2})
-    assert not ok
+    code, text = _lines({"app/api/validation.py": 4, "ui/tabs/frame_tab.py": 2})
+    assert code == 1
     assert "app/api/validation.py: широких except 3 -> 4" in text
 
 
 def test_first_violation_in_clean_file_fails():
-    ok, text = _lines({"app/api/validation.py": 3, "ui/tabs/frame_tab.py": 2,
-                       "worker/tasks/graph.py": 1})
-    assert not ok
+    code, text = _lines({"app/api/validation.py": 3, "ui/tabs/frame_tab.py": 2,
+                         "worker/tasks/graph.py": 1})
+    assert code == 1
     assert "worker/tasks/graph.py: широких except 0 -> 1" in text
 
 
 def test_paid_debt_is_reported_but_green():
-    ok, text = _lines({"app/api/validation.py": 1, "ui/tabs/frame_tab.py": 2})
-    assert ok
+    code, text = _lines({"app/api/validation.py": 1, "ui/tabs/frame_tab.py": 2})
+    assert code == 0
     assert "[долг оплачен] app/api/validation.py: 3 -> 1" in text
 
 
-def test_empty_result_on_nonempty_baseline_is_a_failure():
-    """Убитый линтер не имеет права выглядеть оплаченным долгом."""
-    ok, text = _lines({})
-    assert not ok
-    assert "прогон убит" in text
+def test_empty_result_on_nonempty_baseline_is_unjudgeable():
+    """⛔ Полярность GATE-8: убитый линтер — «судить нечем», а не рост долга.
+
+    Ноль нарушений при эталоне в 174 места — это не оплата долга одним
+    прогоном, а мёртвый ruff. До GATE-8 путь ЧТЕНИЯ печатал здесь `[ПРОВАЛ]`
+    и отдавал 1 (замер 2026-08-20, §101в), тогда как путь ЗАПИСИ на том же
+    условии говорил «судить нечем» и отдавал 2: два судьи одного стенда
+    разошлись формой. Зелёным это не становится — 2 так же не ноль.
+    """
+    code, text = _lines({})
+    assert code == 2
+    assert "прогон ruff убит" in text
+    assert "[ПРОВАЛ]" not in text
+    assert "[долг оплачен]" not in text, "мёртвый прогон оплаты не наблюдал — это артефакт"
 
 
 def test_mypy_errors_fail_the_gate():
-    ok, text = _lines({"app/api/validation.py": 3, "ui/tabs/frame_tab.py": 2},
-                      mypy_bad=2)
-    assert not ok
+    code, text = _lines({"app/api/validation.py": 3, "ui/tabs/frame_tab.py": 2},
+                        mypy_bad=2)
+    assert code == 1
     assert "mypy" in text
 
 
@@ -232,6 +242,24 @@ def test_silent_git_is_unjudgeable(tmp_path, monkeypatch, capsys):
     assert lint_gate.main() == 2
     out = capsys.readouterr().out
     assert "[СУДИТЬ НЕЧЕМ]" in out and "not a git repository" in out
+
+
+def test_killed_ruff_on_check_is_unjudgeable_end_to_end(tmp_path, monkeypatch, capsys):
+    """Тот же убитый ruff, но через весь путь ЧТЕНИЯ, до кода возврата `main()`.
+
+    Отдельно от юнита на `verdict()`: между ними лежит `main()`, которая до
+    GATE-8 переводила «не ok» в `EXIT_REFUTED` и тем возвращала перепутанную
+    полярность обратно. Гейт пункта требует буквально: ни одной строки
+    `[ПРОВАЛ]` и код 2.
+    """
+    _live_stand(tmp_path, monkeypatch, ["--check"])
+    monkeypatch.setattr(lint_gate, "ruff_counts", lambda: {})
+    monkeypatch.setattr(lint_gate, "mypy_errors", lambda: (0, ""))
+
+    assert lint_gate.main() == 2
+    out = capsys.readouterr().out
+    assert "[СУДИТЬ НЕЧЕМ]" in out and "прогон ruff убит" in out
+    assert "[ПРОВАЛ]" not in out
 
 
 def test_live_linters_still_judge(tmp_path, monkeypatch, capsys):

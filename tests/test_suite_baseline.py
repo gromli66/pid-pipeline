@@ -72,7 +72,20 @@ def test_compare_separates_regression_from_fix():
     assert fixed == ["a::t1"]
 
 
-def _check_stand(monkeypatch, run, collect="tests/test_alpha.py::test_one\n\n1 test collected in 1.0s\n"):
+# Настоящая база несёт 22 красных (`tools/bench/suite_baseline.json`, снимок
+# 2026-08-19), и полярность ломалась ровно на этом числе: у мёртвого прогона
+# не разобрано ни одного красного, поэтому ВСЕ 22 выглядели «позеленевшими»
+# и перешагивали порог `MAX_FIXED`. Фикстура `BASE` выше несёт три красных —
+# ниже порога, — и потому дефекта GATE-8 не видела вовсе (замер §101а: тест
+# убитого прогона был зелёным и ДО правки). Число здесь абсолютное: вычислять
+# его из `MAX_FIXED` нельзя, иначе тест останется зелёным при любом её значении.
+MANY_RED = [f"tests/test_dead_{i}.py::test_x" for i in range(22)]
+BIG_BASE = dict(BASE, red=MANY_RED,
+                totals={"failed": 22, "passed": 900, "skipped": 13, "errors": 0})
+
+
+def _check_stand(monkeypatch, run, collect="tests/test_alpha.py::test_one\n\n1 test collected in 1.0s\n",
+                 base=BASE):
     """Стенд ЧТЕНИЯ: pytest подменён парой (вывод прогона, вывод сбора).
 
     Пол базы опущен до 1, чтобы сбор из одной строки его не ронял: иначе
@@ -81,25 +94,47 @@ def _check_stand(monkeypatch, run, collect="tests/test_alpha.py::test_one\n\n1 t
     """
     monkeypatch.setattr(sb, "_pytest",
                         lambda args: (collect, 0) if "--collect-only" in args else run)
-    monkeypatch.setattr(sb, "_load_baseline", lambda: dict(BASE, min_collected=1))
+    monkeypatch.setattr(sb, "_load_baseline", lambda: dict(base, min_collected=1))
 
 
-def test_killed_run_on_check_is_unjudgeable(monkeypatch, capsys):
-    """⛔ Дыра 1-30 (б): у пути ЧТЕНИЯ третьего исхода не было вовсе.
+@pytest.mark.parametrize("run_rc", [77, 3221225477])
+def test_killed_run_on_check_is_unjudgeable(monkeypatch, capsys, run_rc):
+    """⛔ Дыра 1-30 (б) плюс полярность GATE-8: у мёртвого прогона нет состава.
 
-    `os._exit(77)` в первом тесте (класс §24.6 — access violation в этом же
-    наборе уже случался) обрывает вывод: итоговой строки нет, красных не
-    разобрано ни одного. Гейт 0.3 научился на этом краснеть — но тем же
-    кодом 1, что на доказанной регрессии, и вызывающий не мог отличить
-    «чини обстановку» от «чини код». Зелёным это не становится ни на шаг:
-    2 так же не ноль, и CI на ней так же красен.
+    `os._exit(77)` и `0xC0000005` (access violation §24.6 — в `tests/ui` он
+    живой, примерно два прогона из четырёх) обрывают вывод: итоговой строки
+    нет, красных не разобрано ни одного. 1-30 научил стенд говорить «судить
+    нечем» — но не ПЕРВЫМ, и на настоящей базе вердикт всё равно выходил
+    единицей: замер 2026-08-20 (§101а) — два честных `[СУДИТЬ НЕЧЕМ]`, а
+    следом `[ПРОВАЛ] позеленело сразу 22 тестов (порог 10)` и код 1.
+    Зелёным это не становится ни на шаг: 2 так же не ноль, и CI на ней красен.
     """
-    _check_stand(monkeypatch, ("tests/test_alpha.py .\n", 77))
+    assert len(MANY_RED) > sb.MAX_FIXED, "фикстура ниже порога — тест ослеп бы"
+    _check_stand(monkeypatch, ("tests/test_alpha.py .\n", run_rc), base=BIG_BASE)
 
     assert sb.cmd_check() == 2
     out = capsys.readouterr().out
-    assert "[СУДИТЬ НЕЧЕМ]" in out and "77" in out
+    assert "[СУДИТЬ НЕЧЕМ]" in out and str(run_rc) in out
     assert "[ПРОВАЛ]" not in out, "покраснел не тот механизм: провал вместо «судить нечем»"
+    assert "[позеленело]" not in out, "мёртвый прогон починки не наблюдал — это артефакт обрыва"
+
+
+def test_truncated_tail_on_check_is_unjudgeable(monkeypatch, capsys):
+    """Та же ложь при ШТАТНОМ коде возврата — значит коротить обязан весь `verdict()`.
+
+    Замер 2026-08-20 (§101б): итоговая строка на месте и говорит про 22 красных,
+    а идентификаторов разобрано 2 — стенд печатал `[ПРОВАЛ] позеленело сразу
+    20 тестов` и отдавал 1. `run_rc` здесь из штатных `{0, 1}`, то есть одной
+    ветки по коду возврата мало: негоден весь замер, а не только код процесса.
+    """
+    truncated = (f"FAILED {MANY_RED[0]} - X\nFAILED {MANY_RED[1]} - X\n"
+                 "22 failed, 900 passed, 13 skipped in 20.11s\n")
+    _check_stand(monkeypatch, (truncated, 1), base=BIG_BASE)
+
+    assert sb.cmd_check() == 2
+    out = capsys.readouterr().out
+    assert "[СУДИТЬ НЕЧЕМ]" in out and "вывод неполон" in out
+    assert "[ПРОВАЛ]" not in out
 
 
 def test_new_red_on_check_is_still_a_regression(monkeypatch, capsys):
@@ -116,17 +151,62 @@ def test_new_red_on_check_is_still_a_regression(monkeypatch, capsys):
     assert "tests/test_delta.py::test_four" in out
 
 
-def test_proven_regression_outranks_a_broken_measurement(monkeypatch, capsys):
-    """Приоритет тот же, что у трёх соседей: доказанный регресс сильнее неполноты.
+def test_mass_greening_on_a_live_run_is_still_a_failure(monkeypatch, capsys):
+    """Вторая обратная полярность: порог `MAX_FIXED` стережёт по-прежнему.
 
-    Прогон убит (код 77) И в нём виден красный, которого нет в базе, — вердикт 1,
-    а не 2: про код уже есть что сказать.
+    Так выглядит прогон, обрезанный ключом, но вышедший ШТАТНО: код 1,
+    итоговая строка на месте, счётчики сходятся с числом разобранных id —
+    и 20 красных базы «позеленели». Прогон состоялся, значит состав это
+    наблюдение, а не артефакт: вердикт 1. Без этого теста правка GATE-8
+    односторонняя — порог перестал бы ловить обрезанный прогон вовсе.
     """
-    _check_stand(monkeypatch, (REPORT_GREW, 77))
+    live = (f"FAILED {MANY_RED[0]} - X\nFAILED {MANY_RED[1]} - X\n"
+            "2 failed, 940 passed, 13 skipped in 30.10s\n")
+    _check_stand(monkeypatch, (live, 1), base=BIG_BASE)
 
     assert sb.cmd_check() == 1
     out = capsys.readouterr().out
-    assert "[СУДИТЬ НЕЧЕМ]" in out and "77" in out
+    assert "[ПРОВАЛ] позеленело сразу 20 тестов" in out
+    assert "[СУДИТЬ НЕЧЕМ]" not in out
+
+
+def test_a_dead_run_outranks_even_a_visible_new_red(monkeypatch, capsys):
+    """⛔ ПОЛЯРНОСТЬ РАЗВЁРНУТА пунктом GATE-8 — и это не смягчение гейта.
+
+    До GATE-8 здесь стоял обратный вердикт: приоритет «доказанная регрессия
+    сильнее неполноты» (1-25) пропускал единицу вперёд даже на убитом прогоне.
+    Приоритет верен для СОСТОЯВШЕГОСЯ прогона; у мёртвого нет ни счётчиков,
+    ни полного списка красных — рядом с настоящим новым красным точно так же
+    «позеленели» бы все остальные, и вызывающий получал бы про код вердикт,
+    сделанный из отсутствия наблюдений. Обстановку чинят и перемеряют, красный
+    никуда не денется; а вот ошибочный `revert` чужой работы по коду 1 уже
+    случился (2026-08-20, цена — час ложного расследования).
+    """
+    _check_stand(monkeypatch, (REPORT_GREW, 3221225477), base=BIG_BASE)
+
+    assert sb.cmd_check() == 2
+    out = capsys.readouterr().out
+    assert "[СУДИТЬ НЕЧЕМ]" in out and "3221225477" in out
+    assert "[ПРОВАЛ]" not in out
+
+
+def test_priority_survives_where_the_run_did_happen(monkeypatch, capsys):
+    """Обратная сторона GATE-8: приоритет 1-25 отменён ТОЛЬКО для обрыва.
+
+    Прогон состоялся (код 1, счётчики сходятся с числом разобранных id), а
+    «судить нечем» пришло от git, который не ответил про исчезнувший файл:
+    это неполнота СОСТАВА, а не мёртвый замер. Про код при этом есть что
+    сказать — новый красный, — и вердикт по-прежнему 1.
+    """
+    base = dict(BASE, per_file={"tests/test_alpha.py": [1, "0" * 12],
+                                "tests/test_ghost.py": [20, "0" * 12]})
+    _check_stand(monkeypatch, (REPORT_GREW, 1), base=base)
+    monkeypatch.setattr(sb, "tracked_by_git",
+                        lambda paths: (set(paths), "fatal: not a git repository"))
+
+    assert sb.cmd_check() == 1
+    out = capsys.readouterr().out
+    assert "[СУДИТЬ НЕЧЕМ] git не ответил" in out
     assert "[ПРОВАЛ] новые красные" in out
 
 
