@@ -122,6 +122,19 @@ curl -o pipe_mask.png http://localhost:8000/api/diagrams/{uid}/download/pipe_mas
 
 `artifact_type` — любое значение из `ArtifactType` enum (см. [ARCHITECTURE.md §6](ARCHITECTURE.md#6-артефакты-pipeline)).
 
+### Retry после ошибки
+
+```bash
+curl -X POST http://localhost:8000/api/diagrams/{uid}/retry
+# {"status": "validated_bbox", "message": "Status reset to validated_bbox"}
+```
+
+**Precondition:** `status == error` (иначе 400; диаграммы нет — 404).
+**Transition:** `error → <статус перед упавшим этапом>` по карте `error_stage → статус`;
+`error_message`/`error_stage` снимаются, артефакты НЕ удаляются. Полная карта, её дефолт
+и условие, при котором клиент вообще сюда ходит, —
+[STATUS_MACHINE.md §5](STATUS_MACHINE.md#выход-из-тупика-post-apidiagramsuidretry).
+
 ---
 
 ## 4. Detection
@@ -248,7 +261,10 @@ curl -X POST "http://localhost:8000/api/detection/{uid}/detect?model_id=yolov8m_
 | Метод | Путь | Описание |
 |-------|------|----------|
 | POST | `/{uid}/junctions/start` | `detected_junctions → validating_junctions` |
-| POST | `/{uid}/junctions/complete` | Завершить → `validated_junctions`, auto-dispatch graph + SAM2 + OCR |
+| POST | `/{uid}/junctions/complete` | Завершить → `validated_junctions`, auto-dispatch graph + OCR |
+
+**SAM2-контуры отсюда НЕ запускаются** (давно): `contour_task_id` в ответе всегда `null`,
+контуры считаются поточечно из своей вкладки через `POST /api/contours/{uid}/extract`.
 
 ### Graph validation
 
@@ -262,6 +278,22 @@ curl -X POST "http://localhost:8000/api/detection/{uid}/detect?model_id=yolov8m_
 **Разница complete-simple vs complete:** `complete-simple` запускает OCR (flow: граф → simple val → OCR → binding → advanced editor → FXML). `complete` запускает FXML напрямую (финальный шаг после advanced editor).
 
 **Примечание:** OCR обычно уже запущен параллельно с graph build из `complete_junction_validation` (см. [§7 Validation](#7-validation)). Dispatch OCR из `complete-simple` — **idempotent safety net**: task проверяет наличие артефакта `OCR_RESULT` и пропускает выполнение, если OCR уже завершён.
+
+### Отказ отправки задачи — 503 у всех четырёх `complete`
+
+`masks/complete`, `junctions/complete`, `graph/complete-simple`, `graph/complete` ставят
+задачу ПОСЛЕ коммита статуса. Брокер лёг между двумя действиями — эндпоинт **возвращает
+состояние, каким оно было до вызова** (статус и оба поля ошибки), и отвечает **503**;
+`event=dispatch_failed` в логе несёт `uid` и точку возврата. Точка возврата лежит внутри
+`Precondition` того же эндпоинта, поэтому повтор после подъёма брокера проходит.
+Модель отказа, классы исключений и заявленные границы — [STATUS_MACHINE.md §5](STATUS_MACHINE.md).
+
+⚠ **`task_id: null` в ответе 200 значит ровно одно — «цепочка уже ушла вперёд»** (идемпотентный
+повтор). Раньше тем же ответом отвечал и мёртвый брокер, и различить их клиенту было нечем.
+
+⚠ **Исключение — параллельный OCR в `junctions/complete`:** его отказ НЕ откатывает ничего
+(сборка графа уже в брокере) — он назван в `message` и в `ocr_task_id: null`, а восстановление
+даёт safety net из `complete-simple` выше.
 
 ---
 

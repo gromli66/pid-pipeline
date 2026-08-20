@@ -445,13 +445,24 @@ async def retry_operation(
             detail=f"Cannot retry: status is '{diagram.status.value}', expected 'error'"
         )
 
-    # Маппинг error_stage → предыдущий статус для retry
+    # Маппинг error_stage → предыдущий статус для retry.
+    # Этой картой оператор выходит из тупика «ноль кнопок из 13»: клиент не
+    # гадает, куда откатывать, а спрашивает сервер (страховка
+    # `ui/widgets/diagram_workspace.py: _on_error_retry`). Значения, которых
+    # здесь нет, уходят в дефолт `UPLOADED` — то есть в САМОЕ НАЧАЛО
+    # конвейера, где у оператора остаётся одна кнопка «Очистка рамки», хотя
+    # артефакты лежат нетронутыми. Поэтому карта обязана покрывать всё, что
+    # пишется в `error_stage`; перебор держит `tests/test_retry_target_table.py`.
     stage_to_status = {
         # Phase 1: Detection
         "detecting": DiagramStatus.FRAME_CLEANED,
         "creating_cvat_task": DiagramStatus.DETECTED,
         "fetching_annotations": DiagramStatus.VALIDATING_BBOX,
         # Phase 2: Segmentation + skeleton #1
+        # Направление — первое звено цепочки `POST /segment`, вход которой
+        # ровно `validated_bbox`; оттуда та же кнопка «Выделение труб»
+        # перезапускает цепочку С НАПРАВЛЕНИЯ (`app/api/segmentation.py:109`).
+        "direction_classification": DiagramStatus.VALIDATED_BBOX,
         "segmenting": DiagramStatus.VALIDATED_BBOX,
         "skeletonizing": DiagramStatus.SEGMENTING,
         # Phase 3: Mask Validation
@@ -462,8 +473,25 @@ async def retry_operation(
         "detecting_junctions": DiagramStatus.SKELETONIZED_FINAL,
         # Phase 7: Graph
         "building_graph": DiagramStatus.VALIDATED_JUNCTIONS,
+        # Phase 8: контуры, OCR и FXML. Цели — те же, что у отката по кнопке
+        # в клиенте (`_ROLLBACK_TARGET`, «статус ПЕРЕД этим этапом»).
+        # ⚠ У OCR своей кнопки в `validated_graph` нет — она появляется только
+        # с `ocr_completed`, а это была бы неправда. Дверь там ДРУГАЯ, и она
+        # снята исполнением (§107): OCR переотправляет `POST /graph/
+        # complete-simple` (кнопка «Проверка схемы», `val_graph`) — его гейт
+        # `validated_graph` пускает и перехода «ушли вперёд» у него нет.
+        # Прежняя редакция этого комментария называла дверью подтверждение
+        # перекрёстков: его гейт `validated_graph` НЕ пускает вовсе — 400
+        # (`app/api/validation.py: complete_junction_validation`).
+        "contour_extraction": DiagramStatus.VALIDATED_GRAPH,
+        "ocr": DiagramStatus.VALIDATED_GRAPH,
+        "generating_fxml": DiagramStatus.OCR_BOUND,
     }
 
+    # ⚠ Дефолт оставлен как есть: `None` и незнакомое значение по-прежнему
+    # уводят в начало. Честная починка требует считать точку отката из
+    # `ProcessingStage`, то есть серверного реестра «стадия → статус»,
+    # которого в `app/` нет вовсе (волна 5 дороги).
     new_status = stage_to_status.get(diagram.error_stage, DiagramStatus.UPLOADED)
 
     diagram.status = new_status
