@@ -94,10 +94,19 @@ class FakeServer:
         self.mask_completions = []   # статус на момент каждой команды
         self.skeletonize_dispatches = 0
         self.rollbacks = []
+        # Брокер лёг: с ноги 1.16 эндпоинт возвращает состояние и отвечает 503
+        # (`app/api/validation.py: _restore_and_fail`), а не 200 с `task_id: null`.
+        self.broker_down = False
 
     def complete_masks(self):
-        # Команда засчитывается фактом отправки: 400 клиент глотает молча.
+        # Команда засчитывается фактом отправки: сам отказ считается тоже.
         self.mask_completions.append(self.status)
+        if self.broker_down and self.status in _MASKS_COMPLETE_ACCEPTS                 and self.status not in _MASKS_COMPLETE_ALREADY_PAST:
+            # Состояние возвращено сервером — статус НЕ двигается.
+            raise APIError(
+                "Worker unavailable: не удалось поставить задачу (скелетизации)",
+                503,
+            )
         if self.status not in _MASKS_COMPLETE_ACCEPTS:
             raise APIError(
                 f"Cannot complete validation: status is '{self.status.value}'",
@@ -204,19 +213,27 @@ class FakeMsgBox:
     calls = []
     answer = QMessageBox.StandardButton.Yes
 
+    @staticmethod
+    def _seen(kind, args):
+        """(вид, заголовок, ТЕКСТ). Текст нужен, чтобы судить не факт окна,
+        а что в нём написано: «Ошибка» стоит заголовком у всех четырёх."""
+        return (kind,
+                args[1] if len(args) > 1 else "",
+                args[2] if len(args) > 2 else "")
+
     @classmethod
     def question(cls, *args, **kwargs):
-        cls.calls.append(("question", args[1] if len(args) > 1 else ""))
+        cls.calls.append(cls._seen("question", args))
         return cls.answer
 
     @classmethod
     def warning(cls, *args, **kwargs):
-        cls.calls.append(("warning", args[1] if len(args) > 1 else ""))
+        cls.calls.append(cls._seen("warning", args))
         return cls.StandardButton.Ok
 
     @classmethod
     def information(cls, *args, **kwargs):
-        cls.calls.append(("information", args[1] if len(args) > 1 else ""))
+        cls.calls.append(cls._seen("information", args))
         return cls.StandardButton.Ok
 
 
@@ -408,3 +425,53 @@ def test_second_confirmation_sends_second_command(bench):
     assert len(server.mask_completions) == 2, (
         f"второе подтверждение не ушло: команд {len(server.mask_completions)}"
     )
+
+
+# ── доработка ноги 1.16: отказ отправки виден оператору ──────────────────
+
+def test_a_refused_dispatch_is_shown_to_the_operator(bench):
+    """503 «задача не поставлена» больше не глотается молча.
+
+    До ноги 1.16 отказ брокера приходил сюда как 200 с `task_id: null`, и
+    комментарий в обработчике был прав: исключение и правда означало только
+    «цепочка ушла вперёд», о котором оператору говорить нечего. Теперь 503
+    означает обратное — задача НЕ поставлена, сервер вернул состояние, и
+    повторять придётся оператору. Молчащий `logger.error` до него это не
+    доносит: клиент — единственное место, где оператор вообще что-то видит.
+
+    Форма взята у трёх соседей того же файла (`_on_junction_confirmed`,
+    `_on_simple_graph_confirmed`, `_on_graph_confirmed`) — окно `warning`,
+    а не строка статуса: у соседей оператор жмёт «Подтвердить» ровно так же.
+
+    Утверждается РАЗНИЦА (`PROTOCOL §3`): тот же жест на живом брокере окна
+    не показывает вовсе. Иначе тест был бы зелёным при любом поведении.
+    """
+    ws, server = bench(DiagramStatus.VALIDATING_MASKS)
+    server.broker_down = True
+
+    _open(ws, "pipe").confirmed.emit()
+
+    assert len(server.mask_completions) == 1, "команда до сервера не дошла"
+    assert server.status is DiagramStatus.VALIDATING_MASKS, (
+        "поддельный сервер сдвинул статус — сценарий не тот, что на бою"
+    )
+    assert [c[0] for c in FakeMsgBox.calls] == ["warning"], (
+        f"оператору ничего не показали: {FakeMsgBox.calls}"
+    )
+    shown = FakeMsgBox.calls[0][2]
+    assert "валидацию масок" in shown, (
+        f"окно не называет, ЧТО не удалось: {shown}"
+    )
+    assert "не удалось поставить задачу" in shown, (
+        f"причина сервера до оператора не доехала: {shown}"
+    )
+
+
+def test_a_successful_dispatch_stays_silent(bench):
+    """Порог с другой стороны: удачное подтверждение окон не открывает."""
+    ws, server = bench(DiagramStatus.VALIDATING_MASKS)
+
+    _open(ws, "pipe").confirmed.emit()
+
+    assert server.status is DiagramStatus.VALIDATED_MASKS
+    assert FakeMsgBox.calls == [], f"лишние диалоги: {FakeMsgBox.calls}"

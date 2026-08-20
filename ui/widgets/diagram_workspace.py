@@ -1605,8 +1605,20 @@ class DiagramWorkspace(QWidget):
             self.status_provider.watch(self._uid)
             self.status_message.emit(msg, 5000)
         except Exception as exc:
+            # ⚠ Здесь стояло «Don't show error dialog — chain may have already
+            # moved past this point», и до ноги 1.16 это было правдой: отказ
+            # отправки отвечал 200 с `task_id: null`, то есть исключение могло
+            # означать только «цепочка ушла вперёд». Теперь «ушли вперёд» —
+            # по-прежнему 200, а 503 означает ровно обратное: задача НЕ
+            # поставлена, состояние на сервере возвращено, повторять придётся
+            # оператору (`docs/STATUS_MACHINE.md §5`). Молчать об этом нельзя —
+            # три соседних подтверждения (перекрёстки, простой граф, граф)
+            # показывают на своих отказах ровно такое окно.
             logger.error("complete_mask_validation failed: %s", exc)
-            # Don't show error dialog — chain may have already moved past this point
+            QMessageBox.warning(
+                self, "Ошибка",
+                f"Не удалось завершить валидацию масок:\n{exc}",
+            )
             self.status_provider.watch(self._uid)
             self._refresh_status()
 

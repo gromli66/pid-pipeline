@@ -41,7 +41,9 @@
 (нога 1.13); сторож «конвейер не пишет стадию мимо таблицы» живёт там и не дублируется.
 """
 import asyncio
+import inspect
 import logging
+import time
 import uuid
 
 import pytest
@@ -1049,3 +1051,169 @@ def test_layout_is_dispatched_only_after_contours(broker_down, ocr_enabled, no_l
     with pytest.raises(HTTPException):
         asyncio.run(complete_graph_validation(UID, db=after))
     assert no_layout == [str(UID)], "раскладка ставится ДО отправки FXML"
+
+
+# ── БОЕВАЯ ГРАНИЦА: конкурентные обработчики одного клика ────────────────
+#
+# Найдена red-team, подтверждена ревизией связки (§104е) и переснята мной
+# исполнением (§107.5). Возврат состояния здесь НЕ чинится — честная починка
+# требует условного UPDATE («верни, только если статус всё ещё мой»), а это
+# чужая зона (адрес 5-3, долг A1 last-writer-wins). Форма фиксации — та же,
+# что у ветки «БД легла ВМЕСТЕ с брокером»: граница названа в
+# `docs/STATUS_MACHINE.md §5` и заперта здесь, чтобы её починка сказала
+# об этом вслух, а не прошла молча.
+
+def test_the_client_gives_up_before_the_server_does():
+    """Порог достижимости: почему конкурентные обработчики вообще возникают.
+
+    Числа абсолютные и оба принадлежат этой ноге: 60 с лежит в клиенте, файл
+    которого нога правила, 64 с — в доке, который нога дополняла (§87д, §91).
+    Клиентский `_request` ловит `httpx.RequestError`, а таймаут — его подкласс,
+    поэтому по нему повторяется И POST: один клик оператора даёт до
+    `max_retries + 1` конкурентных обработчиков на сервере.
+
+    Тест смотрит на КЛАСС, а не на литерал `except`: сузят перехват — скажет.
+    Поднимут таймаут выше 64 с — скажет тоже, и это правильный сигнал:
+    граница ниже перестанет быть достижимой.
+    """
+    import httpx
+
+    from ui.services.api_client import APIClient
+
+    signature = inspect.signature(APIClient.__init__)
+    timeout = signature.parameters["timeout"].default
+    retries = signature.parameters["max_retries"].default
+
+    assert timeout == 60.0, "клиентский таймаут переехал — пересними границу"
+    assert retries == 3, "число попыток переехало — пересними границу"
+    assert issubclass(httpx.TimeoutException, httpx.RequestError), (
+        "таймаут перестал быть RequestError — POST больше не повторяется"
+    )
+    assert timeout < 64, (
+        "клиент теперь ждёт дольше боевого отказа (64 с) — гонки нет, "
+        "границу в STATUS_MACHINE §5 надо снимать"
+    )
+
+
+def _concurrent_masks_complete(entry, hold_first, hold_second, gap):
+    """Два обработчика `masks/complete` на ОДНОЙ диаграмме, как на бою.
+
+    `send_task` держит поток и бросает — ровно то, что делает боевой
+    result-бэкенд 64 секунды. `to_thread` отпускает цикл событий, поэтому
+    второй обработчик входит, пока первый висит в отправке.
+    """
+    from worker.celery_app import celery_app
+
+    db = FakeDB(_diagram(entry))
+    outcome = {}
+    saved = celery_app.send_task
+
+    def _hang(hold):
+        def _send(name, args=None, kwargs=None, **rest):
+            time.sleep(hold)
+            raise OSError("[Errno 111] Connection refused")
+        return _send
+
+    async def _call(tag, hold):
+        celery_app.send_task = _hang(hold)
+        try:
+            outcome[tag] = ("200", await complete_mask_validation(UID, db=db))
+        except HTTPException as exc:
+            outcome[tag] = (exc.status_code, exc.detail)
+
+    async def _second():
+        await asyncio.sleep(gap)
+        outcome["вход №2"] = db.diagram.status.value
+        await _call("2", hold_second)
+
+    async def _race():
+        await asyncio.gather(_call("1", hold_first), _second())
+
+    try:
+        asyncio.run(_race())
+    finally:
+        celery_app.send_task = saved
+    return db, outcome
+
+
+def test_a_concurrent_handler_restores_a_stale_snapshot(ocr_enabled, no_layout):
+    """⛔ ГРАНИЦА: `previous_state` — снимок, и при конкуренции он ЧУЖОЙ.
+
+    Обработчик №2 входит, пока №1 висит в отправке, и снимает `previous_state`
+    уже ПОСЛЕ коммита-вперёд №1 — то есть запоминает `validated_masks` как
+    «состояние до вызова». Кончая последним, он этот снимок и записывает:
+    ИСХОДНЫЙ ТУПИК ПУНКТА ВОССТАНОВЛЕН, а лог честен и абсурден —
+    «возвращаю состояние в 'validated_masks'».
+
+    Утверждается РАЗНИЦА двух порядков (`PROTOCOL §3`), а не совпадение
+    с состоянием «до»: перевернёшь, кто кончает последним, — финал другой.
+    Значит тест видит именно конкуренцию, а не общий результат отказа.
+
+    Ни одна клетка при этом НЕ ХУЖЕ прежнего: до ноги 1.16 тупик был во всех
+    четырёх исходах из четырёх, теперь это лотерея чётности попыток клиента.
+    Чинится условным UPDATE — 5-3; здесь только фиксация.
+    """
+    late_second, outcome = _concurrent_masks_complete(
+        DiagramStatus.VALIDATING_MASKS, hold_first=0.05, hold_second=0.30, gap=0.02,
+    )
+    late_first, _ = _concurrent_masks_complete(
+        DiagramStatus.VALIDATING_MASKS, hold_first=0.30, hold_second=0.05, gap=0.02,
+    )
+    alone, _ = _concurrent_masks_complete(
+        DiagramStatus.VALIDATING_MASKS, hold_first=0.05, hold_second=0.05, gap=1.0,
+    )
+
+    # Конкуренция состоялась: №2 вошёл уже на чужом коммите-вперёд.
+    assert outcome["вход №2"] == "validated_masks"
+    # Оба получают честный 503 — обещание ноги на КАЖДОМ обработчике выполнено.
+    assert outcome["1"][0] == 503 and outcome["2"][0] == 503
+
+    from ui.widgets.diagram_workspace import _buttons_for_status
+
+    available_late_second, _c, _p = _buttons_for_status(late_second.diagram.status)
+    available_late_first, _c, _p = _buttons_for_status(late_first.diagram.status)
+    available_alone, _c, _p = _buttons_for_status(alone.diagram.status)
+
+    assert late_second.diagram.status.value == "validated_masks"
+    assert available_late_second == set(), (
+        "тупик пункта: доступных кнопок нет — но так и записано в границе"
+    )
+    assert late_first.diagram.status.value == SCENARIO_ENTRY["masks"]
+    assert available_late_first == BUTTONS_AT_ENTRY["masks"]
+    assert alone.diagram.status.value == SCENARIO_ENTRY["masks"]
+    assert available_alone == BUTTONS_AT_ENTRY["masks"]
+
+    assert late_second.diagram.status != late_first.diagram.status, (
+        "порядок завершения перестал решать исход — граница протухла, "
+        "пересними её и проверь, не починили ли гонку (5-3)"
+    )
+
+
+def test_the_stale_snapshot_is_named_in_the_log(ocr_enabled, no_layout):
+    """След не врёт даже в этой ветке: точка возврата названа как есть.
+
+    Читать лог надо буквально: строка «возвращаю состояние в 'validated_masks'»
+    означает, что снимок был снят после чужого коммита. Именно она — единственный
+    способ увидеть гонку на бою, пока условного UPDATE нет.
+    """
+    handler = _Capture()
+    api_logger = logging.getLogger("app.api.validation")
+    previous_level = api_logger.level
+    api_logger.addHandler(handler)
+    api_logger.setLevel(logging.DEBUG)
+    try:
+        _concurrent_masks_complete(
+            DiagramStatus.VALIDATING_MASKS, hold_first=0.05, hold_second=0.30, gap=0.02,
+        )
+    finally:
+        api_logger.removeHandler(handler)
+        api_logger.setLevel(previous_level)
+
+    traces = [r.getMessage() for r in handler.records
+              if getattr(r, "event", None) == "dispatch_failed"]
+
+    assert len(traces) == 2, f"следов не два: {traces}"
+    assert any("'validating_masks'" in m for m in traces), traces
+    assert any("'validated_masks'" in m for m in traces), (
+        "лог не назвал чужой снимок — гонку на бою будет не увидеть"
+    )
