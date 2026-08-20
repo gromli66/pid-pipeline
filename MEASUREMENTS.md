@@ -5932,7 +5932,8 @@ peeled `road-1.13^{}` на origin = тот же коммит правки. За�
 `tests/test_graph_build_status_gate.py` **88 passed** · `tests/test_stage_reader_is_not_silent.py`
 **7 passed** · сторож доков `tests/test_docs_match_code.py` **14 passed + 2 skipped** ·
 соседние контрактные наборы (гейт ноги 1.13, клиентские `tests/ui/test_masks_completion_once.py`
-и `test_workspace_graph_flow.py`) **441 passed** · `tools/lint_gate.py --check` exit 0
+и `test_workspace_graph_flow.py`) **444 passed** — 441 к моменту снятия, до коммитов 3 и 4;
+перемерено после них, разница ровно +3 моих теста в `test_graph_build_status_gate.py` · `tools/lint_gate.py --check` exit 0
 (ruff 173 при эталоне 174, mypy 0) · `tools/suite_baseline.py --check` exit 0: собрано
 **2517** (было 2507 до коммитов 3 и 4 — ровно +3 и +7 моих), `failed 13 / errors 9` —
 тот же пол, что был до захода.
