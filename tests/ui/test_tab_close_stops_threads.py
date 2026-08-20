@@ -15,6 +15,12 @@
 разрушении получателя. Значит вкладка, закрытая ДО конца загрузки, оставляет
 поток, который не погасит уже никто.
 
+Тем же устроены и два потока РАСПОЗНАВАНИЯ (`advanced_graph_tab.py:471`,
+`ocr_binding_tab.py:435`): гасит их `_cleanup_recog_thread`, а зовут его
+только слоты `_on_recognize_done` / `_on_recognize_error` той же вкладки.
+Потоков всего шесть, и здесь проверяются пять из них: у `OcrBindingTab`
+взят загрузочный, у `AdvancedGraphTab` — распознавания.
+
 Цена ЗАМЕРЕНА (§102), а не выведена: процесс, доживший до выхода с бегущим
 `QThread`, падает на разрушении этого потока — `0xC0000409`, 8 прогонов
 из 8 против 0 из 8, когда загрузка успела кончиться. Для оператора это
@@ -86,6 +92,11 @@ class HoldingAPI:
         self.status = status
         self._gate = threading.Event()
         self._entered = threading.Event()
+        #: у распознавания свой затвор: вкладка сначала обязана ДОГРУЗИТЬСЯ
+        #: (иначе редактора нет и жеста «Распознать» тоже), и только потом
+        #: её ловят на втором потоке.
+        self._recog_gate = threading.Event()
+        self._recog_entered = threading.Event()
         self.calls = []
         if not hold:
             self._gate.set()
@@ -98,6 +109,12 @@ class HoldingAPI:
 
     def release(self):
         self._gate.set()
+
+    def wait_until_recognizing(self):
+        return self._recog_entered.wait(HOLD_S)
+
+    def release_recognition(self):
+        self._recog_gate.set()
 
     # -- поверхность воркспейса --
     def get_diagram(self, uid):
@@ -136,6 +153,25 @@ class HoldingAPI:
 
     def download_contours_auto(self, uid, dest):
         raise APIError(f"contours_auto not found for {uid}", 404)
+
+    # -- поверхность вкладки привязки OCR (свои методы, не download_artifact) --
+    def _endpoint(self, key, dest_path):
+        return self.download_artifact(None, key, dest_path)
+
+    def download_ocr_result(self, uid, dest):
+        return self._endpoint("ocr_result", dest)
+
+    def download_ocr_binding(self, uid, dest):
+        return self._endpoint("ocr_binding", dest)
+
+    def download_ocr_validation(self, uid, dest):
+        return self._endpoint("ocr_validation", dest)
+
+    def recognize_boxes(self, uid, boxes):
+        self.calls.append("recognize_boxes")
+        self._recog_entered.set()
+        self._recog_gate.wait(HOLD_S)
+        return {"results": [{"text": "K1", "confidence": 0.9} for _ in boxes]}
 
 
 class _FakeDiagram:
@@ -248,6 +284,10 @@ def blobs(qapp, tmp_path_factory) -> dict:
         "skeleton_final": _png(lines(), root / "skeleton.png"),
         "junction_points_validated": json.dumps(points).encode(),
         "pipe_mask_validated": _png(lines(), root / "pipe.png"),
+        # Привязка OCR: содержимое не разбирается — вкладку рвут раньше, чем
+        # она доберётся до артефактов; важно лишь, что задание не отвалится
+        # до входа в затвор.
+        "ocr_result": json.dumps({"blocks": []}).encode(),
     }
 
 
@@ -258,6 +298,7 @@ TABS = {
     "junction": DiagramStatus.DETECTED_JUNCTIONS,
     "pipe": DiagramStatus.SKELETONIZED,
     "val_graph": DiagramStatus.BUILT,
+    "ocr_binding": DiagramStatus.OCR_COMPLETED,
 }
 
 
@@ -405,6 +446,39 @@ def test_closing_tab_does_not_touch_dead_widgets(bench, capfd):
     err = capfd.readouterr().err
     assert "already deleted" not in err, (
         "загрузчик пишет в разрушенные виджеты закрытой вкладки:\n" + err[:2000]
+    )
+
+
+def test_closing_tab_during_recognition_stops_its_thread(bench):
+    """ВТОРОЙ поток вкладки — распознавания — обязан кончиться так же.
+
+    Здесь вкладка живёт полной жизнью: догрузилась, собрала редактор,
+    оператор запустил распознавание кнопкой и ушёл. Гасит поток
+    `_cleanup_recog_thread`, а зовут его только слоты `_on_recognize_done` /
+    `_on_recognize_error` — те же связи, которые Qt рвёт с вкладкой.
+    """
+    ws, api = bench(DiagramStatus.VALIDATED_GRAPH, hold=False)
+
+    tab = _open(ws, "edit_graph")
+    assert _join(tab._download_thread), "загрузка редактора не кончилась"
+    QApplication.processEvents()
+    assert tab._editor is not None, "обстановка не та: редактор не собрался"
+
+    # Что именно распознавать — вход сценария, а не проверяемый механизм:
+    # настоящие пустые блоки пришлось бы рисовать в редакторе мышью.
+    tab._editor.get_pending_ocr_boxes = lambda: ([1], [[10, 10, 60, 30]])
+    tab.btn_recognize.click()
+
+    thread = tab._recog_thread
+    assert thread is not None, "жест «Распознать» не поднял поток"
+    assert api.wait_until_recognizing(), "поток не дошёл до распознавания"
+
+    _back(ws)
+    assert ws._active_tab is None, "вкладка не закрылась"
+
+    api.release_recognition()
+    assert _join(thread), (
+        "поток распознавания пережил свою вкладку: гасить его больше некому"
     )
 
 

@@ -867,6 +867,13 @@ class BaseGraphTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
         self._downloader.progress.connect(
             lambda msg: self.status_label.setText(msg)
         )
+        # Гасит поток САМ поток, а не слот вкладки. Связи со слотами Qt рвёт
+        # вместе с получателем, а вкладку РАЗРУШАЮТ («← Назад» →
+        # `_remove_tab_widget`), причём `cleanup()` не зовёт ни один путь
+        # закрытия. Уйти из вкладки до конца загрузки — значит оставить
+        # бегущий `QThread`, разрушение которого роняет процесс (пункт 1.x17).
+        self._downloader.finished.connect(self._download_thread.quit)
+        self._downloader.error.connect(self._download_thread.quit)
         self._download_thread.start()
 
     @Slot(dict)

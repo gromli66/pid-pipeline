@@ -223,6 +223,11 @@ class JunctionTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
         self._downloader.progress.connect(
             lambda msg: self.status_label.setText(msg)
         )
+        # Гасит поток САМ поток, а не слот вкладки: связи со слотами Qt рвёт
+        # вместе с разрушаемой вкладкой, и уйти из неё до конца загрузки
+        # значило оставить бегущий `QThread` навсегда (пункт 1.x17).
+        self._downloader.finished.connect(self._download_thread.quit)
+        self._downloader.error.connect(self._download_thread.quit)
         self._download_thread.start()
 
     def _appearance_editor(self):
