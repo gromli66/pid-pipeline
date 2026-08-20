@@ -28,8 +28,16 @@
 та же бегущая строка, реальный клик, и только потом вопрос про кнопки. Прежняя
 редакция спрашивала про целевой статус на СВЕЖЕМ воркспейсе с чистыми стадиями,
 где предусловие лекарства выполнено по построению («свежий объект», `PROTOCOL §3`),
-и потому не видела, что у двух значений из четырёх дверь глушит та же строка,
-что создала тупик.
+и потому не видела второй половины дефекта: у двух значений из четырёх дверь
+глушила та же бегущая строка, что создала тупик, — до 600 с.
+
+⭐ Вторая доработка, решение Максима (§107.9–107.10): глушение ПОЧИНЕНО, а не
+оставлено границей. `_on_error_retry` чистит `_last_stages` — сервер откатил
+статус, значит снимок стадий в памяти клиента описывает состояние, которого
+больше нет. Замер §107.9 показал, что это безопасно: на сервере строка упавшей
+стадии уже `failed`, врал только снимок. Три порога стерегут форму починки:
+дверь открыта сразу после клика · настоящая бегущая стадия по-прежнему гасит
+свою кнопку · новая строка следующего опроса гасит её снова.
 
 ⚠ Модалка `QMessageBox.question` из `_on_error_retry` подменена с утверждением
 о ФАКТЕ вызова (`PROTOCOL §5`): без подмены красный прогон не падает, а виснет.
@@ -348,24 +356,14 @@ def test_target_status_has_a_door(stage, stage_type, target, door, bench):
 
 # ── часть 3б: СКВОЗНОЙ сценарий — тот же воркспейс после клика ───────────
 #
-# Замер §107.2, абсолютные литералы. Ключевое: `_last_stages` клик по страховке
-# НЕ чистит (`_on_error_retry` зовёт только `_refresh_status`), поэтому та же
-# бегущая строка, что создала тупик, продолжает глушить свою кнопку и в целевом
-# статусе — до `WAIT_LIMIT_S` = 600 с.
+# Клик по страховке чистит `_last_stages` (`_on_error_retry`): сервер откатил
+# статус, значит снимок стадий в памяти клиента описывает состояние, которого
+# больше нет. Замер §107.2 ДО починки: та же бегущая строка, что создала тупик,
+# продолжала держать свою кнопку в `processing` уже в ЦЕЛЕВОМ статусе — до
+# `WAIT_LIMIT_S` = 600 с, и у 2 значений из 4 это была ровно дверь
+# (`direction_classification` → `segment`, `contour_extraction` → `contours`);
+# оператору оставались только откаты с УДАЛЕНИЕМ артефактов. Числа §107.10.
 ENABLED_AFTER_CLICK = {
-    "direction_classification": ["cvat", "detect", "frame"],
-    "contour_extraction": ["cvat", "detect", "frame", "graph", "junction",
-                           "pipe", "segment", "val_graph"],
-    "ocr": ["contours", "cvat", "detect", "frame", "graph", "junction",
-            "pipe", "segment", "val_graph"],
-    "generating_fxml": ["contours", "cvat", "detect", "edit_graph", "frame",
-                        "graph", "junction", "ocr", "ocr_binding", "pipe",
-                        "segment", "val_graph"],
-}
-
-# То же место, но бегущая строка уже закрыта опросом. Разница двух таблиц —
-# и есть цена глушения; ниже она утверждается поимённо.
-ENABLED_AFTER_CLICK_WITHOUT_THE_ROW = {
     "direction_classification": ["cvat", "detect", "frame", "segment"],
     "contour_extraction": ["contours", "cvat", "detect", "frame", "graph",
                            "junction", "pipe", "segment", "val_graph"],
@@ -375,6 +373,17 @@ ENABLED_AFTER_CLICK_WITHOUT_THE_ROW = {
                         "graph", "junction", "ocr", "ocr_binding", "pipe",
                         "segment", "val_graph"],
 }
+
+# Порог с другой стороны: глушение бегущей стадией — рабочий механизм, и чинили
+# НЕ его. Здесь отката не было, стадия действительно бежит, и кнопка обязана
+# гаснуть. Без этих клеток «починкой» сошло бы и простое отключение цикла.
+MUTED_WITHOUT_ROLLBACK = [
+    ("validated_bbox", "direction_classification", "segment",
+     ["cvat", "detect", "frame"]),
+    ("validated_graph", "contour_extraction", "contours",
+     ["cvat", "detect", "frame", "graph", "junction", "pipe", "segment",
+      "val_graph"]),
+]
 
 
 @pytest.mark.parametrize("stage,stage_type,target,door", CASES, ids=IDS)
@@ -403,52 +412,68 @@ def test_the_click_lands_in_the_same_workspace(stage, stage_type, target, door, 
 
 
 @pytest.mark.parametrize("stage,stage_type,target,door", CASES, ids=IDS)
-def test_the_running_row_survives_the_rollback_and_mutes_its_own_door(
-        stage, stage_type, target, door, bench):
-    """⛔ ГРАНИЦА, ЗАЯВЛЕННАЯ И НЕ ПОЧИНЕННАЯ: у двух значений из четырёх дверь
-    целевого статуса глушит ТА ЖЕ строка, что создала тупик.
+def test_the_stale_running_row_does_not_mute_the_door(stage, stage_type, target,
+                                                      door, bench):
+    """Дверь целевого статуса открыта СРАЗУ, а не через 600 с.
 
-    Клик по страховке меняет статус на сервере, но `_last_stages` в памяти
-    клиента остаётся прежним, а `_update_buttons` переводит кнопку бегущей
-    стадии в `processing` независимо от статуса. Итог поимённо:
-
-    * `direction_classification` → `validated_bbox`, но `segment` глухая:
-      оператору кликабельны только `cvat`/`detect`/`frame` — зелёные ОТКАТЫ
-      с удалением артефактов (`POST /rollback`), то есть выход есть, но
-      дорогой;
-    * `contour_extraction` → `validated_graph`, но `contours` глухая;
-    * `ocr` и `generating_fxml` — двери живы: их строка глушит кнопку,
-      которой в целевом статусе и так нет.
-
-    Утверждается РАЗНИЦА, а не совпадение (`PROTOCOL §3`): тот же клик со
-    следующим опросом, закрывшим строку, отдаёт дверь обратно. Значит гасит
-    именно строка, а не статус.
-
-    Механизм СТАРШЕ ноги (`_update_buttons`, пункт 1.17 дороги — там же
-    заведена узкая ветка для ручных этапов). Лечится он не в карте сервера,
-    а в клиенте: чистить стадии, которые сервер только что объявил
-    недействительными. Пункт не тронут, граница названа в
-    `docs/STATUS_MACHINE.md §5`; покраснеет здесь, когда её починят.
+    Дефект был у двух значений из четырёх и жил ровно на этом шве: карта сервера
+    возвращала оператора на рабочий шаг, а кнопка этого шага оставалась глухой,
+    потому что клиент всё ещё помнил её стадию бегущей. Выход при этом
+    формально был — `cvat`/`detect`/`frame`, — но это откаты с УДАЛЕНИЕМ
+    артефактов, то есть цена выхода, а не выход.
     """
-    ws, server = bench(SrvStatus.ERROR, stage, stale=[running_row(stage_type)])
+    ws, _ = bench(SrvStatus.ERROR, stage, stale=[running_row(stage_type)])
+
     ws.btn_error_retry.click()
 
-    muted = door is not None and door not in enabled_keys(ws)
-    assert muted == (stage in ("direction_classification", "contour_extraction")), (
-        f"'{stage}': состав глушения разошёлся с замером — "
-        f"дверь '{door}', доступны {enabled_keys(ws)}"
+    keys = enabled_keys(ws)
+    if door is not None:
+        assert door in keys, (
+            f"'{stage}': дверь '{door}' глухая сразу после отката — {keys}"
+        )
+    else:
+        assert "val_graph" in keys, keys
+
+
+@pytest.mark.parametrize("status,stage_type,key,expected", MUTED_WITHOUT_ROLLBACK,
+                         ids=[c[1] for c in MUTED_WITHOUT_ROLLBACK])
+def test_the_muting_of_a_really_running_stage_is_intact(status, stage_type, key,
+                                                        expected, bench):
+    """Порог: чинили КЭШ, а не механизм — бегущая стадия по-прежнему гасит.
+
+    Отката не было, строка описывает настоящее состояние. Если бы «починка»
+    свелась к отключению цикла глушения в `_update_buttons`, эта клетка бы
+    покраснела.
+    """
+    ws, _ = bench(SrvStatus(status), None, stale=[running_row(stage_type)])
+
+    assert enabled_keys(ws) == expected
+    assert key not in enabled_keys(ws), (
+        f"строка '{stage_type}' перестала гасить свою кнопку '{key}'"
     )
 
-    # Та же клетка, но строку закрыл следующий опрос стадий.
-    ws.status_provider.stages_updated.emit(UID, [])
+
+def test_a_new_running_row_after_the_click_mutes_again(bench):
+    """Кэш ИМЕННО ЧИСТИТСЯ: следующий опрос наполняет его заново.
+
+    Утверждается РАЗНИЦА (`PROTOCOL §3`): сразу после клика дверь открыта,
+    а после того, как опрос принёс НОВУЮ бегущую строку той же стадии, она
+    снова глухая. Значит клик снял снимок, а не выключил глушение навсегда.
+    """
+    ws, _ = bench(SrvStatus.ERROR, "direction_classification",
+                  stale=[running_row("direction_classification")])
+
+    ws.btn_error_retry.click()
+    assert "segment" in enabled_keys(ws)
+
+    ws.status_provider.stages_updated.emit(
+        UID, [running_row("direction_classification")])
     ws._refresh_status()
 
-    assert enabled_keys(ws) == ENABLED_AFTER_CLICK_WITHOUT_THE_ROW[stage]
-    if door is not None:
-        assert door in enabled_keys(ws), (
-            f"'{stage}': дверь '{door}' не вернулась даже без бегущей строки — "
-            f"значит гасит не строка, и граница описана неверно"
-        )
+    assert enabled_keys(ws) == ["cvat", "detect", "frame"], (
+        "новая бегущая строка не заглушила кнопку — клик выключил механизм, "
+        "а не снял устаревший снимок"
+    )
 
 
 # ── часть 4: сторож двух карт ────────────────────────────────────────────
