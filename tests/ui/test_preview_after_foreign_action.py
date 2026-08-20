@@ -1035,3 +1035,276 @@ def test_polygon_preview_repeated_after_undo_of_a_move_inside_the_set_is_not_squ
     ed._exit_resize_objects()                    # Esc — превью брошено
 
     assert _size(ed, POLY_NID) == pytest.approx((POLY_W, POLY_H), abs=TOL)
+
+
+# =========================================================================
+# ПОЛОВИНА Г — ПИНЫ: чужой откат возвращает не только геометрию узла.
+#              Четвёртый возврат пункта (§103.15/.16, объём п. 1–4).
+#
+# Граница §97.22 («ни одна команда-на-месте пинов не трогает») ОПРОВЕРГНУТА
+# исполнением: `ResizeNodeCommand.undo` — тоже команда-на-месте, и её
+# `_apply_pins(self._old_pins)` возвращает пины (`simple_commands.py:363`).
+# Перебор вёлся по ДВУМ командам из ТРЁХ — диагональ вместо множества.
+# Полный список — греп `^class .*Command` по `ui/editors/commands/`
+# (22 класса), таблица «команда × что возвращает undo» — `MEASUREMENTS §106.3`.
+#
+# ⛔ Измерители выше сверяют ТОЛЬКО узлы, и порча пина проходила мимо ВСЕХ
+# гейтов пункта: 29 · 77 · 750 зелёные на дереве с живым дефектом (§103.17).
+# Поэтому здесь свой измеритель — по РЁБРАМ.
+# =========================================================================
+
+PIN_EDGE = ("node_11", "node_13")     # ребро, инцидентное узлу набора
+PIN_ROLE = "source"                   # node_11 — источник этого ребра
+PIN_DX, PIN_DY = 10.0, 0.0            # пин оператора до всего
+# Штатный угловой ресайз: 20×36 → 40×36 (sx = 2) — пин едет с рамкой.
+CORNER_BBOX = [25.0, 215.0, 65.0, 251.0]
+PIN_AFTER_CORNER = 20.0               # 10.0 × (40/20)
+# Угловой ресайз увозит центроид на +10 по x — превью 90×90 садится вокруг него.
+BOX_PREVIEW_AFTER_CORNER = [0.0, 188.0, 90.0, 278.0]
+# След превью 90×90 в пине: 20.0 × (90/40) с угловым ресайзом,
+# 10.0 × (90/20) без него — оба дают 45.0.
+PIN_IN_PREVIEW = 45.0
+
+#: Поля ребра, которые обязан видеть измеритель отправки (п. 2 объёма).
+EDGE_KEYS = ("pin_source", "pin_target",
+             "source_point", "target_point", "waypoints")
+
+
+def _edge_in_model(editor):
+    return next(e for e in editor.edges_data
+                if (e.get("source"), e.get("target")) == PIN_EDGE)
+
+
+def _pin(editor):
+    """Пин конца ребра В МОДЕЛИ или None."""
+    from ui.editors import port_model
+    return port_model.edge_pin(_edge_in_model(editor), PIN_ROLE)
+
+
+def _sent_edges(tab):
+    """РЁБРА последнего ушедшего графа — пины и маршруты, а не только узлы.
+
+    П. 2 объёма четвёртого возврата. Слепота прежних измерителей доказана
+    прогоном, а не предположена (§103.17): `_sent_geom`/`_model_geom` знают
+    только про узлы, поэтому затёртый пин уезжал на сервер при пяти зелёных
+    гейтах подряд.
+    """
+    uploads = tab.api_client.uploads
+    assert uploads, "на сервер не ушло ничего — сверять нечего"
+    return {(e["source"], e["target"]): {k: e.get(k) for k in EDGE_KEYS}
+            for e in uploads[-1][2]["links"]}
+
+
+def _model_edges(editor):
+    """То же по модели — ключи те же, что у `_sent_edges`."""
+    return {(e["source"], e["target"]): {k: e.get(k) for k in EDGE_KEYS}
+            for e in editor.edges_data}
+
+
+def _set_pin(editor, dx=PIN_DX, dy=PIN_DY):
+    """Пин входа оператора на конце ребра, инцидентном узлу набора."""
+    from ui.editors import port_model
+    node = editor.nodes[BOX_NID]
+    cy, cx = node["centroid"]
+    port_model.set_edge_pin(node, _edge_in_model(editor), PIN_ROLE,
+                            cx + dx, cy + dy)
+    assert _pin(editor) == {"dx": dx, "dy": dy}, "пин не встал — тест бессмыслен"
+
+
+def _corner_resize(editor, nid=BOX_NID, bbox=CORNER_BBOX):
+    """ЧУЖОЕ действие оператора №2: ШТАТНЫЙ угловой ресайз бокса.
+
+    В «Ручной правке» достижим двойным кликом по equipment-боксу
+    (`mouseDoubleClickEvent` → `_enter_resize_mode`); дальше — ровно те два
+    колбэка, которые дёргает `ResizableNodeOverlay`: кадр протяжки и
+    отпускание. Кладёт в стек `ResizeNodeCommand` — команду-на-месте, чей
+    `undo` возвращает bbox/centroid/area И ПИНЫ.
+    """
+    editor._enter_resize_mode(nid)
+    editor._on_node_resized(nid, list(bbox))      # on_resize оверлея
+    editor._commit_resize(nid)                    # on_commit оверлея
+    assert editor.undo_mgr.can_undo, "ресайз не встал в стек — тест бессмыслен"
+    assert _last_step(editor) == "Resize " + nid, "в стеке не тот шаг"
+
+
+def _box_preview_after_corner(editor):
+    """Превью 90×90 поверх УГЛОВОГО ресайза: рамка другая, чем у `_box_preview`."""
+    editor.preview_resize(width=SIDE, height=SIDE)
+    assert editor.nodes[BOX_NID]["bbox"] == pytest.approx(
+        BOX_PREVIEW_AFTER_CORNER, abs=TOL),         "превью ничего не изменило — тест бессмыслен"
+
+
+def test_save_after_undo_of_a_corner_resize_keeps_the_pin_the_undo_returned(
+        box_tab, dialogs):
+    """§103.15 — минимальная форма четвёртого возврата, путь ЗАПИСИ.
+
+    Пин → угловой ресайз → «Размеры» + превью → Ctrl+Z → «Сохранить».
+    Откат честно вернул И рамку, И пин; `_restore_resize_pins` затирал пин
+    базлайном — на сервер уезжала рамка ОТКАТНАЯ, а пин ПОСТ-РЕСАЙЗНЫЙ.
+    """
+    ed = box_tab._editor
+    _set_pin(ed)
+    _corner_resize(ed)
+    assert _pin(ed) == {"dx": PIN_AFTER_CORNER, "dy": PIN_DY}, \
+        "ресайз не отмасштабировал пин — тест бессмыслен"
+
+    _open_resize(ed, BOX_CLASS)
+    assert BOX_NID in ed._resize_sel, "узел с пином не попал в набор"
+    _box_preview_after_corner(ed)
+    assert _pin(ed) == {"dx": PIN_IN_PREVIEW, "dy": PIN_DY}, \
+        "превью не тронуло пин — тест бессмыслен"
+
+    ed.undo()                                     # Ctrl+Z по УГЛОВОМУ ресайзу
+    assert _pin(ed) == {"dx": PIN_DX, "dy": PIN_DY}, \
+        "чужой откат не вернул пин — тест бессмыслен"
+
+    assert box_tab._save_graph() is True
+    assert dialogs == []
+    assert ed.undo_mgr.stack_depth == 0
+
+    sent = _sent_edges(box_tab)[PIN_EDGE]
+    assert sent["pin_source"] == {"dx": PIN_DX, "dy": PIN_DY}
+    assert sent["pin_source"] != {"dx": PIN_AFTER_CORNER, "dy": PIN_DY}
+    assert sent["pin_source"] != {"dx": PIN_IN_PREVIEW, "dy": PIN_DY}
+    # Рамка и пин согласованы: пин — от рамки 20×36, которую вернул откат.
+    assert _sent_geom(box_tab)[BOX_NID][0] == pytest.approx(BOX_BBOX, abs=TOL)
+    assert _pin(ed) == {"dx": PIN_DX, "dy": PIN_DY}
+    # Ушедший граф совпадает с моделью по ВСЕМ рёбрам, а не только по пину.
+    assert _sent_edges(box_tab) == _model_edges(ed)
+
+
+def test_second_preview_after_undo_of_a_corner_resize_keeps_the_pin(
+        box_tab, dialogs):
+    """Тот же дефект на пути ПЕРЕСЪЁМА базлайна (`preview_resize`).
+
+    Второй тик бегунка после чужого отката: базлайн протух,
+    `_rollback_owned_preview` снимает своё — и затирал возвращённый откатом
+    пин ДО пересъёма, после чего новый базлайн запоминал уже испорченное.
+    """
+    ed = box_tab._editor
+    _set_pin(ed)
+    _corner_resize(ed)
+    _open_resize(ed, BOX_CLASS)
+    _box_preview_after_corner(ed)
+
+    ed.undo()
+    assert _pin(ed) == {"dx": PIN_DX, "dy": PIN_DY}
+
+    ed.preview_resize(width=SIDE, height=SIDE)    # второй тик бегунка
+    assert dialogs == []
+    # Новый базлайн снят с ЧИСТОГО пина: след превью считается от 10.0.
+    assert _pin(ed) == {"dx": PIN_DX * SIDE / BOX_W, "dy": PIN_DY}
+
+    assert box_tab._save_graph() is True
+    sent = _sent_edges(box_tab)[PIN_EDGE]
+    assert sent["pin_source"] == {"dx": PIN_DX, "dy": PIN_DY}
+    assert sent["pin_source"] != {"dx": PIN_AFTER_CORNER, "dy": PIN_DY}
+    assert _sent_geom(box_tab)[BOX_NID][0] == pytest.approx(BOX_BBOX, abs=TOL)
+
+
+def test_apply_after_undo_of_a_corner_resize_returns_to_the_pin_the_undo_left(
+        box_tab, dialogs):
+    """Тот же дефект на пути ПЕРЕСЪЁМА в `apply_resize` — цена выше.
+
+    Пересъём поверх затёртого пина вмуровывал испорченное значение в
+    `cmd._before`, то есть в ТОЧКУ ВОЗВРАТА: отмена до дна стека возвращала
+    рамку 20×36 и пин 20.0 — рассинхрон, не достижимый никаким Ctrl+Z.
+    """
+    ed = box_tab._editor
+    _set_pin(ed)
+    _corner_resize(ed)
+    _open_resize(ed, BOX_CLASS)
+    _box_preview_after_corner(ed)
+
+    ed.undo()
+    ed.apply_resize(width=SIDE, height=SIDE)
+
+    assert dialogs == []
+    assert _size(ed, BOX_NID) == pytest.approx((SIDE, SIDE), abs=TOL)
+
+    while ed.undo_mgr.can_undo:
+        ed.undo()
+
+    assert _size(ed, BOX_NID) == pytest.approx((BOX_W, BOX_H), abs=TOL)
+    assert _pin(ed) == {"dx": PIN_DX, "dy": PIN_DY}
+    assert _pin(ed) != {"dx": PIN_AFTER_CORNER, "dy": PIN_DY}
+
+
+def test_save_removes_our_own_pin_footprint_when_nobody_touched_it(
+        box_tab, dialogs):
+    """Обратная полярность (граница §48): СВОЙ след с пина снимается всегда.
+
+    Ни одного чужого действия — превью и «Сохранить». Пин обязан вернуться
+    к 10.0: оставить 45.0 значило бы держать конец трубы по рамке 90×90 при
+    рамке 20×36. Без этого теста лечение выше вырождается в «не трогать пины».
+    """
+    ed = box_tab._editor
+    _set_pin(ed)
+    _open_resize(ed, BOX_CLASS)
+    _box_preview(ed)
+    assert _pin(ed) == {"dx": PIN_IN_PREVIEW, "dy": PIN_DY}, \
+        "превью не тронуло пин — тест бессмыслен"
+
+    assert box_tab._save_graph() is True
+    assert dialogs == []
+
+    sent = _sent_edges(box_tab)[PIN_EDGE]
+    assert sent["pin_source"] == {"dx": PIN_DX, "dy": PIN_DY}
+    assert sent["pin_source"] != {"dx": PIN_IN_PREVIEW, "dy": PIN_DY}
+    assert _pin(ed) == {"dx": PIN_DX, "dy": PIN_DY}
+
+
+def test_pin_footprint_is_removed_after_an_undo_that_does_not_touch_pins(
+        box_tab, dialogs):
+    """Та же полярность на СМЕШАННОМ состоянии, чужой откат — `DragNodeCommand`.
+
+    Вторая строка таблицы §106.3: команда-на-месте, чей `undo` пинов НЕ трогает.
+    Значит след в пине остаётся наш, и снять его обязаны — при том, что
+    геометрия перенесённого узла набора уже возвращена откатом.
+    """
+    ed = box_tab._editor
+    _set_pin(ed)
+    _foreign_move(ed, INSIDE)                     # узел ИЗ набора, не с пином
+    _open_resize(ed, BOX_CLASS)
+    _box_preview(ed)
+    assert _pin(ed) == {"dx": PIN_IN_PREVIEW, "dy": PIN_DY}
+
+    ed.undo()                                     # пинов этот откат не касается
+    assert _pin(ed) == {"dx": PIN_IN_PREVIEW, "dy": PIN_DY}, \
+        "откат переноса вернул пин — таблица §106.3 врёт"
+
+    assert box_tab._save_graph() is True
+    assert dialogs == []
+
+    sent = _sent_edges(box_tab)[PIN_EDGE]
+    assert sent["pin_source"] == {"dx": PIN_DX, "dy": PIN_DY}
+    assert sent["pin_source"] != {"dx": PIN_IN_PREVIEW, "dy": PIN_DY}
+    assert _sent_geom(box_tab)[BOX_NID][0] == pytest.approx(BOX_BBOX, abs=TOL)
+
+
+def test_pin_the_foreign_undo_removed_is_not_resurrected(box_tab, dialogs):
+    """Третья клетка того же предиката: чужой откат СНЯЛ пин.
+
+    `ResizeNodeCommand._apply_pins` при `old_pins[...] is None` зовёт
+    `clear_edge_pin` — пина не было до ресайза, значит откат его удаляет.
+    Воскресить его базлайном значило бы отменить чужой откат (§48).
+    """
+    ed = box_tab._editor
+    ed._enter_resize_mode(BOX_NID)                # снимок берётся ЗДЕСЬ — пина нет
+    _set_pin(ed)                                  # пин появился ПОСЛЕ снимка
+    ed._on_node_resized(BOX_NID, list(CORNER_BBOX))
+    ed._commit_resize(BOX_NID)
+
+    _open_resize(ed, BOX_CLASS)
+    _box_preview_after_corner(ed)
+    assert _pin(ed) is not None, "пин исчез до отката — тест бессмыслен"
+
+    ed.undo()
+    assert _pin(ed) is None, "чужой откат не снял пин — тест бессмыслен"
+
+    assert box_tab._save_graph() is True
+    assert dialogs == []
+
+    sent = _sent_edges(box_tab)[PIN_EDGE]
+    assert sent["pin_source"] is None
+    assert _pin(ed) is None

@@ -295,6 +295,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self._resize_base: dict = {}               # node_id → исходная геометрия
         self._resize_model_base = None             # snapshot модели до превью
         self._resize_pin_base: list = []           # [(edge, role, dx, dy)] до превью
+        self._resize_pin_preview: list = []        # [(dx, dy) | None] — что ВПИСАЛО превью
         self._resize_model_rev = None              # undo_mgr.revision на момент базлайна
         self._resize_preview_geom: dict = {}       # node_id → что ВПИСАЛО превью
         # Колбэки в таб (назначаются при готовности редактора):
@@ -4106,6 +4107,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 'area': n.get('area'),
             }
         self._resize_pin_base = self._capture_resize_pins()
+        self._resize_pin_preview = []
         self._resize_model_rev = self.undo_mgr.revision
         self._resize_preview_geom = {}
 
@@ -4231,7 +4233,14 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         return pins
 
     def _restore_resize_pins(self):
-        """Вернуть пины набора к базлайну (перед очередным пересчётом рамок)."""
+        """Вернуть пины набора к базлайну — БЕЗУСЛОВНО.
+
+        Зовущий один: `_apply_sizes_from_base`, и там безусловность и есть
+        механизм идемпотентности (базлайн на этом пути заведомо жив: оба
+        входа сначала спрашивают `_resize_baseline_alive()`).
+        ⛔ Для ОТКАТА превью этот метод не годится — см.
+        `_rollback_owned_resize_pins`.
+        """
         from ui.editors import port_model
 
         for e, role, dx, dy in self._resize_pin_base:
@@ -4239,11 +4248,61 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             if pin is not None:
                 pin['dx'], pin['dy'] = dx, dy
 
+    def _snapshot_resize_pins(self) -> list:
+        """Отпечаток пинов: что оставило в них превью. Порядок — `_resize_pin_base`."""
+        from ui.editors import port_model
+
+        out = []
+        for e, role, _dx, _dy in self._resize_pin_base:
+            pin = port_model.edge_pin(e, role)
+            out.append((float(pin['dx']), float(pin['dy'])) if pin is not None else None)
+        return out
+
+    def _rollback_owned_resize_pins(self):
+        """Снять след превью с пинов ТАМ, ГДЕ ОН ЕЩЁ НАШ.
+
+        Та же поэлементность, что у `_preview_live_fields` для узлов, и по той
+        же причине: пин, который вернул ЧУЖОЙ откат, базлайну не принадлежит,
+        и возврат по базлайну отменил бы этот откат (граница §48).
+
+        ⛔ Прежняя граница («ни одна команда-на-месте пинов не трогает»,
+        `MEASUREMENTS §97.22`) ОПРОВЕРГНУТА исполнением — четвёртый возврат
+        пункта 1-6. Полный перебор `ui/editors/commands/*` (22 класса, греп
+        `^class .*Command`; таблица «команда × что возвращает undo» —
+        `MEASUREMENTS §106.3`) даёт РОВНО ОДНУ команду-на-месте, чей `undo`
+        пишет пины: **`ResizeNodeCommand`** (`simple_commands.py:363` —
+        `_apply_pins(self._old_pins)`), штатный угловой ресайз бокса;
+        в «Ручной правке» он достижим двойным кликом по equipment-боксу
+        (`mouseDoubleClickEvent` → `_enter_resize_mode`). Замер §106.4:
+        пин (10,0) → угловой ресайз → «Размеры» → превью → Ctrl+Z (пин честно
+        вернулся к (10,0)) → «Сохранить» клало на сервер `dx` 20.0 при
+        ОТКАТНОЙ рамке `[25, 215, 45, 251]` — рассинхрон рамка/пин,
+        персистентный в JSON.
+
+        ⚠ Граница держится теперь не перечнем команд, а ПРЯМЫМ ответом:
+        отпечаток `_resize_pin_preview` говорит, что в пине оставило превью.
+        Совпало — след наш, снимаем; разошлось — пин тронул кто-то ещё,
+        не трогаем. Поэтому список выше — доказательство, а не условие.
+        """
+        from ui.editors import port_model
+
+        for (e, role, dx, dy), mark in zip(self._resize_pin_base,
+                                           self._resize_pin_preview):
+            if mark is None:
+                continue
+            pin = port_model.edge_pin(e, role)
+            if pin is None:
+                continue                      # чужой откат снял пин — не воскрешаем
+            if (float(pin['dx']), float(pin['dy'])) != mark:
+                continue                      # в пине уже не наш след
+            pin['dx'], pin['dy'] = dx, dy
+
     def _drop_resize_baseline(self):
         """Забыть базлайн: превью зафиксировано или откачено, возвращать нечего."""
         self._resize_model_base = None
         self._resize_base = {}
         self._resize_pin_base = []
+        self._resize_pin_preview = []
         self._resize_model_rev = None
         self._resize_preview_geom = {}
 
@@ -4263,11 +4322,13 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             # уходила ЛЮБАЯ правка на месте, и превью оставалось молча).
             self._drop_resize_baseline()
             return {}
-        # Пины — базлайном целиком, а не по `live`: `rescale_edge_pins`
-        # домножает dx/dy НА МЕСТЕ, и чужой откат геометрии их не касается.
-        # Оставить их — значит держать конец трубы по рамке 90×90 при рамке
+        # Пины — тоже ПОЭЛЕМЕНТНО, по своему отпечатку: чужой откат геометрии
+        # их не касается (`DragNodeCommand`), но откат ШТАТНОГО углового
+        # ресайза касается (`ResizeNodeCommand._apply_pins`) — граница §97.22
+        # опровергнута исполнением, замер §106.4. Снять свой след надо
+        # обязательно: иначе конец трубы держится по рамке 90×90 при рамке
         # 20×36 у узла, которому откат вернул размер (замер §48: dx 10 → 45).
-        self._restore_resize_pins()
+        self._rollback_owned_resize_pins()
         for nid, fields in live.items():
             n = self.nodes.get(nid)
             base = self._resize_base.get(nid)
@@ -4369,6 +4430,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             nid: self._preview_geom_key(self.nodes[nid])
             for nid in self._resize_base if nid in self.nodes
         }
+        # То же для пинов: `_rollback_owned_resize_pins` снимает след только
+        # там, где он совпал с этим отпечатком (четвёртый возврат пункта).
+        self._resize_pin_preview = self._snapshot_resize_pins()
 
     def _refresh_node_visual(self, node_id: str):
         """Обновить визуал узла (bbox/полигон/маркер) по текущим данным."""
