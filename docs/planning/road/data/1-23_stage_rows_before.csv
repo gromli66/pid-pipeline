@@ -1,0 +1,19 @@
+id,diagram_uid,stage_type,status,attempt,celery_task_id,started_at,completed_at,duration_seconds,error_message,error_traceback,error_code,failed_step,current_step,metrics_json,created_at
+640,d4bd65d7-7cb5-4339-abde-c4fa0725f8e8,frame_removal,running,1,,2026-07-10 12:23:47.156754,,,,,,,,,2026-07-10 12:23:47.158138
+671,6e7144d5-19fc-4661-b90a-f26dcaa8c71a,junction_classification,running,7,2d359a4d-5087-409f-b38e-01841f36882d,2026-07-20 10:16:03.334776,,,,,,,inference,,2026-07-20 10:16:03.335243
+703,8c9317e5-6f60-4f76-8de3-9dabdd86ccbd,frame_removal,running,1,,2026-07-20 10:24:20.97768,,,,,,,,,2026-07-20 10:24:20.980459
+704,89ca7583-233e-44da-b30b-f2f08eb2567d,frame_removal,running,1,,2026-07-20 10:24:37.543771,,,,,,,,,2026-07-20 10:24:37.54416
+716,6e7144d5-19fc-4661-b90a-f26dcaa8c71a,junction_classification,completed,8,2d359a4d-5087-409f-b38e-01841f36882d,2026-07-20 12:33:36.104937,2026-07-20 12:33:44.691858,8.586921,,,,,,"{""junction_count"": 43, ""bridge_count"": 2}",2026-07-20 12:33:36.106203
+717,89ca7583-233e-44da-b30b-f2f08eb2567d,frame_removal,running,3,,2026-07-20 12:39:06.328328,,,,,,,,,2026-07-20 12:39:06.332936
+755,d4bd65d7-7cb5-4339-abde-c4fa0725f8e8,frame_removal,running,2,,2026-07-27 19:56:47.234148,,,,,,,,,2026-07-27 19:56:47.279943
+807,8c9317e5-6f60-4f76-8de3-9dabdd86ccbd,frame_removal,running,2,,2026-07-30 14:32:42.648986,,,,,,,,,2026-07-30 14:32:42.649353
+857,b0a8820a-93f0-49b8-a8a9-274997ec12df,frame_removal,running,1,,2026-08-05 10:55:34.015199,,,,,,,,,2026-08-05 10:55:34.01595
+871,8516730a-f6af-487a-bfc0-8dc3e9fe956e,frame_removal,running,1,,2026-08-05 11:22:39.618164,,,,,,,,,2026-08-05 11:22:39.618685
+884,85b70a73-994d-4e20-bd0b-8e6cfefa87fe,frame_removal,running,1,,2026-08-06 08:10:03.026638,,,,,,,,,2026-08-06 08:10:03.030027
+885,f252a4be-e00c-4220-9ea8-5edf76dee52c,frame_removal,running,1,,2026-08-06 08:10:23.658498,,,,,,,,,2026-08-06 08:10:23.658774
+899,d2bb835a-cd1b-42c4-9358-aa0e6b5f1eb5,frame_removal,running,1,,2026-08-06 09:00:08.348601,,,,,,,,,2026-08-06 09:00:08.349058
+931,85b70a73-994d-4e20-bd0b-8e6cfefa87fe,frame_removal,running,2,,2026-08-08 16:00:14.057502,,,,,,,,,2026-08-08 16:00:14.077436
+932,f252a4be-e00c-4220-9ea8-5edf76dee52c,frame_removal,running,2,,2026-08-08 16:00:19.125732,,,,,,,,,2026-08-08 16:00:19.12595
+934,38c8ba6a-5cb3-4045-87ae-5f60381ed6e7,frame_removal,running,1,,2026-08-10 08:47:18.350185,,,,,,,,,2026-08-10 08:47:18.351082
+978,767a96b5-0234-4e68-8c81-9a09284805d8,frame_removal,running,1,,2026-08-12 12:02:54.894784,,,,,,,,,2026-08-12 12:02:54.897761
+1017,40b99e7e-d98d-467e-a146-01198edcf037,frame_removal,running,1,,2026-08-13 12:50:12.791999,,,,,,,,,2026-08-13 12:50:12.792278

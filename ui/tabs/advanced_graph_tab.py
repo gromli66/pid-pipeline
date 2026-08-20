@@ -474,6 +474,11 @@ class AdvancedGraphTab(SimpleGraphTab):
         self._recog_thread.started.connect(self._recog_worker.run)
         self._recog_worker.finished.connect(self._on_recognize_done)
         self._recog_worker.error.connect(self._on_recognize_error)
+        # Гасит поток САМ поток: `_cleanup_recog_thread` зовут только слоты
+        # выше, а связи с ними Qt рвёт вместе с разрушаемой вкладкой
+        # (пункт 1.x17).
+        self._recog_worker.finished.connect(self._recog_thread.quit)
+        self._recog_worker.error.connect(self._recog_thread.quit)
         self._recog_thread.start()
 
     def _cleanup_recog_thread(self):
