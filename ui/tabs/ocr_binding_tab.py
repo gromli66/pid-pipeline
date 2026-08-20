@@ -135,12 +135,16 @@ class _SubTabToolbar(QWidget):
         self.custom_layout.setSpacing(4)
         layout.addLayout(self.custom_layout)
 
-        # скрытые кнопки удаления/перемещения (совместимость с обработчиками)
-        self.btn_del = QPushButton()
+        # Скрытые кнопки удаления/перемещения (совместимость с обработчиками).
+        # Родитель обязателен: в раскладку они не кладутся, а виджет без
+        # родителя и без раскладки — ВЕРХНЕУРОВНЕВЫЙ и живёт до конца
+        # процесса. `setVisible(False)` ниже держит их скрытыми и при
+        # показе родителя (пункт 1.x17).
+        self.btn_del = QPushButton(self)
         self.btn_del.setCheckable(True)
         self.btn_del.setVisible(False)
         self.btn_del.clicked.connect(self.delete_clicked.emit)
-        self.btn_move = QPushButton()
+        self.btn_move = QPushButton(self)
         self.btn_move.setCheckable(True)
         self.btn_move.setVisible(False)
         self.btn_move.clicked.connect(self.move_clicked.emit)
@@ -309,7 +313,13 @@ class OcrBindingTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
         layout.addWidget(self.loading_label)
 
         # === Sub-tab 1: KKS ===
-        self.kks_toolbar = _SubTabToolbar()
+        # ⛔ Родитель и явное `hide()` обязательны: подвкладку убрал П3
+        # (`addTab` ниже закомментирован, самого `sub_tabs` в коде уже нет),
+        # то есть панель не попадает ни в чью раскладку и без родителя
+        # остаётся ВЕРХНЕУРОВНЕВЫМ виджетом до конца процесса — по две штуки
+        # на каждое открытие вкладки, у оператора (пункт 1.x17).
+        self.kks_toolbar = _SubTabToolbar(self)
+        self.kks_toolbar.hide()
         self.kks_toolbar.hint_label.setText(
             "Ctrl+drag: привязка/слияние | Ctrl+ПКМ: отвязка | Ctrl+2×клик: текст | Shift+клик: подтвердить"
         )
@@ -342,7 +352,9 @@ class OcrBindingTab(NonInteractiveSaveMixin, AppearanceMixin, QWidget):
         # self.sub_tabs.addTab(self.kks_toolbar, "🏷 KKS")
 
         # === Sub-tab 2: Diameter ===
-        self.diam_toolbar = _SubTabToolbar()
+        # Родитель и `hide()` — по той же причине, что у `kks_toolbar` выше.
+        self.diam_toolbar = _SubTabToolbar(self)
+        self.diam_toolbar.hide()
         self.diam_toolbar.hint_label.setText(
             "Ctrl+drag: привязка к ребру | Ctrl+ПКМ: отвязка | Ctrl+2×клик: текст"
         )
