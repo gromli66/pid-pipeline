@@ -338,11 +338,20 @@ class APIClient:
         Каждый элемент: stage_type, status (pending/running/completed/failed/skipped),
         attempt, error_message, error_traceback, started_at, completed_at,
         duration_seconds, current_step (под-шаг бегущей стадии, Волна B).
+
+        Отказ сервера отдаётся как пустой список — так удобнее всем читателям, но
+        ЗДЕСЬ теряется различие: «стадий нет» и «сервер отказал» ведут читателя
+        по разным веткам (вторая уводит `_apply_error_status` в фолбэк), а наружу
+        уходит одно и то же. Различить их можно только по этой строке лога,
+        поэтому причина называется, а не глотается (находка ноги 1.12,
+        закрыта в 1.16).
         """
         try:
             result = self._request("GET", f"/api/diagrams/{uid}/stages", retries=1)
             return result.get("stages", [])
-        except APIError:
+        except APIError as exc:
+            logger.warning("Стадии %s не прочитаны (%s) — читателю уйдёт пустой "
+                           "список, как будто их нет", uid, exc)
             return []
 
     def get_stage_durations(self) -> Dict[str, float]:
