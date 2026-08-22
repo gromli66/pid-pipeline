@@ -49,6 +49,14 @@ class Settings(BaseSettings):
     # Projects
     PROJECTS_CONFIG_DIR: str = Field(default="./configs/projects")
     
+    # === Конвертер расчётной схемы САПФИР (.prtx) ===
+    # Сервис из docker/prtx: держит движок САПФИР, ключ лицензии приезжает с
+    # клиентом на время одного прогона и на сервере не хранится.
+    PRTX_SERVICE_URL: str = Field(default="http://prtx:8081")
+    # Полный прогон на 400-узловой схеме — десятки секунд; запас на очередь,
+    # т.к. сервис считает схемы по одной (движок пишет в общий SETTINGS).
+    PRTX_TIMEOUT_SEC: int = Field(default=900)
+
     # API
     API_HOST: str = Field(default="0.0.0.0")
     API_PORT: int = Field(default=8000)

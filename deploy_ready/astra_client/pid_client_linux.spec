@@ -29,6 +29,25 @@ for _root, _dirs, _files in os.walk(os.path.join(ROOT, 'ui', 'resources')):
     for _fn in _files:
         datas.append((os.path.join(_root, _fn), _rel))
 
+# vendored-биндинг libavoid (Э7-b): ортогональный роутер труб в редакторе.
+# Путь ВНУТРИ бандла обязан совпадать с тем, что резолвит
+# modules/graph/core/layout/_avoid_binding.py: он берёт parents[4]/vendor/
+# adaptagrams, а у замороженного модуля это <MEIPASS>/vendor/adaptagrams —
+# поэтому кладём с сохранением относительного пути от корня репо.
+# .so идёт в binaries: так PyInstaller видит его зависимые библиотеки.
+# Бинарь собирается слоем Dockerfile.manylinux и кладётся сюда inner-скриптом;
+# без него редактор молча уходит на самописную лестницу (один INFO в лог).
+_AVOID = os.path.join(ROOT, 'vendor', 'adaptagrams', 'linux')
+_AVOID_REL = os.path.relpath(_AVOID, ROOT)
+for _fn in sorted(os.listdir(_AVOID)) if os.path.isdir(_AVOID) else []:
+    _src = os.path.join(_AVOID, _fn)
+    if not os.path.isfile(_src):
+        continue                      # __pycache__ и прочие каталоги — мимо
+    if _fn.lower().endswith(('.so', '.pyd', '.dll')):
+        binaries.append((_src, _AVOID_REL))
+    else:
+        datas.append((_src, _AVOID_REL))
+
 # PySide6 целиком, включая QtWebEngine из PySide6_Addons (нужен для вкладки CVAT).
 _pyside = collect_all('PySide6')
 datas += _pyside[0]; binaries += _pyside[1]; hiddenimports += _pyside[2]

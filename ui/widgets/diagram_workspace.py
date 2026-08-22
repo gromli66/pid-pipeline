@@ -2030,17 +2030,17 @@ class DiagramWorkspace(QWidget):
     def _start_prtx_conversion(self, export_path=None):
         """Автоконвертор: собрать .prtx из того же валидированного графа.
 
-        Считает КЛИЕНТ: движок САПФИР лицензирован по железу машины и в
-        Linux-контейнере воркера виснет на модальном окне лицензии (замер
-        2026-08-20, подробности — ui/services/prtx_converter.py). Результат
-        уезжает в storage рядом с diagram.fxml и, если оператор выбирал путь
-        экспорта, ложится рядом с сохранённым .fxml.
+        Считает СЕРВЕР (контейнер `prtx`), клиент отдаёт только ключ лицензии
+        САПФИР из профиля оператора — подробности в
+        ui/services/prtx_converter.py. Результат уезжает в storage рядом с
+        diagram.fxml и, если оператор выбирал путь экспорта, ложится рядом с
+        сохранённым .fxml.
         """
-        from ui.services.prtx_converter import PrtxWorker, box_dir
+        from ui.services.prtx_converter import PrtxWorker, license_key_path
 
-        if box_dir() is None:
+        if not license_key_path().is_file():
             self.status_message.emit(
-                "⚠ Коробка конвертера .prtx не найдена — схема не собрана", 6000)
+                "⚠ Ключ лицензии САПФИР не найден — расчётная схема не собрана", 6000)
             return
 
         # Повторная генерация FXML поверх бегущей сборки затёрла бы ссылку на
