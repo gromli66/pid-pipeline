@@ -21,7 +21,8 @@ import uuid
 import pytest
 from fastapi import HTTPException
 
-from app.api.graph import build_prtx
+import app.api.graph as graph_api
+from app.api.graph import build_prtx, prtx_status
 from app.models import Artifact, ArtifactType, Diagram
 
 UID = uuid.UUID("aa11bb22-cc33-dd44-ee55-ff6677889900")
@@ -71,6 +72,20 @@ class FakeDB:
         self.commits += 1
 
 
+class FakeTasks:
+    """BackgroundTasks в объёме, который нужен эндпоинту."""
+
+    def __init__(self):
+        self.tasks = []
+
+    def add_task(self, func, *args, **kwargs):
+        self.tasks.append((func, args, kwargs))
+
+    async def run_all(self):
+        for func, args, kwargs in self.tasks:
+            await func(*args, **kwargs)
+
+
 class FakeUpload:
     """UploadFile в объёме, который читает эндпоинт."""
 
@@ -105,6 +120,13 @@ def _diagram():
     return diagram
 
 
+@pytest.fixture(autouse=True)
+def _clean_jobs():
+    graph_api._PRTX_JOBS.clear()
+    yield
+    graph_api._PRTX_JOBS.clear()
+
+
 @pytest.fixture
 def storage(tmp_path, monkeypatch):
     """Артефакты на диске + перехват записи результата."""
@@ -119,10 +141,27 @@ def storage(tmp_path, monkeypatch):
     class FakeStorage:
         async def save_file(self, uid, stage, name, content):
             saved["content"] = content
-            return f"{uid}/{stage}/{name}", len(content)
+            saved["path"] = f"{uid}/{stage}/{name}"
+            return saved["path"], len(content)
 
     monkeypatch.setattr("app.api.graph.StorageService", FakeStorage)
     return saved
+
+
+#: сессию фоновая задача открывает сама — подсовываем ей ту же FakeDB
+_CURRENT_DB = {}
+
+
+@pytest.fixture(autouse=True)
+def _session_factory(monkeypatch):
+    class _Ctx:
+        async def __aenter__(self):
+            return _CURRENT_DB["db"]
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr("app.db.session.AsyncSessionLocal", lambda: _Ctx())
 
 
 @pytest.fixture
@@ -144,7 +183,10 @@ def service(monkeypatch):
             return False
 
         async def post(self, url, json=None):
-            state["calls"].append({"url": url, "payload": json})
+            # копия: отправленный payload затирается сразу после запроса,
+            # чтобы ключ не жил в памяти дольше нужного
+            state["calls"].append({"url": url, "payload": dict(json or {}),
+                                   "sent": json})
             if isinstance(state["response"], Exception):
                 raise state["response"]
             return state["response"]
@@ -153,9 +195,21 @@ def service(monkeypatch):
     return state
 
 
-def _call(db, key=KEY, text_mode="all"):
-    return asyncio.run(build_prtx(
-        uid=UID, license_key=FakeUpload(key), text_mode=text_mode, db=db))
+def _call(db, key=KEY, text_mode="all", run_job=True):
+    """Дёрнуть эндпоинт и, если он поставил задачу, доиграть её как сервер."""
+    tasks = FakeTasks()
+    _CURRENT_DB["db"] = db
+
+    async def _go():
+        answer = await build_prtx(
+            uid=UID, background_tasks=tasks, license_key=FakeUpload(key),
+            text_mode=text_mode, db=db)
+        if run_job:
+            await tasks.run_all()
+        return answer
+
+    result = asyncio.run(_go())
+    return result, tasks
 
 
 def _db_full():
@@ -195,8 +249,10 @@ def test_empty_key_is_refused_before_service(storage, service):
 
 def test_success_sends_graph_key_and_scan(storage, service):
     db = _db_full()
-    result = _call(db)
+    result, _ = _call(db)
 
+    # эндпоинт отвечает сразу, не дожидаясь движка
+    assert result["status"] == "building"
     assert len(service["calls"]) == 1
     payload = service["calls"][0]["payload"]
     assert base64.b64decode(payload["graph"]) == GRAPH
@@ -205,7 +261,8 @@ def test_success_sends_graph_key_and_scan(storage, service):
     assert payload["text_mode"] == "all"
 
     assert storage["content"] == PRTX
-    assert result["file_size"] == len(PRTX)
+    assert graph_api._PRTX_JOBS[str(UID)] == {
+        "state": "done", "file_path": storage["path"], "file_size": len(PRTX)}
     assert db.commits == 1
     assert [a.artifact_type for a in db.added] == [ArtifactType.PRTX]
 
@@ -232,30 +289,31 @@ def test_reissue_drops_old_artifact(storage, service):
     assert len(db.added) == 1
 
 
-def test_engine_refusing_key_is_passed_through(storage, service):
-    """403 сервиса («движок не принял ключ») не превращается в 500."""
+def test_engine_refusing_key_lands_in_status(storage, service):
+    """Движок не принял ключ — причина доходит до клиента через /prtx/status."""
     service["response"] = FakeResponse(
         403, {"error": "движок не принял ключ лицензии"})
     db = _db_full()
 
-    with pytest.raises(HTTPException) as exc:
-        _call(db)
+    _call(db)
 
-    assert exc.value.status_code == 403
-    assert "ключ лицензии" in exc.value.detail
+    job = graph_api._PRTX_JOBS[str(UID)]
+    assert job["state"] == "error"
+    assert "ключ лицензии" in job["error"]
     assert db.commits == 0
 
 
-def test_dead_service_is_503(storage, service):
+def test_dead_service_lands_in_status(storage, service):
     import httpx
 
     service["response"] = httpx.ConnectError("connection refused")
     db = _db_full()
 
-    with pytest.raises(HTTPException) as exc:
-        _call(db)
+    _call(db)
 
-    assert exc.value.status_code == 503
+    job = graph_api._PRTX_JOBS[str(UID)]
+    assert job["state"] == "error"
+    assert "недоступен" in job["error"]
     assert db.commits == 0
 
 
@@ -268,3 +326,26 @@ def test_key_never_reaches_the_log(storage, service, caplog):
     text = "\n".join(r.getMessage() for r in caplog.records)
     assert KEY.decode("latin-1") not in text
     assert base64.b64encode(KEY).decode() not in text
+
+
+def test_key_is_wiped_after_send(storage, service):
+    """Ключ не должен оставаться в памяти процесса после отправки в сервис."""
+    _call(_db_full())
+    assert service["calls"][0]["sent"] == {}, "payload с ключом не затёрт"
+
+
+def test_repeat_while_building_does_not_start_second_run(storage, service):
+    """Клиент повторяет запрос при обрыве — вторая сборка стартовать не должна."""
+    db = _db_full()
+    graph_api._PRTX_JOBS[str(UID)] = {"state": "building"}
+
+    result, tasks = _call(db, run_job=False)
+
+    assert result["status"] == "building"
+    assert tasks.tasks == [], "поставлено второе задание поверх бегущего"
+    assert service["calls"] == []
+
+
+def test_status_reports_idle_for_unknown_diagram():
+    """Сервер перезапустили — задание потеряно, и это видно клиенту."""
+    assert asyncio.run(prtx_status(uid=UID)) == {"state": "idle"}

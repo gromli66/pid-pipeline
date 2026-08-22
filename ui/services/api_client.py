@@ -652,19 +652,26 @@ class APIClient:
         return self._request("GET", "/api/graph/prtx/health", timeout=15.0)
 
     def build_prtx(self, uid: str, license_key: bytes) -> Dict[str, Any]:
-        """Собрать .prtx на сервере, отдав ему ключ лицензии САПФИР.
+        """Запустить сборку .prtx на сервере, отдав ему ключ лицензии САПФИР.
 
         Движок крутится в контейнере `prtx`; ключа у сервера нет, он приезжает
         этим запросом на один прогон и там не сохраняется (docker/prtx/server.py).
         Ключ в лог не пишем.
 
-        Таймаут с запасом: сервис считает схемы по одной, чужой прогон впереди
-        добавляет к ожиданию свои десятки секунд.
+        Запрос КОРОТКИЙ: сервер отвечает сразу, а считает в фоне. Ждать ответа
+        всю сборку нельзя — она идёт минутами, и промежуточные узлы рвут такое
+        соединение по бездействию (замер 2026-08-22: схема собиралась на сервере
+        2 минуты, клиент к тому времени уже получал WinError 10054/10060 и
+        считал, что всё упало). Готовность забирается `prtx_status`.
         """
         files = {"license": (".S$lk$.bin", license_key, "application/octet-stream")}
         return self._request(
-            "POST", f"/api/graph/{uid}/prtx/build", files=files, timeout=960.0
+            "POST", f"/api/graph/{uid}/prtx/build", files=files, timeout=60.0
         )
+
+    def prtx_status(self, uid: str) -> Dict[str, Any]:
+        """Чем закончилась фоновая сборка: building | done | error | idle."""
+        return self._request("GET", f"/api/graph/{uid}/prtx/status", timeout=15.0)
 
     def upload_prtx(self, uid: str, file_path: Path) -> Dict[str, Any]:
         """Залить готовый .prtx (ляжет рядом с FXML: fxml/diagram.prtx).

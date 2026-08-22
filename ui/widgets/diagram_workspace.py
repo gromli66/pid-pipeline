@@ -2046,6 +2046,9 @@ class DiagramWorkspace(QWidget):
         if not save_path:
             return
         self._last_fxml_dir = os.path.dirname(save_path)
+        # Оператор нажал «сохранить» и ждёт файл — про исход он должен узнать
+        # окном, а не строкой в статусбаре, которая гаснет через 8 секунд.
+        self._prtx_explicit = True
         # Дальше работает общий путь сборки: сервер соберёт схему по нашему
         # ключу и положит её и в storage, и рядом — по выбранному пути.
         self._start_prtx_conversion(export_path=save_path)
@@ -2131,11 +2134,20 @@ class DiagramWorkspace(QWidget):
         from ui.services.prtx_converter import PrtxWorker
         from ui.services.prtx_license import diagnose_local
 
+        explicit = getattr(self, "_prtx_explicit", False)
+
         report = diagnose_local()
         if not report.ok:
-            self.status_message.emit(
-                f"⚠ Лицензия САПФИР: {report.first_problem.title} — "
-                "расчётная схема не собрана (кнопка 🔑 в главном окне)", 8000)
+            problem = report.first_problem
+            if explicit:
+                self._prtx_explicit = False
+                QMessageBox.warning(
+                    self, "Лицензия САПФИР",
+                    f"{problem.title}\n\n{problem.detail}\n\n{problem.hint}")
+            else:
+                self.status_message.emit(
+                    f"⚠ Лицензия САПФИР: {problem.title} — "
+                    "расчётная схема не собрана (кнопка 🔑 в главном окне)", 8000)
             return
 
         # Повторная генерация FXML поверх бегущей сборки затёрла бы ссылку на
@@ -2143,9 +2155,16 @@ class DiagramWorkspace(QWidget):
         running = getattr(self, "_prtx_thread", None)
         if running is not None and running.isRunning():
             logger.info("PRTX: сборка уже идёт, повтор пропущен")
+            if explicit:
+                self._prtx_explicit = False
+                QMessageBox.information(
+                    self, "Расчётная схема",
+                    "Схема уже собирается — дождитесь окончания и повторите.")
             return
 
-        self.status_message.emit("⏳ Сборка расчётной схемы .prtx…", 4000)
+        self.status_message.emit(
+            "⏳ Сборка расчётной схемы .prtx… (до минуты)"
+            if explicit else "⏳ Сборка расчётной схемы .prtx…", 4000)
 
         self._prtx_thread = QThread()
         self._prtx_worker = PrtxWorker(self.api_client, self._uid, export_path)
@@ -2153,6 +2172,9 @@ class DiagramWorkspace(QWidget):
         self._prtx_thread.started.connect(self._prtx_worker.run)
         self._prtx_worker.finished.connect(self._on_prtx_done)
         self._prtx_worker.error.connect(self._on_prtx_error)
+        # Сборка идёт минутами — без этого окно выглядит замершим
+        self._prtx_worker.progress.connect(
+            lambda msg: self.status_message.emit(msg, 4000))
         # Поток гасит сам работник — рабочая область живёт дольше конвертации,
         # но связи со слотами Qt рвёт вместе с получателем (образец — pipe_tab).
         self._prtx_worker.finished.connect(self._prtx_thread.quit)
@@ -2162,13 +2184,26 @@ class DiagramWorkspace(QWidget):
     @Slot(str)
     def _on_prtx_done(self, where: str):
         self.status_message.emit(f"📐 Расчётная схема .prtx собрана: {where}", 8000)
+        if getattr(self, "_prtx_explicit", False):
+            self._prtx_explicit = False
+            QMessageBox.information(
+                self, "Расчётная схема", f"Схема сохранена:\n{where}")
 
     @Slot(str)
     def _on_prtx_error(self, message: str):
-        # Не окно: .prtx — производная от готового FXML, срыв сборки не должен
-        # перебивать оператору результат основного конвейера.
+        # Автосборка молчит окном: .prtx — производная от готового FXML, её срыв
+        # не должен перебивать оператору результат основного конвейера. Но если
+        # оператор САМ нажал «сохранить .prtx», он ждёт файл — тут окно нужно,
+        # иначе экспорт выглядит так, будто ничего не произошло.
         logger.error("PRTX conversion failed: %s", message)
-        self.status_message.emit(f"⚠ Расчётная схема .prtx не собрана: {message}", 10000)
+        if getattr(self, "_prtx_explicit", False):
+            self._prtx_explicit = False
+            QMessageBox.warning(
+                self, "Расчётная схема",
+                f"Не удалось сохранить расчётную схему:\n\n{message}")
+        else:
+            self.status_message.emit(
+                f"⚠ Расчётная схема .prtx не собрана: {message}", 10000)
 
     def _download_fxml(self):
         """Скачать сгенерированный FXML на компьютер пользователя (ручной фолбэк)."""

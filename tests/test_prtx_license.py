@@ -31,19 +31,32 @@ def _home_with_key(tmp_path, name="home", data=b"KEY"):
 class FakeApi:
     """Поверхность api_client, которой пользуется PrtxWorker."""
 
-    def __init__(self, prtx=b"PRTX"):
+    def __init__(self, prtx=b"PRTX", states=None):
         self.built = []
         self.downloaded = []
+        self.polls = 0
         self._prtx = prtx
+        #: что отдаёт /prtx/status по порядку; последнее значение повторяется
+        self._states = list(states or [{"state": "done"}])
 
     def build_prtx(self, uid, license_key):
         self.built.append((uid, license_key))
-        return {"status": "saved", "file_size": len(self._prtx)}
+        return {"status": "building"}
+
+    def prtx_status(self, uid):
+        self.polls += 1
+        return self._states[min(self.polls - 1, len(self._states) - 1)]
 
     def download_artifact(self, uid, artifact_type, dest_path):
         self.downloaded.append((uid, artifact_type))
         dest_path.write_bytes(self._prtx)
         return dest_path
+
+
+@pytest.fixture(autouse=True)
+def _no_sleep(monkeypatch):
+    """Опрос в тестах — без пауз: ждать нечего, сервер поддельный."""
+    monkeypatch.setattr(pc, "POLL_SEC", 0)
 
 
 def _run(worker):
@@ -140,3 +153,55 @@ def test_worker_reports_server_failure(monkeypatch, tmp_path):
 
     assert "сервис конвертера недоступен" in seen["error"]
     assert "finished" not in seen
+
+
+# --- имя файла при экспорте --------------------------------------------
+
+@pytest.mark.parametrize("given, expected", [
+    # уже .prtx — не трогаем
+    (r"C:\out\схема.prtx", r"C:\out\схема.prtx"),
+    # рядом с чертежом — заменяем расширение
+    (r"C:\out\схема.fxml", r"C:\out\схема.prtx"),
+    (r"C:\out\2. Схема Т.С.fxml", r"C:\out\2. Схема Т.С.prtx"),
+    # ⚠ имя с точками и без расширения: with_suffix схлопнул бы в «1.prtx»
+    (r"C:\out\1. Схема отборов и дренажей турбины 1",
+     r"C:\out\1. Схема отборов и дренажей турбины 1.prtx"),
+    (r"C:\out\2. Схема основных магистралей и подпитки Т.С",
+     r"C:\out\2. Схема основных магистралей и подпитки Т.С.prtx"),
+    (r"C:\out\схема", r"C:\out\схема.prtx"),
+])
+def test_export_target_keeps_dotted_names(given, expected):
+    """Оператор не находил файл: путь с точками в имени резался до «1.prtx»."""
+    assert str(pc._prtx_target(given)) == expected
+
+
+def test_worker_waits_for_background_build(monkeypatch, tmp_path):
+    """Сборка идёт минутами: клиент опрашивает сервер, а не ждёт в запросе."""
+    monkeypatch.setenv("PRTX_LICENSE_HOME", str(_home_with_key(tmp_path)))
+    api = FakeApi(states=[{"state": "building"}, {"state": "building"},
+                          {"state": "done"}])
+
+    seen = _run(pc.PrtxWorker(api, "uid-5", None))
+
+    assert api.polls == 3
+    assert seen["finished"] == "на сервере"
+
+
+def test_worker_reports_build_error_from_status(monkeypatch, tmp_path):
+    monkeypatch.setenv("PRTX_LICENSE_HOME", str(_home_with_key(tmp_path)))
+    api = FakeApi(states=[{"state": "error", "error": "движок не принял ключ"}])
+
+    seen = _run(pc.PrtxWorker(api, "uid-6", None))
+
+    assert "движок не принял ключ" in seen["error"]
+    assert api.downloaded == []
+
+
+def test_worker_notices_lost_job(monkeypatch, tmp_path):
+    """Сервер перезапустили посреди сборки — не ждём молча до таймаута."""
+    monkeypatch.setenv("PRTX_LICENSE_HOME", str(_home_with_key(tmp_path)))
+    api = FakeApi(states=[{"state": "idle"}])
+
+    seen = _run(pc.PrtxWorker(api, "uid-7", None))
+
+    assert "потерял задание" in seen["error"]

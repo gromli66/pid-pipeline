@@ -21,6 +21,7 @@ import logging
 import os
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
@@ -31,6 +32,12 @@ logger = logging.getLogger(__name__)
 #: `LicenseChecker` собирает путь как `System.getProperty("user.home") + File.separator
 #: + ".S$lk$.bin"`. Активация САПФИРа кладёт его в профиль пользователя.
 LICENSE_KEY_FILE = ".S$lk$.bin"
+
+#: как часто спрашивать сервер о готовности схемы
+POLL_SEC = 3
+#: сколько всего ждём сборку: замер 2026-08-22 — 2 минуты на схеме со сканом
+#: 4.6 МБ, плюс очередь (сервис считает схемы по одной)
+BUILD_WAIT_SEC = 900
 
 
 class PrtxError(RuntimeError):
@@ -68,6 +75,27 @@ def read_license_key() -> bytes:
     return data
 
 
+#: расширения чертежа, которые при экспорте схемы заменяются на .prtx
+_DRAWING_SUFFIXES = (".fxml", ".xml")
+
+
+def _prtx_target(path) -> Path:
+    """Путь для .prtx рядом с выбранным файлом.
+
+    ⚠ Не `with_suffix`: у диаграмм имена вида «1. Схема отборов … турбины 1»,
+    и Python считает суффиксом всё после ПОСЛЕДНЕЙ точки — такой путь
+    схлопывался в «1.prtx», файл уезжал не туда, а снаружи это выглядело как
+    «экспорт молча ничего не сохранил» (замер 2026-08-22).
+    """
+    target = Path(path)
+    suffix = target.suffix.lower()
+    if suffix == ".prtx":
+        return target
+    if suffix in _DRAWING_SUFFIXES:
+        return target.with_suffix(".prtx")
+    return target.with_name(target.name + ".prtx")
+
+
 class PrtxWorker(QObject):
     """Отдать серверу ключ → он соберёт .prtx → положить копию рядом с FXML.
 
@@ -78,6 +106,7 @@ class PrtxWorker(QObject):
 
     finished = Signal(str)   # человекочитаемое «куда положили»
     error = Signal(str)
+    progress = Signal(str)   # «схема считается, 40 с…» — в статусбар
 
     def __init__(self, api_client, uid: str, export_path: Path | None):
         super().__init__()
@@ -86,14 +115,39 @@ class PrtxWorker(QObject):
         #: путь, куда оператор сохранил .fxml — рядом ляжет .prtx (или None)
         self.export_path = export_path
 
+    def _wait_for_build(self):
+        """Дождаться конца фоновой сборки короткими опросами.
+
+        Не ждём в самом запросе сборки: он держал бы соединение минутами, а
+        промежуточные узлы такое рвут (замер 2026-08-22). Каждый опрос —
+        доли секунды, рвать нечего.
+        """
+        deadline = time.monotonic() + BUILD_WAIT_SEC
+        while time.monotonic() < deadline:
+            time.sleep(POLL_SEC)
+            state = self.api_client.prtx_status(self.uid)
+            kind = state.get("state")
+            if kind == "done":
+                return
+            if kind == "error":
+                raise PrtxError(state.get("error") or "сборка не удалась")
+            if kind == "idle":
+                # Сервер перезапустили посреди сборки — состояние он потерял.
+                raise PrtxError(
+                    "Сервер потерял задание (перезапуск?) — повторите экспорт")
+            self.progress.emit(
+                f"⏳ Схема считается на сервере… {int(time.monotonic() - deadline + BUILD_WAIT_SEC)} с")
+        raise PrtxError(f"Схема не собралась за {BUILD_WAIT_SEC // 60} мин")
+
     def run(self):
         try:
             key = read_license_key()
             self.api_client.build_prtx(self.uid, key)
+            self._wait_for_build()
             where = ["на сервере"]
 
             if self.export_path:
-                target = Path(self.export_path).with_suffix(".prtx")
+                target = _prtx_target(self.export_path)
                 tmp = Path(tempfile.mkdtemp(prefix="prtx_"))
                 try:
                     self.api_client.download_artifact(self.uid, "prtx", tmp / "diagram.prtx")

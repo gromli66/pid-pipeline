@@ -12,7 +12,9 @@ Endpoints:
 from pathlib import Path
 from uuid import UUID
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from fastapi import (
+    APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile,
+)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -366,9 +368,72 @@ async def prtx_health():
             detail=f"Сервис конвертера недоступен: {exc}") from exc
 
 
-@router.post("/{uid}/prtx/build")
+#: Состояние фоновых сборок .prtx: uid -> {"state", "started_at", …}.
+#: Живёт в памяти процесса — api запускается одним воркером uvicorn
+#: (Dockerfile.api). После рестарта состояние теряется, и клиент это переживает:
+#: `state: idle` он трактует как «сборки нет», а готовый файл всё равно лежит
+#: артефактом.
+_PRTX_JOBS: dict[str, dict] = {}
+
+
+async def _prtx_job(uid: UUID, payload: dict):
+    """Собрать схему и сохранить её. Выполняется ПОСЛЕ ответа клиенту.
+
+    Сборка идёт минутами (замер 2026-08-22: 2 минуты на схеме со сканом
+    4.6 МБ). Держать всё это время открытым HTTP-соединение с клиентом
+    нельзя — промежуточные узлы рвут его по бездействию, и оператор видит
+    «ничего не скачалось», хотя схема на сервере уже готова.
+    """
+    import base64
+
+    import httpx
+
+    from app.config import settings
+    from app.db.session import AsyncSessionLocal
+
+    key = str(uid)
+    try:
+        async with httpx.AsyncClient(timeout=settings.PRTX_TIMEOUT_SEC) as client:
+            response = await client.post(
+                f"{settings.PRTX_SERVICE_URL}/build", json=payload)
+    except httpx.HTTPError as exc:
+        logger.error("PRTX service unreachable for %s: %s", uid, exc)
+        _PRTX_JOBS[key] = {"state": "error",
+                           "error": f"Сервис конвертера недоступен: {exc}"}
+        return
+    finally:
+        payload.clear()      # ключ не держим в памяти дольше нужного
+
+    if response.status_code != 200:
+        detail = response.json().get("error", response.text[:500])
+        logger.error("PRTX service failed for %s (%d): %s",
+                     uid, response.status_code, detail)
+        _PRTX_JOBS[key] = {"state": "error", "error": detail}
+        return
+
+    try:
+        content = base64.b64decode(response.json()["prtx"])
+        async with AsyncSessionLocal() as db:
+            file_path, file_size = await _store_prtx(db, uid, content)
+    except Exception as exc:  # noqa: BLE001 — диск/БД; причина уходит клиенту
+        logger.error("PRTX store failed for %s: %s", uid, exc, exc_info=True)
+        _PRTX_JOBS[key] = {"state": "error", "error": f"Не удалось сохранить: {exc}"}
+        return
+
+    logger.info("PRTX built for %s: %s (%d bytes)", uid, file_path, file_size)
+    _PRTX_JOBS[key] = {"state": "done", "file_path": file_path, "file_size": file_size}
+
+
+@router.get("/{uid}/prtx/status")
+async def prtx_status(uid: UUID):
+    """Чем закончилась фоновая сборка. Клиент опрашивает это короткими запросами."""
+    return _PRTX_JOBS.get(str(uid), {"state": "idle"})
+
+
+@router.post("/{uid}/prtx/build", status_code=202)
 async def build_prtx(
     uid: UUID,
+    background_tasks: BackgroundTasks,
     license_key: UploadFile = File(
         ..., alias="license",
         description="Ключ лицензии САПФИР (.S$lk$.bin) с машины оператора"),
@@ -376,19 +441,20 @@ async def build_prtx(
     db: AsyncSession = Depends(get_async_db),
 ):
     """
-    Собрать .prtx на сервере из уже лежащего здесь графа.
+    Запустить сборку .prtx на сервере и сразу вернуть управление.
 
-    Движок САПФИР крутится в контейнере `prtx` (docker/prtx): технически он в
-    Linux работает и даёт дамп, совпадающий с windows-прогоном байт-в-байт
-    (замер 2026-08-21). Единственное, чего у сервера нет, — ключ лицензии: он
-    приезжает от клиента этим запросом, уходит в сервис и на сервере не
-    хранится — ни на диске, ни в БД, ни в логах.
+    Движок САПФИР крутится в контейнере `prtx` (docker/prtx): в Linux он даёт
+    дамп, совпадающий с windows-прогоном байт-в-байт (замер 2026-08-21).
+    Единственное, чего у сервера нет, — ключ лицензии: он приезжает этим
+    запросом, уходит в сервис и на сервере не хранится — ни на диске, ни в БД,
+    ни в логах.
+
+    Результат забирается опросом `/prtx/status` и скачиванием артефакта: ждать
+    ответа в этом же запросе нельзя, сборка идёт минутами (см. `_prtx_job`).
     """
     import base64
 
-    import httpx
-
-    from app.config import settings
+    from app.config import settings                      # noqa: F401 — см. _prtx_job
 
     result = await db.execute(select(Diagram).where(Diagram.uid == uid))
     diagram = result.scalar_one_or_none()
@@ -417,32 +483,22 @@ async def build_prtx(
     if image:
         payload["image"] = base64.b64encode(image).decode("ascii")
 
+    # Повтор поверх бегущей сборки не запускает вторую: клиент повторяет
+    # запрос при обрыве связи, и без этого сервер получил бы очередь одинаковых
+    # заданий, каждое по паре минут.
+    if _PRTX_JOBS.get(str(uid), {}).get("state") == "building":
+        payload.clear()
+        del key
+        return {"status": "building", "message": "Сборка уже идёт", "uid": str(uid)}
+
     logger.info("PRTX build for %s: graph %d B, image %s",
                 uid, len(graph), f"{len(image)} B" if image else "none")
 
-    try:
-        async with httpx.AsyncClient(timeout=settings.PRTX_TIMEOUT_SEC) as client:
-            response = await client.post(
-                f"{settings.PRTX_SERVICE_URL}/build", json=payload)
-    except httpx.HTTPError as exc:
-        logger.error("PRTX service unreachable: %s", exc)
-        raise HTTPException(
-            status_code=503,
-            detail=f"Сервис конвертера недоступен: {exc}") from exc
-    finally:
-        # ключ не должен пережить запрос дольше необходимого
-        del payload, key
+    _PRTX_JOBS[str(uid)] = {"state": "building"}
+    background_tasks.add_task(_prtx_job, uid, payload)
+    del key
 
-    if response.status_code != 200:
-        detail = response.json().get("error", response.text[:500])
-        logger.error("PRTX service failed (%d): %s", response.status_code, detail)
-        raise HTTPException(status_code=response.status_code, detail=detail)
-
-    content = base64.b64decode(response.json()["prtx"])
-    file_path, file_size = await _store_prtx(db, uid, content)
-    logger.info("PRTX built for %s: %s (%d bytes)", uid, file_path, file_size)
-
-    return {"status": "saved", "file_path": file_path, "file_size": file_size, "uid": str(uid)}
+    return {"status": "building", "uid": str(uid)}
 
 
 @router.post("/{uid}/prtx/upload")
