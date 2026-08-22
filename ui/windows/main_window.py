@@ -138,6 +138,20 @@ class MainWindow(QMainWindow):
         self.action_refresh.triggered.connect(self._on_refresh)
         self.toolbar.addAction(self.action_refresh)
 
+        self.toolbar.addSeparator()
+
+        # Проверка лицензии САПФИР — до начала работы, а не на экспорте:
+        # раньше про неверный путь к ключу оператор узнавал в конце пайплайна.
+        self.action_license = QAction("🔑 Лицензия САПФИР", self)
+        self.action_license.setToolTip(
+            "Проверить, видит ли программа ключ лицензии и готов ли конвертер")
+        self.action_license.triggered.connect(self._on_license_clicked)
+        self.toolbar.addAction(self.action_license)
+
+    def _on_license_clicked(self):
+        from ui.widgets.license_dialog import show_license_dialog
+        show_license_dialog(self, self.api_client)
+
     def _setup_statusbar(self):
         self.statusbar = QStatusBar()
         self.setStatusBar(self.statusbar)

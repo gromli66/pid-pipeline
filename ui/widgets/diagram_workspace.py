@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QMessageBox, QFrame,
     QStackedWidget, QApplication, QFileDialog, QInputDialog,
-    QMenu, QDialog, QComboBox, QLineEdit, QDialogButtonBox,
+    QMenu, QDialog, QComboBox, QLineEdit, QDialogButtonBox, QRadioButton,
 )
 from PySide6.QtCore import Qt, Signal, Slot, QTimer, QThread
 from PySide6.QtGui import QAction, QFont
@@ -383,6 +383,51 @@ class _StagePanel(QWidget):
 # =====================================================================
 # Диалог экспорта FXML
 # =====================================================================
+
+class ExportFormatDialog(QDialog):
+    """Что выгружать: чертёж FXML или расчётную схему .prtx.
+
+    choice() → 'fxml' | 'prtx'. Состояние лицензии показываем прямо здесь:
+    иначе про неверно прописанный ключ оператор узнаёт уже после того, как
+    выбрал формат и папку.
+    """
+
+    def __init__(self, parent, license_problem: str | None):
+        super().__init__(parent)
+        self.setWindowTitle("Экспорт")
+        self.setMinimumWidth(460)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Что сохранить?"))
+
+        self._fxml = QRadioButton("Чертёж FXML — как раньше (размер страницы, папка, имя)")
+        self._fxml.setChecked(True)
+        layout.addWidget(self._fxml)
+
+        self._prtx = QRadioButton("Расчётная схема .prtx (САПФИР)")
+        layout.addWidget(self._prtx)
+
+        note = QLabel(
+            "⚠ " + license_problem if license_problem
+            else "Схему собирает сервер по вашему ключу лицензии."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #b00;" if license_problem else "color: gray;")
+        layout.addWidget(note)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Далее")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Отмена")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def choice(self) -> str:
+        return "prtx" if self._prtx.isChecked() else "fxml"
+
 
 class FxmlExportDialog(QDialog):
     """Единый диалог экспорта FXML: размер страницы + папка + имя файла.
@@ -1959,6 +2004,53 @@ class DiagramWorkspace(QWidget):
             )
 
     def _start_fxml(self):
+        """Кнопка «Экспорт»: сперва спрашиваем формат, дальше — по ветке."""
+        from ui.services.prtx_license import diagnose_local
+
+        report = diagnose_local()
+        problem = None if report.ok else (report.first_problem.detail or
+                                          report.first_problem.title)
+
+        dialog = ExportFormatDialog(self, problem)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        if dialog.choice() == "prtx":
+            self._export_prtx(report)
+        else:
+            self._export_fxml()
+
+    def _export_prtx(self, report=None):
+        """Расчётная схема: спросить путь и собрать её на сервере."""
+        import os
+
+        from ui.services.prtx_license import diagnose_local
+
+        report = report if report is not None else diagnose_local()
+        if not report.ok:
+            problem = report.first_problem
+            QMessageBox.warning(
+                self, "Лицензия САПФИР",
+                f"{problem.title}\n\n{problem.detail}\n\n{problem.hint}\n\n"
+                "Подробности — кнопка «🔑 Лицензия САПФИР» в главном окне.",
+            )
+            return
+
+        base = (self._diagram_name or "diagram").strip()
+        default_name = (os.path.splitext(base)[0] or "diagram") + ".prtx"
+        default_dir = getattr(self, "_last_fxml_dir", None) or os.path.expanduser("~")
+        save_path, _ = QFileDialog.getSaveFileName(
+            self, "Сохранить расчётную схему",
+            os.path.join(default_dir, default_name),
+            "Расчётная схема САПФИР (*.prtx);;Все файлы (*)",
+        )
+        if not save_path:
+            return
+        self._last_fxml_dir = os.path.dirname(save_path)
+        # Дальше работает общий путь сборки: сервер соберёт схему по нашему
+        # ключу и положит её и в storage, и рядом — по выбранному пути.
+        self._start_prtx_conversion(export_path=save_path)
+
+    def _export_fxml(self):
         import os
         # Единый диалог: размер + папка + имя. По завершении генерации файл
         # сохранится автоматически в выбранный путь (без второго окна).
@@ -2036,11 +2128,14 @@ class DiagramWorkspace(QWidget):
         diagram.fxml и, если оператор выбирал путь экспорта, ложится рядом с
         сохранённым .fxml.
         """
-        from ui.services.prtx_converter import PrtxWorker, license_key_path
+        from ui.services.prtx_converter import PrtxWorker
+        from ui.services.prtx_license import diagnose_local
 
-        if not license_key_path().is_file():
+        report = diagnose_local()
+        if not report.ok:
             self.status_message.emit(
-                "⚠ Ключ лицензии САПФИР не найден — расчётная схема не собрана", 6000)
+                f"⚠ Лицензия САПФИР: {report.first_problem.title} — "
+                "расчётная схема не собрана (кнопка 🔑 в главном окне)", 8000)
             return
 
         # Повторная генерация FXML поверх бегущей сборки затёрла бы ссылку на

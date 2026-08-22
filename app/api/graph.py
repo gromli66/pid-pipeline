@@ -343,6 +343,29 @@ async def _artifact_bytes(db: AsyncSession, uid: UUID, art_type: ArtifactType):
     return path.read_bytes() if path.is_file() else None
 
 
+@router.get("/prtx/health")
+async def prtx_health():
+    """Готов ли конвертер расчётных схем.
+
+    Нужен клиенту для проверки лицензии до начала работы: оператор жмёт
+    «Лицензия САПФИР» и сразу видит, дойдёт ли дело до сборки, а не узнаёт об
+    этом на экспорте, пройдя весь пайплайн.
+    """
+    import httpx
+
+    from app.config import settings
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(f"{settings.PRTX_SERVICE_URL}/health")
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Сервис конвертера недоступен: {exc}") from exc
+
+
 @router.post("/{uid}/prtx/build")
 async def build_prtx(
     uid: UUID,

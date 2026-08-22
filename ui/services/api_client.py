@@ -643,6 +643,14 @@ class APIClient:
             params["bridge_gap"] = bridge_gap
         return self._request("POST", f"/api/graph/{uid}/generate-fxml", params=params)
 
+    def prtx_health(self) -> Dict[str, Any]:
+        """Готов ли конвертер расчётных схем на сервере.
+
+        Зовётся проверкой лицензии (ui/services/prtx_license.py) до начала
+        работы — короткий таймаут, оператор ждёт ответа в диалоге.
+        """
+        return self._request("GET", "/api/graph/prtx/health", timeout=15.0)
+
     def build_prtx(self, uid: str, license_key: bytes) -> Dict[str, Any]:
         """Собрать .prtx на сервере, отдав ему ключ лицензии САПФИР.
 
