@@ -643,6 +643,34 @@ class APIClient:
             params["bridge_gap"] = bridge_gap
         return self._request("POST", f"/api/graph/{uid}/generate-fxml", params=params)
 
+    def build_prtx(self, uid: str, license_key: bytes) -> Dict[str, Any]:
+        """Собрать .prtx на сервере, отдав ему ключ лицензии САПФИР.
+
+        Движок крутится в контейнере `prtx`; ключа у сервера нет, он приезжает
+        этим запросом на один прогон и там не сохраняется (docker/prtx/server.py).
+        Ключ в лог не пишем.
+
+        Таймаут с запасом: сервис считает схемы по одной, чужой прогон впереди
+        добавляет к ожиданию свои десятки секунд.
+        """
+        files = {"license": (".S$lk$.bin", license_key, "application/octet-stream")}
+        return self._request(
+            "POST", f"/api/graph/{uid}/prtx/build", files=files, timeout=960.0
+        )
+
+    def upload_prtx(self, uid: str, file_path: Path) -> Dict[str, Any]:
+        """Залить готовый .prtx (ляжет рядом с FXML: fxml/diagram.prtx).
+
+        Путь для машин, где конвертер стоит локально коробкой. Штатный путь —
+        build_prtx: считает сервер, клиент отдаёт только ключ лицензии.
+        """
+        file_path = Path(file_path)
+        with open(file_path, "rb") as f:
+            files = {"file": (file_path.name, f, "application/octet-stream")}
+            return self._request(
+                "POST", f"/api/graph/{uid}/prtx/upload", files=files, timeout=120.0
+            )
+
     # === OCR ===
 
     def complete_simple_graph_validation(self, uid: str) -> Dict[str, Any]:

@@ -5,11 +5,14 @@ Endpoints:
 - POST /{uid}/build        — запустить построение графа
                              (VALIDATED_JUNCTIONS | BUILT | ERROR → BUILDING_GRAPH)
 - GET  /{uid}/result       — получить результат построения (node/edge count, artifacts)
+- POST /{uid}/prtx/build   — собрать .prtx на сервере (клиент отдаёт ключ лицензии)
+- POST /{uid}/prtx/upload  — принять .prtx, собранный на машине с коробкой
 """
 
+from pathlib import Path
 from uuid import UUID
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +20,7 @@ from app.core import obs
 from app.core.logging import get_logger
 from app.db import get_async_db
 from app.models import Diagram, DiagramStatus, Artifact, ArtifactType
+from app.services.storage import StorageService
 
 router = APIRouter()
 
@@ -292,3 +296,155 @@ async def generate_fxml(
         "task_id": task_id,
         "uid": str(uid),
     }
+
+
+async def _store_prtx(db: AsyncSession, uid: UUID, content: bytes):
+    """Положить .prtx рядом с FXML и перевыпустить артефакт PRTX."""
+    storage = StorageService()
+    file_path, file_size = await storage.save_file(uid, "fxml", "diagram.prtx", content)
+
+    # Перевыпуск: старый артефакт снимаем, файл перезаписан по тому же пути
+    old_result = await db.execute(
+        select(Artifact).where(
+            Artifact.diagram_uid == uid,
+            Artifact.artifact_type == ArtifactType.PRTX,
+        )
+    )
+    old = old_result.scalar_one_or_none()
+    if old:
+        await db.delete(old)
+        await db.flush()
+
+    db.add(Artifact(
+        diagram_uid=uid,
+        artifact_type=ArtifactType.PRTX,
+        file_path=file_path,
+        file_size=file_size,
+        mime_type="application/octet-stream",
+    ))
+    await db.commit()
+    return file_path, file_size
+
+
+async def _artifact_bytes(db: AsyncSession, uid: UUID, art_type: ArtifactType):
+    """Прочитать файл артефакта с диска. None, если артефакта или файла нет."""
+    from app.config import settings
+
+    result = await db.execute(
+        select(Artifact).where(
+            Artifact.diagram_uid == uid,
+            Artifact.artifact_type == art_type,
+        )
+    )
+    artifact = result.scalar_one_or_none()
+    if not artifact:
+        return None
+    path = Path(settings.STORAGE_PATH) / artifact.file_path
+    return path.read_bytes() if path.is_file() else None
+
+
+@router.post("/{uid}/prtx/build")
+async def build_prtx(
+    uid: UUID,
+    license_key: UploadFile = File(
+        ..., alias="license",
+        description="Ключ лицензии САПФИР (.S$lk$.bin) с машины оператора"),
+    text_mode: str = Query("all", pattern="^(all|bound|none)$"),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Собрать .prtx на сервере из уже лежащего здесь графа.
+
+    Движок САПФИР крутится в контейнере `prtx` (docker/prtx): технически он в
+    Linux работает и даёт дамп, совпадающий с windows-прогоном байт-в-байт
+    (замер 2026-08-21). Единственное, чего у сервера нет, — ключ лицензии: он
+    приезжает от клиента этим запросом, уходит в сервис и на сервере не
+    хранится — ни на диске, ни в БД, ни в логах.
+    """
+    import base64
+
+    import httpx
+
+    from app.config import settings
+
+    result = await db.execute(select(Diagram).where(Diagram.uid == uid))
+    diagram = result.scalar_one_or_none()
+    if not diagram:
+        raise HTTPException(status_code=404, detail="Diagram not found")
+
+    obs.bind(uid=str(uid), phase="generating_fxml")
+
+    graph = await _artifact_bytes(db, uid, ArtifactType.GRAPH_VALIDATED)
+    if graph is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Нет валидированного графа — нечего конвертировать")
+    # Скан не обязателен: без него угол насосов берётся по трубам
+    image = await _artifact_bytes(db, uid, ArtifactType.ORIGINAL_IMAGE)
+
+    key = await license_key.read()
+    if not key:
+        raise HTTPException(status_code=400, detail="Пустой ключ лицензии")
+
+    payload = {
+        "graph": base64.b64encode(graph).decode("ascii"),
+        "license": base64.b64encode(key).decode("ascii"),
+        "text_mode": text_mode,
+    }
+    if image:
+        payload["image"] = base64.b64encode(image).decode("ascii")
+
+    logger.info("PRTX build for %s: graph %d B, image %s",
+                uid, len(graph), f"{len(image)} B" if image else "none")
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.PRTX_TIMEOUT_SEC) as client:
+            response = await client.post(
+                f"{settings.PRTX_SERVICE_URL}/build", json=payload)
+    except httpx.HTTPError as exc:
+        logger.error("PRTX service unreachable: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Сервис конвертера недоступен: {exc}") from exc
+    finally:
+        # ключ не должен пережить запрос дольше необходимого
+        del payload, key
+
+    if response.status_code != 200:
+        detail = response.json().get("error", response.text[:500])
+        logger.error("PRTX service failed (%d): %s", response.status_code, detail)
+        raise HTTPException(status_code=response.status_code, detail=detail)
+
+    content = base64.b64decode(response.json()["prtx"])
+    file_path, file_size = await _store_prtx(db, uid, content)
+    logger.info("PRTX built for %s: %s (%d bytes)", uid, file_path, file_size)
+
+    return {"status": "saved", "file_path": file_path, "file_size": file_size, "uid": str(uid)}
+
+
+@router.post("/{uid}/prtx/upload")
+async def upload_prtx(
+    uid: UUID,
+    file: UploadFile = File(..., description="Расчётная схема САПФИР (.prtx)"),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Принять .prtx, собранный клиентом, и положить рядом с FXML.
+
+    Путь для машин, где конвертер стоит локально коробкой. Штатный путь —
+    /{uid}/prtx/build: сборка на сервере, клиент отдаёт только ключ лицензии.
+    """
+    result = await db.execute(select(Diagram).where(Diagram.uid == uid))
+    diagram = result.scalar_one_or_none()
+
+    if not diagram:
+        raise HTTPException(status_code=404, detail="Diagram not found")
+
+    obs.bind(uid=str(uid), phase="generating_fxml")
+
+    content = await file.read()
+    file_path, file_size = await _store_prtx(db, uid, content)
+
+    logger.info("PRTX uploaded for %s: %s (%d bytes)", uid, file_path, file_size)
+
+    return {"status": "saved", "file_path": file_path, "file_size": file_size, "uid": str(uid)}

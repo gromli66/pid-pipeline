@@ -85,6 +85,7 @@ services:
       - STORAGE_PATH=/storage/diagrams
       - PROJECTS_CONFIG_DIR=/app/configs/projects
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - PRTX_SERVICE_URL=http://prtx:8081
     volumes:
       - ./app:/app/app
       - ./worker:/app/worker
@@ -110,6 +111,36 @@ services:
     networks:
       - pid_network
       - cvat
+
+  # Конвертер расчётной схемы САПФИР (.prtx)
+  #
+  # Образ собирается ОТДЕЛЬНО: его контекст — коробка конвертера (свой git,
+  # ~250 МБ), в этом репозитории её нет. Собрать на машине разработчика
+  # `powershell -File docker\prtx\build.ps1`, привезти сюда
+  # `docker save pid-prtx:latest | ssh ... docker load`.
+  #
+  # Наружу порт НЕ открыт: ключ лицензии оператора ходит только внутри
+  # pid_network, от api к сервису. На сервере ключ не хранится — живёт в
+  # tmpfs на время прогона (docker/prtx/server.py).
+  prtx:
+    image: ${PRTX_IMAGE:-pid-prtx:latest}
+    container_name: pid_prtx
+    logging: *default-logging
+    environment:
+      - PRTX_TIMEOUT_SEC=${PRTX_TIMEOUT_SEC:-900}
+    # Схемы считаются по одной (движок пишет в общий engine/SETTINGS), прогон
+    # берёт до 3 ГБ: -Xmx3072M в json2prtx.sh.
+    shm_size: 64m
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8081/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - pid_network
 
   # Celery Worker - GPU задачи
   worker:

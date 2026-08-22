@@ -80,6 +80,9 @@ class ArtifactType(str, enum.Enum):
 
     # Output
     FXML = "fxml"
+    # Расчётная схема САПФИР (слой CMS), собирается коробкой prt_convertor
+    # из GRAPH_VALIDATED. Лежит рядом с FXML: fxml/diagram.prtx.
+    PRTX = "prtx"
 
     # Debug/Visualization
     DETECTION_OVERLAY = "detection_overlay"

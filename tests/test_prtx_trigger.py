@@ -1,0 +1,88 @@
+# -*- coding: utf-8 -*-
+"""Когда клиент запускает автосборку .prtx (ветка exp/prtx-convert).
+
+Замок против ровно той ошибки, что была в первой редакции: триггер висел на
+`GENERATING_FXML`, а этот статус опрос клиента (2 с) почти никогда не видит —
+генерация FXML занимает 0.1 с (замер по 75 стадиям `fxml_generation`, max 1.3 с).
+На авто-пути после «Проверки схемы» клиент видит `VALIDATED_GRAPH → COMPLETED`,
+и сборка не запускалась бы вовсе.
+
+Тест гоняет НЕ виджет, а голый `_apply_status` на заглушке: без QApplication и
+без сети, зато ровно ту логику взвода, что стоит в бою.
+"""
+import pytest
+
+pytest.importorskip("PySide6")
+
+from ui.services.api_client import DiagramStatus as S           # noqa: E402
+from ui.widgets.diagram_workspace import DiagramWorkspace       # noqa: E402
+
+
+class _Stub:
+    """Минимум, который трогает `_apply_status` на нужных ветках."""
+
+    _apply_status = DiagramWorkspace._apply_status
+
+    def __init__(self):
+        self._uid = "u"
+        self._last_status = S.UPLOADED          # как выставляет load_diagram
+        self._awaiting_fxml_save = False
+        self._prtx_armed = False
+        self._fxml_target_path = None
+        self._stage_errors = {}
+        self._ocr_notified = True               # ветку OCR-опроса не трогаем
+        self._action_buttons = {}
+        self.prtx_calls = []
+        self.fxml_saves = 0
+        self.btn_error_retry = type("B", (), {"setVisible": lambda *a: None})()
+        self.beads = type("Bd", (), {"set_state": lambda *a: None})()
+
+    _update_beads = _update_buttons = _update_gif = lambda *a, **k: None
+    _start_ocr_poll = _stop_ocr_poll = lambda *a: None
+    _apply_error_status = lambda *a, **k: None
+
+    def _save_fxml_silently(self):
+        self.fxml_saves += 1
+        self._fxml_target_path = None
+
+    def _start_prtx_conversion(self, export_path=None):
+        self.prtx_calls.append(export_path)
+
+
+def _play(statuses, **pre):
+    w = _Stub()
+    for k, v in pre.items():
+        setattr(w, k, v)
+    for st in statuses:
+        w._apply_status(st)
+    return w
+
+
+def test_открытие_готовой_схемы_не_пересобирает():
+    """Иначе .prtx собирался бы заново при каждом открытии готовой диаграммы."""
+    w = _play([S.COMPLETED, S.COMPLETED])
+    assert w.prtx_calls == []
+
+
+def test_авто_путь_собирает_даже_когда_generating_fxml_не_увиден():
+    w = _play([S.VALIDATING_GRAPH, S.VALIDATED_GRAPH, S.COMPLETED])
+    assert w.prtx_calls == [None]
+
+
+def test_путь_после_контуров():
+    w = _play([S.OCR_BOUND, S.COMPLETED])
+    assert w.prtx_calls == [None]
+
+
+def test_повторный_опрос_completed_не_собирает_второй_раз():
+    w = _play([S.VALIDATED_GRAPH, S.COMPLETED, S.COMPLETED, S.COMPLETED])
+    assert w.prtx_calls == [None]
+
+
+def test_ручной_экспорт_на_готовой_схеме_кладёт_рядом_с_выбранным_файлом():
+    """Статус не меняется (COMPLETED → COMPLETED), взвод даёт кнопка 📄 FXML."""
+    w = _play([S.COMPLETED],
+              _awaiting_fxml_save=True,
+              _fxml_target_path=r"C:\out\схема.fxml")
+    assert w.prtx_calls == [r"C:\out\схема.fxml"]
+    assert w.fxml_saves == 1
