@@ -200,7 +200,8 @@ def identify_node_by_point(
     annotations: List[Dict],
     labeled_equipment: np.ndarray = None,
     labeled_connectors: np.ndarray = None,
-    exclude_classes: set = None
+    exclude_classes: set = None,
+    buried_connectors: set = None
 ) -> Optional[Dict]:
     """
     Идентифицировать узел по координатам точки контакта.
@@ -211,8 +212,10 @@ def identify_node_by_point(
     3. Если точка на equipment_mask → ищем в annotations какому bbox принадлежит
     4. Иначе → None
     
-    ВАЖНО: Приоритет connector над equipment!
-    Если точка попадает на обе маски, connector имеет приоритет.
+    ВАЖНО: Приоритет connector над equipment — но только если connector хотя бы
+    частично выходит за маску оборудования. Стык, целиком закопанный внутрь
+    элемента (ложное срабатывание модели на кромке символа), перехватывал бы
+    контакт трубы, и элемент оставался без подключения.
     
     Args:
         x, y: Координаты точки (x, y) - НЕ (y, x)!
@@ -222,6 +225,8 @@ def identify_node_by_point(
         labeled_equipment: Нумерованная маска equipment (отдельный слой)
         labeled_connectors: Нумерованная маска connectors (отдельный слой)
         exclude_classes: Классы для исключения (по умолчанию {34, 36, 38, 39})
+        buried_connectors: label_id коннекторов, целиком лежащих внутри
+            equipment_mask — им приоритет над оборудованием не даётся
         
     Returns:
         Словарь с информацией об узле или None
@@ -240,21 +245,24 @@ def identify_node_by_point(
             return None
     
     # ПРИОРИТЕТ: Проверка connector ПЕРВЫМ!
-    # Это критически важно для случаев когда connector касается/перекрывается с equipment
+    # Это критически важно для случаев когда connector касается/перекрывается с equipment.
+    # Исключение — стык, целиком закопанный в маску элемента: он не «касается»
+    # оборудования, а сидит внутри него и крадёт у него трубу.
     if connection_mask[check_y, check_x]:
         label_id = None
         if labeled_connectors is not None and labeled_connectors[check_y, check_x] > 0:
             label_id = int(labeled_connectors[check_y, check_x])
 
-        return {
-            'type': 'connector',
-            'class_id': CONNECTOR_CLASS_ID,
-            'class_name': CONNECTOR_CLASS_NAME,
-            'bbox': None,
-            'ann_idx': None,
-            'label_id': label_id,
-            'segmentation': None  # Connector не имеет полигона
-        }
+        if not (buried_connectors and label_id in buried_connectors):
+            return {
+                'type': 'connector',
+                'class_id': CONNECTOR_CLASS_ID,
+                'class_name': CONNECTOR_CLASS_NAME,
+                'bbox': None,
+                'ann_idx': None,
+                'label_id': label_id,
+                'segmentation': None  # Connector не имеет полигона
+            }
     
     # Проверка equipment
     if equipment_mask[check_y, check_x]:

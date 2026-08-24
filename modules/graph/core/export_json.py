@@ -89,6 +89,10 @@ def export_node_link_format(nodes: List[Dict],
         # Добавить ann_idx (COCO annotation id) для матчинга с SAM2 контурами
         if node.get('ann_idx') is not None:
             node_data['ann_idx'] = node['ann_idx']
+
+        # Кластер дублей стыков: автоматически не чиним, помечаем для оператора
+        if node.get('cluster_suspect'):
+            node_data['cluster_suspect'] = True
         
         # Добавить segmentation (полигон) если есть
         if node.get('segmentation'):

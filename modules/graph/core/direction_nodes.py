@@ -91,10 +91,10 @@ def _max_suffix(items, prefix) -> int:
     return mx
 
 
-def _make_connector(cid: str, point_yx) -> Dict:
+def _make_connector(cid: str, point_yx, area: int = 0) -> Dict:
     y, x = int(point_yx[0]), int(point_yx[1])
     return {"id": cid, "type": "connector", "class_id": -1, "class_name": "connector",
-            "centroid": [y, x], "bbox": None, "area": 0, "degree": 0}
+            "centroid": [y, x], "bbox": None, "area": area, "degree": 0}
 
 
 def _path_pts(edge) -> List:
@@ -721,6 +721,10 @@ def collapse_straight_connectors(nodes, edges, debug: bool = False) -> Dict[str,
         for node in nodes:
             if node.get("type") != "connector":
                 continue
+            if node.get("bend"):
+                # излом трубы: узел стоит именно потому, что тут не прямая, а
+                # признак «противоположные грани» поворота на 30° не видит
+                continue
             nid = node["id"]
             inc = incid.get(nid, [])
             if len(inc) != 2:
@@ -781,4 +785,314 @@ def collapse_straight_connectors(nodes, edges, debug: bool = False) -> Dict[str,
 
     if debug:
         print(f"[direction_nodes] collapse_straight {stats}")
+    return stats
+
+
+# --------------------------------------------------------------------------- #
+# Излом трубы → узел (геометрия ребра должна совпадать с растром)
+# --------------------------------------------------------------------------- #
+# Ребро без узла на повороте вырождается в хорду: реальный путь в 1157 px
+# записывается прямой между концами, и оператор такое ребро удаляет и рисует
+# заново по узлам. Замер по 14 парам graph.json/graph_validated.json (3981
+# ребро): отклонение пути от хорды >30 px → ребро удалено в 71% случаев,
+# 10–30 px → в 26%, ≤10 px → в 2%.
+_CORNER_EPS = 6        # допуск упрощения пути (Ramer–Douglas–Peucker), px
+_CORNER_MIN_ARM = 8    # плечо короче — шум скелетизации, а не поворот
+_PATH_JUMP = 2         # разрыв пути больше этого = телепорт через мост
+_CONNECTOR_AREA = 225  # 15x15 — как у connector'ов со стадии стыков
+
+
+def _dist(a, b) -> float:
+    return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
+
+
+def _rdp_keep(path, i0: int, i1: int, eps: float) -> List[int]:
+    """Вершины упрощённого пути на участке [i0, i1] (Ramer–Douglas–Peucker)."""
+    keep = {i0, i1}
+    stack = [(i0, i1)]
+    while stack:
+        i, j = stack.pop()
+        if j <= i + 1:
+            continue
+        (y0, x0), (y1, x1) = path[i], path[j]
+        chord = ((y1 - y0) ** 2 + (x1 - x0) ** 2) ** 0.5
+        worst, worst_i = -1.0, -1
+        for k in range(i + 1, j):
+            py, px = path[k]
+            if chord >= 1.0:
+                d = abs((y1 - y0) * (x0 - px) - (x1 - x0) * (y0 - py)) / chord
+            else:
+                d = ((py - y0) ** 2 + (px - x0) ** 2) ** 0.5
+            if d > worst:
+                worst, worst_i = d, k
+        if worst > eps:
+            keep.add(worst_i)
+            stack.append((i, worst_i))
+            stack.append((worst_i, j))
+    return sorted(keep)
+
+
+def _path_runs(path) -> List[Tuple[int, int]]:
+    """Непрерывные куски пути; режем по телепортам через мосты."""
+    runs, start = [], 0
+    for i in range(len(path) - 1):
+        if _dist(path[i], path[i + 1]) > _PATH_JUMP:
+            runs.append((start, i))
+            start = i + 1
+    runs.append((start, len(path) - 1))
+    return runs
+
+
+def _corner_indices(path, eps: float = _CORNER_EPS,
+                    min_arm: float = _CORNER_MIN_ARM) -> List[int]:
+    """Индексы точек пути, где труба реально поворачивает.
+
+    Путь сначала режется на непрерывные куски по телепортам через мосты — иначе
+    прыжок моста читается как излом и узел встаёт посреди перекрёстка. Внутри
+    куска работает RDP: после разреза по его вершинам отклонение любого сегмента
+    от собственной хорды не превышает eps по построению.
+    """
+    if not path or len(path) < 3:
+        return []
+    out: List[int] = []
+    for a, b in _path_runs(path):
+        if b - a < 2:
+            continue
+        idx = _rdp_keep(path, a, b, eps)
+        for t in range(1, len(idx) - 1):
+            k, prev, nxt = idx[t], idx[t - 1], idx[t + 1]
+            if _dist(path[prev], path[k]) < min_arm:
+                continue
+            if _dist(path[k], path[nxt]) < min_arm:
+                continue
+            out.append(k)
+    return sorted(out)
+
+
+def _split_edge_at(edge: Dict, cuts: List[int], node_ids: List[str],
+                   edge_counter: int) -> Tuple[List[Dict], int]:
+    """Разрезать ребро в точках cuts, подставив node_ids между кусками."""
+    path = edge["path"]
+    ends = [edge.get("from")] + list(node_ids) + [edge.get("to")]
+    bounds = [0] + list(cuts) + [len(path) - 1]
+    last = len(bounds) - 2
+    pieces = []
+    for i in range(len(bounds) - 1):
+        seg = path[bounds[i]:bounds[i + 1] + 1]
+        piece = dict(edge)
+        piece["id"] = f"edge_{edge_counter}"
+        edge_counter += 1
+        piece["from"], piece["to"] = ends[i], ends[i + 1]
+        piece["path"] = seg
+        piece["source_point"] = edge.get("source_point") if i == 0 else list(seg[0])
+        piece["target_point"] = edge.get("target_point") if i == last else list(seg[-1])
+        piece["length"] = len(seg)
+        piece["straight_line_distance"] = float(_dist(seg[0], seg[-1]))
+        piece["is_terminal"] = bool(edge.get("is_terminal")) and i == last
+        pieces.append(piece)
+    return pieces, edge_counter
+
+
+def split_edges_at_corners(nodes, edges, eps: float = _CORNER_EPS,
+                           min_arm: float = _CORNER_MIN_ARM,
+                           debug: bool = False) -> Dict[str, int]:
+    """Поставить connector в каждый излом трассированного пути. На месте.
+
+    Топологически нейтрально: connector степени 2 внутри ребра эквивалентен
+    исходному ребру — меняется только геометрия, она перестаёт быть хордой.
+    Узлы помечаются `bend`, чтобы collapse_straight_connectors их не схлопнул
+    обратно (его признак «прямой» — противоположные грани — поворота на 30°
+    не видит).
+    """
+    stats = {"corners": 0, "edges_split": 0}
+    conn_counter = _max_suffix(nodes, "bendconn_") + 1
+    edge_counter = _max_suffix(edges, "edge_") + 1
+    new_nodes: List[Dict] = []
+    result: List[Dict] = []
+
+    for e in edges:
+        path = e.get("path")
+        cuts = _corner_indices(path, eps, min_arm) if path else []
+        if not cuts:
+            result.append(e)
+            continue
+
+        node_ids = []
+        for k in cuts:
+            conn = _make_connector(f"bendconn_{conn_counter}", path[k],
+                                   area=_CONNECTOR_AREA)
+            conn["bend"] = True
+            conn_counter += 1
+            new_nodes.append(conn)
+            node_ids.append(conn["id"])
+
+        pieces, edge_counter = _split_edge_at(e, cuts, node_ids, edge_counter)
+        result.extend(pieces)
+        stats["edges_split"] += 1
+        stats["corners"] += len(cuts)
+
+    if new_nodes:
+        edges[:] = result
+        nodes.extend(new_nodes)
+    if debug:
+        print(f"[direction_nodes] split_corners {stats}")
+    return stats
+
+
+# --------------------------------------------------------------------------- #
+# Врезка висячего конца в проходящую трубу
+# --------------------------------------------------------------------------- #
+# Модель стыков иногда не даёт отклика на реальном тройнике; развилку скелета
+# съедает первый прошедший трассер, ветка упирается в чужую трубу и остаётся
+# висячей, а cap вешает на неё connector прямо посреди трубы — «коннектор стоит
+# на линии, но не в ней». Замер на 26747a10: из 21 висячего конца 7 лежат в
+# ≤1.4 px от чужой трубы, остальные — дальше 10 px, так что порог 3 px безопасен.
+_STITCH_TOL = 3.0        # ближе этого висячий конец считаем упёршимся в трубу
+_STITCH_CROSS_GAP = 6    # два конца ближе этого на одной трубе = «крест»
+_STITCH_CELL = 16        # шаг корзин пространственного индекса
+
+
+def stitch_dangling_into_pipe(nodes, edges, tol: float = _STITCH_TOL,
+                              debug: bool = False) -> Dict[str, int]:
+    """Висячий конец, упёршийся в чужую трубу → разрезать её и соединить.
+
+    Должно идти ДО cap_dangling_ends, пока конец ещё from/to=None. Пересечения
+    «крестом» (два висячих конца в одном месте по разные стороны трубы) не
+    трогаем: там правильный ответ — сквозной проход или узел степени 4, а не
+    врезка в точку.
+    """
+    stats = {"stitched": 0, "crossings_skipped": 0}
+
+    buckets: Dict[Tuple[int, int], List[Tuple[str, int]]] = {}
+    by_id: Dict[str, Dict] = {}
+    for e in edges:
+        path = e.get("path")
+        if not path or len(path) < 3:
+            continue
+        by_id[e["id"]] = e
+        for i, pt in enumerate(path):
+            buckets.setdefault((pt[0] // _STITCH_CELL, pt[1] // _STITCH_CELL),
+                               []).append((e["id"], i))
+    if not by_id:
+        return stats
+
+    def nearest_host(point, own_id):
+        cy, cx = int(point[0]) // _STITCH_CELL, int(point[1]) // _STITCH_CELL
+        best_d, best_id, best_i = tol, None, None
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                for eid, i in buckets.get((cy + dy, cx + dx), ()):
+                    if eid == own_id:
+                        continue
+                    d = _dist(point, by_id[eid]["path"][i])
+                    if d < best_d:
+                        best_d, best_id, best_i = d, eid, i
+        return best_id, best_i
+
+    cuts: Dict[str, List[Tuple[int, Dict, str]]] = {}
+    for e in edges:
+        for end, key in (("from", "source_point"), ("to", "target_point")):
+            if e.get(end) is not None:
+                continue
+            pt = e.get(key)
+            if pt is None:
+                path = e.get("path") or []
+                pt = (path[0] if end == "from" else path[-1]) if path else None
+            if pt is None:
+                continue
+            host_id, idx = nearest_host(pt, e.get("id"))
+            if host_id is None:
+                continue
+            host_len = len(by_id[host_id]["path"])
+            if idx < _CORNER_MIN_ARM or idx > host_len - 1 - _CORNER_MIN_ARM:
+                continue          # у самого узла — это не врезка
+            cuts.setdefault(host_id, []).append((idx, e, end))
+
+    # висячее ребро, которое само является хозяином врезки, не трогаем:
+    # его словарь будет заменён кусками, и правка конца потеряется
+    for host_id in list(cuts):
+        cuts[host_id] = [it for it in cuts[host_id] if it[1].get("id") not in cuts]
+        if not cuts[host_id]:
+            del cuts[host_id]
+
+    conn_counter = _max_suffix(nodes, "teeconn_") + 1
+    edge_counter = _max_suffix(edges, "edge_") + 1
+    new_nodes: List[Dict] = []
+    replaced: Dict[str, List[Dict]] = {}
+
+    for host_id, items in cuts.items():
+        items.sort(key=lambda it: it[0])
+        kept = []
+        for i, it in enumerate(items):
+            if any(abs(it[0] - other[0]) <= _STITCH_CROSS_GAP
+                   for j, other in enumerate(items) if j != i):
+                stats["crossings_skipped"] += 1
+                continue
+            kept.append(it)
+        if not kept:
+            continue
+
+        host = by_id[host_id]
+        idxs = [it[0] for it in kept]
+        node_ids = []
+        for idx in idxs:
+            conn = _make_connector(f"teeconn_{conn_counter}", host["path"][idx],
+                                   area=_CONNECTOR_AREA)
+            conn_counter += 1
+            new_nodes.append(conn)
+            node_ids.append(conn["id"])
+
+        pieces, edge_counter = _split_edge_at(host, idxs, node_ids, edge_counter)
+        replaced[host_id] = pieces
+
+        for (idx, dangling, end), node_id in zip(kept, node_ids):
+            seat = list(host["path"][idx])
+            dangling[end] = node_id
+            path = list(dangling.get("path") or [])
+            if end == "from":
+                dangling["source_point"] = seat
+                dangling["path"] = [seat] + path
+            else:
+                dangling["target_point"] = seat
+                dangling["path"] = path + [seat]
+            dangling["length"] = len(dangling["path"])
+            dangling["is_terminal"] = dangling.get("to") is None
+            stats["stitched"] += 1
+
+    if replaced:
+        out: List[Dict] = []
+        for e in edges:
+            out.extend(replaced.get(e.get("id"), [e]))
+        edges[:] = out
+        nodes.extend(new_nodes)
+    if debug:
+        print(f"[direction_nodes] stitch_dangling {stats}")
+    return stats
+
+
+# --------------------------------------------------------------------------- #
+# Кластеры дублей стыков — только пометка для оператора
+# --------------------------------------------------------------------------- #
+# Правила, которые надёжно отличают дубль от настоящего стыка, из текущих
+# артефактов не нашлось: на корпусе из 1353 коннекторов лучший предикат
+# («уверенность <0.6 и сосед-коннектор ближе 25 px») даёт точность 33%. Поэтому
+# такие места не удаляем, а помечаем — решает оператор.
+_CLUSTER_RADIUS = 30
+_CLUSTER_MIN = 3
+
+
+def flag_connector_clusters(nodes, radius: int = _CLUSTER_RADIUS,
+                            min_size: int = _CLUSTER_MIN,
+                            debug: bool = False) -> Dict[str, int]:
+    """Пометить `cluster_suspect` у коннекторов, сбившихся в кучу."""
+    stats = {"flagged": 0}
+    conns = [n for n in nodes if n.get("type") == "connector" and n.get("centroid")]
+    for n in conns:
+        near = sum(1 for m in conns
+                   if m is not n and _dist(n["centroid"], m["centroid"]) <= radius)
+        if near >= min_size - 1:
+            n["cluster_suspect"] = True
+            stats["flagged"] += 1
+    if debug:
+        print(f"[direction_nodes] flag_clusters {stats}")
     return stats
