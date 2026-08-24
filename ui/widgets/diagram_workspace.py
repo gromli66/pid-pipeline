@@ -17,9 +17,9 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QMessageBox, QFrame,
     QStackedWidget, QApplication, QFileDialog, QInputDialog,
-    QMenu, QDialog, QComboBox, QLineEdit, QDialogButtonBox,
+    QMenu, QDialog, QCheckBox, QLineEdit, QDialogButtonBox,
 )
-from PySide6.QtCore import Qt, Signal, Slot, QTimer
+from PySide6.QtCore import Qt, Signal, Slot, QTimer, QThread
 from PySide6.QtGui import QAction, QFont
 
 from ui.services.api_client import APIClient, APIError, DiagramStatus
@@ -381,41 +381,29 @@ class _StagePanel(QWidget):
 
 
 # =====================================================================
-# Диалог экспорта FXML
+# Диалог экспорта
 # =====================================================================
 
-class FxmlExportDialog(QDialog):
-    """Единый диалог экспорта FXML: размер страницы + папка + имя файла.
+class ExportDialog(QDialog):
+    """Забрать готовое или пересобрать заново.
 
-    values() → (page_size, save_path). page_size: '1920x1080'/'A4'…/None (оригинал).
+    Формирование и сохранение разведены: оба файла — чертёж FXML в размерах
+    холста и расчётная схема .prtx — собирает сам этап «Экспорт», а диалог
+    только забирает их с сервера. Раньше он спрашивал формат и ЗАПУСКАЛ
+    генерацию одного из двух, поэтому за вторым файлом оператор жал «Экспорт»
+    ещё раз и попадал на «схема уже собирается — повторите».
+
+    action() → 'download' | 'rebuild_fxml' | 'rebuild_prtx' | None (отмена)
     """
 
-    # (подпись, значение page_size) — как в прежнем _ask_page_size
-    _SIZE_ITEMS = [
-        ("1920×1080 (экран, стандартизация скинов)", "1920x1080"),
-        ("Оригинал (пиксели изображения)", None),
-        ("A4 landscape (297×210 мм)", "A4"),
-        ("A3 landscape (420×297 мм)", "A3"),
-        ("A2 landscape (594×420 мм)", "A2"),
-        ("A1 landscape (841×594 мм)", "A1"),
-        ("A0 landscape (1189×841 мм)", "A0"),
-    ]
-
-    def __init__(self, parent, default_dir: str, default_name: str):
+    def __init__(self, parent, default_dir: str, default_name: str,
+                 prtx_state: dict):
         super().__init__(parent)
-        self.setWindowTitle("Экспорт FXML")
-        self.setMinimumWidth(480)
+        self.setWindowTitle("Экспорт")
+        self.setMinimumWidth(520)
+        self._action = None
 
         layout = QVBoxLayout(self)
-
-        layout.addWidget(QLabel("Размер страницы:"))
-        self._size_combo = QComboBox()
-        self._size_combo.addItems([label for label, _ in self._SIZE_ITEMS])
-        layout.addWidget(self._size_combo)
-
-        layout.addWidget(QLabel("Имя файла:"))
-        self._name_edit = QLineEdit(default_name)
-        layout.addWidget(self._name_edit)
 
         layout.addWidget(QLabel("Папка:"))
         dir_row = QHBoxLayout()
@@ -426,31 +414,102 @@ class FxmlExportDialog(QDialog):
         dir_row.addWidget(btn_browse)
         layout.addLayout(dir_row)
 
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok
-            | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Экспорт")
-        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Отмена")
-        buttons.accepted.connect(self.accept)
+        layout.addWidget(QLabel("Имя файла (без расширения):"))
+        self._name_edit = QLineEdit(default_name)
+        layout.addWidget(self._name_edit)
+
+        self._fxml_check = QCheckBox("Чертёж FXML (холст 1:1)")
+        self._fxml_check.setChecked(True)
+        layout.addWidget(self._fxml_check)
+
+        self._prtx_check = QCheckBox("Расчётная схема .prtx (САПФИР)")
+        layout.addWidget(self._prtx_check)
+
+        note = QLabel(_prtx_state_text(prtx_state))
+        note.setWordWrap(True)
+        note.setIndent(20)
+        ready = bool(prtx_state.get("artifact_ready"))
+        note.setStyleSheet("color: gray;" if ready else "color: #b00;")
+        layout.addWidget(note)
+
+        self._prtx_check.setEnabled(ready)
+        self._prtx_check.setChecked(ready)
+
+        self._btn_download = QPushButton("💾 Скачать")
+        self._btn_download.setDefault(True)
+        self._btn_download.clicked.connect(lambda: self._finish("download"))
+        layout.addWidget(self._btn_download)
+
+        self._fxml_check.toggled.connect(self._sync_download_button)
+        self._prtx_check.toggled.connect(self._sync_download_button)
+        self._sync_download_button()
+
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        layout.addWidget(line)
+
+        layout.addWidget(QLabel("Пересобрать заново на сервере:"))
+        rebuild_row = QHBoxLayout()
+        btn_fxml = QPushButton("♻ Чертёж FXML")
+        btn_fxml.clicked.connect(lambda: self._finish("rebuild_fxml"))
+        rebuild_row.addWidget(btn_fxml)
+        btn_prtx = QPushButton(
+            "♻ Расчётную схему" if ready else "▶ Собрать расчётную схему")
+        btn_prtx.clicked.connect(lambda: self._finish("rebuild_prtx"))
+        rebuild_row.addWidget(btn_prtx)
+        layout.addLayout(rebuild_row)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.button(QDialogButtonBox.StandardButton.Close).setText("Закрыть")
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
     def _browse(self):
-        start = self._dir_edit.text().strip()
-        chosen = QFileDialog.getExistingDirectory(self, "Папка для сохранения", start)
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Папка для сохранения", self._dir_edit.text().strip())
         if chosen:
             self._dir_edit.setText(chosen)
 
+    def _sync_download_button(self):
+        self._btn_download.setEnabled(
+            self._fxml_check.isChecked() or self._prtx_check.isChecked())
+
+    def _finish(self, action: str):
+        self._action = action
+        self.accept()
+
+    def action(self):
+        return self._action
+
     def values(self):
-        """(page_size, save_path). save_path — абсолютный путь с расширением .fxml."""
+        """(путь к .fxml, качать ли FXML, качать ли .prtx).
+
+        Путь отдаём с расширением .fxml — имя для .prtx из него считает
+        `prtx_converter.prtx_target`, который умеет не резать имена вида
+        «1. Схема отборов … турбины 1» по первой точке.
+        """
         import os
-        page_size = self._SIZE_ITEMS[self._size_combo.currentIndex()][1]
         name = (self._name_edit.text() or "diagram").strip() or "diagram"
         if not name.lower().endswith((".fxml", ".xml")):
             name += ".fxml"
-        directory = self._dir_edit.text().strip()
-        return page_size, os.path.join(directory, name)
+        return (os.path.join(self._dir_edit.text().strip(), name),
+                self._fxml_check.isChecked(),
+                self._prtx_check.isChecked())
+
+
+def _prtx_state_text(prtx_state: dict) -> str:
+    """Подпись под галочкой .prtx по ответу /prtx/status."""
+    ready = bool(prtx_state.get("artifact_ready"))
+    if prtx_state.get("state") == "building":
+        return ("⏳ Идёт пересборка; скачать сейчас можно предыдущую версию."
+                if ready else
+                "⏳ Схема собирается на сервере — скачать можно будет позже.")
+    if ready:
+        size = prtx_state.get("artifact_size") or 0
+        return f"✔ Схема собрана на сервере ({size // 1024} КБ)."
+    error = prtx_state.get("error")
+    return ("⚠ Схема не собрана: " + error if error
+            else "⚠ Схемы на сервере нет — соберите её кнопкой ниже.")
 
 
 # =====================================================================
@@ -509,6 +568,11 @@ class DiagramWorkspace(QWidget):
         self._btn_back_injected = None  # Кнопка ← Назад внутри вкладки
         self._ocr_notified = False  # B6.4: OCR ready notification sent
         self._was_status_watching = False  # Paused status polling while tab is open
+        # Отказы отправки, о которых сказал веер: ключ бусины → отпечаток строк
+        # `/stages` этого этапа, известных НА МОМЕНТ отказа (None — не прочитались).
+        # Отпечаток, а не флаг: `ProcessingStage` откатом не удаляются, поэтому
+        # строка прошлого прогона сняла бы свежий отказ и вернула бы молчание.
+        self._dispatch_refusals: Dict[str, Optional[frozenset]] = {}
 
         # OCR artifact polling timer (independent of status changes)
         self._ocr_poll_timer = QTimer(self)
@@ -674,9 +738,10 @@ class DiagramWorkspace(QWidget):
         self._stop_ocr_poll()
         self._ocr_notified = False
         self._fxml_save_prompted = True
-        self._awaiting_fxml_save = False
-        self._fxml_target_path = None
+        self._prtx_armed = False
+        self._prtx_skip_next = False
         self._stage_errors = {}
+        self._dispatch_refusals = {}
         self._last_status = DiagramStatus.UPLOADED
 
         self.title_label.setText(f"Диаграмма — {name}")
@@ -789,6 +854,10 @@ class DiagramWorkspace(QWidget):
         # ERROR: по-этапная изоляция — не морозим весь пайплайн, а
         # реконструируем прогресс из ProcessingStage и красим только упавший этап.
         if status == DiagramStatus.ERROR:
+            # Подавление автосборки .prtx живёт один прогон генерации. Прогон
+            # кончился ошибкой — снимаем, иначе флаг дожил бы до следующего
+            # COMPLETED и съел бы уже честную автосборку.
+            self._prtx_skip_next = False
             self._apply_error_status(error_stage, error_message)
             return
         self._stage_errors = {}
@@ -797,16 +866,29 @@ class DiagramWorkspace(QWidget):
         self._update_buttons(status, error_stage=error_stage)
         self._update_gif(status)
 
-        # Армируем сохранение, как только началась генерация FXML
-        if status == DiagramStatus.GENERATING_FXML:
-            self._awaiting_fxml_save = True
-        # По завершении генерации — тихо сохранить в заранее выбранный путь
-        # (без второго окна). Не завязано на переход статуса (на готовой схеме
-        # перехода нет).
-        if (status == DiagramStatus.COMPLETED
-                and getattr(self, "_awaiting_fxml_save", False)):
-            self._awaiting_fxml_save = False
-            self._save_fxml_silently()
+        # Автоконвертор .prtx взводим ШИРЕ, чем переход в COMPLETED: на сам
+        # GENERATING_FXML опрос (2 с) почти никогда не попадает — генерация
+        # FXML занимает 0.1 с (замер по 75 стадиям, max 1.3 с), и на авто-пути
+        # после «Проверки схемы» клиент видит VALIDATED_GRAPH → COMPLETED.
+        # Признак «конвейер дошёл до конца при нас» — увиденный ранее НЕ-готовый
+        # статус; при открытии уже готовой схемы взвода нет и сборка не
+        # запускается (иначе .prtx пересобирался бы на каждом открытии).
+        if status != DiagramStatus.COMPLETED:
+            self._prtx_armed = True
+
+        # По завершении генерации FXML — добрать второй файл этапа, расчётную
+        # схему. На диск оператора здесь не сохраняется ничего: этап ФОРМИРУЕТ
+        # оба файла на сервере, забирает их отдельный диалог (ExportDialog).
+        if status == DiagramStatus.COMPLETED:
+            if getattr(self, "_prtx_skip_next", False):
+                # «Пересобрать чертёж FXML» — только чертёж: расчётная схема
+                # стоит минут счёта и повторного чтения ключа лицензии, и для
+                # неё в диалоге экспорта есть своя кнопка.
+                self._prtx_skip_next = False
+                self._prtx_armed = False
+            elif getattr(self, "_prtx_armed", False):
+                self._prtx_armed = False
+                self._start_prtx_conversion()
 
         # B6.4: При параллельных статусах — проверить готовность OCR по артефакту
         if not self._ocr_notified and status in (
@@ -952,9 +1034,99 @@ class DiagramWorkspace(QWidget):
             if self._junction_confirmed:
                 target[BEAD_VAL_JUNCTION] = BeadState.COMPLETED
 
+        # Отказ отправки: сервер сказал, что задачи в очереди НЕТ. Держим бусину
+        # красной, пока не увидим свидетельство НОВЕЕ отказа — иначе оператор
+        # смотрит на «в процессе» там, где не отправлено ничего (пункт 1-48).
+        for key, seen in list(self._dispatch_refusals.items()):
+            idx = _KEY_IDX.get(key)
+            if idx is None or self._stage_ran_since_refusal(key, seen, target):
+                self._dispatch_refusals.pop(key, None)
+                continue
+            target[idx] = BeadState.ERROR
+
+        # Второй файл этапа. Статус диаграммы про .prtx не знает — COMPLETED
+        # ставится по готовому чертежу, — поэтому пока схема считается, бусину
+        # «Экспорт» держим сами. Иначе оператор видит зелёный этап и идёт
+        # качать .prtx, которой ещё нет.
+        if self._prtx_busy():
+            target[BEAD_FXML] = BeadState.IN_PROGRESS
+
         # Применить — не описанные = UNAVAILABLE
         for i in range(NUM_BEADS):
             self.beads.set_state(i, target.get(i, BeadState.UNAVAILABLE))
+
+    def _stage_ran_since_refusal(self, key: str, seen, target: dict) -> bool:
+        """Появилось ли свидетельство, что этап всё-таки отработал ПОСЛЕ отказа.
+
+        Три источника, от самого надёжного к самому слабому:
+        этап дошёл до конца по статусу · артефакт OCR на диске · строка
+        `/stages`, которой на момент отказа НЕ БЫЛО.
+
+        Последнее условие и есть смысл отпечатка: откат `ProcessingStage`
+        не удаляет (`start_stage` кладёт новую попытку рядом), поэтому у
+        оператора, вернувшегося с `ocr_completed` и переподтвердившего
+        перекрёстки, строка `ocr` прошлого прогона уже лежит в `/stages` —
+        свидетельством о СВЕЖЕЙ отправке она не является.
+        """
+        idx = _KEY_IDX.get(key)
+        if idx is not None and target.get(idx) == BeadState.COMPLETED:
+            return True
+        if key == "ocr" and getattr(self, "_ocr_notified", False):
+            # Единственный этап с отдельной проверкой по артефакту (B6.4):
+            # результат на диске — доказательство сильнее любой стадии.
+            return True
+        if seen is None:
+            return False        # стадии на момент отказа не прочитались — не гадаем
+        for s in (getattr(self, "_last_stages", None) or []):
+            if (_STAGE_TYPE_TO_KEY.get(s.get("stage_type")) == key
+                    and s.get("id") not in seen):
+                return True
+        return False
+
+    def _note_dispatch_refusals(self, result: dict) -> list:
+        """Записать отказы отправки из ответа веера и вернуть их подписи.
+
+        Клиент не перечисляет поля ответа и не разбирает человеческий текст:
+        сервер называет отказавший этап словарём `ProcessingStage.stage_type`,
+        а перевод «этап → бусина» делает та же карта `_STAGE_TYPE_TO_KEY`,
+        которой клиент уже читает `/stages`. Новый этап веера доедет до своей
+        бусины без правки этого метода; этап без бусины — не молча, а строкой
+        в лог и подписью оператору под своим серверным именем.
+        """
+        labels = dict(self._BUTTON_DEFS)
+        refused = []
+        for stage_type in (result.get("dispatch_failed") or []):
+            key = _STAGE_TYPE_TO_KEY.get(stage_type)
+            if key is None:
+                logger.warning("Отказ отправки «%s»: бусины у этого этапа нет",
+                               stage_type)
+                refused.append(stage_type)
+                continue
+            self._dispatch_refusals[key] = self._known_stage_ids(key)
+            refused.append(labels.get(key, key))
+        if refused:
+            logger.warning("Веер не отправил: %s", ", ".join(refused))
+        return refused
+
+    def _known_stage_ids(self, key: str):
+        """Строки `/stages` этого этапа, существующие ДО отказа. None — не прочитались.
+
+        Про широту `except`: отпечаток нужен только чтобы НЕ снять отказ раньше
+        времени, и `None` здесь — консервативный ответ («свидетельству стадий
+        не верим»), а не потеря. Молчать при этом нельзя: без строки в логе
+        разница между «стадий нет» и «стадии не прочитались» пропадает.
+        """
+        try:
+            stages = self.api_client.get_stages(self._uid)
+        except Exception as exc:  # noqa: BLE001 — причина в логе, решение консервативно
+            logger.warning("Стадии не прочитаны при отказе отправки (%s: %s) — "
+                           "отказ снимется только концом этапа",
+                           type(exc).__name__, exc)
+            return None
+        return frozenset(
+            s.get("id") for s in stages
+            if _STAGE_TYPE_TO_KEY.get(s.get("stage_type")) == key
+        )
 
     # =================================================================
     # GIF активного этапа
@@ -1039,6 +1211,14 @@ class DiagramWorkspace(QWidget):
             if self._junction_confirmed:
                 completed.add("junction")
                 available.discard("junction")
+
+        # Сборка .prtx — вторая половина этапа «Экспорт» (см. _update_beads).
+        # Глушим кнопку на это время: раньше нажатие поверх бегущей сборки
+        # упиралось в «схема уже собирается, повторите».
+        if self._prtx_busy():
+            processing.add("fxml")
+            available.discard("fxml")
+            completed.discard("fxml")
 
         # Map error_stage to button key for retry
         _STAGE_TO_KEY = {
@@ -1658,7 +1838,8 @@ class DiagramWorkspace(QWidget):
         status = self._last_status
         _, completed, _ = _buttons_for_status(status)
 
-        # FXML: всегда перегенерировать (диалог выбора размера внутри _start_fxml)
+        # Экспорт: откат не предлагаем — готовый этап открывает диалог
+        # «скачать / пересобрать» (_start_fxml), а не переигрывает конвейер.
         if key == "fxml":
             original_handler()
             return
@@ -1850,22 +2031,31 @@ class DiagramWorkspace(QWidget):
             )
 
     def _start_fxml(self):
-        import os
-        # Единый диалог: размер + папка + имя. По завершении генерации файл
-        # сохранится автоматически в выбранный путь (без второго окна).
-        base = (self._diagram_name or "diagram").strip()
-        default_name = (os.path.splitext(base)[0] or "diagram") + ".fxml"
-        default_dir = getattr(self, "_last_fxml_dir", None) or os.path.expanduser("~")
+        """Кнопка «Экспорт».
 
-        dialog = FxmlExportDialog(self, default_dir, default_name)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        page_size, save_path = dialog.values()
-        if not save_path:
-            return
-        self._fxml_target_path = save_path
-        self._last_fxml_dir = os.path.dirname(save_path)
+        Этап формирует ОБА файла сам — чертёж FXML в размерах холста и
+        расчётную схему .prtx. Поэтому на готовой схеме кнопка ничего не
+        переигрывает, а открывает диалог «скачать / пересобрать»; ветка
+        генерации нужна, только когда авто-путь не доехал (ERROR, зависшая
+        стадия) и качать ещё нечего.
+        """
+        if self._last_status == DiagramStatus.COMPLETED:
+            self._open_export_dialog()
+        else:
+            self._regenerate_fxml(with_prtx=True)
 
+    def _regenerate_fxml(self, with_prtx: bool):
+        """Запустить генерацию чертежа.
+
+        Размер листа НЕ передаём: чертёж всегда 1:1 с холстом. Воркер по
+        `canvas_transform` уходит в canvas_to_fxml и page_size там игнорирует —
+        ровно то же делает авто-путь после «Ручной правки», так что ручная
+        пересборка даёт тот же файл, а не «другой FXML».
+
+        with_prtx=False — пересборка ТОЛЬКО чертежа: расчётную схему не
+        трогаем, иначе кнопка «Пересобрать чертёж» тянула бы за собой минуты
+        счёта и повторное чтение ключа лицензии, о которых не просили.
+        """
         # Разрыв моста — из настроек редактора этой диаграммы (если задан пользователем)
         bridge_gap = None
         try:
@@ -1876,73 +2066,175 @@ class DiagramWorkspace(QWidget):
         except Exception:
             bridge_gap = None
 
-        # Запускаем генерацию (перегенерация если уже COMPLETED)
         try:
-            self._awaiting_fxml_save = True
-            self.api_client.generate_fxml(self._uid, page_size=page_size, bridge_gap=bridge_gap)
+            self._prtx_skip_next = not with_prtx
+            self.api_client.generate_fxml(self._uid, bridge_gap=bridge_gap)
             self.status_provider.watch(self._uid)
-            size_label = page_size or "оригинал"
-            self.status_message.emit(f"📄 Генерация FXML ({size_label}) запущена", 3000)
+            self.status_message.emit("📄 Формирование чертежа FXML запущено", 3000)
             self._refresh_status()
         except APIError as exc:
-            self._awaiting_fxml_save = False
+            self._prtx_skip_next = False
             QMessageBox.warning(
                 self, "Ошибка",
                 f"Не удалось запустить генерацию FXML:\n{exc.message}",
             )
 
-    def _save_fxml_silently(self):
-        """Тихо сохранить готовый FXML в заранее выбранный путь (без диалога).
-
-        Путь берётся из _fxml_target_path (задан в _start_fxml). Если он не задан
-        (напр. генерацию запустили не через диалог) — окно не открываем, показываем
-        подсказку нажать 📄 FXML.
-        """
-        target = getattr(self, "_fxml_target_path", None)
-        if not target:
-            # Генерация без заранее выбранного пути (напр. авто-пайплайн):
-            # окно сами НЕ открываем — просто подсказываем нажать 📄 FXML.
-            self.status_message.emit(
-                "✅ FXML готов — нажмите 📄 FXML, чтобы сохранить.", 6000,
-            )
-            return
-        try:
-            from pathlib import Path
-            self.api_client.download_artifact(self._uid, "fxml", Path(target))
-            self.status_message.emit(f"📄 FXML сохранён: {target}", 6000)
-        except APIError as exc:
-            QMessageBox.warning(
-                self, "Ошибка",
-                f"Не удалось сохранить FXML:\n{exc.message}",
-            )
-        finally:
-            self._fxml_target_path = None
-
-    def _download_fxml(self):
-        """Скачать сгенерированный FXML на компьютер пользователя (ручной фолбэк)."""
+    def _open_export_dialog(self):
+        """Забрать готовые файлы этапа или пересобрать один из них."""
         import os
-        base = (self._diagram_name or "diagram").strip()
-        default_name = (os.path.splitext(base)[0] or "diagram") + ".fxml"
-        save_path, _ = QFileDialog.getSaveFileName(
-            self, "Сохранить FXML", default_name,
-            "FXML files (*.fxml);;XML files (*.xml);;All files (*)",
-        )
-        if not save_path:
-            return
 
         try:
-            from pathlib import Path
-            self.api_client.download_artifact(self._uid, "fxml", Path(save_path))
-            self.status_message.emit(f"📄 FXML сохранён: {save_path}", 5000)
-            QMessageBox.information(
-                self, "Готово",
-                f"FXML файл сохранён:\n{save_path}",
-            )
+            prtx_state = self.api_client.prtx_status(self._uid)
         except APIError as exc:
+            logger.warning("PRTX status unavailable: %s", exc)
+            prtx_state = {"state": "idle",
+                          "error": f"сервер не ответил ({exc.message})"}
+
+        # Идущую сборку клиент знает точнее сервера: пока жив наш поток, лежащий
+        # на сервере артефакт — от ПРОШЛОГО прогона.
+        if self._prtx_busy():
+            prtx_state = dict(prtx_state, state="building")
+
+        base = (self._diagram_name or "diagram").strip()
+        default_name = os.path.splitext(base)[0] or "diagram"
+        default_dir = getattr(self, "_last_fxml_dir", None) or os.path.expanduser("~")
+
+        dialog = ExportDialog(self, default_dir, default_name, prtx_state)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        action = dialog.action()
+        if action == "rebuild_fxml":
+            self._regenerate_fxml(with_prtx=False)
+            return
+        if action == "rebuild_prtx":
+            self._start_prtx_conversion()
+            return
+
+        fxml_path, want_fxml, want_prtx = dialog.values()
+        self._last_fxml_dir = os.path.dirname(fxml_path)
+        self._download_export(fxml_path, want_fxml, want_prtx)
+
+    def _download_export(self, fxml_path: str, want_fxml: bool, want_prtx: bool):
+        """Скачать готовые артефакты этапа в выбранные пути."""
+        from ui.services.prtx_converter import prtx_target
+
+        targets = []
+        if want_fxml:
+            targets.append(("fxml", "Чертёж FXML", Path(fxml_path)))
+        if want_prtx:
+            targets.append(("prtx", "Расчётная схема .prtx", prtx_target(fxml_path)))
+
+        saved, failed = [], []
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            for art_type, title, path in targets:
+                try:
+                    self.api_client.download_artifact(self._uid, art_type, path)
+                    saved.append(str(path))
+                except APIError as exc:
+                    logger.error("Export download failed (%s): %s", art_type, exc)
+                    failed.append(f"{title}: {exc.message}")
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        if failed:
             QMessageBox.warning(
-                self, "Ошибка",
-                f"Не удалось скачать FXML:\n{exc.message}",
-            )
+                self, "Экспорт",
+                "Сохранено:\n" + ("\n".join(saved) if saved else "— ничего —")
+                + "\n\nНе удалось сохранить:\n" + "\n".join(failed))
+            return
+
+        self.status_message.emit("💾 Сохранено: " + "; ".join(saved), 8000)
+        QMessageBox.information(self, "Экспорт", "Сохранено:\n" + "\n".join(saved))
+
+    def _start_prtx_conversion(self):
+        """Собрать .prtx — второй файл этапа «Экспорт».
+
+        Считает СЕРВЕР (контейнер `prtx`), клиент отдаёт только ключ лицензии
+        САПФИР из профиля оператора — подробности в
+        ui/services/prtx_converter.py. Результат ложится артефактом рядом с
+        diagram.fxml; на диск оператора его забирает ExportDialog.
+        """
+        from ui.services.prtx_converter import PrtxWorker
+        from ui.services.prtx_license import diagnose_local
+
+        report = diagnose_local()
+        if not report.ok:
+            problem = report.first_problem
+            self._on_prtx_error(
+                f"{problem.title}\n\n{problem.detail}\n\n{problem.hint}")
+            return
+
+        # Повторный запуск поверх бегущей сборки затёр бы ссылку на живой
+        # QThread — он остался бы без владельца.
+        running = getattr(self, "_prtx_thread", None)
+        if running is not None and running.isRunning():
+            logger.info("PRTX: сборка уже идёт, повтор пропущен")
+            self.status_message.emit("⏳ Расчётная схема уже собирается…", 4000)
+            return
+
+        self.status_message.emit("⏳ Сборка расчётной схемы .prtx…", 4000)
+
+        self._prtx_thread = QThread()
+        self._prtx_worker = PrtxWorker(self.api_client, self._uid, None)
+        self._prtx_worker.moveToThread(self._prtx_thread)
+        self._prtx_thread.started.connect(self._prtx_worker.run)
+        self._prtx_worker.finished.connect(self._on_prtx_done)
+        self._prtx_worker.error.connect(self._on_prtx_error)
+        # Сборка идёт минутами — без этого окно выглядит замершим
+        self._prtx_worker.progress.connect(
+            lambda msg: self.status_message.emit(msg, 4000))
+        # Поток гасит сам работник — рабочая область живёт дольше конвертации,
+        # но связи со слотами Qt рвёт вместе с получателем (образец — pipe_tab).
+        self._prtx_worker.finished.connect(self._prtx_thread.quit)
+        self._prtx_worker.error.connect(self._prtx_thread.quit)
+        self._prtx_running = True
+        self._prtx_uid = self._uid
+        self._prtx_thread.start()
+        self._refresh_export_state()
+
+    def _prtx_busy(self) -> bool:
+        """Идёт ли сборка .prtx ИМЕННО для открытой сейчас диаграммы.
+
+        Сверка с uid обязательна: рабочая область переиспользуется, и оператор
+        может уйти к другой схеме, пока считается эта — без сверки её бусина
+        «Экспорт» показывала бы чужую работу.
+        """
+        return (getattr(self, "_prtx_running", False)
+                and getattr(self, "_prtx_uid", None) == self._uid)
+
+    def _refresh_export_state(self):
+        """Перерисовать бусину и кнопку «Экспорт» под ход сборки .prtx.
+
+        Через `_apply_status` этого не сделать: COMPLETED для StatusProvider —
+        финальный статус, опрос после него остановлен
+        (`ui/services/status_provider.py`), и нового вызова просто не будет.
+        """
+        if not self._uid:
+            return
+        self._update_beads(self._last_status)
+        self._update_buttons(self._last_status)
+
+    @Slot(str)
+    def _on_prtx_done(self, where: str):
+        self._prtx_running = False
+        self._refresh_export_state()
+        self.status_message.emit("📐 Расчётная схема .prtx собрана: " + where, 8000)
+
+    @Slot(str)
+    def _on_prtx_error(self, message: str):
+        # Раньше автосборка молчала строкой статусбара на 10 с: оператор её не
+        # видел, шёл качать .prtx и получал 404 «артефакта нет». Провал ВТОРОГО
+        # файла этапа показываем окном всегда — этап не пройден.
+        logger.error("PRTX conversion failed: %s", message)
+        self._prtx_running = False
+        self._refresh_export_state()
+        QMessageBox.warning(
+            self, "Расчётная схема",
+            f"Не удалось собрать расчётную схему:\n\n{message}\n\n"
+            "Чертежа FXML это не касается — он готов, скачайте его кнопкой "
+            "«Экспорт».")
 
     # =================================================================
     # Кнопки действий — валидации (открывают вкладки)
@@ -2295,7 +2587,14 @@ class DiagramWorkspace(QWidget):
             if task_id:
                 msg += " → построение графа запущено"
                 self.status_provider.watch(self._uid)
-            self.status_message.emit(msg, 5000)
+            # Веер отправляет ДВЕ задачи, и отказ второй не откатывает первую
+            # (граница §5): про такой отказ сервер говорит полем, а не молчит
+            # `null`-ом. Без чтения этого поля оператор узнавал бы о неотправленном
+            # OCR только от страховки в «Проверке схемы» (пункт 1-48).
+            refused = self._note_dispatch_refusals(result)
+            if refused:
+                msg += f" · НЕ запущено: {', '.join(refused)}"
+            self.status_message.emit(msg, 10000 if refused else 5000)
         except Exception as exc:
             logger.error("complete_junction_validation failed: %s", exc)
             QMessageBox.warning(
@@ -2533,5 +2832,5 @@ class DiagramWorkspace(QWidget):
                     "✅ OCR завершён! Можно переходить к привязке.", 5000,
                 )
 
-            # По завершении генерации FXML сохраняется автоматически внутри
-            # _apply_status → _save_fxml_silently (в выбранный путь, без окна).
+            # По завершении генерации FXML внутри _apply_status запускается
+            # сборка .prtx — второй файл этапа. Оба забирает ExportDialog.

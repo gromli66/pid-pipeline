@@ -44,7 +44,11 @@ class BaseGraphEditor(QGraphicsView):
     COLOR_EQUIPMENT = QColor("#3498db")
     COLOR_CONNECTOR = QColor("#2ecc71")
     COLOR_ISOLATED = QColor("#e74c3c")
-    COLOR_EDGE = QColor(255, 255, 255, 150)
+    # Кислотно-зелёный, непрозрачный: рёбра читаются и на белом листе, и
+    # поверх затемнённого скана. Прежние тёмно-серые (40,40,40,200) сливались
+    # с линиями самого чертежа, и оператор каждый раз перекрашивал их в шторке.
+    COLOR_EDGE_DEFAULT = QColor("#39FF14")
+    COLOR_EDGE = QColor(COLOR_EDGE_DEFAULT)
     COLOR_EDGE_BAD = QColor("#e67e22")
     COLOR_SELECTION = QColor("#f1c40f")
     COLOR_HOVER = QColor("#9b59b6")
@@ -216,6 +220,8 @@ class BaseGraphEditor(QGraphicsView):
         # сливался с пустотой за краем. Светлая тема = как в САПР и в FXML.
         self._sheet_item = None
         self._light_theme: bool = True
+        # Цвет рёбер, выбранный оператором в шторке. None — базовый.
+        self._edge_color_override: QColor | None = None
         self.setMouseTracking(True)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
 
@@ -534,16 +540,22 @@ class BaseGraphEditor(QGraphicsView):
 
     def _apply_theme_colors(self):
         """Цвета, зависящие от темы. Узлы не трогаем: синий/зелёный/красный
-        читаются и на белом, и на тёмном, а вот рёбра по умолчанию БЕЛЫЕ —
-        на белом листе они бы просто исчезли."""
+        читаются и на белом, и на тёмном.
+
+        Рёбра от темы БОЛЬШЕ НЕ ЗАВИСЯТ: кислотно-зелёный виден и на белом
+        листе, и поверх затемнённого скана, а прежние цвета по теме (белый
+        полупрозрачный / тёмно-серый) сливались с чертежом. Выбор оператора
+        здесь же и восстанавливается: метод зовётся из setup_scene(), то есть
+        на каждом переключении «Светлый лист» / «Показать подложку», и раньше
+        затирал выбранный в шторке цвет.
+        """
         if self._light_theme:
             self.setBackgroundBrush(QBrush(QColor(30, 30, 30)))   # пустота за листом
-            self.COLOR_EDGE = QColor(40, 40, 40, 200)
             self.COLOR_KKS_LABEL_BG = QColor(255, 255, 255, 190)
         else:
             self.setBackgroundBrush(QBrush(QColor(30, 30, 30)))
-            self.COLOR_EDGE = QColor(255, 255, 255, 150)
             self.COLOR_KKS_LABEL_BG = QColor(0, 0, 0, 160)
+        self.COLOR_EDGE = self._effective_edge_color()
 
     def set_light_theme(self, light: bool):
         """Светлый лист + тёмный граф (как в САПР и в FXML) или прежний тёмный."""
@@ -576,10 +588,22 @@ class BaseGraphEditor(QGraphicsView):
         painter.end()
         self._bg_item.setPixmap(QPixmap.fromImage(darkened))
 
-    def set_edge_color(self, color: QColor):
-        """Цвет обычных рёбер графа."""
-        self.COLOR_EDGE = QColor(color)
+    def set_edge_color(self, color: QColor | None):
+        """Цвет обычных рёбер графа. None — вернуть базовый (сброс оформления).
+
+        Выбор ЗАПОМИНАЕМ: сцена пересобирается на каждом переключении листа и
+        подложки (setup_scene → _apply_theme_colors), и без этого выбранный
+        цвет слетал обратно к базовому.
+        """
+        self._edge_color_override = QColor(color) if color is not None else None
+        self.COLOR_EDGE = self._effective_edge_color()
         self._redraw_all()
+
+    def _effective_edge_color(self) -> QColor:
+        """Цвет рёбер: выбор оператора главнее базового."""
+        if self._edge_color_override is not None:
+            return QColor(self._edge_color_override)
+        return QColor(self.COLOR_EDGE_DEFAULT)
 
     def _get_edge_color(self, edge_data: dict, key: tuple = None) -> QColor:
         """Виртуальный. Base: стандартный цвет. Advanced: подсветка по диаметру/перпендикулярности."""

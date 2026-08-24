@@ -292,8 +292,22 @@ curl -X POST "http://localhost:8000/api/detection/{uid}/detect?model_id=yolov8m_
 повтор). Раньше тем же ответом отвечал и мёртвый брокер, и различить их клиенту было нечем.
 
 ⚠ **Исключение — параллельный OCR в `junctions/complete`:** его отказ НЕ откатывает ничего
-(сборка графа уже в брокере) — он назван в `message` и в `ocr_task_id: null`, а восстановление
-даёт safety net из `complete-simple` выше.
+(сборка графа уже в брокере), а восстановление даёт safety net из `complete-simple` выше.
+Назван он в ответе ДВАЖДЫ — человеку и машине:
+
+```json
+{ "status": "validated_junctions",
+  "message": "Junction validation completed, graph build started, OCR NOT started (broker unavailable)",
+  "task_id": "…", "contour_task_id": null, "ocr_task_id": null,
+  "dispatch_failed": ["ocr"] }
+```
+
+**`dispatch_failed`** — этапы веера, задача которых НЕ встала в очередь; пустой список
+значит «отказов не было». Значения — из словаря `ProcessingStage.stage_type`, того же,
+которым отвечает `GET /api/diagrams/{uid}/stages`, поэтому клиент переводит их в бусины
+уже имеющейся картой. Поле обязательно: без него `ocr_task_id: null` неотличим от двух
+других исходов (OCR ушёл нормально / OCR выключен в конфиге проекта), и клиенту оставалась
+бы подстрока в англоязычном `message` (пункт 1-48 дороги, `MEASUREMENTS §117`).
 
 ---
 

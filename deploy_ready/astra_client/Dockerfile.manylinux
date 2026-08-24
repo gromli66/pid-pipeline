@@ -31,6 +31,17 @@ RUN /usr/bin/python3.11 -m venv /opt/buildvenv \
     && /opt/buildvenv/bin/pip install --no-cache-dir --upgrade pip wheel setuptools \
     && /opt/buildvenv/bin/pip install --no-cache-dir pyinstaller
 
+# libavoid-биндинг (Э7-b). В git лежит только win-бинарь, linux собирается —
+# тем же рецептом, что слой Dockerfile.worker (vendor/adaptagrams/README.md).
+# Без него Linux-клиент молча деградировал на самописную лестницу: Windows
+# получил биндинг 2026-08-02 (коммит 2a22afe), а Astra с тех пор не пересобирали.
+# python3 в этом образе — 3.12, а клиент собирается под 3.11: подсовываем
+# симлинк, иначе биндинг соберётся под чужие заголовки и не загрузится.
+COPY vendor/adaptagrams/build /tmp/avoid_build
+RUN mkdir -p /tmp/py311 && ln -sf /usr/bin/python3.11 /tmp/py311/python3 \
+    && PATH=/tmp/py311:$PATH sh /tmp/avoid_build/build_linux.sh /opt/adaptagrams/linux \
+    && rm -rf /tmp/avoid_build /tmp/py311
+
 # Зависимости клиента с PyPI. Этот слой пересобирается ТОЛЬКО когда меняется
 # requirements/ui.txt — тогда всё тянется заново из интернета.
 COPY requirements/ui.txt /tmp/ui.txt

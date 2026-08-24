@@ -165,14 +165,18 @@ class APIClient:
         """Закрыть HTTP соединения."""
         self._client.close()
 
-    def _request(
+    def _send(
         self,
         method: str,
         endpoint: str,
         retries: Optional[int] = None,
         **kwargs,
-    ) -> Dict[str, Any]:
-        """Выполнить HTTP запрос с retry при потере соединения."""
+    ) -> httpx.Response:
+        """HTTP запрос с retry при потере соединения. Ответ >= 400 → APIError.
+
+        Ретраим ТОЛЬКО обрыв связи: ответ сервера с кодом ошибки повторять
+        нечего — он придёт таким же.
+        """
         max_retries = retries if retries is not None else self.max_retries
 
         last_error = None
@@ -189,7 +193,7 @@ class APIClient:
                         message = response.text or f"HTTP {response.status_code}"
                     raise APIError(message, response.status_code)
 
-                return response.json()
+                return response
 
             except httpx.RequestError as exc:
                 last_error = exc
@@ -230,28 +234,29 @@ class APIClient:
         # которому потом разбирают инцидент.
         raise APIError(f"Connection failed after {attempts_made} attempts: {last_error}")
 
+    def _request(
+        self,
+        method: str,
+        endpoint: str,
+        retries: Optional[int] = None,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Выполнить HTTP запрос с retry при потере соединения."""
+        return self._send(method, endpoint, retries=retries, **kwargs).json()
+
     def _request_raw(
         self,
         method: str,
         endpoint: str,
         **kwargs,
     ) -> httpx.Response:
-        """Выполнить HTTP запрос и вернуть raw response (для скачивания файлов)."""
-        try:
-            response = self._client.request(method, endpoint, **kwargs)
+        """Выполнить HTTP запрос и вернуть raw response (для скачивания файлов).
 
-            if response.status_code >= 400:
-                try:
-                    error_data = response.json()
-                    message = error_data.get("detail", str(error_data))
-                except Exception:
-                    message = response.text or f"HTTP {response.status_code}"
-                raise APIError(message, response.status_code)
-
-            return response
-
-        except httpx.RequestError as exc:
-            raise APIError(f"Connection error: {exc}")
+        Ретраи те же, что у `_request`: раньше их здесь не было, и один обрыв на
+        скачивании уже готового .prtx (80 КБ) ронял весь экспорт — файл на
+        сервере лежал, а оператор видел «не удалось сохранить».
+        """
+        return self._send(method, endpoint, **kwargs)
 
     # === Health ===
 
@@ -685,6 +690,49 @@ class APIClient:
         if bridge_gap is not None:
             params["bridge_gap"] = bridge_gap
         return self._request("POST", f"/api/graph/{uid}/generate-fxml", params=params)
+
+    def prtx_health(self) -> Dict[str, Any]:
+        """Готов ли конвертер расчётных схем на сервере.
+
+        Зовётся проверкой лицензии (ui/services/prtx_license.py) до начала
+        работы — короткий таймаут, оператор ждёт ответа в диалоге.
+        """
+        return self._request("GET", "/api/graph/prtx/health", timeout=15.0)
+
+    def build_prtx(self, uid: str, license_key: bytes) -> Dict[str, Any]:
+        """Запустить сборку .prtx на сервере, отдав ему ключ лицензии САПФИР.
+
+        Движок крутится в контейнере `prtx`; ключа у сервера нет, он приезжает
+        этим запросом на один прогон и там не сохраняется (docker/prtx/server.py).
+        Ключ в лог не пишем.
+
+        Запрос КОРОТКИЙ: сервер отвечает сразу, а считает в фоне. Ждать ответа
+        всю сборку нельзя — она идёт минутами, и промежуточные узлы рвут такое
+        соединение по бездействию (замер 2026-08-22: схема собиралась на сервере
+        2 минуты, клиент к тому времени уже получал WinError 10054/10060 и
+        считал, что всё упало). Готовность забирается `prtx_status`.
+        """
+        files = {"license": (".S$lk$.bin", license_key, "application/octet-stream")}
+        return self._request(
+            "POST", f"/api/graph/{uid}/prtx/build", files=files, timeout=60.0
+        )
+
+    def prtx_status(self, uid: str) -> Dict[str, Any]:
+        """Чем закончилась фоновая сборка: building | done | error | idle."""
+        return self._request("GET", f"/api/graph/{uid}/prtx/status", timeout=15.0)
+
+    def upload_prtx(self, uid: str, file_path: Path) -> Dict[str, Any]:
+        """Залить готовый .prtx (ляжет рядом с FXML: fxml/diagram.prtx).
+
+        Путь для машин, где конвертер стоит локально коробкой. Штатный путь —
+        build_prtx: считает сервер, клиент отдаёт только ключ лицензии.
+        """
+        file_path = Path(file_path)
+        with open(file_path, "rb") as f:
+            files = {"file": (file_path.name, f, "application/octet-stream")}
+            return self._request(
+                "POST", f"/api/graph/{uid}/prtx/upload", files=files, timeout=120.0
+            )
 
     # === OCR ===
 
