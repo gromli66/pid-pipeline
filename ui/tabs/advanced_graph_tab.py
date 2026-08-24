@@ -479,6 +479,11 @@ class AdvancedGraphTab(SimpleGraphTab):
         # (пункт 1.x17).
         self._recog_worker.finished.connect(self._recog_thread.quit)
         self._recog_worker.error.connect(self._recog_thread.quit)
+        # ⛔ И уносит СЕБЯ САМ, в СВОЁМ потоке (пункт 1-46, замер §119а):
+        # иначе рабочий объект переживает разрушенную вкладку сиротой
+        # в кончившемся потоке — тот же шов, что у загрузчика.
+        self._recog_worker.finished.connect(self._recog_worker.deleteLater)
+        self._recog_worker.error.connect(self._recog_worker.deleteLater)
         self._recog_thread.start()
 
     def _cleanup_recog_thread(self):

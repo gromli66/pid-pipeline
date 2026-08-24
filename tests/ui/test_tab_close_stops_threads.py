@@ -77,6 +77,7 @@ from pathlib import Path                                         # noqa: E402
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal   # noqa: E402
 from PySide6.QtGui import QColor, QImage, QPainter, QPen         # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox          # noqa: E402
+from shiboken6 import isValid                                 # noqa: E402
 
 import ui.widgets.diagram_workspace as dw                        # noqa: E402
 from tools import corpus                                         # noqa: E402
@@ -547,6 +548,48 @@ def test_closing_tab_does_not_touch_dead_widgets(bench, capfd):
     err = capfd.readouterr().err
     assert "already deleted" not in err, (
         "загрузчик пишет в разрушенные виджеты закрытой вкладки:\n" + err[:2000]
+    )
+
+
+@pytest.mark.parametrize("key", sorted(TABS))
+def test_closing_tab_leaves_no_worker_in_a_dead_thread(bench, key):
+    """Разрушенная вкладка не оставляет ЖИВОГО загрузчика в кончившемся потоке.
+
+    Объект назван замером §119а, а не подозрением: после «← Назад» и конца
+    потока C++-объект `ArtifactDownloader` остаётся ЖИВ (`isValid` истинно),
+    его `thread()` — рабочий поток, которого больше НЕТ, а держат обёртку
+    только словарь разрушенной вкладки и замыкание. Разрушить такую сироту
+    может лишь питоний сборщик и лишь ЧУЖИМ (главным) потоком — то самое,
+    чего Qt не разрешает делать с объектом, живущим в другом потоке.
+
+    Утверждается НАШЕ решение (`PROTOCOL §3`, замер 1-19), а не свойство Qt:
+    рабочий объект уносит СЕБЯ САМ, в своём потоке, по концу работы
+    (`finished`/`error` → `deleteLater`). Проверяемое наблюдаемое —
+    действительность C++-объекта, а не поле вкладки: поле переживает
+    разрушение обёртки и о жизни объекта не говорит ничего.
+
+    ⛔ Взводить снос ПОСЛЕ конца потока бесполезно, и это замерено (§119б):
+    `deleteLater()` для объекта в кончившемся потоке не доставляется вовсе —
+    очереди, которая его доиграет, больше нет.
+    """
+    ws, api = bench(TABS[key])
+
+    tab = _open(ws, key)
+    thread = tab._download_thread
+    worker = tab._downloader
+    assert api.wait_until_downloading(), "рабочий поток не дошёл до загрузки"
+    assert isValid(worker), "обстановка не та: загрузчик не создан"
+
+    _back(ws)
+    assert ws._active_tab is None, "вкладка не закрылась"
+
+    api.release()
+    assert _join(thread), f"поток загрузки вкладки «{key}» пережил её разрушение"
+
+    assert not isValid(worker), (
+        f"вкладка «{key}» разрушена, её поток кончился, а рабочий объект "
+        f"{type(worker).__name__} ЖИВ: сирота в потоке, которого больше нет. "
+        "Снести её сможет только сборщик мусора и только чужим потоком"
     )
 
 

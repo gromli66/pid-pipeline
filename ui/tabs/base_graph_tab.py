@@ -877,6 +877,14 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
         # бегущий `QThread`, разрушение которого роняет процесс (пункт 1.x17).
         self._downloader.finished.connect(self._download_thread.quit)
         self._downloader.error.connect(self._download_thread.quit)
+        # ⛔ И уносит СЕБЯ САМ, в СВОЁМ потоке (пункт 1-46, замер §119а):
+        # вкладку РАЗРУШАЮТ, а рабочий объект держит только её словарь —
+        # без этого он остаётся жить сиротой в потоке, которого больше нет,
+        # и снести его сможет лишь питоний сборщик и лишь ЧУЖИМ потоком.
+        # Взводить снос ПОСЛЕ конца потока бесполезно: `deleteLater()` для
+        # объекта в кончившемся потоке не доставляется вовсе (замер §119б).
+        self._downloader.finished.connect(self._downloader.deleteLater)
+        self._downloader.error.connect(self._downloader.deleteLater)
         self._download_thread.start()
 
     @Slot(str)
