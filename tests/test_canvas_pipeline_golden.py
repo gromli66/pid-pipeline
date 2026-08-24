@@ -38,6 +38,8 @@ NODE_KEYS = {
     "class_id", "class_name", "yolo_idx", "ann_id", "ann_idx", "manual",
     "direction", "direction_node", "flow_axis", "flow_direction",
     "pass_through", "kks_full", "skin_info", "_axis",
+    # кластер дублей стыков: автоматически не чиним, помечаем для оператора
+    "cluster_suspect",
 }
 EDGE_KEYS = {
     "id", "source", "target", "source_point", "target_point", "waypoints",
