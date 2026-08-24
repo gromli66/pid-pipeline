@@ -83,6 +83,11 @@ BOX_AREA = 720
 SIDE = 90                                     # цель превью: квадрат 90×90
 BOX_PREVIEW = [-10.0, 188.0, 80.0, 278.0]
 BOX_PREVIEW_AREA = 8100.0
+BOX_MOVED_PREVIEW = [-3.0, 188.0, 87.0, 278.0]   # то же превью после переноса +7
+NEIGHBOUR = "node_14"         # ВТОРОЙ узел набора — половина, которой откат не касался
+NEIGHBOUR_BBOX = [1258, 251, 1309, 279]
+NEIGHBOUR_PREVIEW = [1238.0, 220.0, 1328.0, 310.0]
+SIDE_2 = 60                                   # вторая цель превью: квадрат 60×60
 OUTSIDER = "node_50"          # узел ВНЕ набора — «остальная модель»
 OUTSIDER_CENTROID = [844, 1380]               # [y, x]
 OUTSIDER_MOVED = [844.0, 1387.0]              # тот же узел после переноса на +7
@@ -94,6 +99,7 @@ PIN_EDGE = ("node_11", "node_13")
 PIN_ROLE = "source"
 PIN_DX, PIN_DY = 10.0, 0.0                    # пин оператора до всего
 PIN_SCALED = 45.0                             # 10.0 × (90/20) — и превью, и ресайз
+PIN_PREVIEW_2 = 30.0                          # 10.0 × (60/20) — превью 60×60
 
 # ── корпус полигонов ────────────────────────────────────────────────────
 POLY_UID = "089feca2"
@@ -279,6 +285,17 @@ def _foreign_move(editor, nid, dx=7.0):
     editor.drag_node_to(cx + dx, cy)
     editor.end_drag_node()
     assert editor.undo_mgr.can_undo, "перенос не встал в стек — тест бессмыслен"
+
+
+def _foreign_auto_fix(editor):
+    """ЧУЖОЕ действие оператора №3: СНИМОЧНАЯ команда («Авто-выравнивание»).
+
+    Её `undo` идёт через `model.restore` — словари пересобираются, и превью
+    исчезает из модели ЦЕЛИКОМ, а не поэлементно.
+    """
+    editor.set_mode("idle")
+    editor.auto_fix()
+    assert editor.undo_mgr.can_undo, "auto_fix не встал в стек — тест бессмыслен"
 
 
 def _corner_resize(editor, nid=BOX_NID, bbox=CORNER_BBOX):
@@ -606,6 +623,126 @@ def test_a_preview_applied_before_the_tick_is_not_re_previewed_by_it(
 
     assert ed.nodes[BOX_NID]["bbox"] == pytest.approx(applied, abs=TOL)
     assert _sent_node(box_tab, BOX_NID)["bbox"] == pytest.approx(applied, abs=TOL)
+    assert dialogs == []
+
+
+# ── S4, клетка «ПОСЛЕ чужого действия оператора» (возврат ревизии, §124г) ─
+#
+# Пять тестов выше идут с ЧИСТОГО ЛИСТА: чужое действие в них есть, но это
+# перенос узла ВНЕ набора и БЕЗ отмены — то есть превью к моменту тика цело
+# у всех 17 узлов. Ревизия связки показала, что дефект живёт ровно в клетке,
+# которую обходят по построению оба набора (`MEASUREMENTS §124.1/§124.2):
+# отмена ПОСРЕДИ живого превью. Три теста ниже — эта клетка, обе полярности
+# в каждом: сервер получает зафиксированное И холст остаётся тем, каким его
+# оставил оператор.
+
+def test_the_tick_does_not_revive_the_preview_a_foreign_undo_took_off(
+        box_tab, dialogs):
+    """Перенос узла НАБОРА → превью → Ctrl+Z → тик (§124.3).
+
+    Состояние СМЕШАННОЕ: откат переноса вернул `node_11` его геометрию и
+    честно снял превью только с него, у остальных шестнадцати превью живо.
+    Возврат ПЕРЕСЧЁТОМ вписывал превью во весь набор — `node_11` уезжал
+    с `[25, 215, 45, 251]` обратно на `[-10, 188, 80, 278]` без единого
+    действия оператора и без следа в стеке.
+    """
+    ed = box_tab._editor
+    _foreign_move(ed, BOX_NID)                    # чужое действие ВНУТРИ набора
+    _open_resize(ed)
+    ed.preview_resize(width=SIDE, height=SIDE)
+    assert ed.nodes[BOX_NID]["bbox"] == pytest.approx(BOX_MOVED_PREVIEW, abs=TOL), \
+        "превью ничего не изменило — тест бессмыслен"
+
+    ed.undo()                                     # Ctrl+Z по переносу
+    assert ed.nodes[BOX_NID]["bbox"] == pytest.approx(BOX_BBOX, abs=TOL), \
+        "откат не снял превью с node_11 — тест бессмыслен"
+    assert ed.nodes[NEIGHBOUR]["bbox"] == pytest.approx(NEIGHBOUR_PREVIEW, abs=TOL), \
+        "состояние не смешанное — тест бессмыслен"
+
+    _autosave_tick(box_tab)
+
+    assert ed.nodes[BOX_NID]["bbox"] == pytest.approx(BOX_BBOX, abs=TOL), \
+        "тик воскресил превью, снятое оператором"
+    assert ed.nodes[NEIGHBOUR]["bbox"] == pytest.approx(NEIGHBOUR_PREVIEW, abs=TOL), \
+        "тик снял живое превью соседа по набору"
+    assert _sent_node(box_tab, BOX_NID)["bbox"] == pytest.approx(BOX_BBOX, abs=TOL)
+    assert _sent_node(box_tab, NEIGHBOUR)["bbox"] == pytest.approx(
+        NEIGHBOUR_BBOX, abs=TOL), "превью соседа уехало на сервер (инвариант 1.5)"
+    assert dialogs == []
+
+
+def test_the_tick_does_not_revive_a_preview_a_snapshot_undo_wiped(
+        box_tab, dialogs):
+    """Снимочная команда → превью → Ctrl+Z → тик (§124.5).
+
+    Здесь превью стёрто ЦЕЛИКОМ: `model.restore` кладёт в модель состояние
+    ДО него. Прежний детектор жетона всё равно отвечал «живо», потому что
+    считал живыми поля, которых превью не меняло, — `centroid` бокс-превью
+    не двигает, а `segmentation` у бокса пуст с обеих сторон (§124.6: 17 из
+    17 узлов). Через ≤120 с фоновый тик отменял отмену оператора.
+    """
+    ed = box_tab._editor
+    _foreign_auto_fix(ed)                         # снимочная команда в стеке
+    _open_resize(ed)
+    _box_preview(ed)
+
+    ed.undo()                                     # Ctrl+Z — превью стёрто целиком
+    assert ed.nodes[BOX_NID]["bbox"] == pytest.approx(BOX_BBOX, abs=TOL), \
+        "откат не снял превью — тест бессмыслен"
+    assert ed.nodes[NEIGHBOUR]["bbox"] == pytest.approx(NEIGHBOUR_BBOX, abs=TOL), \
+        "откат снял превью не у всех — тест бессмыслен"
+
+    _autosave_tick(box_tab)
+
+    assert ed.nodes[BOX_NID]["bbox"] == pytest.approx(BOX_BBOX, abs=TOL), \
+        "тик воскресил превью, стёртое откатом"
+    assert ed.nodes[NEIGHBOUR]["bbox"] == pytest.approx(NEIGHBOUR_BBOX, abs=TOL), \
+        "тик воскресил превью, стёртое откатом"
+    assert _sent_node(box_tab, BOX_NID)["bbox"] == pytest.approx(BOX_BBOX, abs=TOL)
+    assert not ed.undo_mgr.can_undo, "стек уехал — тест смотрит не на то состояние"
+    assert dialogs == []
+
+
+def test_the_tick_keeps_the_frame_and_the_pin_a_foreign_undo_returned(
+        box_tab, dialogs):
+    """Пиновая грань той же клетки (§124.4): откат вернул И рамку, И пин.
+
+    Пин масштабируется РАМКОЙ, поэтому у смешанного состояния две половины
+    и обе обязаны пережить тик: `node_11` откат вернул к 20×36 с пином 10.0,
+    сосед по набору остался под живым превью 60×60. Пересчёт перекрывал
+    возвращённое откатом: 60×60 и пин 30.0 при откатных 20×36 и 10.0.
+    """
+    ed = box_tab._editor
+    _set_pin(ed)
+    _corner_resize(ed)                            # чужой угловой ресайз 90×90
+    assert _pin(ed) == {"dx": PIN_SCALED, "dy": PIN_DY}, \
+        "ресайз не отмасштабировал пин — тест бессмыслен"
+
+    _open_resize(ed)
+    ed.preview_resize(width=SIDE_2, height=SIDE_2)
+    assert _pin(ed) == {"dx": PIN_PREVIEW_2, "dy": PIN_DY}, \
+        "превью не тронуло пин — тест бессмыслен"
+
+    ed.undo()                                     # Ctrl+Z по угловому ресайзу
+    assert _size(ed, BOX_NID) == pytest.approx((BOX_W, BOX_H), abs=TOL), \
+        "откат не вернул рамку — тест бессмыслен"
+    assert _pin(ed) == {"dx": PIN_DX, "dy": PIN_DY}, \
+        "откат не вернул пин — тест бессмыслен"
+    assert _size(ed, NEIGHBOUR) == pytest.approx((SIDE_2, SIDE_2), abs=TOL), \
+        "состояние не смешанное — тест бессмыслен"
+
+    _autosave_tick(box_tab)
+
+    assert _size(ed, BOX_NID) == pytest.approx((BOX_W, BOX_H), abs=TOL), \
+        "тик перекрыл рамку, возвращённую откатом"
+    assert _pin(ed) == {"dx": PIN_DX, "dy": PIN_DY}, \
+        "тик перекрыл пин, возвращённый откатом"
+    assert _size(ed, NEIGHBOUR) == pytest.approx((SIDE_2, SIDE_2), abs=TOL), \
+        "тик снял живое превью соседа по набору"
+    assert _sent_node(box_tab, BOX_NID)["bbox"] == pytest.approx(BOX_BBOX, abs=TOL)
+    assert _sent_pin(box_tab) == {"dx": PIN_DX, "dy": PIN_DY}
+    assert _sent_node(box_tab, NEIGHBOUR)["bbox"] == pytest.approx(
+        NEIGHBOUR_BBOX, abs=TOL)
     assert dialogs == []
 
 

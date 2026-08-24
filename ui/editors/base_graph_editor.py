@@ -320,8 +320,11 @@ class BaseGraphEditor(QGraphicsView):
         return None
 
     def restore_uncommitted_preview(self, token) -> None:
-        """Вернуть на холст превью, снятое `take_uncommitted_preview`.
+        """Вернуть на холст ровно то, что сняла `take_uncommitted_preview`.
 
+        Жетон — снимок холста, а не рецепт его пересчёта: набор к моменту тика
+        бывает СМЕШАННЫМ (часть узлов оператор уже вернул чужим Ctrl+Z), и
+        пересчёт вписывал бы превью и туда (`MEASUREMENTS §124.3`).
         `None` — возвращать нечего (превью не было либо редактор его не держит).
         """
         return

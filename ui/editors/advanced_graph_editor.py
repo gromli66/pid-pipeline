@@ -298,7 +298,6 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self._resize_pin_preview: list = []        # [(dx, dy) | None] — что ВПИСАЛО превью
         self._resize_model_rev = None              # undo_mgr.revision на момент базлайна
         self._resize_preview_geom: dict = {}       # node_id → что ВПИСАЛО превью
-        self._resize_preview_args = None           # (width, height, scale) превью
         # Колбэки в таб (назначаются при готовности редактора):
         self.resize_panel_show_cb: Optional[callable] = None     # (visible: bool)
         self.resize_panel_classes_cb: Optional[callable] = None  # (names, current)
@@ -4169,6 +4168,38 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 live[nid] = fields
         return live
 
+    def _preview_owned_fields(self) -> dict:
+        """Где ещё лежит то, что превью РЕАЛЬНО изменило: `{узел → поля}`.
+
+        Отличается от `_preview_live_fields()` вопросом, а не механикой.
+        Тот отвечает «ЧТО откатывать», и там поле, совпавшее с отпечатком, но
+        превью не менявшееся, безвредно: возврат базы в него — no-op. Вопрос
+        «ЕСТЬ ЛИ ЖИВОЕ ПРЕВЬЮ» так решать нельзя. У бокса превью не двигает
+        `centroid`, а `segmentation` пуст с обеих сторон — значит эти два поля
+        совпадают с отпечатком ВСЕГДА, в том числе когда превью стёрто
+        ЦЕЛИКОМ: замер ревизии связки `MEASUREMENTS §124.6` — после отката
+        снимочной команды (`model.restore` кладёт в модель состояние ДО
+        превью) прежний детектор насчитывал **17 узлов из 17 живыми** по
+        полям `centroid`/`segmentation`, жетон выдавался, и запись по таймеру
+        ВОСКРЕШАЛА снятое оператором превью через ≤120 с.
+
+        Лечится тем же приёмом, что и `_base_describes_frame`: спрашивать не
+        «совпало ли значение», а «превью это вообще меняло». Владение доказывает
+        только поле, у которого отпечаток превью РАЗОШЁЛСЯ с базлайном.
+        """
+        owned = {}
+        for nid, fields in self._preview_live_fields().items():
+            base = self._resize_base.get(nid)
+            key = self._resize_preview_geom.get(nid)
+            if base is None or key is None:
+                # Базлайн снят, а превью ещё не вписано: менять было нечему.
+                continue
+            was = self._preview_geom_key(base)
+            changed = {name for name in fields if key[name] != was[name]}
+            if changed:
+                owned[nid] = changed
+        return owned
+
     @staticmethod
     def _frame_size(bbox) -> tuple | None:
         """(ширина, высота) рамки — то, ОТ ЧЕГО зависят `area` и пины."""
@@ -4487,27 +4518,96 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self._revert_resize_preview()
         self._redraw_resize_frames()
 
+    def _snapshot_preview_canvas(self) -> dict:
+        """Холст набора, каким его сейчас видит оператор, + живущий им базлайн.
+
+        Геометрия узлов набора и пины инцидентных рёбер — значениями; шесть
+        полей базлайна — ссылками (`_drop_resize_baseline` их ПЕРЕПРИСВАИВАЕТ,
+        а не чистит на месте, поэтому снимок переживает откат превью).
+        """
+        return {
+            'geom': {nid: self._preview_geom_key(self.nodes[nid])
+                     for nid in self._resize_base if nid in self.nodes},
+            'pins': self._snapshot_resize_pins(),
+            'baseline': (self._resize_model_base, self._resize_base,
+                         self._resize_pin_base, self._resize_pin_preview,
+                         self._resize_model_rev, self._resize_preview_geom),
+        }
+
+    def _restore_preview_canvas(self, snap: dict) -> None:
+        """Вернуть холст набора и базлайн ровно такими, какими их сняли."""
+        from ui.editors import port_model
+
+        (self._resize_model_base, self._resize_base, self._resize_pin_base,
+         self._resize_pin_preview, self._resize_model_rev,
+         self._resize_preview_geom) = snap['baseline']
+        for nid, key in snap['geom'].items():
+            n = self.nodes.get(nid)
+            if not n:
+                continue
+            n['centroid'] = list(key['centroid'])
+            # Пустое поле не возвращается: превью полей не заводит, а запись
+            # «был пустой bbox» стёрла бы то, чего снимок не держал (S8).
+            if key['bbox']:
+                n['bbox'] = list(key['bbox'])
+            if key['segmentation']:
+                n['segmentation'] = list(key['segmentation'])
+            if key['area'] is not None:
+                n['area'] = key['area']
+        for (e, role, _dx, _dy), val in zip(self._resize_pin_base,
+                                            snap['pins']):
+            if val is None:
+                continue
+            pin = port_model.edge_pin(e, role)
+            if pin is not None:
+                pin['dx'], pin['dy'] = val
+        for nid in snap['geom']:
+            self._refresh_node_visual(nid)
+        if self._poly_edit_node in self._resize_base:
+            # Тот же resync, что делает откат: оверлей вершин построен из
+            # `segmentation`, то есть из превью, которое сейчас вернулось.
+            self._poly_resync_overlay()
+        self._redraw_resize_frames()
+
     def take_uncommitted_preview(self):
         """Снять превью «Размеров» на время записи, вернув чем его восстановить.
 
-        Жетон — параметры последнего превью; «есть ли что возвращать» решается
-        тем же прямым ответом, которым живёт откат: не «открыта ли панель» и не
-        «двигался ли стек», а «лежит ли ещё в модели то, что вписало превью».
+        Жетон — СНИМОК холста набора, а не параметры бегунка. «Есть ли что
+        возвращать» решает `_preview_owned_fields()`: не «открыта ли панель»,
+        не «двигался ли стек» и не «совпало ли поле с отпечатком», а «лежит ли
+        ещё в модели то, что превью РЕАЛЬНО изменило» (§124.6).
         """
-        token = (self._resize_preview_args
-                 if self._preview_live_fields() else None)
+        if not self._preview_owned_fields():
+            self.drop_uncommitted_preview()
+            return None
+        token = self._snapshot_preview_canvas()
         self.drop_uncommitted_preview()
         return token
 
     def restore_uncommitted_preview(self, token) -> None:
-        """Пересобрать превью после записи по таймеру.
+        """Вернуть холст оператора ровно таким, каким его сняли ради записи.
 
-        `preview_resize` идемпотентно и снимает базлайн заново — с модели,
-        которая после отката равна той, что базлайн описывал. То есть оператор
-        видит ровно ту же картинку и продолжает с того же места.
+        ⛔ Возврат ПЕРЕСЧЁТОМ (`preview_resize` заново) опровергнут замером
+        ревизии связки — `MEASUREMENTS §124.3`/`§124.4`. Пересчёт вписывает
+        превью во ВЕСЬ набор, а к моменту тика набор бывает СМЕШАННЫМ: чужой
+        Ctrl+Z по переносу узла набора вернул этому узлу геометрию и честно
+        снял превью **только с него**. Пересчёт возвращал превью и туда —
+        `node_11` уезжал с `[25, 215, 45, 251]` обратно на `[-10, 188, 80, 278]`
+        БЕЗ ЖЕСТА оператора, а на пиновой грани тик перекрывал возвращённые
+        откатом рамку и пин (60×60 и пин 30.0 при откатных 20×36 и 10.0).
+        Между `take` и `restore` модель не мутирует — запись читает её и
+        синхронизирует только метаданные `graph` (`GraphDataModel.save`), —
+        поэтому дословный возврат снимка и есть «ровно та же картинка».
+
+        Судьба смешанного состояния ЗАЯВЛЕНА: тик возвращает то, что снял, и
+        ничего сверх. Отменённое оператором остаётся отменённым, живое превью
+        остаётся живым, и обе половины набора переживают запись каждая в своём
+        состоянии. Обратный выбор — «тик пересобирает превью на ВЕСЬ набор, как
+        жест бегунка» — отвергнут: фоновому тику тогда пришлось бы отменять
+        часть Ctrl+Z оператора, то есть ровно то, ради чего заведён S4.
         """
-        if token is not None and self._resize_sel:
-            self.preview_resize(*token)
+        if token is not None:
+            self._restore_preview_canvas(token)
 
     def _undo_point(self):
         """Снимок модели как точка возврата: превью снимается ДО снимка.
@@ -4611,9 +4711,6 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             self._rollback_owned_preview()
             self._capture_resize_base()
         self._apply_sizes_from_base(width, height, scale, kind)
-        # Чем превью восстановить, если его пришлось снять не по воле
-        # оператора (запись по таймеру — `take_uncommitted_preview`).
-        self._resize_preview_args = (width, height, scale)
         for nid in self._resize_sel:
             self._refresh_node_visual(nid)
         self._redraw_resize_frames()
