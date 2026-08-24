@@ -532,8 +532,23 @@ def get_cvat_client() -> CVATClient:
 
 
 def create_labels_from_config(project_config) -> List[CVATLabel]:
-    """Создать список меток из конфигурации проекта."""
+    """Метки проекта CVAT: отображаемые названия в алфавитном порядке.
+
+    Единственный источник списка меток — зовут и API (`app/api/cvat.py`), и
+    воркер (`worker/tasks/detection.py`). Раньше каждый строил свой список
+    инлайном, и расхождение копий не ловил ни один тест.
+
+    Порядок здесь — это порядок СОЗДАНИЯ меток в CVAT, а он же и порядок показа:
+    CVAT метки не сортирует (проверено на v2.25.0 — ни в API, ни в UI-бандле),
+    так что алфавит в интерфейсе разметчика получается только отсюда.
+
+    Побочный эффект порядка: CVAT нумерует `category_id` в выгрузке позицией
+    метки, поэтому на возврате обязательна `denormalize_coco_labels`
+    (`app/api/cvat.py`) — без неё `category_id - 1` даст чужой класс.
+    """
+    from app.services.class_display import display_name, display_order
+
     return [
-        CVATLabel(name=cls.name)
-        for cls in project_config.classes
+        CVATLabel(name=display_name(project_config, cls.name))
+        for cls in display_order(project_config)
     ]

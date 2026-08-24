@@ -92,7 +92,7 @@ validated_bbox ◀── fetch-annotations ◀── confirm ◀─────�
 | `/{uid}/cvat-url` | GET | Получить URL CVAT task |
 | `/{uid}/retry-fetch` | POST | Повторить fetch после ошибки (error → validating_bbox) |
 
-**create-task** — идемпотентен: если `cvat_task_id` уже есть, возвращает существующий. Создаёт project через `get_or_create_project()` (по `cvat_project_name` из конфига). Labels из `project_config.classes`.
+**create-task** — идемпотентен: если `cvat_task_id` уже есть, возвращает существующий. Создаёт project через `get_or_create_project()` (по `cvat_project_name` из конфига). Labels строит `create_labels_from_config()` (`app/services/cvat_client.py`) — **единственный источник списка меток**, его же зовёт воркер (`worker/tasks/detection.py`). Имена меток — отображаемые названия (`display_labels`), порядок — алфавитный по ним: CVAT метки не сортирует ни в API, ни в UI, так что порядок показа разметчику задаётся порядком создания.
 
 **fetch-annotations** — долгая операция (экспорт из CVAT может занять до 2 минут). Выполняется через `asyncio.to_thread()` вне DB-транзакции. При ошибке — статус → `error`, `error_stage = "fetching_annotations"`. Исключение — неопознанная метка (`CVATLabelMismatchError`, ответ 400): статус остаётся `validating_bbox`, чинить нужно в CVAT, см. §7.
 
@@ -129,12 +129,18 @@ Singleton: `get_cvat_client()` — модульный singleton с переис�
 **YOLO 1.1** (основной для импорта аннотаций). ZIP-архив со структурой:
 
 ```
-obj.data          # classes=40, paths
-obj.names         # имена классов (по строке)
+obj.data          # classes=42, paths
+obj.names         # имена классов (по строке), порядок = `classes:` из YAML
 train.txt         # data/obj_train_data/{image}
 obj_train_data/
   {image_stem}.txt  # class_id x_center y_center width height
 ```
+
+В `obj.names` пишутся **отображаемые** названия (`display_labels`): CVAT сопоставляет
+аннотации с метками проекта по имени (`dataset_manager/bindings.py::_get_label_id`), а не по
+позиции, и незнакомое имя отвергает с ошибкой. Порядок строк при этом остаётся порядком
+`classes:` — это индекс, на который ссылается `class_mapping`; совпадать с порядком меток
+в проекте он не обязан.
 
 **COCO 1.0** (используется при экспорте из CVAT). ZIP-архив со структурой:
 
@@ -143,7 +149,9 @@ annotations/
   instances_default.json  # стандартный COCO JSON
 ```
 
-**Class mapping.** `CVATExporter` принимает `class_mapping: Dict[int, int]` для трансляции YOLO class_id → CVAT class_id. Создание из конфига: `create_exporter_from_config(project_config)`.
+**Class mapping.** `CVATExporter` принимает `class_mapping: Dict[int, int]` для трансляции YOLO class_id → CVAT class_id. Создание из конфига: `create_exporter_from_config(project_config)`. Перевод меняет только значения `class_names`, индексы не трогает.
+
+**unknown_class_id.** Индекс класса `unknow` (объекты этого класса идут первыми в файле аннотаций) считается по **внутренним** английским именам и передаётся в `CVATExporter` отдельным аргументом: в `class_names` лежат отображаемые названия, и прежний поиск строкой `"unknow"` по ним ничего не находил.
 
 ---
 
