@@ -1108,7 +1108,13 @@ def flag_connector_clusters(nodes, radius: int = _CLUSTER_RADIUS,
 # представление, а узлы внутри — мусор. Порог согласован с критерием, ради
 # которого П1 и делался: оператор удаляет ребро, когда путь отходит от хорды
 # больше чем на 30 px.
-_CHAIN_TOL = 30.0
+_CHAIN_TOL = 40.0
+
+# Пять и больше изломов подряд между двумя якорями — это не маршрут, а
+# нарисованный зигзагом символ («пружина») на трубе: узел на каждом колене
+# оператор снимает. Замер на 26747a10: цепочки из 8, 7 и 5 изломов сняты
+# целиком, все цепочки из 2-4 изломов оставлены как настоящие маршруты.
+_ZIGZAG_MIN_BENDS = 5
 
 
 def merge_straight_chains(nodes, edges, tol: float = _CHAIN_TOL,
@@ -1154,7 +1160,8 @@ def merge_straight_chains(nodes, edges, tol: float = _CHAIN_TOL,
                     cur = nxt
                 if not interior or len(path) < 2 or nxt == anchor:
                     continue
-                if _max_deviation(path) > tol:
+                if (len(interior) < _ZIGZAG_MIN_BENDS
+                        and _max_deviation(path) > tol):
                     continue                  # настоящий поворот — оставляем
 
                 keep = [x for x in edges
