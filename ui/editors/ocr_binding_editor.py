@@ -215,7 +215,14 @@ class OcrBindingEditor(QGraphicsView):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.scene = QGraphicsScene()
+        # Родитель — сам вид: сцена обязана умирать ВМЕСТЕ с виджетом,
+        # который её показывает (пункт 1-46, замеры §119в-§119е).
+        # Без родителя сцена переживала разрушенную вкладку и умирала
+        # по воле сборщика мусора — с взведённым НУЛЕВЫМ таймером
+        # своего BSP-индекса, тик которого диспетчер доставлял
+        # по освобождённой памяти: это и есть `access violation`
+        # базового гейта (4 краха из 4 на паре наборов -> 0 из 4).
+        self.scene = QGraphicsScene(self)
         self.setScene(self.scene)
         self.setRenderHints(
             QPainter.RenderHint.Antialiasing

@@ -39,6 +39,7 @@ from ui.editors.ocr_binding_editor import OcrBindingEditor
 from ui.widgets.toolbar_buttons import (
     make_undo_button, make_save_button, make_confirm_button,
 )
+from ui.tabs.scene_lifetime import adopt_editor_scene
 
 logger = logging.getLogger(__name__)
 
@@ -395,6 +396,7 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
 
         # Editor (shared across sub-tabs)
         self.editor = OcrBindingEditor(self)
+        adopt_editor_scene(self.editor)   # сцена умирает с виджетом (1-46)
         self.editor.setVisible(False)
         self.editor.binding_changed.connect(self._on_binding_changed)
         self.editor.blocks_changed.connect(self._on_blocks_changed)
@@ -460,6 +462,11 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
         # (пункт 1.x17).
         self._recog_worker.finished.connect(self._recog_thread.quit)
         self._recog_worker.error.connect(self._recog_thread.quit)
+        # ⛔ И уносит СЕБЯ САМ, в СВОЁМ потоке (пункт 1-46, замер §119а):
+        # иначе рабочий объект переживает разрушенную вкладку сиротой
+        # в кончившемся потоке — тот же шов, что у загрузчика.
+        self._recog_worker.finished.connect(self._recog_worker.deleteLater)
+        self._recog_worker.error.connect(self._recog_worker.deleteLater)
         self._recog_thread.start()
 
     def _cleanup_recog_thread(self):
@@ -662,6 +669,14 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
         # значило оставить бегущий `QThread` навсегда (пункт 1.x17).
         self._downloader.finished.connect(self._download_thread.quit)
         self._downloader.error.connect(self._download_thread.quit)
+        # ⛔ И уносит СЕБЯ САМ, в СВОЁМ потоке (пункт 1-46, замер §119а):
+        # вкладку РАЗРУШАЮТ, а рабочий объект держит только её словарь —
+        # без этого он остаётся жить сиротой в потоке, которого больше нет,
+        # и снести его сможет лишь питоний сборщик и лишь ЧУЖИМ потоком.
+        # Взводить снос ПОСЛЕ конца потока бесполезно: `deleteLater()` для
+        # объекта в кончившемся потоке не доставляется вовсе (замер §119б).
+        self._downloader.finished.connect(self._downloader.deleteLater)
+        self._downloader.error.connect(self._downloader.deleteLater)
 
         self._download_thread.start()
 

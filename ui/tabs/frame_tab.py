@@ -28,6 +28,7 @@ from ui.services.api_client import APIError
 from ui.widgets.toolbar_buttons import (
     make_undo_button, make_save_button, make_confirm_button,
 )
+from ui.tabs.scene_lifetime import adopt_editor_scene
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +135,7 @@ class FrameTab(QWidget):
         root.addWidget(self.error_label)
 
         self.editor = FrameRemoverView()
+        adopt_editor_scene(self.editor)   # сцена умирает с виджетом (1-46)
         self.editor.status_callback = self._on_editor_status
         root.addWidget(self.editor, stretch=1)
 

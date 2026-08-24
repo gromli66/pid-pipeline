@@ -77,6 +77,7 @@ from pathlib import Path                                         # noqa: E402
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal   # noqa: E402
 from PySide6.QtGui import QColor, QImage, QPainter, QPen         # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox          # noqa: E402
+from shiboken6 import isValid                                 # noqa: E402
 
 import ui.widgets.diagram_workspace as dw                        # noqa: E402
 from tools import corpus                                         # noqa: E402
@@ -550,6 +551,48 @@ def test_closing_tab_does_not_touch_dead_widgets(bench, capfd):
     )
 
 
+@pytest.mark.parametrize("key", sorted(TABS))
+def test_closing_tab_leaves_no_worker_in_a_dead_thread(bench, key):
+    """Разрушенная вкладка не оставляет ЖИВОГО загрузчика в кончившемся потоке.
+
+    Объект назван замером §119а, а не подозрением: после «← Назад» и конца
+    потока C++-объект `ArtifactDownloader` остаётся ЖИВ (`isValid` истинно),
+    его `thread()` — рабочий поток, которого больше НЕТ, а держат обёртку
+    только словарь разрушенной вкладки и замыкание. Разрушить такую сироту
+    может лишь питоний сборщик и лишь ЧУЖИМ (главным) потоком — то самое,
+    чего Qt не разрешает делать с объектом, живущим в другом потоке.
+
+    Утверждается НАШЕ решение (`PROTOCOL §3`, замер 1-19), а не свойство Qt:
+    рабочий объект уносит СЕБЯ САМ, в своём потоке, по концу работы
+    (`finished`/`error` → `deleteLater`). Проверяемое наблюдаемое —
+    действительность C++-объекта, а не поле вкладки: поле переживает
+    разрушение обёртки и о жизни объекта не говорит ничего.
+
+    ⛔ Взводить снос ПОСЛЕ конца потока бесполезно, и это замерено (§119б):
+    `deleteLater()` для объекта в кончившемся потоке не доставляется вовсе —
+    очереди, которая его доиграет, больше нет.
+    """
+    ws, api = bench(TABS[key])
+
+    tab = _open(ws, key)
+    thread = tab._download_thread
+    worker = tab._downloader
+    assert api.wait_until_downloading(), "рабочий поток не дошёл до загрузки"
+    assert isValid(worker), "обстановка не та: загрузчик не создан"
+
+    _back(ws)
+    assert ws._active_tab is None, "вкладка не закрылась"
+
+    api.release()
+    assert _join(thread), f"поток загрузки вкладки «{key}» пережил её разрушение"
+
+    assert not isValid(worker), (
+        f"вкладка «{key}» разрушена, её поток кончился, а рабочий объект "
+        f"{type(worker).__name__} ЖИВ: сирота в потоке, которого больше нет. "
+        "Снести её сможет только сборщик мусора и только чужим потоком"
+    )
+
+
 def test_closing_tab_during_recognition_stops_its_thread(bench):
     """ВТОРОЙ поток вкладки — распознавания — обязан кончиться так же.
 
@@ -628,6 +671,55 @@ def test_closing_tab_during_contour_recognition_stops_its_thread(bench,
         # бежать, и процесс упал бы на его разрушении, унеся весь прогон.
         worker.stop()
         _join(worker)
+
+
+@pytest.mark.parametrize("key", sorted(TABS))
+def test_closing_tab_takes_its_editor_scene_with_it(bench, key, monkeypatch):
+    """Разрушенная вкладка уносит СЦЕНУ своего редактора — синхронно с собой.
+
+    Корень крахов базового гейта, названный вмешательством (§119в–§119д):
+    `QGraphicsScene` во всех редакторах создаётся БЕЗ родителя Qt и держится
+    только питоньим полем редактора. Такая сцена переживает разрушенную
+    вкладку и умирает позже, по воле сборщика мусора, — а у её BSP-индекса
+    к этому моменту взведён НУЛЕВОЙ таймер (индекс заводит его на каждом
+    изменении состава элементов). Тик этого таймера диспетчер доставляет
+    по мёртвому получателю: `QEventDispatcherWin32::event` →
+    `QCoreApplication::notifyInternal2` по освобождённой памяти. Это и есть
+    `access violation`, за который платит тот, кто первым провернёт очередь.
+
+    Утверждается НАШЕ решение (`PROTOCOL §3`): сцена ЖИВЁТ РОВНО СТОЛЬКО,
+    СКОЛЬКО ВИДЖЕТ, который её показывает. Наблюдаемое — действительность
+    C++-объекта сцены сразу после боевого жеста «← Назад», без единого
+    оборота очереди сверх того, что делает сам жест.
+
+    ⛔ Поле ищется в `__dict__`, а не через `getattr`: у `QGraphicsView` есть
+    МЕТОД `scene()`, и одноимённое поле редактора его затеняет.
+    """
+    # Модалку в пути подменяем утверждением о факте, а не таймаутом
+    # (`PROTOCOL §5`, четвёртый исход зонда): у вкладки привязки на ПОЛНОЙ
+    # загрузке всплывает `QMessageBox.critical` — с подставными артефактами
+    # OCR-данные не разбираются, — и без подмены набор ПОВИС бы на ней.
+    monkeypatch.setattr("ui.tabs.ocr_binding_tab.QMessageBox", FakeMsgBox)
+    ws, api = bench(TABS[key], hold=False)
+
+    tab = _open(ws, key)
+    assert _join(tab._download_thread), "загрузка вкладки не кончилась"
+    QApplication.processEvents()
+
+    editor = getattr(tab, "_editor", None) or getattr(tab, "editor", None)
+    assert editor is not None, f"обстановка не та: редактор вкладки «{key}» не собрался"
+    scene = editor.__dict__.get("scene") or editor.__dict__.get("scene_obj")
+    assert scene is not None and isValid(scene), (
+        f"обстановка не та: у редактора вкладки «{key}» нет сцены")
+
+    _back(ws)
+    assert ws._active_tab is None, "вкладка не закрылась"
+
+    assert not isValid(scene), (
+        f"вкладка «{key}» разрушена, а сцена её редактора ЖИВА: она переживёт "
+        "вкладку и умрёт по воле сборщика мусора — вместе с нулевым таймером "
+        "своего BSP-индекса, тик которого придёт по мёртвому получателю"
+    )
 
 
 # ── контроль честности ───────────────────────────────────────────────────

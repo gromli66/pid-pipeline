@@ -25,6 +25,7 @@ from ui.widgets.appearance_panel import AppearanceMixin
 from ui.widgets.toolbar_buttons import (
     make_undo_button, make_save_button, make_confirm_button,
 )
+from ui.tabs.scene_lifetime import adopt_editor_scene
 
 logger = logging.getLogger(__name__)
 
@@ -289,6 +290,14 @@ class PipeTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
         # значило оставить бегущий `QThread` навсегда (пункт 1.x17).
         self._downloader.finished.connect(self._download_thread.quit)
         self._downloader.error.connect(self._download_thread.quit)
+        # ⛔ И уносит СЕБЯ САМ, в СВОЁМ потоке (пункт 1-46, замер §119а):
+        # вкладку РАЗРУШАЮТ, а рабочий объект держит только её словарь —
+        # без этого он остаётся жить сиротой в потоке, которого больше нет,
+        # и снести его сможет лишь питоний сборщик и лишь ЧУЖИМ потоком.
+        # Взводить снос ПОСЛЕ конца потока бесполезно: `deleteLater()` для
+        # объекта в кончившемся потоке не доставляется вовсе (замер §119б).
+        self._downloader.finished.connect(self._downloader.deleteLater)
+        self._downloader.error.connect(self._downloader.deleteLater)
         self._download_thread.start()
 
     @Slot(str)
@@ -318,6 +327,7 @@ class PipeTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
             from ui.editors.polyline_mask_editor import PolylineMaskEditor
 
             self._editor = PolylineMaskEditor()
+            adopt_editor_scene(self._editor)   # сцена умирает с виджетом (1-46)
             self._editor.status_callback = lambda msg: self.status_label.setText(msg)
             self._editor.width_changed_callback = self._on_editor_width_changed
             # Ctrl+S раньше звал save_mask() без пути — PNG падал в CWD процесса
