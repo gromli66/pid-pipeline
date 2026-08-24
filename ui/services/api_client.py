@@ -19,6 +19,34 @@ logger = logging.getLogger(__name__)
 _STAGE_DURATIONS_TTL_SEC = 600.0
 
 
+# ── Политика повторов ────────────────────────────────────────────────────
+#
+# Повтор запроса, который МОГ БЫТЬ ДОСТАВЛЕН, безопасен только для
+# идемпотентных методов. У POST такой гарантии нет: клиент делает ими 36
+# вызовов, из которых 14 отправляют задачу в брокер, — повтор там означает
+# вторую задачу Celery, а на пути «завершить валидацию» ещё и второй
+# конкурентный обработчик (замер §104е/§107.5: он восстанавливал тупик).
+#
+# ⛔ Вопрос задаётся СОСТОЯНИЮ, а не перечню эндпоинтов: «было ли соединение
+# установлено?». Соединения не было — сервер запроса не видел, дубль
+# невозможен по построению, и повтор безопасен любому методу. Поэтому новый
+# POST, добавленный завтра, защищён автоматически, и ошибка в числе 36
+# перестаёт быть дефектом. Перечень остаётся доказательством в
+# `MEASUREMENTS.md §118`, а не несущей конструкцией.
+#
+# ⚠ `ReadError` лежит на стороне «мог дойти» ЗАМЕРОМ, а не по интуиции: обрыв
+# keep-alive даёт именно его, а не `ConnectError` (§118).
+_NEVER_DELIVERED = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+_IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
+
+
+def _may_retry(method: str, exc: httpx.RequestError) -> bool:
+    """Можно ли повторить запрос, не рискуя продублировать эффект."""
+    if isinstance(exc, _NEVER_DELIVERED):
+        return True
+    return method.upper() in _IDEMPOTENT_METHODS
+
+
 class DiagramStatus(str, Enum):
     """Статусы диаграммы (зеркало backend)."""
     UPLOADED = "uploaded"
@@ -152,6 +180,7 @@ class APIClient:
         max_retries = retries if retries is not None else self.max_retries
 
         last_error = None
+        attempts_made = 0
         for attempt in range(max_retries + 1):
             try:
                 response = self._client.request(method, endpoint, **kwargs)
@@ -168,6 +197,17 @@ class APIClient:
 
             except httpx.RequestError as exc:
                 last_error = exc
+                attempts_made = attempt + 1
+                if not _may_retry(method, exc):
+                    # Д2: у неповторённого запроса обязан остаться след с
+                    # адресом (в нём uid), иначе «клиент просто не дошёл»
+                    # и «клиент сдался нарочно» в логе неразличимы.
+                    logger.warning(
+                        "%s %s: %s — повтора не будет, запрос мог дойти до "
+                        "сервера, а метод неидемпотентен; повтор за оператором",
+                        method.upper(), endpoint, type(exc).__name__,
+                    )
+                    break
                 if attempt < max_retries:
                     delay = self.retry_delay * (2 ** attempt)  # exponential backoff
                     logger.warning(
@@ -189,7 +229,10 @@ class APIClient:
                         ),
                     )
 
-        raise APIError(f"Connection failed after {max_retries + 1} attempts: {last_error}")
+        # Число ФАКТИЧЕСКИХ попыток, а не потолок: после отказа без повтора
+        # «after 4 attempts» было бы неправдой ровно в том сообщении, по
+        # которому потом разбирают инцидент.
+        raise APIError(f"Connection failed after {attempts_made} attempts: {last_error}")
 
     def _request(
         self,

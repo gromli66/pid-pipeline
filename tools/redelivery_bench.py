@@ -18,6 +18,7 @@
 | B | `visibility_timeout` > длительности | ровно 1 | порог заперт с двух сторон: стенд не красит всегда |
 | C | боевой `celery_app`, воркер не нужен | 7200 на КАНАЛЕ и > самого длинного `time_limit` | опция доезжает до kombu, а не лежит в конфиге |
 | D | боевой эндпоинт запуска против ЖИВОГО брокера и против МЁРТВОГО | живой: ровно 1 сообщение в очереди, статус `detecting`, 1 коммит; мёртвый: 503, состояние вернулось, в очереди пусто | пункт 1.13: «коммит статуса до `send_task`» — что отказ реален и что исправный путь не сломан |
+| E | КЛИЕНТСКИЙ POST против сервера, который отвечает позже клиентского таймаута | ровно 1 попадание и 1 сообщение в очереди; при закрытом порте — 4 попытки и 0 сообщений; GET — 4 попадания | пункт 1-19: «повтор POST не дублирует эффект». Боевая связка 60 с у клиента против 64 с у `send_task` сжата в 30 раз |
 
 Нога C красная до правки (канал отдавал 3600) и зелёная после — это и есть зонд
 гейта. Ноги A и B — зонд друг другу; в ноге D зонд друг другу — её две стороны.
@@ -68,13 +69,17 @@ Redis нужен живой, поэтому в CI стенда нет — там
 from __future__ import annotations
 
 import argparse
+import http.server
+import importlib.util
 import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -99,6 +104,16 @@ LEG_A_VT, LEG_A_SLEEP = 5, 150
 LEG_A_ATTEMPTS = 2                               # каждая попытка — свежая фаза скана
 LEG_B_VT, LEG_B_SLEEP = 200, 120
 LEG_TAIL = 25                                    # ожидание сверх длительности задачи
+
+# Нога E. Боевая связка — клиент сдаётся на 60-й секунде, сервер отказывает на
+# 64-й (`docs/STATUS_MACHINE.md §5`, замер §87д). Здесь она сжата в 30 раз с
+# сохранением знака: 2.0 < 5.0. Запас втрое больше боевого (боевой 4 с из 64,
+# то есть 6 %; здесь 3 с из 5) — на загруженной машине клиент обязан сдаться
+# ЗАВЕДОМО раньше сервера, иначе стенд судил бы обстановку, а не код.
+LEG_E_CLIENT_TIMEOUT = 2.0
+LEG_E_SERVER_HOLD = 5.0
+LEG_E_RETRY_DELAY = 0.1                          # backoff здесь не проверяется
+LEG_E_EXPECTED_ATTEMPTS = 4                      # max_retries=3 + первая
 READY_TIMEOUT = 90                               # старт воркера стенда
 
 
@@ -438,6 +453,134 @@ def leg_dispatch_failure() -> dict:
 # Отчёт и приёмка
 # --------------------------------------------------------------------------- #
 
+class _ProbeHandler(http.server.BaseHTTPRequestHandler):
+    """Сервер, который ведёт себя как боевой эндпоинт запуска на мёртвом брокере.
+
+    Каждый вход публикует задачу в пробную очередь (это и есть «эффект»,
+    который повтор может продублировать), потом держит соединение дольше
+    клиентского таймаута и только затем отвечает 503 — ровно порядок боевого
+    пути: коммит статуса и `send_task` идут ДО того, как отказ станет виден.
+    """
+
+    hits: list = []          # заполняется классом, читается снаружи
+    app: Celery | None = None
+    hold = LEG_E_SERVER_HOLD
+
+    def _serve(self, method: str) -> None:
+        type(self).hits.append(method)
+        app = type(self).app
+        if app is not None:
+            app.send_task(TASK_NAME, args=[str(uuid.uuid4())], queue=PROBE_QUEUE)
+        time.sleep(type(self).hold)
+        try:
+            self.send_response(503)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"detail": "broker unavailable"}')
+        except OSError:
+            pass             # клиент уже ушёл по таймауту — это и есть профиль
+
+    def do_POST(self) -> None:      # noqa: N802 — имя диктует BaseHTTPRequestHandler
+        self._serve("POST")
+
+    def do_GET(self) -> None:       # noqa: N802
+        self._serve("GET")
+
+    def log_message(self, fmt, *args):
+        pass                 # свой протокол вывода, стандартный лог не нужен
+
+
+def _load_api_client():
+    """Клиент грузится ПО ФАЙЛУ, а не импортом пакета `ui.services`.
+
+    `ui/services/__init__.py` тянет `status_provider`, а тот — PySide6,
+    которого в контейнере нет вовсе. Путь берётся из `PROBE_API_CLIENT`:
+    ни один контейнер стека не монтирует `ui/` (проверено `docker exec ls`),
+    поэтому в бою ноги файл кладут туда `docker cp`.
+    """
+    raw = os.getenv("PROBE_API_CLIENT") or str(REPO / "ui" / "services" / "api_client.py")
+    path = Path(raw)
+    if not path.exists():
+        return None, "клиента нет по пути {} (положить `docker cp`)".format(path)
+    spec = importlib.util.spec_from_file_location("probe_api_client", path)
+    if spec is None or spec.loader is None:
+        return None, "не читается как модуль: {}".format(path)
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except ImportError as exc:
+        return None, "клиент не импортируется: {}".format(exc)
+    return module, None
+
+
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def _attempts_from(error: Exception) -> int:
+    """Сколько попыток клиент сделал НА САМОМ ДЕЛЕ — из его же сообщения."""
+    found = re.search(r"after (\d+) attempts", str(error))
+    return int(found.group(1)) if found else -1
+
+
+def leg_post_retry() -> dict:
+    """Нога E: повтор POST не дублирует эффект (пункт 1-19).
+
+    Три стороны, и они зонд друг другу: если стенд красит первую, но не видит
+    разницы со второй, он судит не то. Сторона «порт закрыт» держит обратную
+    полярность — полезный повтор «API ещё не поднят» обязан ПЕРЕЖИТЬ правку.
+    """
+    module, why = _load_api_client()
+    if module is None:
+        return {"unknown": why}
+
+    import redis
+
+    try:
+        _flush_probe_db()
+    except redis.exceptions.RedisError as exc:
+        return {"unknown": "живой брокер недоступен: {}".format(exc)}
+
+    app = _build_app()
+    out: dict = {}
+
+    def _one(method: str, serve: bool) -> dict:
+        _flush_probe_db()
+        _ProbeHandler.hits = []
+        _ProbeHandler.app = app
+        port = _free_port()
+        server = None
+        if serve:
+            server = http.server.ThreadingHTTPServer(("127.0.0.1", port), _ProbeHandler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+        client = module.APIClient(base_url="http://127.0.0.1:{}".format(port),
+                                  timeout=LEG_E_CLIENT_TIMEOUT,
+                                  retry_delay=LEG_E_RETRY_DELAY)
+        started = time.monotonic()
+        try:
+            client._request(method, "/api/probe/{}/start".format(uuid.uuid4()))
+            outcome, attempts = "ответ получен", -1
+        except module.APIError as exc:
+            outcome, attempts = "отказ", _attempts_from(exc)
+        finally:
+            client.close()
+            if server is not None:
+                server.shutdown()
+                server.server_close()
+        return {"method": method, "served": serve, "outcome": outcome,
+                "attempts": attempts, "hits": len(_ProbeHandler.hits),
+                "queued": sum(_probe_db_messages().values()),
+                "elapsed": round(time.monotonic() - started, 1)}
+
+    out["post_slow"] = _one("POST", serve=True)
+    out["post_refused"] = _one("POST", serve=False)
+    out["get_slow"] = _one("GET", serve=True)
+    _flush_probe_db()
+    return out
+
+
 def leg_config() -> dict:
     """Нога C: числа боевого конфига. Брокер нужен только для канала."""
     from worker.celery_app import celery_app
@@ -539,6 +682,42 @@ def verdict(legs: dict) -> tuple[int, list[str]]:
             bad += 0 if ok else 1
             lines.append("{} {}".format("OK    " if ok else "ПРОВАЛ", text))
 
+    e = legs.get("E")
+    if e is not None and e.get("unknown"):
+        unknown += 1
+        lines.append("НЕЧЕМ  E: {}".format(e["unknown"]))
+    elif e is not None:
+        slow, refused, get = e["post_slow"], e["post_refused"], e["get_slow"]
+        # ⚠ Ветка «замер негоден» стоит ПЕРВОЙ и общая для всех проверок
+        # (разделительная линия 1-44): вердикты ниже читают в том числе
+        # ОТСУТСТВИЕ сообщений в очереди, а неподнявшийся сервер или немая
+        # публикация дают ровно такое же отсутствие. Сначала доказывается,
+        # что наблюдение вообще могло состояться.
+        if slow["hits"] < 1 or slow["queued"] < 1:
+            unknown += 1
+            lines.append("НЕЧЕМ  E: сервер пробы не принял запрос или публикация "
+                         "не дошла до очереди (попаданий {}, в очереди {}) — "
+                         "судить нечем".format(slow["hits"], slow["queued"]))
+        else:
+            checks_e = (
+                (slow["hits"] == 1 and slow["queued"] == 1,
+                 "E-медленный: POST дошёл {} раз(а), в очереди {} (нужно 1 и 1)".format(
+                     slow["hits"], slow["queued"])),
+                (slow["attempts"] == 1,
+                 "E-медленный: клиент сделал {} попыт(ку/ок) (нужно 1)".format(
+                     slow["attempts"])),
+                (refused["attempts"] == LEG_E_EXPECTED_ATTEMPTS and refused["queued"] == 0,
+                 "E-порт закрыт: попыток {} при {} в очереди (нужно {} и 0) — "
+                 "полезный повтор «API ещё не поднят» обязан жить".format(
+                     refused["attempts"], refused["queued"], LEG_E_EXPECTED_ATTEMPTS)),
+                (get["hits"] == LEG_E_EXPECTED_ATTEMPTS,
+                 "E-GET: идемпотентный метод дошёл {} раз(а) (нужно {})".format(
+                     get["hits"], LEG_E_EXPECTED_ATTEMPTS)),
+            )
+            for ok, text in checks_e:
+                bad += 0 if ok else 1
+                lines.append("{} {}".format("OK    " if ok else "ПРОВАЛ", text))
+
     lines.append("\nнарушений критериев приёмки: {}{}".format(
         bad, " · судить нечем: {}".format(unknown) if unknown else ""))
     return (1 if bad else (2 if unknown else 0)), lines
@@ -547,7 +726,7 @@ def verdict(legs: dict) -> tuple[int, list[str]]:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description="Б10: передоставка задачи брокером (visibility_timeout)")
-    parser.add_argument("--leg", choices=["A", "B", "C", "D"], default=None,
+    parser.add_argument("--leg", choices=["A", "B", "C", "D", "E"], default=None,
                         help="прогнать одну ногу вместо всех")
     parser.add_argument("--pool", default=_default_pool(),
                         help="пул воркера стенда (по умолчанию prefork, на Windows threads)")
@@ -559,7 +738,7 @@ def main(argv=None) -> int:
                         help="вердикт по критериям приёмки, exit 1 при нарушении")
     args = parser.parse_args(argv)
 
-    wanted = [args.leg] if args.leg else ["A", "B", "C", "D"]
+    wanted = [args.leg] if args.leg else ["A", "B", "C", "D", "E"]
     print("брокер стенда: {} · очередь: {} · задача: {}".format(
         probe_broker_url(), PROBE_QUEUE, TASK_NAME))
 
@@ -590,6 +769,22 @@ def main(argv=None) -> int:
                           side, row.get("broker"), row.get("outcome"), row.get("elapsed"),
                           row.get("status"), row.get("error_stage"),
                           row.get("commits"), row.get("queued")))
+
+    if "E" in wanted:
+        print("нога E: клиентский POST против сервера, который отвечает "
+              "позже таймаута ({} с против {} с) — идёт…".format(
+                  LEG_E_CLIENT_TIMEOUT, LEG_E_SERVER_HOLD))
+        legs["E"] = leg_post_retry()
+        e = legs["E"]
+        if e.get("unknown"):
+            print("        {}".format(e["unknown"]))
+        else:
+            for side in ("post_slow", "post_refused", "get_slow"):
+                row = e[side]
+                print("        {:13s} {} -> {}, попыток {}, дошло до сервера {}, "
+                      "в очереди {}; за {} с".format(
+                          side, row["method"], row["outcome"], row["attempts"],
+                          row["hits"], row["queued"], row["elapsed"]))
 
     for leg in ("A", "B"):
         if leg not in wanted:
