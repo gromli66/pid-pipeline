@@ -272,6 +272,20 @@ class GraphBuilder:
 
         # РАЗДЕЛЬНАЯ нумерация equipment и connectors
         labeled_connectors, num_connectors = ndimage.label(updated_connections_mask)
+
+        # Стык, целиком закопанный в маску элемента — ложное срабатывание модели
+        # на кромке символа: он перехватывает контакт трубы, и элемент остаётся
+        # без подключения. Считаем такие компоненты один раз и снимаем с них
+        # приоритет над оборудованием (identify_node_by_point).
+        buried_connectors = set()
+        if num_connectors:
+            outside = ndimage.sum(np.logical_not(equipment_mask), labeled_connectors,
+                                  index=range(1, num_connectors + 1))
+            buried_connectors = {i for i, v in enumerate(np.atleast_1d(outside), start=1)
+                                 if v == 0}
+            if self.verbose and buried_connectors:
+                print(f"  Стыков внутри маски элемента (приоритет снят): "
+                      f"{len(buried_connectors)}")
         
         # Для обратной совместимости создаём unified labeled_nodes
         # (используется в визуализации и некоторых функциях)
@@ -321,6 +335,7 @@ class GraphBuilder:
                 annotations=annotations,
                 max_path_length=self.max_path_length,
                 connector_offset=connector_offset,
+                buried_connectors=buried_connectors,
                 debug=self.debug
             )
         
@@ -381,8 +396,10 @@ class GraphBuilder:
         #  3) пересчёт degree + pass_through.
         from .direction_nodes import (
             annotate_direction_nodes, drop_degenerate_stubs,
-            drop_duplicate_contact_stubs, cap_dangling_ends,
+            drop_duplicate_contact_stubs, split_edges_at_corners,
+            stitch_dangling_into_pipe, cap_dangling_ends,
             collapse_straight_connectors, set_direction_pass_through,
+            flag_connector_clusters,
         )
         if annotations:
             annotate_direction_nodes(nodes, edges, annotations, debug=self.debug)
@@ -394,17 +411,29 @@ class GraphBuilder:
         #     ВАЖНО до cap, иначе cap вешает на эти огрызки лишние connector'ы.
         #  2) cap_dangling_ends — реальный висячий конец трубы → connector на эндпоинт
         #     (перпендикуляр-поворот у бокса повисает снаружи → connector снаружи).
-        #  3) collapse_straight_connectors — универсально схлопнуть проходной connector
+        #  3) split_edges_at_corners — connector в каждый излом трассированного
+        #     пути: ребро без узла на повороте вырождается в хорду.
+        #  4) collapse_straight_connectors — универсально схлопнуть проходной connector
         #     степени 2 на ПРЯМОЙ (рёбра на противоположных сторонах) в одно ребро;
         #     connector'ы на ПОВОРОТЕ и junction'ы (степень ≥3) остаются.
         d_stats = drop_degenerate_stubs(nodes, edges, debug=self.debug)
         # дубль-контактные «огрызки вникуда» (параллельная короткая ветка у того же
         # узла) — убрать ДО cap, иначе станут лишним connector'ом и заблокируют collapse
         dup_stats = drop_duplicate_contact_stubs(nodes, edges, debug=self.debug)
+        # излом трассированного пути → connector: без него ребро вырождается в
+        # хорду через всю схему (замер: отклонение >30 px → оператор удаляет
+        # такое ребро в 71% случаев)
+        bend_stats = split_edges_at_corners(nodes, edges, debug=self.debug)
+        # висячий конец, упёршийся в чужую трубу — это пропущенный тройник:
+        # разрезать трубу и соединить (до cap, пока конец ещё to=None)
+        tee_stats = stitch_dangling_into_pipe(nodes, edges, debug=self.debug)
         c_stats = cap_dangling_ends(nodes, edges, debug=self.debug)
         col_stats = collapse_straight_connectors(nodes, edges, debug=self.debug)
         update_node_degrees(nodes, edges, debug=self.debug)
         set_direction_pass_through(nodes, edges)
+        # кластеры дублей стыков автоматически не чиним (надёжного правила из
+        # текущих артефактов не нашлось) — помечаем, чтобы UI подсветил их
+        flag_connector_clusters(nodes, debug=self.debug)
         s_stats = {"stitched": 0}
         r_stats = {"axis_kept": 0, "through_merged": 0, "perp_capped": 0, "noise_dropped": 0}
         if self.verbose:
@@ -414,7 +443,11 @@ class GraphBuilder:
                 f"{col_stats['collapsed']}; napravlenie: осевых рёбер "
                 f"{r_stats['axis_kept']}, перп-сшито {r_stats['through_merged']}, "
                 f"перп→connector {r_stats['perp_capped']}, огрызков у грани "
-                f"{r_stats['noise_dropped']}, закрыто висячих {c_stats['capped']}"
+                f"{r_stats['noise_dropped']}, закрыто висячих {c_stats['capped']}; "
+                f"изломов → узлов {bend_stats['corners']} "
+                f"(рёбер разрезано {bend_stats['edges_split']}); "
+                f"врезано тройников {tee_stats['stitched']} "
+                f"(крестов пропущено {tee_stats['crossings_skipped']})"
             )
 
         elapsed = time.time() - start_time

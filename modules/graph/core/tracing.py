@@ -39,6 +39,71 @@ def _polygon_centroid(xs, ys):
     else:
         return int(sum(xs) / n), int(sum(ys) / n)
 
+# Кусок скелета короче — шум скелетизации, а не труба.
+MIN_LEFTOVER_LENGTH = 20
+
+# Ветка после развилки, упёршаяся в тупик на такой длине — шпора скелетизации:
+# от неё откатываемся, как раньше. Длиннее — настоящая труба со свободным
+# концом, её откат сжёг бы навсегда.
+SPUR_LENGTH = 20
+
+_WALK_ORDER = ((0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1))
+
+
+def _leftover_fragments(skeleton: np.ndarray, visited: np.ndarray,
+                        min_length: int) -> List[List[Tuple[int, int]]]:
+    """Куски скелета, которых трассировка не коснулась, → отдельные пути."""
+    left = skeleton & ~visited
+    if not left.any():
+        return []
+    labels, _ = ndimage.label(left, structure=np.ones((3, 3), dtype=np.uint8))
+    fragments: List[List[Tuple[int, int]]] = []
+    for label_id, sl in enumerate(ndimage.find_objects(labels), start=1):
+        if sl is None:
+            continue
+        ys, xs = np.where(labels[sl] == label_id)
+        if len(ys) < min_length:
+            continue
+        y0, x0 = sl[0].start, sl[1].start
+        pixels = {(int(y) + y0, int(x) + x0) for y, x in zip(ys, xs)}
+        while pixels:
+            # старт — пиксель с наименьшим числом соседей, то есть конец ветки
+            start = min(pixels, key=lambda p: sum(
+                (p[0] + dy, p[1] + dx) in pixels for dy, dx in _WALK_ORDER))
+            path = [start]
+            pixels.discard(start)
+            current = start
+            while True:
+                nxt = next(((current[0] + dy, current[1] + dx)
+                            for dy, dx in _WALK_ORDER
+                            if (current[0] + dy, current[1] + dx) in pixels), None)
+                if nxt is None:
+                    break
+                pixels.discard(nxt)
+                path.append(nxt)
+                current = nxt
+            if len(path) >= min_length:
+                fragments.append(path)
+    return fragments
+
+
+def _node_at_end(point, contact_map: np.ndarray, get_or_create_node,
+                 shape) -> Optional[str]:
+    """Узел у конца подобранного куска: сам пиксель и его 8 соседей."""
+    height, width = shape
+    y, x = point
+    for dy in (0, -1, 1):
+        for dx in (0, -1, 1):
+            ny, nx = y + dy, x + dx
+            if not (0 <= ny < height and 0 <= nx < width):
+                continue
+            if contact_map[ny, nx] > 0:
+                node_id = get_or_create_node(ny, nx)
+                if node_id is not None:
+                    return node_id
+    return None
+
+
 def trace_edges_v3(skeleton: np.ndarray,
                    labeled_equipment: np.ndarray,
                    labeled_connectors: np.ndarray,
@@ -50,6 +115,7 @@ def trace_edges_v3(skeleton: np.ndarray,
                    annotations: List[Dict],
                    max_path_length: int = 10000,
                    connector_offset: int = 0,
+                   buried_connectors: set = None,
                    debug: bool = False) -> Tuple[List[Dict], List[Dict]]:
     """
     Трассировка всех рёбер графа с динамическим созданием узлов.
@@ -66,6 +132,8 @@ def trace_edges_v3(skeleton: np.ndarray,
         annotations: Список COCO аннотаций (bbox + segmentation)
         max_path_length: Максимальная длина пути
         connector_offset: Сдвиг label_id для connectors (= num_equipment)
+        buried_connectors: label_id стыков, целиком лежащих внутри маски
+            оборудования — такой стык не перехватывает контакт у элемента
         debug: Выводить отладочную информацию
 
     Returns:
@@ -93,7 +161,8 @@ def trace_edges_v3(skeleton: np.ndarray,
             connection_mask=connection_mask,
             annotations=annotations,
             labeled_equipment=labeled_equipment,
-            labeled_connectors=labeled_connectors
+            labeled_connectors=labeled_connectors,
+            buried_connectors=buried_connectors
         )
         
         if node_info is None:
@@ -215,6 +284,32 @@ def trace_edges_v3(skeleton: np.ndarray,
 
     if debug:
         print(f"Трассировка завершена. Найдено рёбер: {len(edges)}, узлов: {len(node_registry)}")
+
+    # ===== ВТОРОЙ ПРОХОД: скелет, до которого трассировка не дошла =====
+    # Трассировка стартует только с контактных точек, поэтому кусок трубы, у
+    # которого ни на одном конце нет узла (или единственный сосед — excluded
+    # класс: текст, стрелка), не попадает в граф вообще. Замер по 11 схемам: так
+    # терялось от 2.5% до 52% скелета вне масок узлов. Концы, оставшиеся без
+    # узла, закроет cap_dangling_ends.
+    for fragment in _leftover_fragments(skeleton, visited, MIN_LEFTOVER_LENGTH):
+        for py, px in fragment:
+            visited[py, px] = True
+        from_id = _node_at_end(fragment[0], contact_map, get_or_create_node, skeleton.shape)
+        to_id = _node_at_end(fragment[-1], contact_map, get_or_create_node, skeleton.shape)
+        edges.append({
+            'id': f'edge_{edge_counter}',
+            'from': from_id,
+            'to': to_id,
+            'source_point': [fragment[0][0], fragment[0][1]],
+            'target_point': [fragment[-1][0], fragment[-1][1]],
+            'path': fragment,
+            'length': len(fragment),
+            'is_terminal': to_id is None,
+            'color': None,
+        })
+        edge_counter += 1
+        if debug:
+            print(f"  ➕ Подобран кусок трубы {len(fragment)} px: {from_id} → {to_id}")
 
     # ===== ДОБАВЛЕНИЕ НЕДОСТАЮЩИХ COCO УЗЛОВ =====
     # Собираем ann_idx которые уже в графе
@@ -422,9 +517,10 @@ def trace_single_edge_v3(start_node_id: str,
     Трассировка одного ребра от стартовой точки (v3) с откатом к развилкам.
 
     ИЗМЕНЕНИЯ:
-    - При попадании в тупик откатывается к последней развилке
-    - Если путь ведёт к excluded узлу (get_or_create_node returns None) — считается тупиком
-    - Пробует альтернативные направления пока не найдёт валидный узел
+    - Путь в excluded узел (get_or_create_node вернул None) — тупик: откат к
+      последней развилке и другое направление
+    - Свободный конец трубы (соседей нет) — НЕ тупик: возвращаем терминальное
+      ребро сразу; откат тут сжёг бы пройденную настоящую трубу
     """
     height, width = skeleton.shape
 
@@ -589,17 +685,21 @@ def trace_single_edge_v3(start_node_id: str,
                 continue
             valid_neighbors.append((ny, nx))
 
-        # Тупик — нет валидных соседей
+        # Тупик. Короткая ветка после развилки — шпора скелетизации, от неё
+        # откатываемся и пробуем другое направление (иначе развилка теряет
+        # настоящее продолжение). Длинная ветка — законный свободный конец
+        # трубы: откат пометил бы её visited навсегда и труба пропала бы из
+        # графа (замер по 11 схемам: так терялось 2.5–17% скелета, на одной —
+        # 52%, куском в 10209 px).
         if len(valid_neighbors) == 0:
-            if debug:
-                print(f"  ⊥ Тупик в {current}, длина пути {len(path)}")
-
-            # Пробуем откат к развилке
-            if try_rollback_to_fork():
+            spur = len(path) - 1 - fork_stack[-1][1] if fork_stack else len(path)
+            if spur <= SPUR_LENGTH and try_rollback_to_fork():
                 continue
 
-            # Нет развилок — это terminal edge
-            # Помечаем путь как visited
+            if debug:
+                print(f"  ⊥ Свободный конец в {current}, длина пути {len(path)}")
+
+            # Терминальное ребро: путь пройден, помечаем его visited
             for py, px in path:
                 visited[py, px] = True
 
