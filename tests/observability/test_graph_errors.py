@@ -66,10 +66,13 @@ def _zeros():
 
 
 def _fake_scipy(monkeypatch):
-    """scipy.ndimage.label → (labeled, num); инжект только на время теста."""
+    """scipy.ndimage.{label, sum} → минимум для build(); инжект только на время теста."""
     scipy = types.ModuleType("scipy")
     ndimage = types.ModuleType("scipy.ndimage")
     ndimage.label = lambda arr, *a, **k: (np.zeros(np.asarray(arr).shape, dtype=int), 1)
+    # buried_connectors (П4): суммы по меткам, семантика scipy.ndimage.sum
+    ndimage.sum = lambda arr, labels=None, index=(), **k: np.array(
+        [np.asarray(arr)[np.asarray(labels) == i].sum() for i in index])
     scipy.ndimage = ndimage
     monkeypatch.setitem(sys.modules, "scipy", scipy)
     monkeypatch.setitem(sys.modules, "scipy.ndimage", ndimage)
