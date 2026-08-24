@@ -1258,6 +1258,7 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
             self.status_label.setText("Сохранение отменено")
             return False
 
+        lifted_preview = None
         try:
             QApplication.setOverrideCursor(Qt.WaitCursor)
 
@@ -1265,7 +1266,19 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
             # идёт мимо стека команд, флаг его не видит, а оператор не
             # подтверждал (1.5). Без снятия сервер расходился с моделью —
             # превью уезжало заливкой, а выход из режима откатывал его в модели.
-            self._editor.drop_uncommitted_preview()
+            #
+            # ⛔ Но снять превью НАСОВСЕМ может только ЖЕСТ. Тик таймера жестом
+            # не является (1-38), а путь записи у него общий с кнопкой: раз
+            # в 120 с фоновый тик заходил сюда и стирал размер, который оператор
+            # в эту минуту подбирал бегунком, — без единого его действия и без
+            # следа в стеке (§83.32). Поэтому по таймеру превью снимается только
+            # НА ВРЕМЯ записи и возвращается в `finally`. Инвариант 1.5 при этом
+            # не ослаблен ни на шаг: серверу и там, и там достаётся ровно
+            # зафиксированное состояние.
+            if self._save_interactive:
+                self._editor.drop_uncommitted_preview()
+            else:
+                lifted_preview = self._editor.take_uncommitted_preview()
 
             # Холст пишется в свой артефакт: graph_validated принадлежит вкладкам
             # в оригинальных координатах и затирать его 1920-графом нельзя.
@@ -1296,6 +1309,9 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
             return False
         finally:
             QApplication.restoreOverrideCursor()
+            # Превью, снятое ради записи по таймеру, — обратно на холст
+            # (в `finally`: отказ записи не должен стоить оператору работы).
+            self._editor.restore_uncommitted_preview(lifted_preview)
 
     @Slot()
     def _on_confirm(self):

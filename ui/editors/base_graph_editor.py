@@ -306,6 +306,26 @@ class BaseGraphEditor(QGraphicsView):
         """
         return
 
+    def take_uncommitted_preview(self):
+        """Снять живое превью НА ВРЕМЯ записи и вернуть жетон для возврата.
+
+        Отличает ЖЕСТ оператора от тика таймера, не ослабляя инвариант 1.5:
+        серверу в обоих случаях достаётся только зафиксированное, но по жесту
+        превью снимается насовсем, а по таймеру — возвращается на холст сразу
+        после записи (`restore_uncommitted_preview`). Иначе фоновый тик раз
+        в 120 с стирал размер, который оператор в эту минуту подбирал бегунком
+        (§83.32, родня 1-38). База превью не держит — переопределяет `Advanced`.
+        """
+        self.drop_uncommitted_preview()
+        return None
+
+    def restore_uncommitted_preview(self, token) -> None:
+        """Вернуть на холст превью, снятое `take_uncommitted_preview`.
+
+        `None` — возвращать нечего (превью не было либо редактор его не держит).
+        """
+        return
+
     def save_graph(self, path: str = "") -> bool:
         """Сохранить граф в JSON."""
         if not path:

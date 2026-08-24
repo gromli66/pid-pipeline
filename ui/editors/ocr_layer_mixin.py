@@ -867,6 +867,15 @@ class OcrLayerMixin:
 
         on_resize пишет новый bbox прямо в blk['bbox'] (только model.text_blocks),
         живо перерисовывая блок. Коммит под Undo — на release (_ocr_resize_commit).
+
+        ⛔ Точка возврата снимается НА ПЕРВОМ КАДРЕ ПРОТЯЖКИ, а не здесь.
+        Ручки — резидентное состояние: они переживают смену инструмента и живут
+        сколько угодно долго (снимает их только выход из «ОКР привязка», Esc,
+        удаление блока или клик по пустому месту). Снимок, взятый при ПОКАЗЕ,
+        успевал вобрать в себя чужую подтверждённую команду — удаление блока,
+        правку текста, привязку, — и один Ctrl+Z по размеру блока откатывал
+        ЕЁ, а не размер (§83.30). Между первым кадром протяжки и отпусканием
+        такого окна нет: оператор держит кнопку мыши.
         """
         from ui.editors.resize_overlay import ResizableNodeOverlay
         blk = self.model.find_text_block(bid)
@@ -877,11 +886,14 @@ class OcrLayerMixin:
             return
         self._hide_ocr_block_resize()
         self._ocr_resize_block_id = bid
-        self._ocr_resize_cmd = self._ocr_push_snapshot("Размер блока")
+        self._ocr_resize_cmd = None
 
         def _on_resize(new_bbox, _bid=bid):
             b = self.model.find_text_block(_bid)
             if b is not None:
+                # Снимок — ДО первой мутации модели этой протяжкой.
+                if self._ocr_resize_cmd is None:
+                    self._ocr_resize_cmd = self._ocr_push_snapshot("Размер блока")
                 b["bbox"] = [float(v) for v in new_bbox]
                 self._redraw_single_ocr_block(_bid)
                 # Привязанный блок «приклеен» к стороне цели: производная
@@ -904,15 +916,18 @@ class OcrLayerMixin:
         )
 
     def _ocr_resize_commit(self):
-        """Финализировать одно перетаскивание ручки блока (шаг undo)."""
+        """Финализировать одно перетаскивание ручки блока (шаг undo).
+
+        Нового снимка «на случай продолжения» здесь больше нет: следующая
+        протяжка возьмёт свой на первом же кадре (`_show_ocr_block_resize`).
+        Прежний задел и был тем открытым снимком, который переживал смену
+        инструмента и уносил в себя чужую команду (§83.30).
+        """
         cmd = getattr(self, "_ocr_resize_cmd", None)
         if cmd is not None:
             self._ocr_commit(cmd)
             self._ocr_resize_cmd = None
         self.refresh_ocr_layer()
-        # Начать новый снимок на случай продолжения перетаскивания той же рамки.
-        if self._ocr_resize_overlay is not None and self._ocr_resize_block_id is not None:
-            self._ocr_resize_cmd = self._ocr_push_snapshot("Размер блока")
 
     def _hide_ocr_block_resize(self):
         """Скрыть ручки изменения размера текст-блока (если есть)."""
