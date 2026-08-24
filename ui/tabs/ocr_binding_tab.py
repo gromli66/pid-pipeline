@@ -35,6 +35,7 @@ from ui.services.artifact_downloader import (
     ArtifactDownloader, Job, artifact, endpoint, one,
 )
 from ui.services.recognize_worker import RecognizeWorker
+from ui.services.thread_lifetime import hand_over
 from ui.editors.ocr_binding_editor import OcrBindingEditor
 from ui.widgets.toolbar_buttons import (
     make_undo_button, make_save_button, make_confirm_button,
@@ -467,6 +468,13 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
         # в кончившемся потоке — тот же шов, что у загрузчика.
         self._recog_worker.finished.connect(self._recog_worker.deleteLater)
         self._recog_worker.error.connect(self._recog_worker.deleteLater)
+        # ⛔ И, наконец, поток обязан КОНЧИТЬСЯ раньше, чем процесс начнёт
+        # разрушать объекты (пункт 1-50, замер §127): гашение выше
+        # срабатывает только когда работник ДОРАБОТАЛ, а на молчащем
+        # сервере он не дорабатывает вовсе — уход из вкладки давал тогда
+        # 4 краха процесса из 4 (`0xC0000409`).
+        hand_over(self, self._recog_thread, self._recog_worker,
+                  name="распознавание привязки OCR", uid=self.uid)
         self._recog_thread.start()
 
     def _cleanup_recog_thread(self):
@@ -678,6 +686,13 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
         self._downloader.finished.connect(self._downloader.deleteLater)
         self._downloader.error.connect(self._downloader.deleteLater)
 
+        # ⛔ И, наконец, поток обязан КОНЧИТЬСЯ раньше, чем процесс начнёт
+        # разрушать объекты (пункт 1-50, замер §127): гашение выше
+        # срабатывает только когда работник ДОРАБОТАЛ, а на молчащем
+        # сервере он не дорабатывает вовсе — уход из вкладки давал тогда
+        # 4 краха процесса из 4 (`0xC0000409`).
+        hand_over(self, self._download_thread, self._downloader,
+                  name="загрузка привязки OCR", uid=self.uid)
         self._download_thread.start()
 
     @Slot(str)

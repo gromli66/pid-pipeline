@@ -41,6 +41,7 @@ follow_imports = "silent"          # соседний нетипизирован
 files = [
     "modules/graph/core/contours_merge.py",
     "ui/services/artifact_downloader.py",
+    "ui/services/thread_lifetime.py",
     "ui/services/client_logging.py",
     "ui/services/recognize_worker.py",
     "tools/corpus.py",

@@ -27,6 +27,7 @@ import time
 from PySide6.QtCore import Slot, Qt, QThread, Signal
 
 from ui.services.api_client import APIClient, APIError
+from ui.services.thread_lifetime import hand_over
 from ui.editors.base_graph_editor import BaseGraphEditor
 from ui.editors.contour_editor import ContourEditor
 from ui.tabs.base_graph_tab import BaseGraphTab
@@ -292,6 +293,12 @@ class ContourTab(BaseGraphTab):
         # брошенный воркер опрашивает сервер ещё до 600 с, а процесс падает
         # на его разрушении (пункт 1.x17, замер §102ж).
         self.destroyed.connect(self._recog_worker.stop)
+        # ⛔ Связь `destroyed` выше ПРОСИТ поток остановиться, но конца
+        # его не ждёт никто — а процесс, дошедший до выхода с бегущим
+        # `QThread`, падает на его разрушении (пункт 1-50, замер §127).
+        # Здесь поток и работник — один объект: он же и умеет `stop()`.
+        hand_over(self, self._recog_worker, self._recog_worker,
+                  name="распознавание контуров", uid=self.uid)
         self._recog_worker.start()
 
     def _stop_recog_worker(self):

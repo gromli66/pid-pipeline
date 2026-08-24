@@ -21,10 +21,13 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 import time
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
+
+from ui.services.thread_lifetime import Stopped
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +117,18 @@ class PrtxWorker(QObject):
         self.uid = uid
         #: путь, куда оператор сохранил .fxml — рядом ляжет .prtx (или None)
         self.export_path = export_path
+        #: Просьба остановиться — от `ui/services/thread_lifetime.py`
+        #: (пункт 1-50). Дожидаться конца этой сборки клиенту нельзя: она идёт
+        #: до `BUILD_WAIT_SEC`, то есть до пятнадцати минут. Поэтому ожидание
+        #: между опросами ПРЕРЫВАЕМОЕ, и на закрытии клиента поток уходит не
+        #: позже, чем через `POLL_SEC`. Сама сборка на сервере при этом не
+        #: прекращается — она и не должна: артефакт ляжет туда же, оператор
+        #: заберёт его следующим заходом.
+        self._stop = threading.Event()
+
+    def stop(self):
+        """Прекратить ОПРОС сборки (сервер продолжает считать сам)."""
+        self._stop.set()
 
     def _wait_for_build(self):
         """Дождаться конца фоновой сборки короткими опросами.
@@ -124,7 +139,8 @@ class PrtxWorker(QObject):
         """
         deadline = time.monotonic() + BUILD_WAIT_SEC
         while time.monotonic() < deadline:
-            time.sleep(POLL_SEC)
+            if self._stop.wait(POLL_SEC):
+                raise Stopped("опрос сборки прекращён — клиент закрывается")
             state = self.api_client.prtx_status(self.uid)
             kind = state.get("state")
             if kind == "done":
@@ -158,6 +174,14 @@ class PrtxWorker(QObject):
 
             self.finished.emit(" и ".join(where))
 
+        except Stopped as exc:
+            # Ни `finished`, ни `error`: получателя этих сигналов уже нет —
+            # владельца разрушили, а поток обязан просто уйти (пункт 1-50).
+            logger.info("PRTX: %s (uid=%s)", exc, self.uid[:8])
+            # ⛔ Но унести СЕБЯ работник обязан всё равно, и сам, в СВОЁМ
+            # потоке (инвариант 1-46, замер §119а): без сигналов связи
+            # `finished`/`error` → `deleteLater` не срабатывают.
+            self.deleteLater()
         except PrtxError as exc:
             self.error.emit(str(exc))
         except Exception as exc:  # noqa: BLE001 — сеть/диск, в UI уходит текст

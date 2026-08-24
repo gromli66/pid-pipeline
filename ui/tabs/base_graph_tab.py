@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Signal, Slot, Qt, QThread
 
 from ui.services.api_client import APIClient, APIError
+from ui.services.thread_lifetime import hand_over
 from ui.services.artifact_downloader import (
     ArtifactDownloader, Job, artifact, one,
 )
@@ -886,6 +887,13 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
         # объекта в кончившемся потоке не доставляется вовсе (замер §119б).
         self._downloader.finished.connect(self._downloader.deleteLater)
         self._downloader.error.connect(self._downloader.deleteLater)
+        # ⛔ И, наконец, поток обязан КОНЧИТЬСЯ раньше, чем процесс начнёт
+        # разрушать объекты (пункт 1-50, замер §127): гашение выше
+        # срабатывает только когда работник ДОРАБОТАЛ, а на молчащем
+        # сервере он не дорабатывает вовсе — уход из вкладки давал тогда
+        # 4 краха процесса из 4 (`0xC0000409`).
+        hand_over(self, self._download_thread, self._downloader,
+                  name="загрузка графовой вкладки", uid=self.uid)
         self._download_thread.start()
 
     @Slot(str)
