@@ -71,21 +71,40 @@ elif [ ! -f "$KEY" ]; then
     echo "  ПРОПУЩЕНО: нет файла ключа ($KEY)"
     echo "  Скопируйте ключ и повторите: bash tools/deploy_check.sh ~/lic_key.bin"
 else
-    echo "  считаю (движок берёт десятки секунд)..."
+    # Сборку ждём ОПРОСОМ: /prtx/build отвечает 202 сразу и считает в фоне
+    # (движок берёт десятки секунд, держать соединение всё это время нельзя —
+    # промежуточные узлы рвут его по бездействию).
+    echo "  ставлю задание..."
     t0=$(date +%s)
-    code=$(curl -s -m 960 -o /tmp/prtx_build.json -w '%{http_code}' \
+    code=$(curl -s -m 60 -o /tmp/prtx_build.json -w '%{http_code}' \
            -F "license=@$KEY" "$API/api/graph/$uid/prtx/build")
-    echo "  HTTP $code за $(( $(date +%s) - t0 )) с: $(head -c 300 /tmp/prtx_build.json)"
-    if [ "$code" = "200" ]; then
-        good "схема собрана на сервере"
-        dl=$(curl -s -m 60 -o /tmp/prtx_dl.prtx -w '%{http_code}' \
-             "$API/api/diagrams/$uid/download/prtx")
-        sz=$(stat -c%s /tmp/prtx_dl.prtx 2>/dev/null || echo 0)
-        echo "  скачивание артефакта: HTTP $dl, $sz байт"
-        { [ "$dl" = "200" ] && [ "$sz" -gt 10000 ]; } \
-            && good "артефакт скачивается" || bad "артефакт не скачался"
+    echo "  HTTP $code: $(head -c 300 /tmp/prtx_build.json)"
+    if [ "$code" != "202" ]; then
+        bad "задание не поставлено (ждали HTTP 202)"
     else
-        bad "сборка не прошла"
+        state=timeout
+        st=""
+        for _ in $(seq 1 300); do        # 300 x 3 c = 15 мин, как у клиента
+            sleep 3
+            st=$(curl -s -m 15 "$API/api/graph/$uid/prtx/status")
+            case "$st" in
+                *'"state":"done"'*)  state=done;  break ;;
+                *'"state":"error"'*) state=error; break ;;
+                *'"state":"idle"'*)  state=idle;  break ;;
+            esac
+        done
+        echo "  сборка: $state за $(( $(date +%s) - t0 )) с: $(printf '%s' "$st" | head -c 300)"
+        if [ "$state" = "done" ]; then
+            good "схема собрана на сервере"
+            dl=$(curl -s -m 60 -o /tmp/prtx_dl.prtx -w '%{http_code}' \
+                 "$API/api/diagrams/$uid/download/prtx")
+            sz=$(stat -c%s /tmp/prtx_dl.prtx 2>/dev/null || echo 0)
+            echo "  скачивание артефакта: HTTP $dl, $sz байт"
+            { [ "$dl" = "200" ] && [ "$sz" -gt 10000 ]; } \
+                && good "артефакт скачивается" || bad "артефакт не скачался"
+        else
+            bad "сборка не прошла ($state)"
+        fi
     fi
     rm -f /tmp/prtx_build.json /tmp/prtx_dl.prtx
 fi

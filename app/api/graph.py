@@ -425,9 +425,31 @@ async def _prtx_job(uid: UUID, payload: dict):
 
 
 @router.get("/{uid}/prtx/status")
-async def prtx_status(uid: UUID):
-    """Чем закончилась фоновая сборка. Клиент опрашивает это короткими запросами."""
-    return _PRTX_JOBS.get(str(uid), {"state": "idle"})
+async def prtx_status(uid: UUID, db: AsyncSession = Depends(get_async_db)):
+    """Чем закончилась фоновая сборка. Клиент опрашивает это короткими запросами.
+
+    `state` — ход ТЕКУЩЕЙ сборки; он живёт в памяти процесса и после рестарта
+    api теряется. `artifact_ready` отвечает на другой вопрос — «лежит ли на
+    сервере готовый .prtx». По нему диалог экспорта решает, есть ли что качать,
+    и переживает рестарт api; ждущему сборку клиенту он не указ (свежесть файла
+    он не доказывает — см. _wait_for_build).
+    """
+    from app.config import settings
+
+    result = await db.execute(
+        select(Artifact).where(
+            Artifact.diagram_uid == uid,
+            Artifact.artifact_type == ArtifactType.PRTX,
+        )
+    )
+    artifact = result.scalar_one_or_none()
+    ready = artifact is not None and (
+        Path(settings.STORAGE_PATH) / artifact.file_path).is_file()
+
+    state = dict(_PRTX_JOBS.get(str(uid), {"state": "idle"}))
+    state["artifact_ready"] = ready
+    state["artifact_size"] = artifact.file_size if ready else None
+    return state
 
 
 @router.post("/{uid}/prtx/build", status_code=202)

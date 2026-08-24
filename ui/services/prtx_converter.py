@@ -79,7 +79,7 @@ def read_license_key() -> bytes:
 _DRAWING_SUFFIXES = (".fxml", ".xml")
 
 
-def _prtx_target(path) -> Path:
+def prtx_target(path) -> Path:
     """Путь для .prtx рядом с выбранным файлом.
 
     ⚠ Не `with_suffix`: у диаграмм имена вида «1. Схема отборов … турбины 1»,
@@ -147,7 +147,7 @@ class PrtxWorker(QObject):
             where = ["на сервере"]
 
             if self.export_path:
-                target = _prtx_target(self.export_path)
+                target = prtx_target(self.export_path)
                 tmp = Path(tempfile.mkdtemp(prefix="prtx_"))
                 try:
                     self.api_client.download_artifact(self.uid, "prtx", tmp / "diagram.prtx")
