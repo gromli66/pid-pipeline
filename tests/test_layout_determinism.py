@@ -773,3 +773,36 @@ def test_unreadable_corpus_file_is_unjudgeable_not_a_traceback(
     out = capsys.readouterr().out
     assert match in out
     assert out.strip().endswith(det.MARK_UNJUDGED_OTHER)
+
+
+# ───── ошибка ВЫЗОВА — третий класс, не «опровергнуто» (пункт 1-45) ─────
+
+@pytest.mark.parametrize("argv,match", [
+    (["--check", "--runs", "1"], "меньше двух"),
+    (["--check", "--uid", "deadbeef"], "нет в корпусе"),
+])
+def test_a_bad_argument_is_a_call_error_not_a_refutation(monkeypatch, capsys,
+                                                         argv, match):
+    """⛔ Хвост полярности, найденный зондом 1-44 и не входивший в его зону.
+
+    Обе ветки печатали строку и отдавали **1** — код «опровергнуто», то есть
+    «раскладка сломалась». Замер не начинался вовсе: аргументы разобраны
+    неверно, сравнивать нечего. Это третий класс после «замер негоден»
+    и «регресс», и у остальных четырёх стендов он уже даёт **2** — их
+    ошибки вызова идут через `argparse` (замер §120: неизвестный ключ →
+    2 у всех пяти, включая этот стенд). Две ветки, написанные руками,
+    из этого правила выпадали.
+
+    Проверяется КОД, а не текст: единица здесь и есть дефект.
+    """
+    monkeypatch.setattr(det.corpus, "corpus_paths",
+                        lambda include_storage=True: {"aaaaaaaa": "x"})
+    monkeypatch.setattr(det, "measure", lambda *a: pytest.fail(
+        "замер начался, хотя аргументы разобраны неверно"))
+    monkeypatch.setattr(sys, "argv", ["layout_determinism.py", *argv])
+
+    with pytest.raises(SystemExit) as exc:
+        det.main()
+
+    assert exc.value.code == 2, "ошибка вызова прочтётся как «регресс раскладки»"
+    assert match in capsys.readouterr().err

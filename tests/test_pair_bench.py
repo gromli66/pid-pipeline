@@ -232,62 +232,140 @@ def _rows(added=0):
                                  "removed": 0, "moved": 0, "retyped": 0}}}
 
 
+def _inputs(mark="вход-1"):
+    """Отпечатки входа тех же ключей, что и у `_rows()` (пункт 1-45).
+
+    Число абсолютное, из проверяемого поля не считается: тест не должен
+    оставаться зелёным при любом значении отпечатка.
+    """
+    return {"u1": {"detection": mark}}
+
+
+def _base(rows, inputs=None):
+    """Эталон нынешнего вида: числа И данные, на которых они сняты.
+
+    По умолчанию отпечаток совпадает с `_inputs()` — «вход тот же», ровно то
+    условие, при котором стенд и до 1-45 судил о коде. Подмена входа
+    разбирается отдельными тестами ниже, и отпечаток там задаётся явно.
+    """
+    return {"rows": rows, "inputs": _inputs() if inputs is None else inputs}
+
+
 def test_check_is_green_when_nothing_grew():
-    code, lines = pair_bench.verdict(_rows(2), _rows(2))
+    code, lines = pair_bench.verdict(_rows(2), _base(_rows(2)), _inputs())
 
     assert code == 0
     assert "рост правок: 0" in lines[-1]
 
 
 def test_check_fails_when_operator_had_to_edit_more():
-    code, lines = pair_bench.verdict(_rows(3), _rows(2))
+    code, lines = pair_bench.verdict(_rows(3), _base(_rows(2)), _inputs())
 
     assert code == 1
     assert any("ХУЖЕ" in line and "added 2 -> 3" in line for line in lines)
 
 
 def test_paying_the_debt_is_printed_but_does_not_fail():
-    code, lines = pair_bench.verdict(_rows(1), _rows(2))
+    code, lines = pair_bench.verdict(_rows(1), _base(_rows(2)), _inputs())
 
     assert code == 0
     assert any("лучше" in line for line in lines)
 
 
-def test_disappeared_pair_is_a_failure_not_a_skip():
-    code, lines = pair_bench.verdict({"u1": {}}, _rows(2))
+# ───── вердикт о коде не собирается из ненаблюдений (пункт 1-45) ─────
+
+def test_disappeared_pair_is_unjudgeable_not_a_regression():
+    """⛔ Замер §109: стенд отдал 1 «рост правок: 1» при НУЛЕ строк «ХУЖЕ».
+
+    Весь счётчик был занят пропавшей парой (`8d14cf73/layout`), то есть
+    вердикт о коде собрался из ОТСУТСТВИЯ наблюдения — класс, который 1-44
+    закрыл у `suite_baseline` и `lint_gate` (`PROTOCOL §Гейты`). Проверяется
+    и итоговая строка: словом «рост» она называла то, чего не было.
+    """
+    code, lines = pair_bench.verdict({"u1": {}}, _base(_rows(2)), {"u1": {}})
+
+    assert code == 2
+    assert any("НЕ ИЗМЕРЕНА" in line and "u1/detection" in line for line in lines)
+    assert any("рост правок: 0" in line for line in lines), "рост назван без роста"
+
+
+def test_growth_is_not_muffled_by_a_pair_without_a_verdict():
+    """Доказанный рост сильнее неполноты (1-25): иначе хватило бы стереть
+    один артефакт, чтобы стенд замолчал обо всех."""
+    rows = {"u1": _rows(3)["u1"], "u2": {}}
+    base = _base({"u1": _rows(2)["u1"], "u2": _rows(0)["u1"]},
+                 {"u1": {"detection": "вход-1"}, "u2": {"detection": "вход-2"}})
+
+    code, lines = pair_bench.verdict(rows, base, _inputs())
 
     assert code == 1
-    assert any("ПРОПАЛА" in line for line in lines)
+    assert any("ХУЖЕ" in line for line in lines)
+    assert any("НЕ ИЗМЕРЕНА" in line for line in lines)
+
+
+def test_changed_input_is_unjudgeable_not_a_regression():
+    """Корпус в `storage/` живой: запуск конвейера переписывает артефакты под
+    тем же uid, и разница «эталон 18.08 против файлов 19.08» читалась как
+    рост правок оператора. Это дрейф ДАННЫХ, а не регресс модели."""
+    code, lines = pair_bench.verdict(_rows(3), _base(_rows(2)),
+                                     _inputs("вход-ДРУГОЙ"))
+
+    assert code == 2
+    assert any("ВХОД НЕ ТОТ" in line for line in lines)
+    assert not any("ХУЖЕ" in line for line in lines)
+
+
+def test_baseline_without_fingerprints_cannot_judge():
+    """Плоский эталон до 1-45: он не может назвать данные, о которых судит.
+
+    Тот же ответ, что у ПР1 и «Ручной правки» на эталон без `inputs`
+    (`TESTING §8.2`): «судить нечем» до первого пересъёма, даже если числа
+    выросли, — потому что неизвестно, о тех ли они артефактах.
+    """
+    code, lines = pair_bench.verdict(_rows(3), {"rows": _rows(2), "inputs": {}},
+                                     _inputs())
+
+    assert code == 2
+    assert any("не помнит отпечатков входа" in line for line in lines)
 
 
 def test_empty_measurement_cannot_be_green():
     """Чистый клон: данных корпуса нет — судить нечем, а не «всё хорошо»."""
-    assert pair_bench.verdict({}, _rows(2))[0] == 2
+    assert pair_bench.verdict({}, _base(_rows(2)), {})[0] == 2
 
 
 def test_empty_baseline_cannot_be_green():
-    assert pair_bench.verdict(_rows(2), {})[0] == 2
+    assert pair_bench.verdict(_rows(2), _base({}), _inputs())[0] == 2
 
 
 def test_no_common_uids_cannot_be_green():
-    assert pair_bench.verdict({"other": {}}, _rows(2))[0] == 2
+    assert pair_bench.verdict({"other": {}}, _base(_rows(2)), {})[0] == 2
 
 
 def test_unknown_uid_is_skipped_not_judged():
     rows = dict(_rows(2))
     rows["new_uid"] = {"detection": {"added": 999}}
 
-    code, lines = pair_bench.verdict(rows, _rows(2))
+    code, lines = pair_bench.verdict(rows, _base(_rows(2)), _inputs())
 
     assert code == 0
     assert any("новое" in line and "new_uid" in line for line in lines)
 
 
-def test_missing_diagram_is_reported_and_skipped():
-    code, lines = pair_bench.verdict({"u1": {}, }, {"u1": {}, "u2": _rows()["u1"]})
+def test_missing_diagram_is_unjudgeable_too():
+    """⛔ Асимметрия одного стенда, названная в 1-45: пропала ВСЯ диаграмма —
+    exit 0 «пропуск», пропала ОДНА пара — exit 1 «регресс». Обе пропажи это
+    одно и то же отсутствие наблюдения, и зелёный тут врёт так же, как
+    красный: `set(эталон) - set(замеренного)` у ПР1 — «корпус усечён», 2.
+    """
+    code, lines = pair_bench.verdict(
+        {"u1": _rows()["u1"]},
+        _base({"u1": _rows()["u1"], "u2": _rows()["u1"]},
+              {"u1": {"detection": "вход-1"}, "u2": {"detection": "вход-2"}}),
+        _inputs())
 
-    assert code == 0
-    assert any("нет данных u2" in line for line in lines)
+    assert code == 2
+    assert any("НЕ ИЗМЕРЕНА u2" in line for line in lines)
 
 
 # --------------------------------------------------------------------------
@@ -314,3 +392,44 @@ def test_cli_does_not_freeze_an_empty_baseline(tmp_path, capsys):
 
     assert code == 2
     assert "эталон не тронут" in capsys.readouterr().out
+
+
+def test_cli_freezes_the_fingerprints_and_then_judges_by_them(
+        storage, tmp_path, monkeypatch):
+    """От края до края: пересъём кладёт отпечатки, сверка судит по ним.
+
+    Тест утверждает РАЗНИЦУ, а не совпадение с состоянием «до»: один и тот же
+    корпус после пересъёма зелен, а после правки ОДНОГО артефакта — «судить
+    нечем». Без второй половины он остался бы зелёным и на эталоне без
+    отпечатков.
+    """
+    monkeypatch.setattr(pair_bench, "BASELINE", tmp_path / "pair_baseline.json")
+
+    assert pair_bench.main(["--storage", str(storage), "--write-baseline"]) == 0
+    frozen = json.loads(pair_bench.BASELINE.read_text(encoding="utf-8"))
+    assert frozen["version"] == pair_bench.BASELINE_VERSION
+    assert frozen["inputs"]["aaaabbbb"]["graph"]
+    assert pair_bench.main(["--storage", str(storage), "--check"]) == 0
+
+    graph = (storage / "aaaabbbb-0000-0000-0000-000000000000" / "graph"
+             / "graph_validated.json")
+    graph.write_text(graph.read_text(encoding="utf-8").replace("n2", "n7"),
+                     encoding="utf-8")
+
+    assert pair_bench.main(["--storage", str(storage), "--check"]) == 2
+
+
+def test_cli_check_on_a_baseline_from_before_the_fingerprints(
+        storage, tmp_path, monkeypatch, capsys):
+    """Нынешний `tools/bench/pair_baseline.json` — плоский, снят 18.08.
+
+    До пересъёма стенд обязан говорить «судить нечем», а не выносить вердикт
+    о коде по числам, снятым неизвестно на каких артефактах.
+    """
+    monkeypatch.setattr(pair_bench, "BASELINE", tmp_path / "pair_baseline.json")
+    rows = pair_bench.collect(storage)["rows"]
+    pair_bench.BASELINE.write_text(json.dumps(rows, ensure_ascii=False),
+                                   encoding="utf-8")
+
+    assert pair_bench.main(["--storage", str(storage), "--check"]) == 2
+    assert "не помнит отпечатков входа" in capsys.readouterr().out

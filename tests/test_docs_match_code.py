@@ -7,8 +7,14 @@
 
 Здесь сверяются только те утверждения, которые уже врали. Разрастаться этому файлу
 не нужно: остальной дрейф доков — Этап 13.
+
+Раздел 4 добавлен пунктом 1-45: у документа про стенды есть свой вид лжи —
+ДВЕ ЕГО СТРОКИ называют РАЗНЫЙ код возврата для ОДНОГО условия. Так `TESTING.md`
+и жил с 1-30: тремя абзацами выше молчащий git числился кодом 2, а в таблице ниже
+— «провалом», то есть единицей.
 """
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -181,3 +187,121 @@ def test_napravlenie_doc_classes_match_config():
         f"docs/NAPRAVLENIE.md обещает classes={doc_classes}, "
         f"а thermohydraulics.yaml → {cfg_classes}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# 4. Полярность стендов: код возврата в доке против кода возврата в стенде
+#    (пункт 1-45; дефект — две строки docs/TESTING.md про один и тот же исход)
+# --------------------------------------------------------------------------- #
+
+# Словарь вердиктов дороги: этими словами документ называет код, не цифрой.
+# «Отказ» сюда не берётся намеренно — его строки и так несут `exit 1` цифрой,
+# а корень слова живёт в «отказал/отказывает» и дал бы ложные попадания.
+_VERDICT_WORDS = {"провал": 1, "судить нечем": 2}
+# Цифрой код называется двумя способами: жирной ячейкой таблицы (`**2**`)
+# и словами «код 2» / «exit 1».
+_CODE_MARKS = (re.compile(r"\*\*([012])\*\*"),
+               re.compile(r"(?:код|exit)\s*\**\s*([012])\b"))
+
+
+def _code_claims(path: Path, condition: str):
+    """[(номер строки, текст, {коды})] — что документ обещает про это условие.
+
+    ⛔ Читаются только СТРОКИ ТАБЛИЦ. Проза тех же разделов пересказывает
+    историю («печатали строку и отдавали **1**»), и её номера — не обещание,
+    а рассказ о том, как было. Граница названа здесь, чтобы её видел
+    наследник: противоречие, спрятанное в прозе, этот сторож не поймает.
+    """
+    where = re.compile(condition)
+    out = []
+    for num, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.lstrip().startswith("|") or not where.search(line):
+            continue
+        codes = {int(m.group(1)) for mark in _CODE_MARKS
+                 for m in mark.finditer(line)}
+        codes |= {code for word, code in _VERDICT_WORDS.items()
+                  if word in line.lower()}
+        if codes:
+            out.append((num, line.strip(), codes))
+    return out
+
+
+def _code_of_silent_git(monkeypatch) -> int:
+    """Базовая линия набора: файл исчез, а git про него не ответил."""
+    from tools import suite_baseline as sb
+
+    monkeypatch.setattr(sb, "tracked_by_git",
+                        lambda paths: (set(paths), "git не запустился: зонд"))
+    problems, _notes, unjudged = sb.floor_problems(
+        {"per_file": {"tests/пропал.py": [7, "отпечаток"]}, "min_collected": 0},
+        {})
+    assert unjudged and not problems, (
+        "молчащий git ушёл в провал по составу, а не в «судить нечем»")
+    return sb.EXIT_UNJUDGED
+
+
+def _code_of_a_bad_call(monkeypatch) -> int:
+    """ПР1: команда собрана неверно — замер не начинался."""
+    from tools import layout_determinism as det
+
+    monkeypatch.setattr(det.corpus, "corpus_paths",
+                        lambda include_storage=True: {"aaaaaaaa": "x"})
+    monkeypatch.setattr(sys, "argv",
+                        ["layout_determinism.py", "--check", "--runs", "1"])
+    with pytest.raises(SystemExit) as exc:
+        det.main()
+    return exc.value.code
+
+
+def _code_of_an_unmeasured_pair(monkeypatch) -> int:
+    """ДН4: пара эталона не измерена — её нет на диске."""
+    from tools import pair_bench
+
+    base = {"rows": {"u1": {"graph": {}}}, "inputs": {"u1": {"graph": "вход"}}}
+    return pair_bench.verdict({"u1": {}}, base, {"u1": {}})[0]
+
+
+# (условие, документ, чем это условие названо в строках таблиц, чем меряется код)
+_POLARITY_CLAIMS = (
+    ("молчащий git", "docs/TESTING.md",
+     r"git не ответил про (?:исчезнувшие|пропавшие) файлы", _code_of_silent_git),
+    ("ошибка вызова ПР1", "docs/TESTING.md",
+     r"`--runs` меньше двух|uid, которого нет в корпусе|неизвестный ключ",
+     _code_of_a_bad_call),
+    ("пара без вердикта у ДН4", "docs/TESTING.md",
+     r"(?:пара|диаграммы) эталона (?:не измерена|нет на диске)",
+     _code_of_an_unmeasured_pair),
+)
+
+
+@pytest.mark.parametrize("what,doc,condition,measure", _POLARITY_CLAIMS,
+                         ids=[c[0] for c in _POLARITY_CLAIMS])
+def test_one_document_names_one_code_for_one_condition(monkeypatch, what, doc,
+                                                       condition, measure):
+    """⛔ Дефект уровня документа, а не строки (пункт 1-45).
+
+    Гейт читают глазами, и полярность его кода — такое же несущее число,
+    как таймаут в `WORKER_TASKS.md`. Замер: `TESTING.md` с пункта 1-30 нёс
+    про молчащий git ДВЕ строки — «**2**» в таблице «что валит гейт» и
+    «провал» в таблице «что случилось с файлом», — то есть читатель получал
+    ложь про полярность ровно там, где её только что чинили.
+
+    Сверяются оба конца: строки документа между собой И с кодом, который
+    стенд действительно отдаёт на этом условии.
+    """
+    claims = _code_claims(ROOT / doc, condition)
+    assert claims, (
+        f"{doc}: ни одна строка таблиц не говорит про «{what}» — условие "
+        f"переписали, а сторож ослеп. Обнови условие в _POLARITY_CLAIMS")
+
+    named = {code for _num, _text, codes in claims for code in codes}
+    assert len(named) == 1, (
+        f"{doc}: про «{what}» документ называет разные коды {sorted(named)}:\n"
+        + "\n".join(f"    :{num} -> {sorted(codes)}  {text[:110]}"
+                     for num, text, codes in claims))
+
+    real = measure(monkeypatch)
+    assert named == {real}, (
+        f"{doc}: про «{what}» документ обещает код {named.pop()}, "
+        f"а стенд отдаёт {real}:\n"
+        + "\n".join(f"    :{num}  {text[:110]}" for num, text, _c in claims))

@@ -53,18 +53,31 @@
 возвращает 2 («данных нет»), а не зелёный ноль. Логика диффов закрыта юнит-тестами
 `tests/test_pair_bench.py`, они в CI и идут на синтетических артефактах.
 
+Три исхода `--check` (`PROTOCOL §5`; полярность выправлена пунктом 1-45):
+    0 — объём правок не вырос;
+    1 — вырос: оператору пришлось доделывать больше. Единственное здешнее
+        наблюдение, которое говорит о коде;
+    2 — СУДИТЬ НЕЧЕМ: мерить нечего (нет данных, нет эталона, нет общих uid),
+        пара эталона не измерена — её нет на диске, — или вход пары не тот,
+        на котором эталон снят (`inputs`, версия 2 эталона).
+До 1-45 стенд собирал вердикт «регресс кода» из ОТСУТСТВИЯ наблюдения: пропавшая
+пара шла в один счётчик с ростом правок и давала exit 1 «рост правок: 1» при нуле
+строк «ХУЖЕ», а отпечатка входа у эталона не было вовсе — дрейф данных читался
+как рост правок (`TESTING §9`, замеры §109 и §120).
+
 Запуск (из корня репо):
     python -X utf8 tools/pair_bench.py                    # таблицы + сводка с медианами
     python -X utf8 tools/pair_bench.py --stage graph      # одна пара
     python -X utf8 tools/pair_bench.py --json out.json    # машинный вывод
     python -X utf8 tools/pair_bench.py --write-baseline   # заморозить эталон (Д6)
-    python -X utf8 tools/pair_bench.py --check            # против эталона, exit 1
+    python -X utf8 tools/pair_bench.py --check            # против эталона, 0 / 1 / 2
 
 Только чтение: ни один артефакт не изменяется.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import statistics
@@ -78,6 +91,10 @@ if str(REPO) not in sys.path:
 from tools.dn2_edit_diff import INTENT, diff_pair  # noqa: E402
 
 BASELINE = REPO / "tools" / "bench" / "pair_baseline.json"
+# Версия формата эталона. 2 — рядом с числами лежит `inputs`, отпечаток входа
+# каждой пары (пункт 1-45). Старый плоский вид `{uid8: {стадия: числа}}`
+# читается как «отпечатков нет»: судить по нему нечем, пока его не пересняли.
+BASELINE_VERSION = 2
 
 # Пары «до → после». Порядок = порядок конвейера.
 STAGES = [
@@ -426,16 +443,51 @@ def default_storage() -> Path:
     return Path(env) if env else REPO / "storage" / "diagrams"
 
 
+def _rel(path: Path) -> str:
+    """Путь от корня репо, если он внутри. Иначе — как есть.
+
+    Близнец `edit_bench._rel` и по причине тоже: стенд под тестом получает
+    временный корпус и временный эталон ВНЕ дерева, а голый `relative_to`
+    падает там `ValueError` ещё на сборке справки argparse — то есть стенд
+    нельзя было прогнать от края до края (пункт 1-45).
+    """
+    try:
+        return str(path.relative_to(REPO))
+    except ValueError:
+        return str(path)
+
+
+def pair_fingerprint(before: Path, after: Path) -> str:
+    """Отпечаток ВХОДА пары — обе её стороны (пункт 1-45, идиома GATE-6).
+
+    Эталон ключуется по `uid8/стадия` и до 1-45 не помнил, НА КАКИХ данных
+    он снят. Корпус в `storage/` живой: обычный запуск конвейера переписывает
+    артефакты под тем же uid, и разница «эталон 18.08 против файлов 19.08»
+    читалась как рост правок оператора, то есть как регресс модели.
+
+    Считается по БАЙТАМ, а не по разобранному содержимому, — в отличие от
+    `corpus.data_fingerprint()` у ПР1. Две причины: половина пар вообще не
+    json (`yolo_*.txt`, `pipe_mask*.png`), а EOL-ловушки здесь нет — эти
+    файлы лежат вне git (`.gitignore:32`), и `.gitattributes` их не трогает.
+    """
+    digest = hashlib.sha256()
+    for path in (before, after):
+        digest.update(hashlib.sha256(path.read_bytes()).digest())
+    return digest.hexdigest()
+
+
 def collect(storage: Path, stages=None) -> dict:
     """{uid8: {стадия: {метрики}}} по всем диаграммам, где пара есть на диске.
 
-    Второй словарь — пары с нарушенным порядком (`до` новее `после`).
+    Рядом — `inputs` тех же ключей (отпечаток входа каждой пары) и `stale`:
+    пары с нарушенным порядком (`до` новее `после`).
     """
     wanted = [s for s in STAGES if stages is None or s[0] in stages]
     rows: dict[str, dict] = {}
     stale: dict[str, list] = {}
-    report = {"rows": rows, "stale": stale, "storage": str(storage),
-              "stages": [s[0] for s in wanted]}
+    inputs: dict[str, dict] = {}
+    report = {"rows": rows, "stale": stale, "inputs": inputs,
+              "storage": str(storage), "stages": [s[0] for s in wanted]}
     if not storage.is_dir():
         return report
     for diagram in sorted(p for p in storage.iterdir() if p.is_dir()):
@@ -445,6 +497,7 @@ def collect(storage: Path, stages=None) -> dict:
             if not (before.exists() and after.exists()):
                 continue
             rows.setdefault(uid8, {})[name] = MEASURE[name](before, after)
+            inputs.setdefault(uid8, {})[name] = pair_fingerprint(before, after)
             if before.stat().st_mtime > after.stat().st_mtime + 1:
                 stale.setdefault(uid8, []).append(name)
     return report
@@ -500,49 +553,101 @@ def print_report(report: dict) -> None:
 # Эталон и вердикт
 # --------------------------------------------------------------------------
 
-def verdict(rows: dict, base: dict) -> tuple[int, list]:
+def read_baseline() -> dict:
+    """Эталон в нынешнем виде: `{"rows": ..., "inputs": ...}`.
+
+    Плоский вид `{uid8: {стадия: числа}}` — эталон, снятый до пункта 1-45.
+    Отпечатков входа в нём нет, и это читается не как «вход тот же», а как
+    «эталон не может назвать данные, о которых судит»: та же развилка, что
+    у версии 2 эталона «Ручной правки» (`TESTING §8.2`).
+    """
+    if not BASELINE.exists():
+        return {"rows": {}, "inputs": {}}
+    raw = json.loads(BASELINE.read_text(encoding="utf-8"))
+    if raw.get("version"):
+        return {"rows": raw.get("rows") or {}, "inputs": raw.get("inputs") or {}}
+    return {"rows": raw, "inputs": {}}
+
+
+def verdict(rows: dict, base: dict, inputs: dict) -> tuple[int, list]:
     """(код возврата, строки отчёта) — сравнение с эталоном.
 
-    2 — судить нечем (пусто в замере или в эталоне, или ни одного общего uid:
-    так выглядит чистый клон, где данных корпуса нет);
-    1 — вырос объём правок или пара пропала с диска;
+    Три исхода (`PROTOCOL §5`), и вердикт О КОДЕ собирается только из
+    НАБЛЮДЕНИЙ (`PROTOCOL §Гейты`, правило заведено пунктом 1-44):
+    2 — СУДИТЬ НЕЧЕМ: пусто в замере или в эталоне, ни одного общего uid,
+        эталон не помнит отпечатков входа, пара эталона не измерена (её нет
+        на диске) или вход пары не тот, на котором эталон снят;
+    1 — вырос объём правок: оператору пришлось доделывать больше. Это
+        единственное здешнее наблюдение, которое говорит о коде;
     0 — не хуже эталона.
+
+    ⛔ До 1-45 пропавшая пара шла в один счётчик с ростом правок, и стенд
+    отдавал **1 «рост правок: 1»** при НУЛЕ строк «ХУЖЕ» (замер §109: весь
+    `bad` — это «ПРОПАЛА `8d14cf73/layout`»). Асимметрия была и внутри
+    одного стенда: пропала ВСЯ диаграмма — «пропуск» и exit 0, пропала ОДНА
+    пара — «регресс» и exit 1. Обе пропажи — одно и то же отсутствие
+    наблюдения, и обе теперь «судить нечем».
+
+    Доказанный рост сильнее неполноты (1-25): пара без вердикта не глушит
+    выросшего соседа, иначе хватило бы стереть один артефакт, чтобы стенд
+    замолчал обо всех.
     """
-    lines = []
-    if not base:
+    lines: list[str] = []
+    known = base.get("rows") or {}
+    known_inputs = base.get("inputs") or {}
+    if not known:
         return 2, ["эталона нет или он пуст — сначала --write-baseline"]
     if not rows:
         return 2, ["замер пуст: ни одной пары не найдено — данных корпуса нет"]
-    common = set(rows) & set(base)
+    common = set(rows) & set(known)
     if not common:
-        return 2, [f"ни одного uid эталона нет на диске (в эталоне {len(base)}, "
+        return 2, [f"ни одного uid эталона нет на диске (в эталоне {len(known)}, "
                    f"замерено {len(rows)}) — судить нечем"]
-    bad = 0
-    for uid in sorted(set(base) - set(rows)):
-        lines.append(f"нет данных {uid}: диаграммы нет на диске — пропуск")
-    for uid in sorted(set(rows) - set(base)):
+    if not known_inputs:
+        return 2, ["эталон не помнит отпечатков входа — он снят до пункта 1-45, "
+                   "и его числа могут относиться к другим артефактам (корпус "
+                   "в storage живой, TESTING §3). Лечится пересъёмом (Д6)"]
+    worse, unjudged = 0, []
+    for uid in sorted(set(known) - set(rows)):
+        lines.append(f"НЕ ИЗМЕРЕНА {uid}: диаграммы эталона нет на диске")
+        unjudged.append(uid)
+    for uid in sorted(set(rows) - set(known)):
         lines.append(f"новое   {uid}: диаграммы нет в эталоне — пропуск")
     for uid in sorted(common):
         for stage in [s[0] for s in STAGES]:
-            was, now = base[uid].get(stage), rows[uid].get(stage)
+            was, now = known[uid].get(stage), rows[uid].get(stage)
             if was is None:
                 if now is not None:
                     lines.append(f"новое   {uid}/{stage}: в эталоне нет — пропуск")
                 continue
             if now is None:
-                lines.append(f"ПРОПАЛА {uid}/{stage}: пара была в эталоне, "
-                             f"на диске её нет")
-                bad += 1
+                lines.append(f"НЕ ИЗМЕРЕНА {uid}/{stage}: пара была в эталоне, "
+                             f"на диске её нет — о ней вердикта нет")
+                unjudged.append(f"{uid}/{stage}")
+                continue
+            was_input = (known_inputs.get(uid) or {}).get(stage)
+            now_input = (inputs.get(uid) or {}).get(stage)
+            if was_input != now_input:
+                lines.append(f"ВХОД НЕ ТОТ {uid}/{stage}: артефакты пары сменились "
+                             f"({(was_input or 'нет')[:12]} -> "
+                             f"{(now_input or 'нет')[:12]}) — числа эталона сняты "
+                             f"на других данных")
+                unjudged.append(f"{uid}/{stage}")
                 continue
             for key in EDIT[stage]:
                 old, new = was.get(key, 0), now.get(key, 0)
                 if new > old:
                     lines.append(f"ХУЖЕ    {uid}/{stage}: {key} {old} -> {new}")
-                    bad += 1
+                    worse += 1
                 elif new < old:
                     lines.append(f"лучше   {uid}/{stage}: {key} {old} -> {new}")
-    lines.append(f"\nрост правок: {bad}")
-    return (1 if bad else 0), lines
+    lines.append(f"\nрост правок: {worse}")
+    if unjudged:
+        shown = ", ".join(unjudged[:5]) + ("…" if len(unjudged) > 5 else "")
+        lines.append(f"[СУДИТЬ НЕЧЕМ] без вердикта {len(unjudged)}: {shown}")
+    if worse:                        # доказанный рост сильнее неполноты (1-25)
+        return 1, lines
+    return (2 if unjudged else 0), lines
 
 
 def main(argv=None) -> int:
@@ -555,7 +660,7 @@ def main(argv=None) -> int:
                     help="считать только эту пару (можно повторять)")
     ap.add_argument("--json", type=Path, default=None, help="выгрузить числа в json")
     ap.add_argument("--write-baseline", action="store_true",
-                    help=f"заморозить эталон в {BASELINE.relative_to(REPO)}")
+                    help=f"заморозить эталон в {_rel(BASELINE)}")
     ap.add_argument("--check", action="store_true",
                     help="сравнить с эталоном, exit 1 при росте правок")
     args = ap.parse_args(argv)
@@ -578,13 +683,13 @@ def main(argv=None) -> int:
             print("\nзамер пуст — эталон не тронут")
             return 2
         BASELINE.parent.mkdir(parents=True, exist_ok=True)
-        BASELINE.write_text(json.dumps(rows, ensure_ascii=False, indent=1,
-                                       sort_keys=True), encoding="utf-8")
-        print(f"\nэталон заморожен -> {BASELINE.relative_to(REPO)}")
+        BASELINE.write_text(json.dumps(
+            {"version": BASELINE_VERSION, "rows": rows,
+             "inputs": report["inputs"]},
+            ensure_ascii=False, indent=1, sort_keys=True), encoding="utf-8")
+        print(f"\nэталон заморожен -> {_rel(BASELINE)}")
     if args.check:
-        base = json.loads(BASELINE.read_text(encoding="utf-8")) \
-            if BASELINE.exists() else {}
-        code, lines = verdict(rows, base)
+        code, lines = verdict(rows, read_baseline(), report["inputs"])
         print()
         for line in lines:
             print(line)
