@@ -1058,7 +1058,9 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
         )
         self._add_bg_darkness_slider(panel)
         self._add_color_setting(
-            panel, "Цвет рёбер", "edge_color", QColor(255, 255, 255),
+            panel, "Цвет рёбер", "edge_color",
+            QColor(self._editor.COLOR_EDGE_DEFAULT if self._editor
+                   else BaseGraphEditor.COLOR_EDGE_DEFAULT),
             lambda c: self._editor and self._editor.set_edge_color(c),
         )
         # Субъективные размеры (только визуал). Наследуются «Контурами».
@@ -1093,15 +1095,16 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
             return
         from PySide6.QtGui import QColor
         from ui.services.ui_settings import UISettings
-        # Тема — ПЕРЕД цветом рёбер: она задаёт их дефолт (на белом листе белые
-        # рёбра не видны), а явно выбранный оператором цвет применяется после
-        # и остаётся главнее.
+        # Тема — ПЕРЕД цветом рёбер: она пересобирает сцену, а цвет рёбер
+        # применяется после и остаётся главнее. (Сам цвет от темы уже не
+        # зависит — базовый кислотно-зелёный виден и на белом листе.)
         if hasattr(ed, "set_light_theme"):
             ed.set_light_theme(
                 bool(UISettings.instance().get_appearance(
                     self.uid, "light_sheet", 1)))
         if hasattr(ed, "set_edge_color"):
-            self._apply_saved_color("edge_color", QColor(255, 255, 255), ed.set_edge_color)
+            self._apply_saved_color("edge_color", QColor(ed.COLOR_EDGE_DEFAULT),
+                                    ed.set_edge_color)
         if hasattr(ed, "set_size_factor"):
             self._apply_saved_size(
                 "size_connector", lambda f: ed.set_size_factor("CONNECTOR_DRAW_RADIUS", f))
@@ -1117,9 +1120,8 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
         ed = self._editor
         if ed is None:
             return
-        from PySide6.QtGui import QColor
         if hasattr(ed, "set_edge_color"):
-            ed.set_edge_color(QColor(255, 255, 255, 150))
+            ed.set_edge_color(None)          # None → базовый цвет редактора
         # Общий сброс обязан вернуть и размерные регуляторы (иначе T6 красный).
         if hasattr(ed, "reset_size_factors"):
             ed.reset_size_factors()

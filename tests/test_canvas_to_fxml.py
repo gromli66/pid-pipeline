@@ -9,7 +9,9 @@ bindings с константным кеглем, линии без B2-проек
 """
 import xml.etree.ElementTree as ET
 
-from modules.canvas_to_fxml import KKS_FONT_SIZE, generate_canvas_fxml
+from modules.canvas_to_fxml import (
+    DEFAULT_LINE_COLOR, KKS_FONT_SIZE, generate_canvas_fxml,
+)
 
 
 def _canvas_graph() -> dict:
@@ -134,6 +136,19 @@ def test_polygon_node_and_napravlenie_triangle():
     assert 'layoutX="700.0"' in b1 and 'points="' in b1
     n1 = xml.split('fx:id="n1"')[1].split('/>')[0]
     assert 'points="' in n1   # треугольник-стрелка
+
+
+def test_line_color_default_is_independent_of_editor_settings():
+    """Базовый цвет линии — #333333, и настройки редактора на него не влияют.
+
+    Цвет рёбер в шторке «Оформление» (кислотно-зелёный по умолчанию) — только
+    отрисовка: он меняет константу редактора и в данные не пишет. В FXML цвет
+    берётся из `render_color`, а его ставит ровно один путь — «Линии → Цвет».
+    """
+    xml = _fxml()
+    for eid in ("e2", "e4", "e5"):                   # рёбра без render_color
+        assert f'stroke="{DEFAULT_LINE_COLOR}"' in xml.split(f'fx:id="{eid}"')[1].split('/>')[0]
+    assert DEFAULT_LINE_COLOR == '#333333'
 
 
 def test_lines_render_overrides_dash_and_no_b2():
