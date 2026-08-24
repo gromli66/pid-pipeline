@@ -25,6 +25,7 @@ from PySide6.QtGui import QAction, QFont
 from ui.services.api_client import APIClient, APIError, DiagramStatus
 from ui.services.client_logging import bind_uid
 from ui.services.status_provider import StatusProvider
+from ui.services.thread_lifetime import hand_over
 from ui.widgets.progress_beads import ProgressBeads, BeadInfo, BeadState
 from ui.widgets.bead_gif_player import BeadGifPlayer
 
@@ -2191,6 +2192,13 @@ class DiagramWorkspace(QWidget):
         self._prtx_worker.error.connect(self._prtx_thread.quit)
         self._prtx_running = True
         self._prtx_uid = self._uid
+        # ⛔ Рабочая область живёт дольше конвертации, но НЕ дольше
+        # процесса: `cleanup()` этот поток не упоминает вовсе, и клиент,
+        # закрытый посреди сборки, падал `0xC0000409` — 6 раз из 6 на
+        # каждом жесте оператора (пункт 1-50, замер §127). Дверь ниже
+        # просит работника остановиться и даёт выходу его дождаться.
+        hand_over(self, self._prtx_thread, self._prtx_worker,
+                  name="сборка .prtx", uid=self._uid)
         self._prtx_thread.start()
         self._refresh_export_state()
 

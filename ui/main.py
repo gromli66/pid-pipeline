@@ -21,6 +21,7 @@ for _stream in (sys.stdout, sys.stderr):
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ui.services.client_logging import install_excepthook, setup_client_logging
+from ui.services.thread_lifetime import install_exit_guard
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
@@ -132,6 +133,13 @@ def main():
 
     # Эмодзи-шрифт из бандла (на Astra эмодзи иначе рисуются квадратами)
     _load_bundled_fonts(app)
+
+    # ⛔ Выход клиента обязан дождаться фоновых потоков (пункт 1-50): клиент,
+    # закрытый посреди сборки .prtx или незаконченной загрузки вкладки, падал
+    # на разрушении бегущего `QThread` — `0xC0000409`, 6 крахов из 6 и 4 из 4
+    # соответственно (замер §127). Ставится ДО окна: первый же поток поднимает
+    # вкладка, которую оператор откроет сразу после старта.
+    install_exit_guard(app)
 
     # Главное окно
     window = MainWindow()

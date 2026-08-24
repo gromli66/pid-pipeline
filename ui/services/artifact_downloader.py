@@ -37,6 +37,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,6 +46,7 @@ from typing import Any, Sequence
 from PySide6.QtCore import QObject, Signal
 
 from ui.services.api_client import APIError
+from ui.services.thread_lifetime import Stopped
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +146,16 @@ class ArtifactDownloader(QObject):
         #: (может пройти со следующей попытки), не-`APIError` = скачанное не
         #: легло на локальный диск, повторять нечего.
         self.last_error: BaseException | None = None
+        #: Просьба остановиться — от `ui/services/thread_lifetime.py`
+        #: (пункт 1-50). Вкладку разрушают «← Назад», а качать дальше некому
+        #: и некуда. Флаг снимает ОСТАВШИЕСЯ задания; текущий HTTP-запрос
+        #: дорабатывает сам — прервать его отсюда нельзя, и это названная
+        #: граница, а не недосмотр.
+        self._stop = threading.Event()
+
+    def stop(self):
+        """Не начинать новых загрузок: владелец разрушен или клиент уходит."""
+        self._stop.set()
 
     # -- один кандидат ----------------------------------------------------
 
@@ -163,6 +175,8 @@ class ArtifactDownloader(QObject):
         #: предпочтённый кандидат отказал НЕ по 404 — он мог быть на месте
         preferred_unknown = False
         for i, f in enumerate(job.fetches):
+            if self._stop.is_set():
+                raise Stopped("загрузка прекращена — вкладки больше нет")
             try:
                 dest = self._fetch(f)
             except Exception as exc:  # noqa: BLE001 — следующий кандидат цепочки
@@ -214,6 +228,16 @@ class ArtifactDownloader(QObject):
                     if done_key:
                         self.progress.emit(f"Загружен {done_key}")
             self.finished.emit(artifacts)
+        except Stopped as exc:
+            # Ни `finished`, ни `error`: получателя нет — вкладку разрушили,
+            # и поток обязан просто уйти (пункт 1-50).
+            logger.info("загрузка %s прекращена: %s", self.uid[:8], exc)
+            # ⛔ Но унести СЕБЯ работник обязан всё равно, и сам, в СВОЁМ
+            # потоке (инвариант 1-46, замер §119а): на боевом пути это делают
+            # связи `finished`/`error` → `deleteLater`, а здесь их нет —
+            # иначе объект остался бы сиротой в кончившемся потоке, где
+            # `deleteLater()` уже не доставляется вовсе (§119б).
+            self.deleteLater()
         except Exception as exc:  # noqa: BLE001 — любой сбой уходит во вкладку
             self.last_error = exc
             self.error.emit(str(exc))

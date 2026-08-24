@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from ui.services.prtx_license import Report, diagnose_local
+from ui.services.thread_lifetime import hand_over
 
 
 class _ServerProbe(QObject):
@@ -94,6 +95,11 @@ class LicenseDialog(QDialog):
         self._thread.started.connect(self._probe.run)
         self._probe.done.connect(self._on_probe_done)
         self._probe.done.connect(self._thread.quit)
+        # `closeEvent` гасит пробу с потолком 3 с, но приходит он не на
+        # всяком пути разрушения диалога — а сама проба непрерываема
+        # (один HTTP). Дверь ниже закрывает обе дыры (пункт 1-50).
+        hand_over(self, self._thread, self._probe,
+                  name="проверка лицензии")
         self._thread.start()
 
     def _on_probe_done(self, report):
