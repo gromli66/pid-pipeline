@@ -137,14 +137,18 @@ class APIClient:
         """Закрыть HTTP соединения."""
         self._client.close()
 
-    def _request(
+    def _send(
         self,
         method: str,
         endpoint: str,
         retries: Optional[int] = None,
         **kwargs,
-    ) -> Dict[str, Any]:
-        """Выполнить HTTP запрос с retry при потере соединения."""
+    ) -> httpx.Response:
+        """HTTP запрос с retry при потере соединения. Ответ >= 400 → APIError.
+
+        Ретраим ТОЛЬКО обрыв связи: ответ сервера с кодом ошибки повторять
+        нечего — он придёт таким же.
+        """
         max_retries = retries if retries is not None else self.max_retries
 
         last_error = None
@@ -160,7 +164,7 @@ class APIClient:
                         message = response.text or f"HTTP {response.status_code}"
                     raise APIError(message, response.status_code)
 
-                return response.json()
+                return response
 
             except httpx.RequestError as exc:
                 last_error = exc
@@ -187,28 +191,29 @@ class APIClient:
 
         raise APIError(f"Connection failed after {max_retries + 1} attempts: {last_error}")
 
+    def _request(
+        self,
+        method: str,
+        endpoint: str,
+        retries: Optional[int] = None,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Выполнить HTTP запрос с retry при потере соединения."""
+        return self._send(method, endpoint, retries=retries, **kwargs).json()
+
     def _request_raw(
         self,
         method: str,
         endpoint: str,
         **kwargs,
     ) -> httpx.Response:
-        """Выполнить HTTP запрос и вернуть raw response (для скачивания файлов)."""
-        try:
-            response = self._client.request(method, endpoint, **kwargs)
+        """Выполнить HTTP запрос и вернуть raw response (для скачивания файлов).
 
-            if response.status_code >= 400:
-                try:
-                    error_data = response.json()
-                    message = error_data.get("detail", str(error_data))
-                except Exception:
-                    message = response.text or f"HTTP {response.status_code}"
-                raise APIError(message, response.status_code)
-
-            return response
-
-        except httpx.RequestError as exc:
-            raise APIError(f"Connection error: {exc}")
+        Ретраи те же, что у `_request`: раньше их здесь не было, и один обрыв на
+        скачивании уже готового .prtx (80 КБ) ронял весь экспорт — файл на
+        сервере лежал, а оператор видел «не удалось сохранить».
+        """
+        return self._send(method, endpoint, **kwargs)
 
     # === Health ===
 

@@ -346,6 +346,49 @@ def test_repeat_while_building_does_not_start_second_run(storage, service):
     assert service["calls"] == []
 
 
-def test_status_reports_idle_for_unknown_diagram():
+def _status(db):
+    return asyncio.run(prtx_status(uid=UID, db=db))
+
+
+def test_status_reports_idle_for_unknown_diagram(storage):
     """Сервер перезапустили — задание потеряно, и это видно клиенту."""
-    assert asyncio.run(prtx_status(uid=UID)) == {"state": "idle"}
+    assert _status(FakeDB(None, {})) == {
+        "state": "idle", "artifact_ready": False, "artifact_size": None}
+
+
+def test_status_sees_ready_artifact_after_restart(storage, tmp_path):
+    """Задание в памяти умерло вместе с процессом, а файл на диске остался.
+
+    Диалог экспорта решает по `artifact_ready`, есть ли что качать, — иначе
+    после рестарта api оператор видел бы «схемы нет» над готовым файлом.
+    """
+    (tmp_path / "diagram.prtx").write_bytes(PRTX)
+    art = _artifact(ArtifactType.PRTX, "diagram.prtx")
+    art.file_size = len(PRTX)
+
+    answer = _status(FakeDB(_diagram(), {ArtifactType.PRTX: art}))
+
+    assert answer["state"] == "idle"          # про ХОД сборки не врём
+    assert answer["artifact_ready"] is True
+    assert answer["artifact_size"] == len(PRTX)
+
+
+def test_status_keeps_building_state_over_old_artifact(storage, tmp_path):
+    """Идущая сборка важнее лежащего файла: он от ПРОШЛОГО прогона."""
+    (tmp_path / "diagram.prtx").write_bytes(PRTX)
+    graph_api._PRTX_JOBS[str(UID)] = {"state": "building"}
+
+    answer = _status(FakeDB(_diagram(), {
+        ArtifactType.PRTX: _artifact(ArtifactType.PRTX, "diagram.prtx")}))
+
+    assert answer["state"] == "building"
+    assert answer["artifact_ready"] is True
+
+
+def test_status_ignores_artifact_row_without_file(storage):
+    """Откат сносит строку артефакта, но бывает и наоборот — строка без файла."""
+    answer = _status(FakeDB(_diagram(), {
+        ArtifactType.PRTX: _artifact(ArtifactType.PRTX, "no_such.prtx")}))
+
+    assert answer["artifact_ready"] is False
+    assert answer["artifact_size"] is None

@@ -172,7 +172,7 @@ def test_worker_reports_server_failure(monkeypatch, tmp_path):
 ])
 def test_export_target_keeps_dotted_names(given, expected):
     """Оператор не находил файл: путь с точками в имени резался до «1.prtx»."""
-    assert str(pc._prtx_target(given)) == expected
+    assert str(pc.prtx_target(given)) == expected
 
 
 def test_worker_waits_for_background_build(monkeypatch, tmp_path):
