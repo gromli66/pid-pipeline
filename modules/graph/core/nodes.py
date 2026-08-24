@@ -908,25 +908,12 @@ def update_node_degrees(nodes: List[Dict], edges: List[Dict], debug: bool = Fals
             nodes[node_idx[to_id]]['degree'] += 1
 
 
-# Компонента из одних connector'ов — это либо осиротевший стык (шум детектора,
-# к нему ничего не подключено), либо настоящая труба, на которой просто нет
-# оборудования: коллектор с отводами, магистраль вдоль края листа. Отличаем по
-# суммарной длине трубы в компоненте.
-ORPHAN_MIN_PIPE_LENGTH = 60
-
-
 def filter_isolated_connectors(
     nodes: List[Dict],
     edges: List[Dict],
     debug: bool = False
 ) -> Tuple[List[Dict], List[Dict], Dict]:
-    """Выбросить компоненты из одних connector'ов, в которых нет трубы.
-
-    Раньше выбрасывалась ЛЮБАЯ компонента без «настоящего» узла — вместе с ней
-    из графа исчезал, например, коллектор с восемью отводами (на одной схеме
-    это четверть скелета). Теперь компонента без оборудования удаляется, только
-    если суммарная длина её труб меньше ORPHAN_MIN_PIPE_LENGTH.
-    """
+    """Фильтрация изолированных connector'ов."""
     adjacency = {node['id']: set() for node in nodes}
 
     for edge in edges:
@@ -941,12 +928,6 @@ def filter_isolated_connectors(
             adjacency[to_id].add(from_id)
 
     node_by_id = {node['id']: node for node in nodes}
-    edges_by_node: Dict[str, List[Dict]] = {}
-    for edge in edges:
-        for key in ('from', 'to'):
-            node_id = edge.get(key)
-            if node_id is not None:
-                edges_by_node.setdefault(node_id, []).append(edge)
 
     def is_connector(node_id: str) -> bool:
         node = node_by_id.get(node_id)
@@ -959,37 +940,32 @@ def filter_isolated_connectors(
         class_name = node.get('class_name')
         return class_name and class_name != 'connector'
 
+    def has_path_to_real_node(start_id: str) -> bool:
+        """Iterative BFS: проверяет есть ли путь от connector до real node."""
+        from collections import deque
+        visited = {start_id}
+        queue = deque([start_id])
+        while queue:
+            current = queue.popleft()
+            for neighbor_id in adjacency.get(current, set()):
+                if neighbor_id in visited:
+                    continue
+                if is_real_node(neighbor_id):
+                    return True
+                if is_connector(neighbor_id):
+                    visited.add(neighbor_id)
+                    queue.append(neighbor_id)
+        return False
+
     connectors_to_remove = set()
-    kept_orphans = 0
-    seen = set()
 
     for node in nodes:
         node_id = node['id']
-        if node_id in seen or not is_connector(node_id):
+        if not is_connector(node_id):
             continue
 
-        # компонента из connector'ов, связанных только через connector'ы
-        stack, group, touches_real = [node_id], set(), False
-        seen.add(node_id)
-        while stack:
-            current = stack.pop()
-            group.add(current)
-            for neighbor_id in adjacency.get(current, set()):
-                if is_real_node(neighbor_id):
-                    touches_real = True
-                elif is_connector(neighbor_id) and neighbor_id not in seen:
-                    seen.add(neighbor_id)
-                    stack.append(neighbor_id)
-        if touches_real:
-            continue
-
-        pipe = {e['id']: e for nid in group for e in edges_by_node.get(nid, [])}
-        pipe_length = sum(e.get('length', 0) for e in pipe.values())
-        if pipe_length >= ORPHAN_MIN_PIPE_LENGTH:
-            kept_orphans += 1      # труба без оборудования — это всё равно труба
-            continue
-
-        connectors_to_remove |= group
+        if not has_path_to_real_node(node_id):
+            connectors_to_remove.add(node_id)
 
     filtered_nodes = [n for n in nodes if n['id'] not in connectors_to_remove]
 
@@ -1011,8 +987,7 @@ def filter_isolated_connectors(
 
     stats = {
         'removed_connectors': len(connectors_to_remove),
-        'removed_edges': removed_edges,
-        'kept_orphan_components': kept_orphans
+        'removed_edges': removed_edges
     }
 
     return filtered_nodes, filtered_edges, stats
