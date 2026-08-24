@@ -25,6 +25,7 @@ from ui.widgets.appearance_panel import AppearanceMixin
 from ui.widgets.toolbar_buttons import (
     make_undo_button, make_save_button, make_confirm_button,
 )
+from ui.tabs.scene_lifetime import adopt_editor_scene
 
 logger = logging.getLogger(__name__)
 
@@ -351,6 +352,7 @@ class JunctionTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
             from ui.editors.square_mask_editor import SquareMaskEditor
 
             self._editor = SquareMaskEditor()
+            adopt_editor_scene(self._editor)   # сцена умирает с виджетом (1-46)
             self._editor.status_callback = lambda msg: self.status_label.setText(msg)
             # Ctrl+S в редакторе раньше звал save_masks() без путей — PNG падали
             # в CWD процесса и на сервер не уходили. Теперь шорткат идёт сюда.

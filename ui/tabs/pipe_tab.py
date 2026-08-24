@@ -25,6 +25,7 @@ from ui.widgets.appearance_panel import AppearanceMixin
 from ui.widgets.toolbar_buttons import (
     make_undo_button, make_save_button, make_confirm_button,
 )
+from ui.tabs.scene_lifetime import adopt_editor_scene
 
 logger = logging.getLogger(__name__)
 
@@ -326,6 +327,7 @@ class PipeTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
             from ui.editors.polyline_mask_editor import PolylineMaskEditor
 
             self._editor = PolylineMaskEditor()
+            adopt_editor_scene(self._editor)   # сцена умирает с виджетом (1-46)
             self._editor.status_callback = lambda msg: self.status_label.setText(msg)
             self._editor.width_changed_callback = self._on_editor_width_changed
             # Ctrl+S раньше звал save_mask() без пути — PNG падал в CWD процесса

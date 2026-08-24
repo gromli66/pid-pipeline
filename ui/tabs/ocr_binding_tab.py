@@ -39,6 +39,7 @@ from ui.editors.ocr_binding_editor import OcrBindingEditor
 from ui.widgets.toolbar_buttons import (
     make_undo_button, make_save_button, make_confirm_button,
 )
+from ui.tabs.scene_lifetime import adopt_editor_scene
 
 logger = logging.getLogger(__name__)
 
@@ -395,6 +396,7 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
 
         # Editor (shared across sub-tabs)
         self.editor = OcrBindingEditor(self)
+        adopt_editor_scene(self.editor)   # сцена умирает с виджетом (1-46)
         self.editor.setVisible(False)
         self.editor.binding_changed.connect(self._on_binding_changed)
         self.editor.blocks_changed.connect(self._on_blocks_changed)

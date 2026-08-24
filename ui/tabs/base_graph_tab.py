@@ -33,6 +33,7 @@ from ui.widgets.appearance_panel import AppearanceMixin
 from ui.widgets.toolbar_buttons import (
     make_undo_button, make_redo_button, make_save_button, make_confirm_button,
 )
+from ui.tabs.scene_lifetime import adopt_editor_scene
 
 logger = logging.getLogger(__name__)
 
@@ -1024,6 +1025,7 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
                 self._editor_layout.count() - 1, editor
             )
             self._editor = editor  # присвоить только после успеха
+            adopt_editor_scene(editor)   # сцена умирает с виджетом (1-46)
             self.status_label.setText("Граф загружен")
             self.apply_saved_appearance()
             self._on_editor_ready()
