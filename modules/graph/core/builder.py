@@ -397,7 +397,8 @@ class GraphBuilder:
         from .direction_nodes import (
             annotate_direction_nodes, drop_degenerate_stubs,
             drop_duplicate_contact_stubs, split_edges_at_corners,
-            stitch_dangling_into_pipe, cap_dangling_ends,
+            merge_straight_chains, stitch_dangling_into_pipe, cap_dangling_ends,
+            dissolve_boundary_connectors,
             collapse_straight_connectors, set_direction_pass_through,
             flag_connector_clusters,
         )
@@ -424,11 +425,16 @@ class GraphBuilder:
         # хорду через всю схему (замер: отклонение >30 px → оператор удаляет
         # такое ребро в 71% случаев)
         bend_stats = split_edges_at_corners(nodes, edges, debug=self.debug)
+        # зигзаг — не поворот: цепочка изломов, которая в целом лежит на прямой,
+        # схлопывается обратно (дрожание скелета от текста в маске трубы)
+        zig_stats = merge_straight_chains(nodes, edges, debug=self.debug)
         # висячий конец, упёршийся в чужую трубу — это пропущенный тройник:
         # разрезать трубу и соединить (до cap, пока конец ещё to=None)
         tee_stats = stitch_dangling_into_pipe(nodes, edges, debug=self.debug)
         c_stats = cap_dangling_ends(nodes, edges, debug=self.debug)
         col_stats = collapse_straight_connectors(nodes, edges, debug=self.debug)
+        # коннектор, приклеенный огрызком к элементу — это связь, а не узел
+        dis_stats = dissolve_boundary_connectors(nodes, edges, debug=self.debug)
         update_node_degrees(nodes, edges, debug=self.debug)
         set_direction_pass_through(nodes, edges)
         # кластеры дублей стыков автоматически не чиним (надёжного правила из
@@ -445,7 +451,10 @@ class GraphBuilder:
                 f"перп→connector {r_stats['perp_capped']}, огрызков у грани "
                 f"{r_stats['noise_dropped']}, закрыто висячих {c_stats['capped']}; "
                 f"изломов → узлов {bend_stats['corners']} "
-                f"(рёбер разрезано {bend_stats['edges_split']}); "
+                f"(рёбер разрезано {bend_stats['edges_split']}, "
+                f"зигзагов схлопнуто {zig_stats['merged']} → "
+                f"{zig_stats['nodes_dropped']} узлов убрано, "
+                f"растворено у элементов {dis_stats['dissolved']}); "
                 f"врезано тройников {tee_stats['stitched']} "
                 f"(крестов пропущено {tee_stats['crossings_skipped']})"
             )

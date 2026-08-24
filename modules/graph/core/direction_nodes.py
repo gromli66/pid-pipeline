@@ -1096,3 +1096,191 @@ def flag_connector_clusters(nodes, radius: int = _CLUSTER_RADIUS,
     if debug:
         print(f"[direction_nodes] flag_clusters {stats}")
     return stats
+
+
+# --------------------------------------------------------------------------- #
+# Зигзаг — не поворот: схлопнуть цепочки придуманных узлов обратно в прямую
+# --------------------------------------------------------------------------- #
+# split_edges_at_corners режет путь локально, поэтому дрожание скелета (текст,
+# попавший в маску трубы) даёт «повороты» там, где труба идёт прямо: ушло вбок
+# на 15 px и вернулось. Считаем цепочку целиком: если её реальный путь нигде не
+# отходит от прямой между концами дальше _CHAIN_TOL, прямая — честное
+# представление, а узлы внутри — мусор. Порог согласован с критерием, ради
+# которого П1 и делался: оператор удаляет ребро, когда путь отходит от хорды
+# больше чем на 30 px.
+_CHAIN_TOL = 30.0
+
+
+def merge_straight_chains(nodes, edges, tol: float = _CHAIN_TOL,
+                          debug: bool = False) -> Dict[str, int]:
+    """Схлопнуть цепочки узлов-изломов, которые в целом лежат на прямой.
+
+    Трогаем только узлы, поставленные нами (`bend`): стыки, утверждённые
+    оператором, и оборудование — якоря, они неприкосновенны.
+    """
+    stats = {"merged": 0, "nodes_dropped": 0}
+    edge_counter = _max_suffix(edges, "edge_") + 1
+
+    changed = True
+    while changed:
+        changed = False
+        incid: Dict[str, List[Dict]] = {}
+        for e in edges:
+            for k in ("from", "to"):
+                v = e.get(k)
+                if v is not None:
+                    incid.setdefault(v, []).append(e)
+        by_id = {n["id"]: n for n in nodes}
+
+        def movable(nid):
+            n = by_id.get(nid)
+            return bool(n and n.get("bend")) and len(incid.get(nid, ())) == 2
+
+        for anchor in list(by_id):
+            if movable(anchor):
+                continue                      # не якорь, а внутренность цепочки
+            for first in list(incid.get(anchor, ())):
+                path: List = []
+                interior: List[str] = []
+                cur, e = anchor, first
+                while True:
+                    path += _oriented_from(e, cur)
+                    nxt = e["to"] if e.get("from") == cur else e.get("from")
+                    if nxt is None or not movable(nxt):
+                        break
+                    interior.append(nxt)
+                    pair = incid[nxt]
+                    e = pair[0] if pair[0] is not e else pair[1]
+                    cur = nxt
+                if not interior or len(path) < 2 or nxt == anchor:
+                    continue
+                if _max_deviation(path) > tol:
+                    continue                  # настоящий поворот — оставляем
+
+                keep = [x for x in edges
+                        if x["id"] not in {y["id"] for y in _chain_edges(incid, interior)}]
+                merged = {
+                    "id": f"edge_{edge_counter}", "from": anchor, "to": nxt,
+                    "source_point": list(path[0]), "target_point": list(path[-1]),
+                    "path": path, "length": len(path), "is_terminal": False,
+                    "color": first.get("color"),
+                    "straight_line_distance": float(_dist(path[0], path[-1])),
+                }
+                edge_counter += 1
+                edges[:] = keep + [merged]
+                drop = set(interior)
+                nodes[:] = [n for n in nodes if n["id"] not in drop]
+                stats["merged"] += 1
+                stats["nodes_dropped"] += len(interior)
+                changed = True
+                break
+            if changed:
+                break
+
+    if debug:
+        print(f"[direction_nodes] merge_straight_chains {stats}")
+    return stats
+
+
+def _oriented_from(edge, start) -> List:
+    path = list(edge.get("path") or [])
+    if not path:
+        pts = [p for p in (edge.get("source_point"), edge.get("target_point")) if p]
+        path = pts
+    return path if edge.get("from") == start else list(reversed(path))
+
+
+def _chain_edges(incid, interior) -> List[Dict]:
+    out, seen = [], set()
+    for nid in interior:
+        for e in incid.get(nid, ()):
+            if id(e) not in seen:
+                seen.add(id(e))
+                out.append(e)
+    return out
+
+
+def _max_deviation(path) -> float:
+    if len(path) < 3:
+        return 0.0
+    (y0, x0), (y1, x1) = path[0], path[-1]
+    chord = _dist(path[0], path[-1])
+    if chord < 1:
+        return max(_dist(p, path[0]) for p in path)
+    return max(abs((y1 - y0) * (x0 - px) - (x1 - x0) * (y0 - py)) / chord
+               for py, px in path)
+
+
+# --------------------------------------------------------------------------- #
+# Коннектор, прижатый к элементу — это связь, а не узел
+# --------------------------------------------------------------------------- #
+# Модель стыков нередко ставит квадрат прямо на границе символа. Между ним и
+# элементом остаётся огрызок скелета в 4-20 px, и в графе появляется лишний
+# узел там, где труба просто входит в элемент. Растворяем: огрызок убираем,
+# трубу цепляем к элементу напрямую.
+_BOUNDARY_STUB = 20
+
+
+def dissolve_boundary_connectors(nodes, edges, max_stub: int = _BOUNDARY_STUB,
+                                 debug: bool = False) -> Dict[str, int]:
+    """Коннектор степени 2, приклеенный огрызком к элементу → убрать. На месте."""
+    stats = {"dissolved": 0}
+    by_id = {n["id"]: n for n in nodes}
+
+    def is_connector(nid):
+        n = by_id.get(nid)
+        return bool(n) and n.get("class_name") == "connector"
+
+    changed = True
+    while changed:
+        changed = False
+        incid: Dict[str, List[Dict]] = {}
+        for e in edges:
+            for k in ("from", "to"):
+                v = e.get(k)
+                if v is not None:
+                    incid.setdefault(v, []).append(e)
+
+        for node in nodes:
+            nid = node["id"]
+            if not is_connector(nid):
+                continue
+            pair = incid.get(nid, [])
+            if len(pair) != 2:
+                continue
+            stubs = [e for e in pair
+                     if e.get("length", 10 ** 9) <= max_stub
+                     and not is_connector(e["to"] if e["from"] == nid else e["from"])]
+            if len(stubs) != 1:
+                continue                      # ни одного или оба — не наш случай
+            stub = stubs[0]
+            keep = pair[0] if pair[1] is stub else pair[1]
+            element = stub["to"] if stub["from"] == nid else stub["from"]
+            far = keep["to"] if keep["from"] == nid else keep["from"]
+            if far == element:
+                continue                      # петля на элемент
+
+            # merged идёт far -> nid -> element
+            merged = _oriented_from(keep, far) + _oriented_from(stub, nid)
+            if keep.get("from") == nid:
+                keep["from"] = element
+                keep["source_point"] = list(merged[-1]) if merged else keep.get("source_point")
+                path = list(reversed(merged))          # from=element -> far
+            else:
+                keep["to"] = element
+                keep["target_point"] = list(merged[-1]) if merged else keep.get("target_point")
+                path = merged                          # from=far -> element
+            if merged:
+                keep["path"] = path
+                keep["length"] = len(path)
+                keep["straight_line_distance"] = float(_dist(path[0], path[-1]))
+            edges.remove(stub)
+            nodes.remove(node)
+            by_id.pop(nid, None)
+            stats["dissolved"] += 1
+            changed = True
+            break
+
+    if debug:
+        print(f"[direction_nodes] dissolve_boundary {stats}")
+    return stats
