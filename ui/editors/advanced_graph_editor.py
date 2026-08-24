@@ -298,6 +298,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self._resize_pin_preview: list = []        # [(dx, dy) | None] — что ВПИСАЛО превью
         self._resize_model_rev = None              # undo_mgr.revision на момент базлайна
         self._resize_preview_geom: dict = {}       # node_id → что ВПИСАЛО превью
+        self._resize_preview_args = None           # (width, height, scale) превью
         # Колбэки в таб (назначаются при готовности редактора):
         self.resize_panel_show_cb: Optional[callable] = None     # (visible: bool)
         self.resize_panel_classes_cb: Optional[callable] = None  # (names, current)
@@ -544,6 +545,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         # Призрак вставки не переживает перерисовку сцены (item'ы удалены).
         if getattr(self, "_paste_ghost", None) is not None:
             self._paste_ghost = None
+        # Жёлтые рамки набора «Размеры» сцена уже сняла (они на zValue 9,
+        # фильтр Base сносит всё > 0) — здесь снимаются мёртвые ссылки на них.
+        self._resize_frames.clear()
         super()._reset_scene_state()
 
     def _redraw_all(self):
@@ -555,6 +559,13 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         # OCR текст-блоки поверх графа (видимы только в состоянии 'ocr').
         if hasattr(self, "_ocr_block_items"):
             self.refresh_ocr_layer()
+        # ⛔ Жёлтые рамки живого набора — тоже часть картинки, а не украшение
+        # одного жеста. Без этой строки любая перерисовка сцены (цвет рёбер
+        # в шторке, откат снимочной команды, правка KKS) уносила их насовсем,
+        # а набор оставался ЖИВЫМ: оператор не видел, что «Размеры» держат
+        # 17 узлов, и не замечал ни одной ловушки, которую держит открытое
+        # состояние редактора (§83.33 — замер: 17 рамок → 0 на сцене).
+        self._redraw_resize_frames()
 
     def _after_statistics_update(self):
         """Обновить multi-select визуалы."""
@@ -4158,6 +4169,50 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 live[nid] = fields
         return live
 
+    @staticmethod
+    def _frame_size(bbox) -> tuple | None:
+        """(ширина, высота) рамки — то, ОТ ЧЕГО зависят `area` и пины."""
+        if bbox and len(bbox) == 4:
+            return (round(float(bbox[2]) - float(bbox[0]), 6),
+                    round(float(bbox[3]) - float(bbox[1]), 6))
+        return None
+
+    def _base_describes_frame(self, nid: str, fields) -> bool:
+        """Можно ли вернуть узлу ПРОИЗВОДНЫЕ от рамки величины — `area` и пины.
+
+        ⛔ Третья ось поэлементности (§110.25, клетка (7) пункта 1-40). Первые
+        две — «узлы × поля» и «набор × остальная модель». Эта про то, что поле,
+        совпавшее с отпечатком ПО ЗНАЧЕНИЮ, не доказывает владения: у бокса
+        `segmentation` пуст и у превью, и у кого угодно ещё, а `area` — число,
+        и чужая команда даёт то же самое не случайно, а СТРУКТУРНО. Redo
+        углового ресайза ТОЙ ЖЕ ширины считает и рамку, и пин одной формулой
+        от одной базы (10.0 × 90/20 = 45.0 с обеих сторон) — то есть это
+        воспроизводимый ЖЕСТ оператора (Ctrl+Y), а не лотерея битов.
+
+        Разделяет не «чьё состояние», а «описывает ли база нынешнюю рамку»:
+        `area` и пины — функции РАЗМЕРА, и возвращать их из базлайна законно,
+        только пока размер базлайновый. Два законных случая: рамку сейчас же
+        вернём сами (`bbox`/`segmentation` среди наших полей) — либо она уже
+        базлайнового размера, потому что чужой откат вернул ПЕРЕНОС, а перенос
+        размера не меняет (замер §97.3: `area` 1428 обязана вернуться).
+        Незаконный — рамку задала чужая команда: откат писал в узел площадь
+        720 и пин 10.0 при рамке 90×90, и рассинхрон уезжал в JSON.
+        """
+        base = self._resize_base.get(nid)
+        if base is None:
+            return False
+        # ⛔ Условия — те же, при которых рамка РЕАЛЬНО возвращается ниже.
+        # Голое «поле среди наших» здесь и есть ловушка: у бокса `segmentation`
+        # пуст с обеих сторон, поэтому совпадает ВСЕГДА и не значит ничего.
+        if ('bbox' in fields and base['bbox']) or \
+                ('segmentation' in fields and base['segmentation']):
+            return True
+        node = self.nodes.get(nid)
+        if node is None:
+            return False
+        return self._frame_size(node.get('bbox')) == \
+            self._frame_size(base.get('bbox'))
+
     def _preview_still_in_model(self) -> bool:
         """Превью, вписанное последним `_apply_sizes_from_base`, ещё в модели
         ЦЕЛИКОМ — у каждого узла набора, в каждом поле И В КАЖДОМ ПИНЕ.
@@ -4277,8 +4332,13 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             out.append((float(pin['dx']), float(pin['dy'])) if pin is not None else None)
         return out
 
-    def _rollback_owned_resize_pins(self):
+    def _rollback_owned_resize_pins(self, live: dict | None = None):
         """Снять след превью с пинов ТАМ, ГДЕ ОН ЕЩЁ НАШ.
+
+        `live` — вердикт `_preview_live_fields()` по узлам. Пин масштабируется
+        РАМКОЙ, поэтому базовое значение возвращается, только пока база эту
+        рамку описывает (`_base_describes_frame`): совпадение отпечатка на
+        чужой redo-рамке СТРУКТУРНОЕ, а не доказательство владения.
 
         Та же поэлементность, что у `_preview_live_fields` для узлов, и по той
         же причине: пин, который вернул ЧУЖОЙ откат, базлайну не принадлежит,
@@ -4319,6 +4379,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                                            self._resize_pin_preview):
             if mark is None:
                 continue
+            if live is not None and not self._base_describes_frame(
+                    e.get(role), live.get(e.get(role), ())):
+                continue          # рамку узла задала чужая команда — пин её
             pin = port_model.edge_pin(e, role)
             if pin is None:
                 continue                      # чужой откат снял пин — не воскрешаем
@@ -4357,7 +4420,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         # опровергнута исполнением, замер §106.4. Снять свой след надо
         # обязательно: иначе конец трубы держится по рамке 90×90 при рамке
         # 20×36 у узла, которому откат вернул размер (замер §48: dx 10 → 45).
-        self._rollback_owned_resize_pins()
+        self._rollback_owned_resize_pins(live)
         for nid, fields in live.items():
             n = self.nodes.get(nid)
             base = self._resize_base.get(nid)
@@ -4369,7 +4432,10 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 n['bbox'] = list(base['bbox'])
             if 'segmentation' in fields and base['segmentation']:
                 n['segmentation'] = list(base['segmentation'])
-            if 'area' in fields and base['area'] is not None:
+            # `area` — производная от рамки, а не самостоятельное поле: база
+            # возвращается, только пока она эту рамку описывает.
+            if 'area' in fields and base['area'] is not None \
+                    and self._base_describes_frame(nid, fields):
                 n['area'] = base['area']
         poly_edit_in_base = self._poly_edit_node in self._resize_base
         self._drop_resize_baseline()
@@ -4421,6 +4487,28 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self._revert_resize_preview()
         self._redraw_resize_frames()
 
+    def take_uncommitted_preview(self):
+        """Снять превью «Размеров» на время записи, вернув чем его восстановить.
+
+        Жетон — параметры последнего превью; «есть ли что возвращать» решается
+        тем же прямым ответом, которым живёт откат: не «открыта ли панель» и не
+        «двигался ли стек», а «лежит ли ещё в модели то, что вписало превью».
+        """
+        token = (self._resize_preview_args
+                 if self._preview_live_fields() else None)
+        self.drop_uncommitted_preview()
+        return token
+
+    def restore_uncommitted_preview(self, token) -> None:
+        """Пересобрать превью после записи по таймеру.
+
+        `preview_resize` идемпотентно и снимает базлайн заново — с модели,
+        которая после отката равна той, что базлайн описывал. То есть оператор
+        видит ровно ту же картинку и продолжает с того же места.
+        """
+        if token is not None and self._resize_sel:
+            self.preview_resize(*token)
+
     def _undo_point(self):
         """Снимок модели как точка возврата: превью снимается ДО снимка.
 
@@ -4452,6 +4540,16 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 n['centroid'] = list(base['centroid'])
                 n['segmentation'] = list(base['segmentation'])
                 n['area'] = base['area']
+                # ⛔ И `bbox` — ровно как в боксовой ветке выше. Он тут не
+                # результат, а ВХОД: `_resize_node_poly` отдаёт его
+                # `rescale_edge_pins` как «рамку ДО». Без возврата парой
+                # становилось «прошлый тик → цель», и пин ехал от базы на
+                # частное соседних тиков: ×2 → 20.0, ×3 → 15.0 вместо 30.0,
+                # «Применить» тем же ×2 → множитель 1.0 и пин ИСХОДНОЙ формы
+                # при удвоенном контуре (§110.26). Геометрия при этом верна
+                # на каждом тике — глазом не видно вовсе.
+                if base['bbox']:
+                    n['bbox'] = list(base['bbox'])
                 self._resize_node_poly(n, float(scale))
         # Что именно вписано — отпечаток для `_preview_still_in_model()`:
         # им сторож базлайна отвечает ПРЯМО, а не через `undo_mgr.revision`.
@@ -4513,6 +4611,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             self._rollback_owned_preview()
             self._capture_resize_base()
         self._apply_sizes_from_base(width, height, scale, kind)
+        # Чем превью восстановить, если его пришлось снять не по воле
+        # оператора (запись по таймеру — `take_uncommitted_preview`).
+        self._resize_preview_args = (width, height, scale)
         for nid in self._resize_sel:
             self._refresh_node_visual(nid)
         self._redraw_resize_frames()
@@ -4687,7 +4788,22 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
 
         from ui.editors.undo_manager import SnapshotCommand
         # Базлайн = состояние ДО живого превью (чтобы Ctrl+Z вернул и размеры тоже).
-        if not self._resize_baseline_alive():
+        #
+        # ⛔ ЗДЕСЬ ДВА РАЗНЫХ ВОПРОСА, И СТОРОЖ ОТВЕЧАЕТ ТОЛЬКО НА ПЕРВЫЙ.
+        # «Годится ли `_resize_base` для идемпотентного пересчёта размеров» —
+        # вопрос про НАБОР, и `_resize_baseline_alive()` отвечает на него верно.
+        # «Годится ли `_resize_model_base` точкой возврата» — вопрос про ВСЮ
+        # МОДЕЛЬ: снимок держит и те узлы, которых в наборе нет. Любая команда,
+        # легшая в стек после съёмки базлайна (или снятая с него Ctrl+Z),
+        # оставила базлайн описывающим прошлое, а отпечатки набора этого не
+        # видят. Замеры §121: чужой перенос ВНЕ набора, отменённый оператором,
+        # ВОСКРЕСАЛ отменой до дна при стеке 0 (§103.18), а узел, воскрешённый
+        # Ctrl+Z между превью и «Применить», откат «Применить» удалял снова.
+        # Поэтому точку возврата пересобираем всегда, когда стек двигался:
+        # своё превью снимаем поэлементно, снимок берём с модели КАК ОНА СЕЙЧАС.
+        stale_return_point = (self._resize_model_base is None
+                              or self._resize_model_rev != self.undo_mgr.revision)
+        if stale_return_point or not self._resize_baseline_alive():
             # То же, что в `preview_resize`: пересъём поверх живого превью
             # вмуровал бы его И в размер, И в точку возврата `cmd._before`
             # (замер §97.2: полигон 605×75 → ×2 → «Применить» ×2 → 2420×300,
@@ -5954,6 +6070,18 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
 
         if dialog.exec() == QDialog.DialogCode.Accepted:
             new_text = text_edit.text().strip()
+            if new_text == str(current_text or "").strip():
+                return
+
+            # ⛔ Точка возврата — как у соседнего KKS по тому же жесту
+            # (Ctrl+2ЛКМ в «ОКР привязке»). Без неё правка шла МИМО стека:
+            # `revision` не рос, `has_unsaved_changes()` её не видел (вкладка
+            # закрывалась без вопроса, автосохранение не срабатывало), а
+            # первый же Ctrl+Z по соседней команде стирал её вместе с собой —
+            # её `_before` снят ДО правки (§83.31). Распространение по трубам
+            # — часть того же действия оператора, поэтому внутри шага.
+            cmd = self._ocr_push_snapshot("Диаметр ребра")
+            edge_data = self.model.find_edge_data(edge_key)
 
             if new_text:
                 import re
@@ -5986,6 +6114,10 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
 
             # Распространить диаметры по трубам
             prop_count = self._propagate_all_diameters()
+
+            # Шаг закрыт здесь: всё, что правка задела (сам диаметр и
+            # распространение по трубам), — один Ctrl+Z оператора.
+            self._ocr_commit(cmd)
 
             # Refresh visual (edge color may change)
             self._redraw_all()
