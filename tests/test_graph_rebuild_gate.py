@@ -57,10 +57,12 @@ from app.api.contours import (
 from app.api.ocr import (
     apply_ocr_binding,
     recognize_ocr_boxes,
+    save_ocr_binding,
     save_ocr_validation,
     start_ocr,
     update_ocr_result,
 )
+from app.api.validation import save_validated_graph
 from app.api.build_gate import GRAPH_READY_STATUSES, REBUILD_REFUSAL
 from app.models import Artifact, ArtifactType, Diagram, DiagramStatus
 
@@ -83,6 +85,11 @@ ENDPOINTS = (
     "ocr_recognize",
     "ocr_binding_apply",
     "ocr_start",
+    # Возврат ревизии связки 3+5: этих двух в решётке НЕ БЫЛО, и расхождение
+    # `apply` c `save` при `ERROR` попало ровно в зазор между двумя наборами —
+    # блок 5 их не судил, а решётка pains-3 не знает про гейт пересборки.
+    "graph_save",
+    "binding_save",
 )
 
 ALL_STATUSES = {s.value for s in DiagramStatus}
@@ -113,14 +120,22 @@ ACCEPTS = {
     # разъедься они, оператор получил бы «сохранить можно, применить нельзя».
     # Отличие от `GRAPH_READY` ровно в двух клетках: до валидации графа
     # применять нечего.
-    "ocr_binding_apply": GRAPH_READY - {"built", "validating_graph"},
+    "ocr_binding_apply": GRAPH_READY - {"built", "validating_graph", "error"},
     # Единственный, у кого свой список был и до блока 5. Убран `building_graph`:
     # эндпоинт первым же делом СНОСИТ `OCR_RESULT` (`app/api/ocr.py`), а сборка
     # графа в этот момент ждёт текстовые блоки, чтобы слить их в свежий граф.
     "ocr_start": {"validated_junctions", "built",
                   "validating_graph", "validated_graph", "extracting_contours",
                   "contours_extracted", "contours_validated", "ocr_completed",
-                  "ocr_bound", "error"},
+                  "ocr_bound", "generating_fxml", "completed", "error"},
+    # Собственные списки pains-3 + гейт пересборки перед ними. `error` у
+    # `/graph/save` — решение №3, доведённое до конца (первая запись вкладки
+    # «Контуры» приходит сюда); у `/binding/save` `error` НЕТ, и `/binding/apply`
+    # с тем же списком теперь тоже его не пускает.
+    "graph_save": {"built", "validating_graph", "validated_graph",
+                   "contours_validated", "ocr_completed", "ocr_bound",
+                   "generating_fxml", "completed", "error"},
+    "binding_save": GRAPH_READY - {"built", "validating_graph", "error"},
 }
 
 #: Пускает ли эндпоинт `ERROR` с `error_stage` упавшей СБОРКИ ГРАФА.
@@ -227,6 +242,10 @@ CALL = {
         UID, payload={"boxes": []}, db=db),
     "ocr_binding_apply": lambda db: apply_ocr_binding(UID, db=db),
     "ocr_start": lambda db: start_ocr(UID, db=db),
+    "graph_save": lambda db: save_validated_graph(
+        UID, file=FakeUpload(b'{"nodes": [], "edges": []}'), db=db),
+    "binding_save": lambda db: save_ocr_binding(
+        UID, file=FakeUpload(b'{"bindings": []}'), db=db),
 }
 
 
@@ -358,9 +377,54 @@ def test_a_failed_ocr_does_not_lock_phase_b(endpoint, layout, broker):
 
     Без этой клетки гейт мог бы закрыть `ERROR` целиком, и тест выше остался
     бы зелёным — а оператор после падения распознавания терял бы и контуры.
+
+    ⛔ Клетка судится ПО ТАБЛИЦЕ `ACCEPTS`, а не «все пускают» (возврат ревизии
+    связки 3+5): у `/binding/save` `ERROR` в списке нет, и `/binding/apply`,
+    которому этот же список передан, обязан вести себя ТАК ЖЕ. Пока
+    `graph_is_ready` отвечал по `ERROR` до проверки `allowed`, они расходились
+    знаком — «применить можно, сохранить нельзя».
     """
     diagram = _diagram("error", error_stage="ocr")
+    if "error" not in ACCEPTS[endpoint]:
+        with pytest.raises(HTTPException) as exc:
+            _run(endpoint, diagram)
+        assert exc.value.status_code == 400, endpoint
+        return
     _result, _db = _run(endpoint, diagram)
+
+
+def test_apply_and_save_agree_on_a_failed_ocr(layout, broker):
+    """Именно тот дефект, за который вернули: два соседа по вкладке сошлись.
+
+    Утверждается РАВЕНСТВО исходов, а не каждый по отдельности: порознь оба
+    были «объяснимы», и расхождение пряталось в зазоре между двумя наборами.
+    """
+    def _outcome(endpoint):
+        try:
+            _run(endpoint, _diagram("error", error_stage="ocr"))
+            return 200
+        except HTTPException as exc:
+            return exc.status_code
+
+    assert _outcome("ocr_binding_apply") == _outcome("binding_save")
+
+
+def test_the_allowed_list_really_decides_the_error_cell():
+    """Сторож НАШЕГО решения: `allowed` управляет клеткой `ERROR`.
+
+    Проверяется предикат, а не эндпоинт: подставляем два разных списка одному
+    и тому же объекту и требуем разных ответов. Верни кто-нибудь прежний
+    порядок (ветка `ERROR` раньше `allowed`) — оба ответа станут `True`.
+    """
+    from app.api.build_gate import GRAPH_READY_STATUSES, graph_is_ready
+    from app.api.ocr import _BINDING_SAVE_STATUSES
+
+    broken = _diagram("error", error_stage="ocr")
+    assert graph_is_ready(broken, GRAPH_READY_STATUSES) is True
+    assert graph_is_ready(broken, _BINDING_SAVE_STATUSES) is False
+
+    building = _diagram("error", error_stage=GRAPH_BUILD_STAGE)
+    assert graph_is_ready(building, GRAPH_READY_STATUSES) is False
 
 
 # ── машинный признак отказа: клиент и сервер сведены ─────────────────────
@@ -533,3 +597,216 @@ def test_preserve_contours_still_saves_them_where_it_should():
                                       preserve_contours=True))
     assert ArtifactType.CONTOURS_VALIDATED not in doomed
     assert ArtifactType.OCR_RESULT in doomed, "«Переделать OCR» не снёс старый OCR"
+
+
+# ── файловая половина сброса контуров (возврат ревизии связки 3+5) ────────
+#
+# «Контуры сбрасываются» было выполнено ТОЛЬКО в БД: строка снята, а
+# `contours_validated.json` и `contours_auto.json` остались лежать — и все ТРИ
+# потребителя читают их ПО ПУТИ, мимо строки (`worker/tasks/layout.py`,
+# `app/services/layout_dispatch.py`, `worker/tasks/graph.py`). Влив идёт по IoU,
+# то есть контуры прошлого поколения садились на узлы нового молча.
+#
+# Файловых клеток у контуров не было НИ ОДНОЙ — судилась только таблица типов.
+
+from app.api.rollback import purge_artifacts                    # noqa: E402
+
+
+class _PurgeDB:
+    """Поверхность сессии для `purge_artifacts`: только `execute` с DELETE."""
+
+    class _Res:
+        rowcount = 1
+
+    async def execute(self, stmt):
+        return self._Res()
+
+
+def _contours_on_disk(storage):
+    d = storage / str(UID) / "contours"
+    return sorted(p.name for p in d.glob("contours_*.json"))
+
+
+@pytest.mark.parametrize("target", REBUILD_TARGETS, ids=lambda s: s.value)
+def test_rebuild_takes_the_contour_files_off_the_disk(target, storage):
+    """Строка и ФАЙЛ сносятся вместе — иначе конвейер читает сироту.
+
+    Утверждается РАЗНИЦА: до вызова файлы лежат, после — их нет. Тот же класс,
+    что `graph_canvas.json` до pains-3, и то же лекарство.
+    """
+    assert _contours_on_disk(storage) == ["contours_auto.json",
+                                          "contours_validated.json"], "стенд пуст"
+
+    doomed = _artifacts_to_delete(target, preserve_ocr=True,
+                                  preserve_contours=False)
+    asyncio.run(purge_artifacts(UID, doomed, _PurgeDB()))
+
+    assert _contours_on_disk(storage) == [], (
+        "контуры прошлого поколения остались на диске — их вольют по IoU "
+        "в новый граф")
+
+
+def test_preserved_contours_stay_on_the_disk(storage):
+    """Порог заперт с другой стороны: «Переделать OCR» файлы НЕ трогает.
+
+    Иначе «сносить файл вместе со строкой» вылечилось бы «сносить всегда»,
+    и пункт 5-1 (контуры считают поточечно руками) был бы отменён молча.
+    """
+    doomed = _artifacts_to_delete(DiagramStatus.VALIDATED_GRAPH,
+                                  preserve_contours=True)
+    asyncio.run(purge_artifacts(UID, doomed, _PurgeDB()))
+
+    assert _contours_on_disk(storage) == ["contours_auto.json",
+                                          "contours_validated.json"]
+
+
+def test_layout_dispatch_does_not_see_the_old_contours(storage):
+    """Клетка ревизора: после пересборки диспетчер раскладки контуров НЕ видит.
+
+    Судится не наше представление о читателе, а САМ читатель —
+    `_validated_contours` из `app/services/layout_dispatch.py`, которая ходит
+    ПО ПУТИ и мимо БД. Ради неё дефект и чинился: сноси мы только строку,
+    эта функция продолжала бы отдавать полигоны прошлого поколения, а влив
+    идёт по IoU.
+
+    Фикстура несёт НАСТОЯЩИЙ подтверждённый полигон: с пустым списком узлов
+    читатель отдавал бы `[]` и до правки, и после, — клетка была бы слепа.
+    """
+    from app.services import layout_dispatch
+
+    (storage / str(UID) / "contours" / "contours_validated.json").write_text(
+        json.dumps({"nodes": [{
+            "ann_id": 1,
+            "polygon_validated": [10, 10, 40, 10, 40, 40, 10, 40],
+            "status": "approved",
+        }]}), encoding="utf-8")
+
+    before = layout_dispatch._validated_contours(UID)
+    assert before, "стенд пуст — читатель не увидел контуров ДО отката"
+
+    doomed = _artifacts_to_delete(DiagramStatus.VALIDATED_JUNCTIONS,
+                                  preserve_ocr=True, preserve_contours=False)
+    asyncio.run(purge_artifacts(UID, doomed, _PurgeDB()))
+
+    assert layout_dispatch._validated_contours(UID) == [], (
+        "диспетчер раскладки читает контуры прошлого поколения")
+
+
+# ── сведение `/ocr/start` с клиентским «кнопка зелёная» ──────────────────
+#
+# Возврат ревизии связки 3+5. Приём тот же, что уже работает для привязки
+# (`tests/test_phase_b_reentry.py::test_client_binding_threshold_matches_the_
+# server_gate`), — на этом эндпоинте его просто не применили. Цена промаха
+# замерена: из ОДИННАДЦАТИ статусов, при которых клиент красит кнопку
+# «Распознавание текста» зелёной, ТРИ отвечали 400 уже ПОСЛЕ вопроса
+# «Перезапустить распознавание?» и ответа «Да», причём по-английски.
+
+#: Клиентское множество «кнопка зелёная», снятое чтением обеих веток
+#: `_apply_status`. Литерал держит набор pains-3 — здесь он ПОВТОРЁН, а не
+#: импортирован: две независимые копии ловят правку одной из них.
+CLIENT_GREEN = {
+    "built", "validating_graph", "validated_graph",
+    "extracting_contours", "contours_extracted", "contours_validated",
+    "ocr_completed", "ocr_bound", "generating_fxml", "completed",
+}
+
+#: Единственное НАМЕРЕННОЕ расхождение: во время сборки перезапуск запрещён
+#: (эндпоинт первым делом сносит `OCR_RESULT`, а сборка ждёт текстовые блоки).
+#: Пока кнопка не погашена — отказ обязан быть по-русски.
+# Решение Максима 2026-08-25 (повторный возврат ревизии связки): building_graph
+# из зелёных УШЁЛ — кнопка на время сборки серая, зелёных-с-отказом не осталось.
+# Русский отказ сервера на этом статусе — страховка прямых путей, его клетка ниже.
+GREEN_BUT_REFUSED: set = set()
+RUSSIAN_REFUSAL = ["building_graph"]
+
+
+def test_client_green_button_matches_the_ocr_start_gate():
+    """Зелёная кнопка и белый список сервера сведены БЕЗ исключений.
+
+    Перебор ведётся ПОЛНЫМ клиентским множеством, а не выборкой.
+    """
+    from app.api.ocr import _OCR_START_STATUSES
+
+    server = {s.value for s in _OCR_START_STATUSES}
+    refused = {s for s in CLIENT_GREEN if s not in server}
+    assert refused == GREEN_BUT_REFUSED, (
+        f"кнопка зелёная, а сервер отвечает 400 на: {sorted(refused)}")
+
+
+def test_the_client_green_set_is_the_real_one():
+    """Сторож копии: клиентский литерал тот же, что у набора pains-3.
+
+    Без него две копии разъедутся молча, и сведение выше начнёт сверять
+    сервер сам с собой.
+    """
+    from tests.ui.test_ocr_restart_asks import ALL_GREEN
+    assert set(ALL_GREEN) == CLIENT_GREEN
+
+
+@pytest.mark.parametrize("status", RUSSIAN_REFUSAL)
+def test_the_intentional_refusal_speaks_russian(status, layout, broker):
+    """Оператор читает отказ ПОСЛЕ «Да» на вопрос о потере результата.
+
+    Утверждается НАШЕ решение (русский текст и никакой отправки в брокер), а не
+    факт четырёхсотки: прежняя английская строка про 'validated_junctions'
+    прилетала в модалку клиента как есть.
+    """
+    with pytest.raises(HTTPException) as exc:
+        _run("ocr_start", _diagram(status))
+    detail = str(exc.value.detail)
+    assert exc.value.status_code == 400
+    assert "Cannot start OCR" not in detail, detail
+    assert "Распознавание" in detail, detail
+    assert broker == [], "отказ всё равно поставил задачу в очередь"
+
+
+# ── черновики: общий tmp у двух писателей из трёх ────────────────────────
+
+def _tmp_writers():
+    """Все места, где строится имя черновика: (файл, аргумент `with_suffix`).
+
+    Аргумент вытаскивается регуляркой по ВСЕМУ тексту, а не построчно: у
+    писателя FXML вызов разнесён на две строки, и построчный перебор его
+    не видел (поймано собственным сторожем перебора).
+    """
+    import re
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[1]
+    out = []
+    for rel in ("app/api/ocr.py", "app/services/ocr_graph_merge.py",
+                "worker/tasks/graph.py"):
+        src = (repo / rel).read_text(encoding="utf-8")
+        for arg in re.findall(r"with_suffix\(\s*(.*?)\)\s*$",
+                              src, re.S | re.M):
+            arg = " ".join(arg.split())
+            if ".tmp" in arg:
+                out.append((rel, arg))
+    return out
+
+
+def test_every_tmp_writer_carries_the_pid():
+    """Все писатели черновиков несут PID в имени — перебор ГРЕПОМ, не выборкой.
+
+    Правило записано у третьего писателя (`worker/tasks/graph.py`): «Суффикс
+    PID обязателен: общий tmp просто перенёс бы гонку на шаг раньше — второй
+    писатель обрезал бы черновик первого, и `os.replace` положил бы поверх цели
+    уже испорченный файл». Обстановка для гонки есть: `acks_late` и
+    `worker_concurrency=2` (`worker/celery_app.py`).
+
+    Возврат ревизии связки 3+5: двое из трёх писателей правило не соблюдали, и
+    ни один набор этого не видел — сторожа на популяцию не было вовсе.
+    """
+    without = [f"{rel}: {arg}" for rel, arg in _tmp_writers()
+               if "getpid" not in arg]
+    assert without == [], f"черновики без PID в имени: {without}"
+
+
+def test_the_grep_really_sees_the_writers():
+    """Сторож самого сторожа: перебор находит ВСЕ три места, а не ноль.
+
+    Без этой клетки правило выше зеленело бы и на пустом списке — тот же класс,
+    что «гейт судит по отсутствию наблюдения».
+    """
+    assert len(_tmp_writers()) == 3, (
+        f"писателей черновиков найдено {len(_tmp_writers())}, а не 3")

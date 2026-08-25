@@ -129,6 +129,26 @@ _CANVAS_ARTIFACTS = [
 #: Файлы холста на диске. Строка БД и файл сносятся ВМЕСТЕ — см. `purge_artifacts`.
 _CANVAS_FILES = ("graph_canvas.json", "residual_defects.json")
 
+#: Артефакты, у которых есть ЧИТАТЕЛИ ПО ПУТИ — мимо строки `Artifact`. Файл
+#: такого артефакта обязан сноситься вместе со строкой, иначе он остаётся
+#: сиротой: клиент его не покажет (он ходит по БД), а конвейер прочитает.
+#:
+#: ⛔ Контуры попали сюда возвратом ревизии связки 3+5: блок 5 убрал `graph` из
+#: `_PRESERVE_CONTOURS_KEYS` («после пересборки контуры сбрасываются»), но
+#: сбросил только СТРОКУ — `contours_validated.json` и `contours_auto.json`
+#: оставались лежать, а читают их ТРИ потребителя по пути:
+#: `worker/tasks/layout.py` (влив в холст), `app/services/layout_dispatch.py`
+#: (sha), `worker/tasks/graph.py` (растровый enrich). Влив идёт по IoU, то есть
+#: контуры прошлого поколения молча садились на узлы нового — ровно тот
+#: механизм, ради которого ключ и убирали. Тот же класс сироты, что
+#: `graph_canvas.json` до pains-3, и то же лекарство.
+_ORPHAN_FILES = {
+    ArtifactType.GRAPH_CANVAS: ("graph", "graph_canvas.json"),
+    ArtifactType.RESIDUAL_DEFECTS: ("graph", "residual_defects.json"),
+    ArtifactType.CONTOURS_VALIDATED: ("contours", "contours_validated.json"),
+    ArtifactType.CONTOURS_AUTO: ("contours", "contours_auto.json"),
+}
+
 #: Цель отката, начиная с которой холст переживает возврат.
 _CANVAS_SURVIVES_FROM = DiagramStatus.OCR_BOUND
 
@@ -215,18 +235,25 @@ def _artifacts_to_delete(
     return types
 
 
-def _unlink_canvas_files(uid: UUID) -> None:
-    """Снести файлы холста с диска.
+def _unlink_orphan_files(uid: UUID, art_types) -> None:
+    """Снести с диска файлы тех артефактов, у которых есть читатели ПО ПУТИ.
 
     Раньше удалялась только строка `Artifact`, а `graph_canvas.json` оставался
     лежать — и вместе с ним флаг `operator_saved`. Задача раскладки читает флаг
     из ФАЙЛА (`worker/tasks/layout.py`) и при нём выбрасывает свой результат:
     откат звал пересчёт с force=True, тот честно считал и молча ничего не писал.
+
+    Тот же счёт у контуров (возврат ревизии связки 3+5), поэтому перечень стал
+    таблицей `_ORPHAN_FILES`: сносится ровно то, чья СТРОКА в этом же вызове
+    снимается, — «файл без строки» опаснее удалённого.
     """
     from app.services.storage import StorageService
-    graph_dir = StorageService().base_path / str(uid) / "graph"
-    for fname in _CANVAS_FILES:
-        f = graph_dir / fname
+    base = StorageService().base_path / str(uid)
+    for art_type in art_types:
+        location = _ORPHAN_FILES.get(art_type)
+        if location is None:
+            continue
+        f = base / location[0] / location[1]
         try:
             f.unlink()
             logger.info("rollback %s: снят %s", uid, f.name)
@@ -237,7 +264,7 @@ def _unlink_canvas_files(uid: UUID) -> None:
 
 
 async def purge_artifacts(uid: UUID, art_types: list, db) -> int:
-    """Снять артефакты: строки БД и файлы холста ВМЕСТЕ. Вернуть число строк.
+    """Снять артефакты: строки БД и осиротевшие файлы ВМЕСТЕ. Вернуть число строк.
 
     Общая точка для отката по бусине и для переоткрытия валидации CVAT
     (`app/api/cvat.py`), который раньше сносил только строки. Осиротевший
@@ -254,8 +281,7 @@ async def purge_artifacts(uid: UUID, art_types: list, db) -> int:
             Artifact.artifact_type.in_(art_types),
         )
     )
-    if any(t in art_types for t in _CANVAS_ARTIFACTS):
-        _unlink_canvas_files(uid)
+    _unlink_orphan_files(uid, art_types)
     return result.rowcount
 
 

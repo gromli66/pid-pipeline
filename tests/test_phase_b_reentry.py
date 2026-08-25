@@ -56,9 +56,15 @@ ACCEPTS = {
                     "contours_validated", "ocr_completed", "ocr_bound",
                     "generating_fxml", "completed"},
     # 3.1в: +generating_fxml/completed — вкладка открывается и из готовой схемы.
+    # `error` — возврат ревизии связки 3+5: решение №3 («упавший OCR фазу B не
+    # запирает») не работало ни на одной вкладке, потому что ПЕРВАЯ запись
+    # «Контуров» приходит сюда и отвечала 400 раньше, чем дело доходило до
+    # `PUT /contours/validated`. Упавшую СБОРКУ сюда по-прежнему не пускают —
+    # её отбивает гейт пересборки по `error_stage`
+    # (`tests/test_graph_rebuild_gate.py`).
     "graph_save": {"built", "validating_graph", "validated_graph",
                    "contours_validated", "ocr_completed", "ocr_bound",
-                   "generating_fxml", "completed"},
+                   "generating_fxml", "completed", "error"},
     # 3.1в + Н8+: весь «хвост» начиная с `validated_graph` — ровно то, что
     # пускает клиентский порог `_binding_reachable`.
     "binding_save": {"validated_graph", "extracting_contours",

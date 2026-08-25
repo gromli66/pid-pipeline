@@ -17,8 +17,9 @@
 распознавания обязан сохранить контуры, которые считал руками.
 
 ⚠ Сосед со СВОЕЙ политикой: `/api/ocr/{uid}/binding/save` (`_BINDING_SAVE_
-STATUSES`, пункт 3.1в) `ERROR` не пускает вовсе. Сводить его политику с этой —
-чужой пункт, здесь она названа, а не тронута.
+STATUSES`, пункт 3.1в) `ERROR` не пускает вовсе — и `/binding/apply`, которому
+этот же список передан, теперь тоже не пускает. Раньше передача списка ничего
+не меняла (см. `graph_is_ready`), и два соседа расходились знаком.
 
 Кто зовёт (перечень снят грепом `require_graph_ready` по `app/api/`):
 `contours.py` — `/extract`, PUT `/validated`, `/auto-accept`, `/complete`,
@@ -66,14 +67,31 @@ GRAPH_READY_STATUSES = (
     DiagramStatus.OCR_BOUND,
     DiagramStatus.GENERATING_FXML,
     DiagramStatus.COMPLETED,
+    # ⛔ `ERROR` здесь ЯВНО (возврат ревизии связки 3+5). Раньше ветка `ERROR`
+    # отвечала ДО проверки `allowed`, и передача своего списка вырождалась
+    # в no-op: `/binding/apply` при `error/ocr` отвечал 200 и писал KKS, а его
+    # сосед `/binding/save` — 400, то есть ровно «применить можно, сохранить
+    # нельзя», против чего его список и передавали. Теперь `allowed` решает и
+    # здесь: у кого `ERROR` в списке — тот пускает (решение №3: упавший OCR
+    # фазу B не запирает), у кого нет — отвергает вместе со всеми.
+    DiagramStatus.ERROR,
 )
 
 
 def graph_is_ready(diagram, allowed=GRAPH_READY_STATUSES) -> bool:
-    """Можно ли сейчас писать в граф из фазы B."""
+    """Можно ли сейчас писать в граф из фазы B.
+
+    ⛔ `ERROR` проверяется ПО ТОМУ ЖЕ `allowed`, что и всё остальное, и только
+    ПОТОМ уточняется по `error_stage`. Порядок был обратным, и вызов со своим
+    списком вырождался в no-op — см. комментарий у `GRAPH_READY_STATUSES`.
+    """
+    if diagram.status not in allowed:
+        return False
     if diagram.status is DiagramStatus.ERROR:
+        # Упавшая СБОРКА — 400 (графа нет); любой другой упавший этап фазу B
+        # не запирает (решение №3 редтима).
         return diagram.error_stage != GRAPH_BUILD_STAGE
-    return diagram.status in allowed
+    return True
 
 
 def require_graph_ready(diagram, allowed=GRAPH_READY_STATUSES) -> None:

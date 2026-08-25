@@ -47,6 +47,7 @@ class _Stub:
     # ли этап). Заглушка гоняет НАСТОЯЩИЙ `_apply_status`, поэтому обязана
     # знать всё, что он трогает у себя, — сторож ниже это и проверяет.
     _light_binding_button = lambda *a, **k: None
+    _light_ocr_button = lambda *a, **k: None
 
     def _start_prtx_conversion(self):
         self.prtx_calls += 1

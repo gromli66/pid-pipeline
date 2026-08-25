@@ -338,7 +338,14 @@ UI выставляет их по спискам `DiagramWorkspace._PRESERVE_OCR
 | `BUILT` … `COMPLETED` (`GRAPH_READY_STATUSES`, 11 значений) | **пускается** |
 | всё раньше `BUILT`, включая `VALIDATED_JUNCTIONS` и `BUILDING_GRAPH` | **400** |
 | `ERROR` с `error_stage == "building_graph"` | **400** — сборка упала, графа нет |
-| `ERROR` с любым другим `error_stage` | **пускается** — упавший OCR фазу B не запирает |
+| `ERROR` с любым другим `error_stage` | **пускается**, если `ERROR` есть в списке ЭТОГО эндпоинта |
+
+⚠ `ERROR` разбирается ПО ТОМУ ЖЕ списку, что и все прочие статусы, и только
+потом уточняется по `error_stage`. Порядок был обратным, и передача своего
+списка вырождалась в no-op: `/binding/apply` при `error/ocr` отвечал 200 и писал
+KKS, а его сосед `/binding/save` — 400. У `GRAPH_READY_STATUSES` `ERROR` есть,
+у `_BINDING_SAVE_STATUSES` — нет, и это осознанно: применять привязку можно
+ровно там, где её можно сохранить.
 
 `VALIDATED_JUNCTIONS` отвергается не из перестраховки:
 `complete_junction_validation` ставит задачу сборки, **оставляя** этот статус, а
@@ -353,6 +360,12 @@ CPU-only сервере это минуты ожидания.
 | `PUT /ocr/{uid}/result`, `POST /ocr/{uid}/validation/save`, `POST /ocr/{uid}/recognize` | `GRAPH_READY_STATUSES` |
 | `POST /ocr/{uid}/binding/apply` | `_BINDING_SAVE_STATUSES` — тот же, что у соседа `/binding/save` |
 | `POST /validation/{uid}/graph/save`, `.../graph/canvas/save`, `POST /ocr/{uid}/binding/save` | гейт стоит **перед** их собственными списками |
+
+⚠ `POST /validation/{uid}/graph/save` пускает `ERROR` (кроме упавшей сборки) — это
+вторая половина решения №3: ПЕРВАЯ запись вкладки «Контуры» приходит именно сюда
+(`ContourTab._save_graph` зовёт `super()` раньше `PUT /contours/validated`), и
+400 здесь обрывал сохранение до контуров. То есть обещание «упавший OCR фазу B
+не запирает» без этой клетки не работало ни на одной вкладке.
 
 У последних трёх собственные списки **вложены** в `GRAPH_READY_STATUSES`, поэтому
 гейт там не запирает ни одной клетки — он меняет только **текст** отказа. Это не
@@ -375,11 +388,19 @@ CPU-only сервере это минуты ожидания.
 | `OCR_RESULT`, `OCR_CLEANED` | **живут** | сырые пиксельные блоки, к графу не привязаны: распознавание считается параллельно сборке |
 | `OCR_VALIDATION` | **живёт** | правки текстов с ключами `block_N` от тех же сырых блоков — труд оператора переживает пересборку легитимно |
 | `OCR_BINDING` | **гибнет** | держит `node_id`; после пересборки это KKS не на тот элемент либо тихий `updated: 0` |
-| `CONTOURS_AUTO`, `CONTOURS_VALIDATED` | **гибнут** | вливаются в новый граф по IoU (`modules/graph/core/contours_merge.py`) без сигнала устаревания — сядут на чужие узлы молча |
+| `CONTOURS_AUTO`, `CONTOURS_VALIDATED` | **гибнут — строка И ФАЙЛ** | вливаются в новый граф по IoU (`modules/graph/core/contours_merge.py`) без сигнала устаревания — сядут на чужие узлы молча |
 | `GRAPH_VALIDATED`, `GRAPH_CANVAS` | **гибнут** | штатно, по `_STAGE_ARTIFACTS` и границе холста (§4) |
 
 ⚠ Не путать с «Переделать OCR» (ключ `ocr`, цель `validated_graph`): там наоборот
 — контуры берегутся (пункт 5-1), а OCR сносится весь. Пересборки при этом нет.
+
+⛔ **Файл сносится ВМЕСТЕ со строкой, и это не деталь реализации.** У холста и у
+контуров есть читатели ПО ПУТИ, мимо строки `Artifact`: раскладка
+(`worker/tasks/layout.py`), диспетчер (`app/services/layout_dispatch.py`) и
+растровый enrich сборки (`worker/tasks/graph.py`). Осиротевший файл опаснее
+удалённого — клиент его не покажет (он ходит по БД), а конвейер прочитает и
+вольёт. Таблица «артефакт → файл» — `_ORPHAN_FILES` в `app/api/rollback.py`;
+заводя новый артефакт с читателем по пути, впиши его туда.
 
 ### Заслон вкладки: окно «после BUILT»
 

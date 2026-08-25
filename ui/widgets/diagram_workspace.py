@@ -1034,9 +1034,7 @@ class DiagramWorkspace(QWidget):
                     self._ocr_rerunning = False     # новый результат пришёл
                     self._stop_ocr_poll()
                     self.beads.set_state(BEAD_OCR, BeadState.COMPLETED)
-                    if "ocr" in self._action_buttons:
-                        self._action_buttons["ocr"].setEnabled(True)
-                        self._action_buttons["ocr"].setStyleSheet(_BTN_STYLE_GREEN)
+                    self._light_ocr_button(status)
                     # Привязка — только с проверенным графом (`_binding_reachable`),
                     # и цветом по тому, пройден ли этап (`_light_binding_button`).
                     self._light_binding_button(status)
@@ -1062,15 +1060,32 @@ class DiagramWorkspace(QWidget):
             DiagramStatus.CONTOURS_VALIDATED,
         ):
             self.beads.set_state(BEAD_OCR, BeadState.COMPLETED)
-            if "ocr" in self._action_buttons:
-                self._action_buttons["ocr"].setEnabled(True)
-                self._action_buttons["ocr"].setStyleSheet(_BTN_STYLE_GREEN)
+            self._light_ocr_button(status)
             # Привязка — только с проверенным графом (`_binding_reachable`),
             # и цветом по тому, пройден ли этап (`_light_binding_button`).
             self._light_binding_button(status)
             # «Ручная правка» по факту OCR-артефакта БОЛЬШЕ НЕ ОТКРЫВАЕТСЯ:
             # гейт §3.2 — сначала привязка, потом готовая раскладка
             # (ui/services/layout_gate.py, применяется в _on_stages_updated).
+
+    def _light_ocr_button(self, status) -> None:
+        """Зажечь кнопку распознавания по готовому результату.
+
+        ⛔ Кроме сборки графа: перезапуск там заведомо отбит гейтом пересборки
+        (решение Максима 2026-08-25, дефект 2 ревизии связки) — кнопка серая,
+        тупиковый вопрос не предлагается; русский отказ сервера остаётся
+        страховкой прямых путей. Единственная точка правила: её зовут ВСЕ пути
+        зажигания (обе ветки `_apply_status`, тик поллера, `_on_stages_updated`)
+        — возврат ревизии показал, что гашение в одном месте не переживало тика.
+        """
+        if "ocr" not in self._action_buttons:
+            return
+        if status is DiagramStatus.BUILDING_GRAPH:
+            self._action_buttons["ocr"].setEnabled(False)
+            self._action_buttons["ocr"].setStyleSheet(_BTN_STYLE_GRAY)
+        else:
+            self._action_buttons["ocr"].setEnabled(True)
+            self._action_buttons["ocr"].setStyleSheet(_BTN_STYLE_GREEN)
 
     # =================================================================
     # OCR artifact polling (independent of DiagramStatus changes)
@@ -1133,8 +1148,8 @@ class DiagramWorkspace(QWidget):
                 )
                 self.beads.set_state(BEAD_OCR, BeadState.COMPLETED)
                 if "ocr" in self._action_buttons:
-                    self._action_buttons["ocr"].setEnabled(True)
-                    self._action_buttons["ocr"].setStyleSheet(_BTN_STYLE_GREEN)
+                    # У тика поллера своего статуса нет — порог от `_last_status`.
+                    self._light_ocr_button(self._last_status)
                     self._action_buttons["ocr"].setText("Распознавание текста")
                     if getattr(self, "_filled_keys", None):
                         self._filled_keys.pop("ocr", None)
@@ -1607,9 +1622,8 @@ class DiagramWorkspace(QWidget):
         # OCR по артефакту может опережать ProcessingStage
         if getattr(self, "_ocr_notified", False) and "ocr" not in failed:
             self.beads.set_state(BEAD_OCR, BeadState.COMPLETED)
-            if "ocr" in self._action_buttons:
-                self._action_buttons["ocr"].setEnabled(True)
-                self._action_buttons["ocr"].setStyleSheet(_BTN_STYLE_GREEN)
+            # У стадий своего статуса нет — порог от `_last_status`.
+            self._light_ocr_button(self._last_status)
 
         # Overlay упавших этапов — красная бусина + красная retry-кнопка
         self._stage_errors = failed

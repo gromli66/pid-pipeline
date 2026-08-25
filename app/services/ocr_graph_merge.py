@@ -12,6 +12,7 @@
 """
 
 import json
+import os
 import logging
 from pathlib import Path
 from typing import Union
@@ -85,7 +86,10 @@ def merge_ocr_result_into_graph(
     # (диск кончился, воркер убит по таймауту) оставляет оператора без графа
     # вовсе. `Path.replace` == `os.replace`: атомарен на POSIX, перезаписывает
     # на Windows (блок 5; тот же класс, что `/ocr/binding/apply`).
-    tmp_path = graph_path.with_suffix(".merge.tmp")
+    # ⚠ Суффикс PID — по тому же правилу, что у двух соседних писателей:
+    # общий черновик переносит гонку на шаг раньше (`acks_late`,
+    # `worker_concurrency=2`).
+    tmp_path = graph_path.with_suffix(f".merge.{os.getpid()}.tmp")
     try:
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(graph, f, ensure_ascii=False, indent=2)
