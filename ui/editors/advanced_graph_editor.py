@@ -555,9 +555,53 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self._resize_frames.clear()
         super()._reset_scene_state()
 
-    def _redraw_all(self):
-        """Восстанавливает grid после перерисовки."""
-        super()._redraw_all()
+    def setup_scene(self):
+        """Полная пересборка сцены + слои Advanced.
+
+        `Base.setup_scene` зовут переключатели «Светлый лист» и «Показать
+        подложку» (base:596, :608): он делает `scene.clear()` и рисует заново
+        только лист, подложку, рёбра и узлы. Всё остальное восстанавливал
+        единственный `_redraw_all`, которого здесь нет, — и оператор получал
+        пустой холст при нажатой кнопке «Скины» (замер §MEFX1: шесть слоёв
+        разом → ноль, флаги при этом живы).
+        """
+        self._drop_live_scene_overlays()
+        super().setup_scene()
+        self._redraw_overlays()
+
+    def _drop_live_scene_overlays(self):
+        """Снять оверлеи, которые держат предметы сцены, ДО `scene.clear()`.
+
+        `_reset_scene_state` их не обнуляет, а `clear()` в отличие от
+        `removeItem` РАЗРУШАЕТ предметы — после него ссылки указывают на
+        удалённые объекты C++, и следующий жест оператора падает
+        `RuntimeError` (замер §MEFX1: правка полигона, ручки текст-блока,
+        рамка добавления блока — все три). Здесь предметы ещё живы, поэтому
+        снимаются штатными путями. `_redraw_all` этого не требует: он
+        предметы только снимает со сцены, владение уходит оверлею.
+        """
+        if self._poly_overlay is not None:
+            # Операции с вершинами уже зафиксированы пошагово (см.
+            # _exit_polygon_editing_mode), терять оператору нечего.
+            self._poly_overlay.hide()
+            self._poly_overlay = None
+            self._poly_edit_node = None
+            self._poly_op_before = None
+        if getattr(self, "_ocr_resize_overlay", None) is not None:
+            self._hide_ocr_block_resize()
+        if getattr(self, "_ocr_add_preview", None) is not None:
+            if self._ocr_add_preview.scene() is not None:
+                self.scene.removeItem(self._ocr_add_preview)
+            self._ocr_add_preview = None
+            self._ocr_add_start = None
+
+    def _redraw_overlays(self):
+        """Слои поверх графа — общий хвост ОБОИХ путей перерисовки.
+
+        Зовут `_redraw_all` (перерисовка поверх живого фона) и `setup_scene`
+        (пересборка с нуля). Порядок вставки значения не имеет: z у слоёв
+        явные (сетка 0.5, скины 2.5, подсветка 6-7, рамки 9).
+        """
         if self.grid_visible:
             self._draw_grid()
         self._redraw_skins()
@@ -571,6 +615,16 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         # 17 узлов, и не замечал ни одной ловушки, которую держит открытое
         # состояние редактора (§83.33 — замер: 17 рамок → 0 на сцене).
         self._redraw_resize_frames()
+        # Подсветка выделения гибнет тем же способом: наборы
+        # `selected_nodes`/`selected_edges` пересборку переживают, а кольца и
+        # обводка — нет (замер §MEFX1). Метод идемпотентен: свои прежние
+        # предметы он снимает сам.
+        self._update_selection_visuals()
+
+    def _redraw_all(self):
+        """Восстанавливает слои Advanced после перерисовки."""
+        super()._redraw_all()
+        self._redraw_overlays()
 
     def _after_statistics_update(self):
         """Обновить multi-select визуалы."""
