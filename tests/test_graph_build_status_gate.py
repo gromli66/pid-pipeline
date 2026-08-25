@@ -72,7 +72,7 @@ ERROR_STAGES = [
     "detecting",
     "segmenting",
     "skeletonizing",
-    "skeletonizing_simple",
+    "skeletonizing_final",
     "detecting_junctions",
     "generating_fxml",
     "ocr",

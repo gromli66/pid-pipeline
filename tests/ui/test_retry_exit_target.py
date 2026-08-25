@@ -348,7 +348,13 @@ def test_target_status_has_a_door(stage, stage_type, target, door, bench):
     if door is not None:
         assert door in keys, f"в '{target}' нет кнопки '{door}': {keys}"
     else:
-        assert "ocr" not in keys, keys
+        # ⚠ Переснято блоком pains-1: дверей в `validated_graph` теперь ДВЕ.
+        # Прямая кнопка «Распознавание текста» перестала быть глухой (боль
+        # 1.4 сузила набор «в процессе» бусины OCR до живой стадии), и сервер
+        # её пускает — `app/api/ocr.py:37,54`. Косвенная — «Проверка схемы»,
+        # та самая, что названа замером §107.1; она остаётся заперта здесь же,
+        # чтобы правка бусины не подменила одну дверь другой молча.
+        assert "ocr" in keys, keys
         assert "val_graph" in keys, (
             f"в '{target}' нет двери переотправки OCR («Проверка схемы»): {keys}"
         )
@@ -365,10 +371,15 @@ def test_target_status_has_a_door(stage, stage_type, target, door, bench):
 # оператору оставались только откаты с УДАЛЕНИЕМ артефактов. Числа §107.10.
 ENABLED_AFTER_CLICK = {
     "direction_classification": ["cvat", "detect", "frame", "segment"],
+    # ⚠ `ocr` в двух списках `validated_graph` — следствие pains-1 (боль 1.4):
+    # набор «в процессе» бусины OCR сузился до живой стадии, и кнопка
+    # «Распознавание текста» в этом статусе больше не глухая. Дверь настоящая,
+    # а не украшение: `POST /api/ocr/{uid}/start` пускает `validated_graph`
+    # (`app/api/ocr.py:37,54`).
     "contour_extraction": ["contours", "cvat", "detect", "frame", "graph",
-                           "junction", "pipe", "segment", "val_graph"],
+                           "junction", "ocr", "pipe", "segment", "val_graph"],
     "ocr": ["contours", "cvat", "detect", "frame", "graph", "junction",
-            "pipe", "segment", "val_graph"],
+            "ocr", "pipe", "segment", "val_graph"],
     "generating_fxml": ["contours", "cvat", "detect", "edit_graph", "frame",
                         "graph", "junction", "ocr", "ocr_binding", "pipe",
                         "segment", "val_graph"],
@@ -381,7 +392,7 @@ MUTED_WITHOUT_ROLLBACK = [
     ("validated_bbox", "direction_classification", "segment",
      ["cvat", "detect", "frame"]),
     ("validated_graph", "contour_extraction", "contours",
-     ["cvat", "detect", "frame", "graph", "junction", "pipe", "segment",
+     ["cvat", "detect", "frame", "graph", "junction", "ocr", "pipe", "segment",
       "val_graph"]),
 ]
 

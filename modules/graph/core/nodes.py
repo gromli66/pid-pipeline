@@ -187,14 +187,20 @@ def _find_nearest_mask_point(y: int, x: int, equipment_mask: np.ndarray,
                     continue  # Только граница квадрата
                 ny, nx = y + dy, x + dx
                 if 0 <= ny < equipment_mask.shape[0] and 0 <= nx < equipment_mask.shape[1]:
-                    if equipment_mask[ny, nx] or connection_mask[ny, nx]:
+                    if equipment_mask[ny, nx] or \
+                            (connection_mask is not None and connection_mask[ny, nx]):
                         return (ny, nx)
     return None
 
 
+# Радиус поиска маски элемента для buried-стыка: квадрат стыка 15x15 может
+# торчать из тонкого символа не дальше своего размера — 18 px покрывает край.
+BURIED_SNAP_RADIUS = 18
+
+
 def identify_node_by_point(
-    x: int, 
-    y: int, 
+    x: int,
+    y: int,
     equipment_mask: np.ndarray,
     connection_mask: np.ndarray,
     annotations: List[Dict],
@@ -212,10 +218,10 @@ def identify_node_by_point(
     3. Если точка на equipment_mask → ищем в annotations какому bbox принадлежит
     4. Иначе → None
     
-    ВАЖНО: Приоритет connector над equipment — но только если connector хотя бы
-    частично выходит за маску оборудования. Стык, целиком закопанный внутрь
-    элемента (ложное срабатывание модели на кромке символа), перехватывал бы
-    контакт трубы, и элемент оставался без подключения.
+    ВАЖНО: Приоритет connector над equipment — но не для buried-стыков (доля
+    пикселей на маске оборудования >= BURIED_MIN_OVERLAP): такой стык сидит на
+    символе (ложное срабатывание модели на кромке), перехватывал бы контакт
+    трубы, и элемент оставался без подключения — контакт отдаём элементу.
     
     Args:
         x, y: Координаты точки (x, y) - НЕ (y, x)!
@@ -225,8 +231,9 @@ def identify_node_by_point(
         labeled_equipment: Нумерованная маска equipment (отдельный слой)
         labeled_connectors: Нумерованная маска connectors (отдельный слой)
         exclude_classes: Классы для исключения (по умолчанию {34, 36, 38, 39})
-        buried_connectors: label_id коннекторов, целиком лежащих внутри
-            equipment_mask — им приоритет над оборудованием не даётся
+        buried_connectors: label_id коннекторов, сидящих на equipment_mask
+            (доля пикселей >= BURIED_MIN_OVERLAP) — им приоритет над
+            оборудованием не даётся, контакт уходит элементу
         
     Returns:
         Словарь с информацией об узле или None
@@ -246,24 +253,35 @@ def identify_node_by_point(
     
     # ПРИОРИТЕТ: Проверка connector ПЕРВЫМ!
     # Это критически важно для случаев когда connector касается/перекрывается с equipment.
-    # Исключение — стык, целиком закопанный в маску элемента: он не «касается»
-    # оборудования, а сидит внутри него и крадёт у него трубу.
+    # Исключение — buried-стык (сидит на маске элемента, перекрытие >=
+    # BURIED_MIN_OVERLAP): он не «касается» оборудования, а крадёт у него трубу.
     if connection_mask[check_y, check_x]:
         label_id = None
         if labeled_connectors is not None and labeled_connectors[check_y, check_x] > 0:
             label_id = int(labeled_connectors[check_y, check_x])
 
+        connector_info = {
+            'type': 'connector',
+            'class_id': CONNECTOR_CLASS_ID,
+            'class_name': CONNECTOR_CLASS_NAME,
+            'bbox': None,
+            'ann_idx': None,
+            'label_id': label_id,
+            'segmentation': None  # Connector не имеет полигона
+        }
         if not (buried_connectors and label_id in buried_connectors):
-            return {
-                'type': 'connector',
-                'class_id': CONNECTOR_CLASS_ID,
-                'class_name': CONNECTOR_CLASS_NAME,
-                'bbox': None,
-                'ann_idx': None,
-                'label_id': label_id,
-                'segmentation': None  # Connector не имеет полигона
-            }
-    
+            return connector_info
+        # Стык сидит на элементе: контакт отдаём элементу. Контактный пиксель
+        # может лежать на части квадрата, торчащей из маски тонкого символа, —
+        # ищем маску элемента рядом (квадрат стыка ~15px). Не нашли — стык
+        # остаётся узлом: потерять контакт хуже, чем оставить лишний стык.
+        if not equipment_mask[check_y, check_x]:
+            near_eq = _find_nearest_mask_point(check_y, check_x, equipment_mask,
+                                               None, radius=BURIED_SNAP_RADIUS)
+            if near_eq is None:
+                return connector_info
+            check_y, check_x = near_eq
+
     # Проверка equipment
     if equipment_mask[check_y, check_x]:
         matches = []
@@ -289,7 +307,9 @@ def identify_node_by_point(
                 else:
                     matches.append(label)
 
-        # Если есть только excluded боксы (например, только background), то фильтруем
+        # Если есть только excluded боксы (например, только background), то фильтруем.
+        # Buried-стык, чей контакт попал в excluded-бокс, тоже даёт None — конец
+        # повиснет и закроется capconn; осознанно: excluded-зона узлом не бывает.
         if not matches and excluded_matches:
             return None
 
@@ -991,3 +1011,28 @@ def filter_isolated_connectors(
     }
 
     return filtered_nodes, filtered_edges, stats
+
+
+# Стык, сидящий НА символе, перехватывает контакт трубы у элемента — с него
+# снимается приоритет над оборудованием (identify_node_by_point). Прежний
+# критерий «целиком внутри маски» пропускал тонкие символы: их маска не
+# заполняет bbox, квадрат стыка вылезает наружу, и труба кончалась на стыке
+# внутри элемента, не подключаясь к нему (26747a10, смотровое стекло).
+# Стыки труб, прочерченных через bbox бака, маску символа не трогают
+# (перекрытие 0) и не задеваются при любом положительном пороге.
+BURIED_MIN_OVERLAP = 0.35
+
+
+def buried_connector_labels(equipment_mask: np.ndarray,
+                            labeled_connectors: np.ndarray,
+                            num_connectors: int,
+                            min_frac: float = BURIED_MIN_OVERLAP) -> set:
+    """Метки стыков, чья доля пикселей на маске оборудования >= min_frac."""
+    if not num_connectors:
+        return set()
+    idx = range(1, num_connectors + 1)
+    inside = np.atleast_1d(ndimage.sum(equipment_mask, labeled_connectors, index=idx))
+    total = np.bincount(labeled_connectors.ravel(),
+                        minlength=num_connectors + 1)[1:num_connectors + 1]
+    return {i for i, (ins, tot) in enumerate(zip(inside, total), start=1)
+            if tot > 0 and ins / tot >= min_frac}

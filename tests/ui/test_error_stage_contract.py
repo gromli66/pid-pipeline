@@ -78,14 +78,20 @@ API_WRITERS = {"fetching_annotations"}
 WORKER_WRITERS = {
     "building_graph", "contour_extraction", "detecting", "detecting_junctions",
     "direction_classification", "generating_fxml", "ocr", "segmenting",
-    "skeletonizing", "skeletonizing_simple",
+    # `skeletonizing_final` вместо `skeletonizing_simple` с 2026-08-25 (боль 1,
+    # Б16): задача финальной скелетизации называет СВОЙ этап, а не соседний.
+    "skeletonizing", "skeletonizing_final",
 }
 BUTTON_COUNT = 13
 # Понимает клиент, но не пишет никто: `validating_graph` — это ЗНАЧЕНИЕ СТАТУСА
 # (`app/models/diagram.py:64`), в `error_stage` его не кладёт ни один писатель.
 # Лишняя клетка карты безвредна, но зафиксирована: реестр стадий (5-4) обязан
 # знать, что она держится ни на чём.
-CLIENT_ONLY = {"validating_graph"}
+# `skeletonizing_simple` — вторая такая клетка с 2026-08-25 (pains-1, боль 1):
+# писатель переехал на `skeletonizing_final`, а прежнее значение осталось в карте
+# клиента ЛЕГАСИ — им помечены строки `error_stage` у диаграмм, сломавшихся до
+# правки, и снять клетку можно только вместе с этими строками в БД.
+CLIENT_ONLY = {"validating_graph", "skeletonizing_simple"}
 # Динамические писатели: значение считается в рантайме, перечислить его нельзя.
 # Оба живут в `worker/utils/db_helpers.py` (:36 — параметр `set_diagram_error`,
 # :146 — `task_name.split('.')[-1]` в мёртвом сегодня `safe_dispatch`).

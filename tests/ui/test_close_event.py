@@ -289,8 +289,14 @@ def test_close_stops_background_work(window):
 
     window.close()
 
-    assert window.status_provider.unwatched == [UID], (
-        f"опрос статуса не погашен при выходе: {window.status_provider.unwatched}"
+    # Утверждается СОСТОЯНИЕ, а не число вызовов: с pains-1 (Б1) слежение
+    # включает сам `load_diagram`, поэтому `unwatch` зовётся дважды — паузой
+    # на открытии вкладки (`_open_tab`) и уборкой на выходе. Погашенность от
+    # этого не меняется, а счётчик вызовов её и не измерял.
+    assert window.status_provider.is_watching(UID) is False, (
+        f"опрос статуса не погашен при выходе: "
+        f"watched={window.status_provider.watched}, "
+        f"unwatched={window.status_provider.unwatched}"
     )
     assert window.workspace._active_tab is None, "вкладка осталась открытой после выхода"
 

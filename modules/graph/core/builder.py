@@ -9,7 +9,7 @@ import numpy as np
 from PIL import Image
 
 from .utils import load_binary_mask
-from .nodes import extract_nodes, update_node_degrees, prepare_tracing_data, assign_node_classes, filter_isolated_connectors, load_coco_annotations
+from .nodes import extract_nodes, update_node_degrees, prepare_tracing_data, assign_node_classes, filter_isolated_connectors, load_coco_annotations, buried_connector_labels
 from .tracing import trace_edges, trace_edges_v3, compute_edge_statistics
 from .bridge_preprocessing import preprocess_bridges
 from .visualize import plot_graph_overlay, plot_statistics, plot_isolated_nodes_debug, plot_contact_points_debug
@@ -273,19 +273,15 @@ class GraphBuilder:
         # РАЗДЕЛЬНАЯ нумерация equipment и connectors
         labeled_connectors, num_connectors = ndimage.label(updated_connections_mask)
 
-        # Стык, целиком закопанный в маску элемента — ложное срабатывание модели
-        # на кромке символа: он перехватывает контакт трубы, и элемент остаётся
-        # без подключения. Считаем такие компоненты один раз и снимаем с них
+        # Стык, сидящий на маске элемента — ложное срабатывание модели на кромке
+        # символа: он перехватывает контакт трубы, и элемент остаётся без
+        # подключения. Считаем такие компоненты один раз и снимаем с них
         # приоритет над оборудованием (identify_node_by_point).
-        buried_connectors = set()
-        if num_connectors:
-            outside = ndimage.sum(np.logical_not(equipment_mask), labeled_connectors,
-                                  index=range(1, num_connectors + 1))
-            buried_connectors = {i for i, v in enumerate(np.atleast_1d(outside), start=1)
-                                 if v == 0}
-            if self.verbose and buried_connectors:
-                print(f"  Стыков внутри маски элемента (приоритет снят): "
-                      f"{len(buried_connectors)}")
+        buried_connectors = buried_connector_labels(
+            equipment_mask, labeled_connectors, num_connectors)
+        if self.verbose and buried_connectors:
+            print(f"  Стыков на маске элемента (приоритет снят): "
+                  f"{len(buried_connectors)}")
         
         # Для обратной совместимости создаём unified labeled_nodes
         # (используется в визуализации и некоторых функциях)
@@ -398,7 +394,8 @@ class GraphBuilder:
             annotate_direction_nodes, drop_degenerate_stubs,
             drop_duplicate_contact_stubs, split_edges_at_corners,
             merge_straight_chains, stitch_dangling_into_pipe, cap_dangling_ends,
-            dissolve_boundary_connectors,
+            dissolve_boundary_connectors, drop_synthetic_orphan_components,
+            drop_unstitched_leftovers,
             collapse_straight_connectors, set_direction_pass_through,
             flag_connector_clusters,
         )
@@ -431,10 +428,21 @@ class GraphBuilder:
         # висячий конец, упёршийся в чужую трубу — это пропущенный тройник:
         # разрезать трубу и соединить (до cap, пока конец ещё to=None)
         tee_stats = stitch_dangling_into_pipe(nodes, edges, debug=self.debug)
+        # подобранный кусок, не прижившийся обоими концами — хвост, а не труба
+        lo_stats = drop_unstitched_leftovers(nodes, edges, debug=self.debug)
+        if self.verbose and lo_stats["dropped"]:
+            print(f"  Хвостов подбора срезано: {lo_stats['dropped']} "
+                  f"({lo_stats['px_dropped']} px)")
         c_stats = cap_dangling_ends(nodes, edges, debug=self.debug)
         col_stats = collapse_straight_connectors(nodes, edges, debug=self.debug)
         # коннектор, приклеенный огрызком к элементу — это связь, а не узел
         dis_stats = dissolve_boundary_connectors(nodes, edges, debug=self.debug)
+        # компонента из одних наших затычек — подобранный шум маски, не труба
+        orph_stats = drop_synthetic_orphan_components(nodes, edges, debug=self.debug)
+        if self.verbose and orph_stats["components"]:
+            print(f"  Сирот-компонент из затычек удалено: {orph_stats['components']} "
+                  f"({orph_stats['nodes_dropped']} узлов, {orph_stats['edges_dropped']} рёбер, "
+                  f"{orph_stats['px_dropped']} px)")
         update_node_degrees(nodes, edges, debug=self.debug)
         set_direction_pass_through(nodes, edges)
         # кластеры дублей стыков автоматически не чиним (надёжного правила из
@@ -456,7 +464,8 @@ class GraphBuilder:
                 f"{zig_stats['nodes_dropped']} узлов убрано, "
                 f"растворено у элементов {dis_stats['dissolved']}); "
                 f"врезано тройников {tee_stats['stitched']} "
-                f"(крестов пропущено {tee_stats['crossings_skipped']})"
+                f"(крестов пропущено {tee_stats['crossings_skipped']}, "
+                f"обрывков не врезано {tee_stats['orphans_skipped']})"
             )
 
         elapsed = time.time() - start_time

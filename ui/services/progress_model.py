@@ -18,18 +18,25 @@ from typing import Optional
 
 # Канонический порядок авто-пайплайна (значения ProcessingStage.stage_type).
 # Совпадает с _STAGE_TYPE_TO_KEY/_STAGE_DONE_STATUS в diagram_workspace.
+# Три стадии-призрака (`upload`, `mask_validation`, `graph_validation`) убраны:
+# строк `ProcessingStage` с такими типами не заводит НИКТО (`StageType.UPLOAD`/
+# `MASK_VALIDATION`/`GRAPH_VALIDATION` не встречаются ни в `app/`, ни в
+# `worker/`), а вес в знаменателе они держали — процент структурно не доходил
+# до 100 (замер 0.9). `direction_classification` наоборот добавлена: строку она
+# заводит (`worker/tasks/direction.py`), а в каноне её не было.
+# Порядок пары «финал скелета / перекрёстки» — как в конвейере: финальную
+# скелетизацию диспетчит `task_skeletonize_simple`, и только она зовёт
+# `task_detect_junctions` (`worker/tasks/skeleton.py`). Обратный порядок врал ETA.
 _PIPELINE = [
-    "upload",
     "frame_removal",
     "detection",
     "cvat_validation",
+    "direction_classification",
     "segmentation",
     "skeletonization",
-    "mask_validation",
-    "junction_classification",
     "final_skeletonization",
+    "junction_classification",
     "graph_building",
-    "graph_validation",
     "contour_extraction",
     "layout",
     "ocr",
@@ -38,17 +45,15 @@ _PIPELINE = [
 
 # Человекочитаемые подписи фаз (для лейбла прогресс-бара).
 _STAGE_LABELS = {
-    "upload": "Загрузка",
     "frame_removal": "Очистка рамки",
     "detection": "Поиск элементов",
     "cvat_validation": "Проверка элементов",
+    "direction_classification": "Классификация направления",
     "segmentation": "Выделение труб",
     "skeletonization": "Скелетизация",
-    "mask_validation": "Проверка труб",
-    "junction_classification": "Проверка узлов",
     "final_skeletonization": "Скелетизация (финал)",
+    "junction_classification": "Проверка узлов",
     "graph_building": "Сборка схемы",
-    "graph_validation": "Проверка схемы",
     "contour_extraction": "Контуры элемента",
     "layout": "Раскладка схемы",
     "ocr": "Распознавание текста",
@@ -110,17 +115,19 @@ def substep_status_line(stages) -> str:
 # Дефолтные бюджеты стадий (сек) — ПРОВИЗОРНЫЕ, тюнятся с первых прогонов.
 # None = ручная/await-стадия (оператор): в ETA не учитываем, в проценте — номинал.
 _DEFAULT_BUDGETS = {
-    "upload": 5,
     "frame_removal": None,
     "detection": 60,
     "cvat_validation": None,
+    # Сид направления: на dev-прогонах стадия занимала 0.3 и 0.8 с
+    # (MEASUREMENTS §34.5, §35.2), запас на CPU-only — тот же множитель, что у
+    # соседей. Число провизорное: с шестого наблюдения его перекрывает p50
+    # сервера (`app/api/stats.py`).
+    "direction_classification": 5,
     "segmentation": 90,
     "skeletonization": 20,
-    "mask_validation": None,
-    "junction_classification": 30,
     "final_skeletonization": 20,
+    "junction_classification": 30,
     "graph_building": 25,
-    "graph_validation": None,
     "contour_extraction": 40,
     # ПРОВИЗОРНО. Замер на dev-CPU: 936 узлов — 72 с. Боевой CPU-only
     # ожидаемо в 2-5 раз медленнее, модели время-от-размера нет.

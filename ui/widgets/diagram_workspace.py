@@ -137,11 +137,15 @@ _BEAD_DEFS = [
      DiagramStatus.VALIDATED_GRAPH),
 
     (BEAD_OCR,           "ocr",         DiagramStatus.OCR_COMPLETED,
-     {DiagramStatus.OCR_PROCESSING,
-      DiagramStatus.BUILDING_GRAPH, DiagramStatus.BUILT,
-      DiagramStatus.VALIDATING_GRAPH, DiagramStatus.VALIDATED_GRAPH,
-      DiagramStatus.EXTRACTING_CONTOURS, DiagramStatus.CONTOURS_EXTRACTED,
-      DiagramStatus.CONTOURS_VALIDATED},
+     # РАСПОЗНАВАНИЕ СЧИТАЕТСЯ ПАРАЛЛЕЛЬНО, И СВОЕГО СТАТУСА У НЕГО НЕТ.
+     # Здесь стояли ВОСЕМЬ статусов подряд (сборка графа, обе валидации,
+     # все контуры), поэтому кружок «идёт распознавание» вертелся всю
+     # сборку и все контуры — независимо от того, бежит ли OCR. Теперь
+     # «в процессе» ведёт живая строка `/stages` (`_ocr_stage_running`,
+     # применяется в `_update_beads`/`_sync_ocr_bead`), а `OCR_PROCESSING`
+     # остаётся мёртвым рудиментом: в прямом конвейере он не присваивается
+     # нигде, попасть в него можно только откатом (`app/api/rollback.py`).
+     {DiagramStatus.OCR_PROCESSING},
      DiagramStatus.VALIDATED_GRAPH),
 
     (BEAD_OCR_BINDING,   "ocr_binding", DiagramStatus.OCR_BOUND,
@@ -186,6 +190,27 @@ def _beads_for_status(status: DiagramStatus) -> list:
         # else: UNAVAILABLE (default)
     return result
 
+
+
+def _ocr_stage_running(stages) -> bool:
+    """Бежит ли распознавание ПРЯМО СЕЙЧАС — по строке `/stages`, не по статусу.
+
+    Своего статуса у OCR нет: он считается параллельно сборке графа и контурам,
+    а `DiagramStatus` — одно поле на всех.
+
+    ⛔ Предел `_stage_stuck` здесь НЕ применяется, хотя кнопки его применяют:
+    он считается от `WAIT_LIMIT_S` = 600 с (предел ожидания РАСКЛАДКИ), а у
+    распознавания свой потолок — `time_limit` 3600 с (`worker/tasks/ocr.py`).
+    Часовая задача на CPU-only сервере — норма, и по чужому пределу бусина
+    гасла бы посреди живой работы. Конец работы приносит либо артефакт
+    (`_ocr_notified`), либо `ERROR` от `set_diagram_error`.
+    """
+    for s in (stages or []):
+        if (s.get("stage_type") or "").lower() != "ocr":
+            continue
+        if (s.get("status") or "").lower() == "running":
+            return True
+    return False
 
 
 def _stage_stuck(stage, limit_s: float = None, now=None) -> bool:
@@ -300,7 +325,12 @@ _STAGE_TYPE_TO_KEY = {
     "skeletonization": "segment",
     "mask_validation": "pipe",
     "junction_classification": "junction",
-    "final_skeletonization": "segment",
+    # Финальная скелетизация принадлежит «Проверке узлов», а не «Выделению
+    # труб»: её статусы (`SKELETONIZING_FINAL`/`SKELETONIZED_FINAL`) лежат в
+    # наборе бусины `junction`, и оператор смотрел на крутящуюся бусину
+    # одного этапа и заполняющуюся кнопку другого (боль 1, Б16). Решётка —
+    # `tests/ui/test_stage_maps_invariant.py`.
+    "final_skeletonization": "junction",
     "graph_building": "graph",
     "graph_validation": "val_graph",
     "contour_extraction": "contours",
@@ -744,6 +774,17 @@ class DiagramWorkspace(QWidget):
         self._stage_errors = {}
         self._dispatch_refusals = {}
         self._last_status = DiagramStatus.UPLOADED
+        # СОСТОЯНИЕ СТАДИЙ ПРИНАДЛЕЖИТ ДИАГРАММЕ, А НЕ ОКНУ (боль Б1). Без
+        # сброса кнопки, бусины и гейт новой схемы решались стадиями
+        # предыдущей, а вкладки получали код проекта ЧУЖОГО проекта
+        # (`_get_project_code` кешировал его на первый вопрос и не сбрасывал
+        # нигде). `_last_stages = None` — «стадии ещё не читались»: пустой
+        # список означал бы «прочитаны, их нет», и гейт судил бы по нулю.
+        self._last_stages = None
+        self._filled_keys = {}
+        self._gate_blocked = False
+        self._layout_gate = None
+        self._project_code = None
 
         self.title_label.setText(f"Диаграмма — {name}")
 
@@ -774,6 +815,12 @@ class DiagramWorkspace(QWidget):
                     pass
         self.status_provider.status_updated.connect(self._on_status_updated)
         self.status_provider.stages_updated.connect(self._on_stages_updated)
+        # И ВКЛЮЧИТЬ СЛЕЖЕНИЕ. Подписка на сигналы без него молчит: `watch`
+        # звал только список диаграмм и только для «обрабатываемых» статусов
+        # (`diagram_list.py`), поэтому у схемы, открытой в любом другом
+        # статусе, стадии не приезжали вовсе. Идемпотентно (множество uid), а
+        # опрос сам снимется на финальном статусе без бегущих стадий.
+        self.status_provider.watch(uid)
 
     def cleanup(self):
         """Вызвать при уходе из workspace."""
@@ -1027,6 +1074,13 @@ class DiagramWorkspace(QWidget):
                 if _idx is not None and target.get(_idx) == BeadState.IN_PROGRESS:
                     target[_idx] = BeadState.AVAILABLE
 
+        # OCR: «в процессе» — по живой строке стадии, а не по чужому статусу
+        # (боль 1.4). Ставится ДО отказов веера: отказ старше этого признака и
+        # обязан перекрывать его красным (пункт 1-48).
+        if (target.get(BEAD_OCR) != BeadState.COMPLETED
+                and _ocr_stage_running(getattr(self, "_last_stages", None))):
+            target[BEAD_OCR] = BeadState.IN_PROGRESS
+
         # Перекрыть pipe/junction если подтверждены по отдельности
         if status == DiagramStatus.VALIDATING_MASKS:
             if self._pipe_confirmed:
@@ -1238,7 +1292,12 @@ class DiagramWorkspace(QWidget):
             "direction_classification": "segment",
             "segmenting": "segment",
             "skeletonizing": "segment",
+            # Писатель этого значения переехал на `skeletonizing_final`
+            # (`worker/tasks/skeleton.py`, тот же блок болей); клетка остаётся
+            # для строк `error_stage`, записанных ДО правки, — они лежат в БД
+            # у уже сломанных диаграмм.
             "skeletonizing_simple": "pipe",
+            "skeletonizing_final": "junction",
             "detecting_junctions": "junction",
             "building_graph": "graph",
             "validating_graph": "val_graph",
@@ -2785,7 +2844,29 @@ class DiagramWorkspace(QWidget):
                 btn.setStyleSheet(_btn_fill_style(_pct / 100.0))
                 btn.setText(f"{label} · {_pct}%")
         self._filled_keys = new_filled
+        self._sync_ocr_bead()
         self._apply_layout_gate(stages)
+
+    def _sync_ocr_bead(self):
+        """Свести бусину OCR со свежими стадиями — без смены статуса.
+
+        При статусах фазы B опрос статуса остановлен
+        (`status_provider._FINAL_STATUSES`), и `_update_beads` звать некому:
+        единственный источник свежести — тик OCR-поллера, который приходит
+        сюда через `_on_stages_updated`. Чужие вердикты не трогаем: отказ
+        веера и упавшая стадия старше признака «бежит», а готовность OCR
+        доказывает артефакт (`_ocr_notified`), а не строка стадии.
+        """
+        if (self._ocr_notified
+                or "ocr" in self._dispatch_refusals
+                or "ocr" in getattr(self, "_stage_errors", {})
+                or _status_ge(self._last_status, DiagramStatus.OCR_COMPLETED)):
+            return
+        state = dict(_beads_for_status(self._last_status)).get(
+            BEAD_OCR, BeadState.UNAVAILABLE)
+        if _ocr_stage_running(getattr(self, "_last_stages", None)):
+            state = BeadState.IN_PROGRESS
+        self.beads.set_state(BEAD_OCR, state)
 
     def _apply_layout_gate(self, stages):
         """Гейт «Ручной правки»: пускать только с готовой раскладкой (§3.2).
@@ -2813,6 +2894,17 @@ class DiagramWorkspace(QWidget):
                 btn.setEnabled(True)
                 btn.setToolTip("")
                 self._restyle_button("edit_graph", self._last_status)
+                # И БУСИНУ: крутит её сам гейт (ветка `waiting` ниже), значит
+                # сам и обязан вернуть — иначе кружок вертится до ручного
+                # «Обновить» (боль 1.3). Состояние берём тем же путём, что и
+                # `_update_beads`, — по статусу. Красное не трогаем: отказ
+                # отправки и упавшая стадия старше открытой двери.
+                if ("edit_graph" not in self._dispatch_refusals
+                        and "edit_graph" not in getattr(self, "_stage_errors", {})):
+                    self.beads.set_state(
+                        BEAD_EDIT_GRAPH,
+                        dict(_beads_for_status(self._last_status)).get(
+                            BEAD_EDIT_GRAPH, BeadState.UNAVAILABLE))
             return          # дальше обычные правила кнопки в силе
         self._gate_blocked = True
         btn.setToolTip(gate.reason)

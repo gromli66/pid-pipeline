@@ -792,7 +792,15 @@ def task_skeletonize_simple(
     except SoftTimeLimitExceeded:
         logger.error("Simple skeletonization timed out for %s", diagram_uid, exc_info=True)
         fail_stage(stage, "Simple skeletonization timed out", traceback.format_exc())
-        set_diagram_error(db, diagram_uid, "Simple skeletonization timed out", "skeletonizing_simple")
+        # `skeletonizing_final`, а не `skeletonizing_simple`: задача знает свой
+        # тип (`StageType.FINAL_SKELETONIZATION` выше), и по этому значению
+        # клиент красит СВОЮ кнопку — «Проверку узлов», где стоит и бусина
+        # этапа. Прежнее значение вело на «Проверку труб» — чужую кнопку
+        # соседней стадии (боль 1, Б16). Цель отката у обоих значений одна
+        # (`app/api/diagrams.py`: `validated_masks`), поэтому переезд не меняет
+        # ни ретрая, ни диспетчеризации; старое остаётся в картах клиента как
+        # легаси — им помечены строки, записанные до этой правки.
+        set_diagram_error(db, diagram_uid, "Simple skeletonization timed out", "skeletonizing_final")
         raise
 
     except Exception as exc:
@@ -807,7 +815,7 @@ def task_skeletonize_simple(
             raise self.retry(exc=exc)
 
         fail_stage(stage, str(exc)[:500], traceback.format_exc(), exc=exc)
-        set_diagram_error(db, diagram_uid, str(exc)[:500], "skeletonizing_simple")
+        set_diagram_error(db, diagram_uid, str(exc)[:500], "skeletonizing_final")
         raise
 
     finally:

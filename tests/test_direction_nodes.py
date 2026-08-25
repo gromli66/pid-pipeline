@@ -14,6 +14,7 @@ from modules.graph.core.direction_nodes import (  # noqa: E402
     annotate_direction_nodes, apply_direction_rules, cap_dangling_ends,
     stitch_collinear_stubs, drop_degenerate_stubs, collapse_straight_connectors,
     detach_degenerate_box_stubs, set_direction_pass_through, NAPRAVLENIE_CLASS_ID,
+    drop_synthetic_orphan_components, stitch_dangling_into_pipe,
 )
 
 BOX = (100, 100, 160, 140)  # (x_min,y_min,x_max,y_max)
@@ -188,6 +189,76 @@ def test_collapse_straight_and_keep_turn():
     edges = [{"id": "e0", "from": "A", "to": "C", "source_point": [10, 50], "target_point": [50, 50], "path": [[10, 50], [50, 50]]},
              {"id": "e1", "from": "C", "to": "B", "source_point": [50, 50], "target_point": [50, 90], "path": [[50, 50], [50, 90]]}]
     assert collapse_straight_connectors(nodes, edges)["collapsed"] == 0
+
+
+def test_orphan_synthetic_component_dropped():
+    nodes = [{"id": "capconn_1", "type": "connector"},
+             {"id": "bendconn_1", "type": "connector"},
+             {"id": "node_5", "type": "connector", "class_name": "connector"},
+             {"id": "capconn_2", "type": "connector"}]
+    edges = [_edge("e1", "capconn_1", "bendconn_1", [0, 0], [0, 100], length=100),
+             _edge("e2", "node_5", "capconn_2", [10, 0], [10, 50], length=50)]
+    st = drop_synthetic_orphan_components(nodes, edges)
+    # компонента из одних затычек умерла; ветка от настоящего стыка живёт
+    assert st["components"] == 1 and st["nodes_dropped"] == 2 and st["px_dropped"] == 100
+    assert [n["id"] for n in nodes] == ["node_5", "capconn_2"]
+    assert [e["id"] for e in edges] == ["e2"]
+
+
+def test_stitch_skips_orphan_but_takes_bridge():
+    hostA = _edge("hA", "node_1", "node_2", [50, 100], [50, 139],
+                  path=[[50, x] for x in range(100, 140)], length=40)
+    hostB = _edge("hB", "node_3", "node_4", [80, 100], [80, 139],
+                  path=[[80, x] for x in range(100, 140)], length=40)
+    # обрывок в никуда: один конец у трубы A, второй висит в воздухе
+    orphan = _edge("o1", None, None, [52, 120], [64, 120],
+                   path=[[52, 120], [58, 120], [64, 120]], length=12)
+    # перемычка: оба конца легли на трубы A и B
+    bridge = _edge("b1", None, None, [52, 125], [78, 125],
+                   path=[[52, 125], [65, 125], [78, 125]], length=26)
+    nodes = [{"id": f"node_{i}", "type": "connector", "class_name": "connector"}
+             for i in range(1, 5)]
+    edges = [hostA, hostB, orphan, bridge]
+    st = stitch_dangling_into_pipe(nodes, edges)
+    assert st["orphans_skipped"] == 1, st
+    assert st["stitched"] == 2, st
+    assert orphan.get("from") is None and orphan.get("to") is None
+    assert str(bridge["from"]).startswith("teeconn_")
+    assert str(bridge["to"]).startswith("teeconn_")
+
+
+def test_stitch_degraded_bridge_fully_skipped():
+    # у перемычки кросс-фильтр съедает конец на трубе A (рядом чужой конец) —
+    # второй конец на трубе B тоже снимается, одноконцевой врезки не происходит
+    hostA = _edge("hA", "node_1", "node_2", [50, 100], [50, 139],
+                  path=[[50, x] for x in range(100, 140)], length=40)
+    hostB = _edge("hB", "node_3", "node_4", [80, 100], [80, 139],
+                  path=[[80, x] for x in range(100, 140)], length=40)
+    bridge = _edge("b1", None, None, [52, 120], [78, 120],
+                   path=[[52, 120], [65, 120], [78, 120]], length=26)
+    crosser = _edge("c1", "node_9", None, [30, 122], [48, 122],
+                    path=[[30, 122], [40, 122], [48, 122]], length=18)
+    nodes = [{"id": f"node_{i}", "type": "connector", "class_name": "connector"}
+             for i in (1, 2, 3, 4, 9)]
+    edges = [hostA, hostB, bridge, crosser]
+    from modules.graph.core.direction_nodes import stitch_dangling_into_pipe as sdp
+    st = sdp(nodes, edges)
+    assert st["crossings_skipped"] == 2, st
+    assert st["orphans_skipped"] == 1, st
+    assert st["stitched"] == 0, st
+    assert bridge.get("from") is None and bridge.get("to") is None
+
+
+def test_buried_overlap_threshold():
+    import numpy as np
+    from modules.graph.core.nodes import buried_connector_labels
+    eq = np.zeros((40, 40), dtype=bool)
+    eq[0:20, 0:20] = True
+    lab = np.zeros((40, 40), dtype=int)
+    lab[5:10, 5:10] = 1       # целиком в маске (1.0)
+    lab[18:23, 5:10] = 2      # сидит на кромке (0.4) — тонкий символ
+    lab[30:35, 30:35] = 3     # не касается маски (0)
+    assert buried_connector_labels(eq, lab, 3) == {1, 2}
 
 
 if __name__ == "__main__":
