@@ -597,3 +597,64 @@ def test_вне_скинов_пересчёт_не_запускается(crossi
     _drag_endpoint(ed, ed.model.edge_key("blk", "far"), "source", *EP_CROSS)
     assert ed._bridge_cuts == {}
     assert _pieces(ed) == CROSS_NONE
+
+
+def _gap_centers(ed, edge) -> list:
+    """Середины разрывов НА ЭКРАНЕ — `(x, y)` между кусками полилинии.
+
+    Разрыв это дыра между соседними подпутями одного `QGraphicsPathItem`,
+    поэтому читается ровно там же, где его видит оператор, а не в данных.
+    """
+    path = ed.edge_items[ed.model.edge_key(edge["source"], edge["target"])].path()
+    pts = [(path.elementAt(i).x, path.elementAt(i).y, path.elementAt(i).type)
+           for i in range(path.elementCount())]
+    return [(round((pts[i - 1][0] + pts[i][0]) / 2, 1),
+             round((pts[i - 1][1] + pts[i][1]) / 2, 1))
+            for i in range(1, len(pts))
+            if pts[i][2] == QPainterPath.ElementType.MoveToElement]
+
+
+def test_разрыв_едет_за_пересечением_а_не_за_ключом(crossing):
+    """⛔ Симметрической разности КЛЮЧЕЙ мало — адрес работы шире.
+
+    Тяга узла `la` укорачивает горизонтальную трубу, само пересечение
+    остаётся на месте (500, 700), а разрыв в данных меняет только
+    АРК-ДЛИНУ: 70 → 20 от нового начала. Ключ `edge_2` при этом в обоих
+    наборах, разность ключей пуста — и по ней ребро не перерисовалось бы,
+    а кадры протяжки уже применили старые 70 к новой полилинии, посадив
+    дыру на x = 480 + 70 = 550, мимо трубы.
+    """
+    ed = crossing
+    _drag_endpoint(ed, ed.model.edge_key("blk", "far"), "source", *EP_CROSS)
+    e2 = ed.model.find_edge_data(ed.model.edge_key("la", "lb"))
+    assert _gap_centers(ed, e2) == [(500.0, 700.0)]
+
+    ed.start_drag_node("la")
+    ed.drag_node_to(480.0, 700.0)
+    ed.end_drag_node()
+    assert _pieces(ed) == CROSS_ONE, "мост никуда не делся"
+    assert _gap_centers(ed, e2) == [(500.0, 700.0)], "дыра уехала с пересечения"
+
+
+def test_пачка_команд_синхронизируется_один_раз(crossing):
+    """«Оптимизировать все» — одно нажатие, но команда на каждое ребро.
+
+    Пересчёт квадратичен, поэтому на время пачки дверь глушится
+    (`_bridge_cuts_batch`), а картинка сводится один раз в `finally`.
+    Проверяется и то, что глушитель снят: залипший флаг заморозил бы
+    разрывы до следующей полной перерисовки.
+    """
+    ed = crossing
+    key = ed.model.edge_key("blk", "far")
+    _drag_endpoint(ed, key, "source", *EP_CROSS)
+    assert _pieces(ed) == CROSS_ONE
+    # Оптимизация выпрямляет ИМЕННО ребро-мост: колено уходит, пересечение
+    # с ним — тоже. Взять здесь `edge_2` значило бы получить тест, зелёный
+    # и при выброшенном сведении (замер §MEFX2ж, зонд 3).
+    ed.edge_perp_scores[key] = {"is_good": False, "score": 0.1,
+                                "source_angle": 45, "target_angle": 45}
+
+    assert ed.optimize_all_edges() == 1, "пачке нечего делать — тест декоративен"
+    assert ed._bridge_cuts_batch is False
+    assert _pieces(ed) == CROSS_NONE
+    assert _pieces(ed) == _pieces_expected(ed)

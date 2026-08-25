@@ -110,19 +110,31 @@ class UndoManager:
         # В отличие от stack_depth не «застывает» при переполнении deque
         # и не совпадает ложно после undo + повторных правок.
         self._revision: int = 0
+        # Хук «мутация состоялась»: зовётся ПОСЛЕ каждой из тех же четырёх
+        # дверей. Нужен слоям, которые считаются по ВСЕЙ модели и потому не
+        # могут обновиться внутри отдельной команды: команда знает только
+        # свои рёбра, а разрывы мостов меняются и у чужих. По умолчанию
+        # None — редакторы, которым такого слоя нет, не платят ничего.
+        self.on_commit: Optional[Callable[[], None]] = None
+
+    def _committed(self):
+        """Мутация состоялась: счётчик вырос, слушателю пора синхронизироваться."""
+        self._revision += 1
+        if self.on_commit is not None:
+            self.on_commit()
 
     def execute(self, command: Command):
         """Выполнить команду и добавить в undo-стек."""
         command.execute()
         self.undo_stack.append(command)
         self.redo_stack.clear()
-        self._revision += 1
+        self._committed()
 
     def push_executed(self, command: Command):
         """Добавить уже выполненную команду (для drag, waypoint move)."""
         self.undo_stack.append(command)
         self.redo_stack.clear()
-        self._revision += 1
+        self._committed()
 
     def undo(self) -> Optional[str]:
         """Отменить последнее действие.
@@ -135,7 +147,7 @@ class UndoManager:
         cmd = self.undo_stack.pop()
         cmd.undo()
         self.redo_stack.append(cmd)
-        self._revision += 1
+        self._committed()
         return cmd.description
 
     def redo(self) -> Optional[str]:
@@ -149,7 +161,7 @@ class UndoManager:
         cmd = self.redo_stack.pop()
         cmd.redo()
         self.undo_stack.append(cmd)
-        self._revision += 1
+        self._committed()
         return cmd.description
 
     @property

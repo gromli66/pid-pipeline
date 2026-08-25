@@ -324,6 +324,11 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         # ── Разрывы мостов «— | —»: предпросмотр FXML, часть слоя скинов ──
         # edge_id → [(s, gap)]; ⛔ в граф не пишутся (решение Максима №2).
         self._bridge_cuts: dict = {}
+        # Пересчёт на завершении жеста — через единственную дверь мутаций
+        # модели (см. _sync_bridge_cuts). Пачка команд (optimize_all_edges)
+        # эту дверь глушит и синхронизируется один раз в конце.
+        self._bridge_cuts_batch: bool = False
+        self.undo_mgr.on_commit = self._sync_bridge_cuts
         # Множитель ширины разрыва — единственный регулятор оформления, который
         # уходит в выгрузку (шторка «Размер объектов» → UISettings → generate).
         # ⚠ Вкладка его сюда пока не передаёт (`advanced_graph_tab.py:387`
@@ -536,9 +541,10 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         остаются вычисляемыми, файл графа от предпросмотра не меняется.
 
         ⚠ Цена квадратична по рёбрам (замер §MEFX2б: 8.4 мс на 118 рёбрах,
-        ~250 мс на 418). Поэтому зовётся только из общего пути перерисовки
-        рёбер — то есть на завершении жеста и на пересборке сцены, а не на
-        кадр, — и только при включённом предпросмотре.
+        ~250 мс на 418). Поэтому зовётся с двух мест — из общего пути
+        перерисовки рёбер (пересборка сцены) и из `_sync_bridge_cuts`
+        (завершение жеста или команды), — а не на кадр, и только при
+        включённом предпросмотре.
 
         ⚠ Место вызова — `_before_draw_all_edges`, а не `_redraw_overlays`:
         оверлеи рисуются ПОСЛЕ рёбер в обоих путях (`setup_scene` и
@@ -554,6 +560,45 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             base_stroke=self.EDGE_WIDTH, use_diameter=False, graph_scale=1.0,
             bridge_gap_factor=self.bridge_gap_factor,
         )
+
+    def _sync_bridge_cuts(self):
+        """Разрывы на ЗАВЕРШЕНИИ жеста или команды (хук `undo_mgr.on_commit`).
+
+        Возврат приёмки 2026-08-25: «новые разрывы после перетаскивания
+        коннектора — не всегда». Пересчёт жил только в
+        `_before_draw_all_edges`, то есть в ПОЛНОЙ перерисовке; жесты,
+        которые обновляют пути рёбер поштучно (`_update_edge_path`),
+        оставляли на сцене разрывы прошлой перерисовки: новое пересечение
+        без разрыва, снятое — с разрывом, висящим в воздухе.
+
+        Место — `UndoManager`: `execute` / `push_executed` / `undo` /
+        `redo` это ЕДИНСТВЕННАЯ дверь мутаций модели (там же растёт
+        `revision`, на который опирается дёрти-флаг). Замер §MEFX2ж: мимо
+        неё не проходит ни один из пяти путей, ломавших картину, — тяга
+        конца ребра, тяга узла, протяжка waypoint, `redo` гранулярной
+        команды и удаление ребра-моста. Перечислять сами жесты значило бы
+        снова забыть шестой.
+
+        ⛔ На КАДР жеста не зовётся — развилка §MEFX2г разрешена в пользу
+        «не на кадр» и остаётся в силе: кадры до `undo_mgr` не доходят.
+
+        Перерисовываются НЕ рёбра жеста: разрывы считаются по всему листу,
+        оператор тянет одну трубу, а рвётся соседняя. Адрес работы —
+        рёбра, у которых разрывы стали ДРУГИМИ (появились, исчезли или
+        уехали по длине), то есть чуть шире симметрической разности ключей.
+        """
+        if not self.show_skins or self._bridge_cuts_batch:
+            return
+        old = self._bridge_cuts
+        self._recompute_bridge_cuts()
+        stale = {eid for eid in set(old) | set(self._bridge_cuts)
+                 if old.get(eid) != self._bridge_cuts.get(eid)}
+        if not stale:
+            return
+        for edge in self.edges_data:
+            if edge.get('id') in stale:
+                self._update_edge_path(
+                    self.model.edge_key(edge['source'], edge['target']))
 
     def _edge_cuts(self, edge_data: dict):
         """Разрывы ЭТОГО ребра — только пока включён предпросмотр FXML."""
@@ -951,7 +996,14 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         return True
 
     def optimize_all_edges(self) -> int:
-        """Оптимизировать все неперпендикулярные рёбра."""
+        """Оптимизировать все неперпендикулярные рёбра.
+
+        Одно нажатие кнопки — одна команда на КАЖДОЕ ребро, поэтому
+        разрывы синхронизируются один раз в конце, а не по разу на ребро:
+        пересчёт квадратичен, и пачка из 50 рёбер платила бы 50 его цен
+        (замер §MEFX2ж). Жест у оператора один — и картинка обновляется
+        один раз, на его завершении.
+        """
         optimized = 0
         edges_to_optimize = [
             key for key, info in self.edge_perp_scores.items()
@@ -962,9 +1014,14 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             # drop_uncommitted_preview). Пустой список команд не даёт:
             # вваривать нечего, значит и картинку у оператора не отбираем.
             self.drop_uncommitted_preview()
-        for node_a, node_b in edges_to_optimize:
-            if self.optimize_edge(node_a, node_b):
-                optimized += 1
+        self._bridge_cuts_batch = True
+        try:
+            for node_a, node_b in edges_to_optimize:
+                if self.optimize_edge(node_a, node_b):
+                    optimized += 1
+        finally:
+            self._bridge_cuts_batch = False
+            self._sync_bridge_cuts()
         self.update_status(f"Оптимизировано {optimized} рёбер из {len(edges_to_optimize)}")
         self.update_statistics()
         return optimized
