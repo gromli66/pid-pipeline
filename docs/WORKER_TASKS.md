@@ -311,6 +311,8 @@ def task_Y(self, diagram_uid: str, project_code: str = "thermohydraulics"):
 **Output артефакты:** `skeleton/skeleton_final.png` (SKELETON_FINAL)
 **Auto-chain:** `task_detect_junctions` через `send_task()` → queue: `gpu`
 
+**`error_stage` = `skeletonizing_final`** (с 2026-08-25, блок точечных болей). Задача называется `simple` по режиму алгоритма (`simple_mode` в `skeleton_extension`), но её стадия — `StageType.FINAL_SKELETONIZATION`, и писала она прежде `skeletonizing_simple` — значение, которое клиент красил на кнопку «Проверка труб», то есть на СОСЕДНИЙ этап (боль Б16). Цель отката у обоих значений одна — `validated_masks` (`app/api/diagrams.py` знает и старое, и новое), ни одно из них не знает `_STAGE_DISPATCH` в `app/api/segmentation.py`, поэтому переезд не меняет ни ретрая, ни диспетчеризации: меняется только кнопка, которую красит ошибка. Прежнее значение остаётся в карте клиента ЛЕГАСИ — им помечены строки `error_stage` у диаграмм, сломавшихся до правки. ⚠ Метка фазы в логах (`obs.bind(phase=...)`) и поле `stage=` у доменных ошибок остались `skeletonizing_simple` — они называют ЗАДАЧУ, а не этап конвейера, и в `error_stage` не попадают (`set_diagram_error` — единственный писатель).
+
 ### 4.5 task_detect_junctions
 
 **Файл:** `worker/tasks/junction.py`
@@ -385,6 +387,8 @@ def task_Y(self, diagram_uid: str, project_code: str = "thermohydraulics"):
 **Output артефакты:** `ocr/ocr_result.json` (OCR_RESULT)
 **Auto-chain:** нет
 **Особенность:** запускается параллельно с `task_build_graph` после `complete_junction_validation`
+
+**Порядок конца задачи: слияние в граф → `complete_stage` → `commit`** (с 2026-08-25, блок точечных болей, пункт 1.6). Готовность OCR клиент читает СТРОКОЙ В БД — `has_ocr_result` в `GET /api/ocr/{uid}/status` смотрит наличие `Artifact(OCR_RESULT)`. Прежний порядок (файл → артефакт → `complete_stage` → `commit` → и только потом merge) открывал окно, в котором этап уже зелёный, а текстовых блоков в графе ещё нет: оператор уходил в «Привязку подписей» по графу без текста. **Падение слияния теперь честная ошибка этапа**, а не `warning` в лог: стадия `failed`, `error_stage='ocr'`, артефакт не закоммичен — значит клиент «готово» не покажет, а повтор возможен (сырой `ocr_result.json` остаётся на диске и считается заново, но труд модели не выбрасывается). Прежнее поведение — тихий успех при несостоявшемся слиянии — и есть A7 из ROADMAP («провал OCR-merge неотличим от успеха»); закрыта его воркерная половина.
 
 ### 4.8 task_extract_contours
 

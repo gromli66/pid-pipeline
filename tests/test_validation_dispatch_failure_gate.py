@@ -74,7 +74,7 @@ ERROR_STAGES = [
     "direction_classification",
     "segmenting",
     "skeletonizing",
-    "skeletonizing_simple",
+    "skeletonizing_final",
     "detecting_junctions",
     "building_graph",
     "generating_fxml",

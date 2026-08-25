@@ -68,7 +68,11 @@ ERROR_STAGES = [
     "direction_classification",
     "segmenting",
     "skeletonizing",
-    "skeletonizing_simple",
+    # Переехало вместе с писателем (pains-1, боль 1/Б16):
+    # `skeletonizing_simple` -> `skeletonizing_final`. Поведение клетки
+    # не изменилось — оба значения ведут в `validated_masks`, и ни одно
+    # не знает `_STAGE_DISPATCH`; изменилось имя, под которым её пишут.
+    "skeletonizing_final",
     "detecting_junctions",
     "building_graph",
     "generating_fxml",
@@ -111,7 +115,7 @@ LAUNCH_BY_ERROR = {
     ("segment", "direction_classification"): ("segmenting", DIRECTION_TASK),
     ("segment", "segmenting"): ("segmenting", DIRECTION_TASK),
     ("segment", "skeletonizing"): ("skeletonizing", SKELETON_TASK),
-    ("segment", "skeletonizing_simple"): ("segmenting", DIRECTION_TASK),
+    ("segment", "skeletonizing_final"): ("segmenting", DIRECTION_TASK),
     ("segment", "detecting_junctions"): ("detecting_junctions", JUNCTION_TASK),
     ("segment", "building_graph"): ("segmenting", DIRECTION_TASK),
     ("segment", "generating_fxml"): ("segmenting", DIRECTION_TASK),
@@ -375,7 +379,7 @@ def test_error_stage_vocabulary_is_complete():
         "direction_classification",
         "segmenting",
         "skeletonizing",
-        "skeletonizing_simple",
+        "skeletonizing_final",
         "detecting_junctions",
         "building_graph",
         "generating_fxml",

@@ -113,6 +113,12 @@ TABLE_BEFORE = {
 # Второй независимый литерал, а не выражение «TABLE_BEFORE плюс правки»:
 # иначе редакции перестали бы быть независимыми, и сторож разницы ниже
 # сравнивал бы литерал сам с собой.
+# Клетка переименована вслед за писателем (pains-1, боль 1/Б16): цель у обоих
+# ключей одна — `validated_masks` (`app/api/diagrams.py` знает и старый, и
+# новый), поэтому решётка не изменилась, изменилось имя, под которым её
+# спрашивают. Снимок ДО правки остаётся историческим и не переписывается.
+RENAMED_BY_PAINS_1 = {"skeletonizing_simple": "skeletonizing_final"}
+
 TABLE_AFTER = {
     "building_graph": "validated_junctions",
     "contour_extraction": "validated_graph",
@@ -124,7 +130,7 @@ TABLE_AFTER = {
     "ocr": "validated_graph",
     "segmenting": "validated_bbox",
     "skeletonizing": "segmenting",
-    "skeletonizing_simple": "validated_masks",
+    "skeletonizing_final": "validated_masks",
     None: "uploaded",
     "totally_unknown_stage": "uploaded",
 }
@@ -273,8 +279,9 @@ def test_the_edit_changed_exactly_four_cells():
     решётки проверяются прогоном по действующей карте (`test_retry_transition`).
     """
     diff = {
-        k: (TABLE_BEFORE[k], TABLE_AFTER[k])
-        for k in TABLE_BEFORE if TABLE_BEFORE[k] != TABLE_AFTER[k]
+        k: (TABLE_BEFORE[k], TABLE_AFTER[RENAMED_BY_PAINS_1.get(k, k)])
+        for k in TABLE_BEFORE
+        if TABLE_BEFORE[k] != TABLE_AFTER[RENAMED_BY_PAINS_1.get(k, k)]
     }
     assert diff == {
         "direction_classification": ("uploaded", "validated_bbox"),

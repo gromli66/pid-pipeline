@@ -165,6 +165,37 @@ def task_run_ocr(self, diagram_uid: str):
                 len(result.get("secondary", [])),
             )
 
+            # === Слияние OCR -> общий граф (чистая схема) ===
+            # ДО завершения стадии и до коммита артефакта: готовность OCR
+            # клиент читает СТРОКОЙ В БД (`has_ocr_result`, `app/api/ocr.py`),
+            # поэтому «готово» обязано наступать после слияния — иначе оператор
+            # уходит в «Привязку подписей» по графу БЕЗ текстовых блоков.
+            # Граф уже создан (graph_validated при simple-валидации) — переносим
+            # блоки в graph["text_blocks"]. Идемпотентно; сырой ocr_result остаётся.
+            # ⛔ Падение слияния БОЛЬШЕ НЕ ГЛОТАЕТСЯ (решение №8 от 2026-08-25):
+            # прежний `except Exception` с warning делал провал неотличимым от
+            # успеха — этап зеленел, а текста в графе не было. Теперь это
+            # честная ошибка этапа: стадия `failed`, `error_stage='ocr'`,
+            # артефакт не закоммичен, повтор возможен (файл на диске остаётся).
+            from app.services.ocr_graph_merge import merge_ocr_result_into_graph
+            graph_art = (
+                db.query(Artifact)
+                .filter(
+                    Artifact.diagram_uid == diagram_uid,
+                    Artifact.artifact_type.in_((
+                        ArtifactType.GRAPH_VALIDATED, ArtifactType.GRAPH_JSON,
+                    )),
+                )
+                .order_by(Artifact.artifact_type == ArtifactType.GRAPH_VALIDATED)
+                .first()
+            )
+            if graph_art:
+                n_merged = merge_ocr_result_into_graph(
+                    storage_path / graph_art.file_path, ocr_result_path,
+                )
+                if n_merged:
+                    logger.info("[%s] merged %d OCR blocks into graph", diagram_uid, n_merged)
+
             # === Регистрация артефакта ===
             rel_path = str(ocr_result_path.relative_to(storage_path))
 
@@ -185,34 +216,6 @@ def task_run_ocr(self, diagram_uid: str):
             db.add(artifact)
             complete_stage(stage, {"result_path": rel_path})
             db.commit()
-
-        # === Слияние OCR -> общий граф (чистая схема) ===
-        # Граф уже создан (graph_validated при simple-валидации) — переносим
-        # блоки в graph["text_blocks"]. Идемпотентно; сырой ocr_result остаётся.
-        try:
-            from app.services.ocr_graph_merge import merge_ocr_result_into_graph
-            graph_art = (
-                db.query(Artifact)
-                .filter(
-                    Artifact.diagram_uid == diagram_uid,
-                    Artifact.artifact_type.in_((
-                        ArtifactType.GRAPH_VALIDATED, ArtifactType.GRAPH_JSON,
-                    )),
-                )
-                .order_by(Artifact.artifact_type == ArtifactType.GRAPH_VALIDATED)
-                .first()
-            )
-            if graph_art:
-                n_merged = merge_ocr_result_into_graph(
-                    storage_path / graph_art.file_path, ocr_result_path,
-                )
-                if n_merged:
-                    logger.info("[%s] merged %d OCR blocks into graph", diagram_uid, n_merged)
-        except Exception as merge_exc:  # noqa: BLE001
-            logger.warning(
-                "[%s] OCR->graph merge skipped: %s", diagram_uid, merge_exc,
-                exc_info=True,
-            )
 
         logger.info("[%s] OCR completed successfully", diagram_uid)
 
