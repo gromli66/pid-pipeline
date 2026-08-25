@@ -249,6 +249,17 @@ def test_stitch_degraded_bridge_fully_skipped():
     assert bridge.get("from") is None and bridge.get("to") is None
 
 
+def test_long_flat_chain_collapses():
+    from modules.graph.core.direction_nodes import merge_straight_chains
+    # длинная почти-прямая (отклонение 24 при хорде 1000) — схлопывается
+    nodes = [{"id": "A", "type": "equipment"},
+             {"id": "b", "type": "connector", "bend": True, "centroid": [24, 500]},
+             {"id": "C", "type": "equipment"}]
+    edges = [_edge("e0", "A", "b", [0, 0], [24, 500], path=[[0, 0], [24, 500]]),
+             _edge("e1", "b", "C", [24, 500], [0, 1000], path=[[24, 500], [0, 1000]])]
+    assert merge_straight_chains(nodes, edges)["merged"] == 1
+
+
 def test_buried_overlap_threshold():
     import numpy as np
     from modules.graph.core.nodes import buried_connector_labels

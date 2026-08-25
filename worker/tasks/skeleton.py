@@ -13,6 +13,7 @@ task_skeletonize_simple:
     Auto-chain → task_detect_junctions
 """
 
+import json
 import logging
 import os
 import tempfile
@@ -344,6 +345,27 @@ def task_skeletonize(
             max_thickness=skel_cfg.mask_max_thickness,
         )
 
+        # Хвост трубы в боксе стрелки втягивается скелетизацией/prune, и бокс
+        # остаётся без трубы — вернуть пиксели модельной маски (только внутри
+        # боксов napravlenie, текст и прочее не трогается).
+        try:
+            from mask_refinement import restore_direction_box_tails
+            coco_tail_path = diagram_dir / "detection" / "coco_validated.json"
+            if coco_tail_path.exists():
+                if pipe_mask_img is None:
+                    pipe_mask_img = cv2.imread(str(pipe_mask_path), cv2.IMREAD_GRAYSCALE)
+                if pipe_mask_img is not None:
+                    with open(coco_tail_path, encoding="utf-8") as _f:
+                        _coco_tails = json.load(_f)
+                    raw_bin = (pipe_mask_img > 127).astype(np.uint8)
+                    mask_result, _tails = restore_direction_box_tails(
+                        mask_result, raw_bin, _coco_tails)
+                    if _tails:
+                        logger.info("Direction-box tails restored: %d px", _tails)
+        except (OSError, ValueError) as tails_exc:
+            logger.warning("direction-box tails restore failed: %s", tails_exc,
+                           exc_info=True)
+
         cv2.imwrite(str(skeleton_mask_output_path), mask_result)
 
         mask_pixels = int(np.sum(mask_result > 127))
@@ -574,6 +596,26 @@ def task_skeletonize_simple(
             nm_bin = (cv2.imread(str(node_mask_path), cv2.IMREAD_GRAYSCALE) > 127).astype(np.uint8)
 
             refined_mask, refine_stats = refine_pipe_mask(pm_bin, image_bgr, nm_bin)
+
+            # Хвост трубы в боксе стрелки втянут ещё до валидации (skeleton_mask
+            # первого этапа), refine его не возвращает — вернуть пиксели
+            # модельной маски (только внутри боксов napravlenie).
+            try:
+                from mask_refinement import restore_direction_box_tails
+                raw_tail_path = diagram_dir / "segmentation" / "pipe_mask.png"
+                coco_tail_path = diagram_dir / "detection" / "coco_validated.json"
+                if raw_tail_path.exists() and coco_tail_path.exists():
+                    raw_bin = (cv2.imread(str(raw_tail_path),
+                                          cv2.IMREAD_GRAYSCALE) > 127).astype(np.uint8)
+                    with open(coco_tail_path, encoding="utf-8") as _f:
+                        _coco_tails = json.load(_f)
+                    refined_mask, _tails = restore_direction_box_tails(
+                        refined_mask, raw_bin, _coco_tails)
+                    if _tails:
+                        logger.info("Direction-box tails restored: %d px", _tails)
+            except (OSError, ValueError) as tails_exc:
+                logger.warning("direction-box tails restore failed: %s", tails_exc,
+                               exc_info=True)
 
             refined_path = diagram_dir / "segmentation" / "pipe_mask_refined.png"
             cv2.imwrite(str(refined_path), refined_mask)
