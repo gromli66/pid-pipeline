@@ -1467,3 +1467,82 @@ def test_подсказка_каждой_кнопки_обещает_выход(
     missing = [b.text() for b in tab.mode_group.buttons()
                if promise not in b.toolTip()]
     assert missing == [], f"кнопки без обещания выхода: {missing}"
+
+
+# ── 7.4: окно «Добавить узел» закрывается ВСЕМИ тремя путями ──────────────
+
+
+def test_окно_добавить_узел_несёт_кнопку_закрытия(qapp):
+    """Крестик неактивен не сам по себе, а из-за ЯВНО заданного набора флагов.
+
+    `QDialog` подсказок оформления не содержит: заголовок, системное меню и
+    кнопку закрытия добавляет менеджер окон — но только пока приложение не
+    задало набор флагов само. Замер §MEFX7: со снятой кнопкой «?» флаги
+    диалога были `0x3003`, у голого `QDialog` — `0x8003003`; разница — ровно
+    бит `WindowCloseButtonHint`. Кнопка «?» при этом выключена и БЕЗ той
+    строки, то есть покупала она только потерю крестика.
+    """
+    from PySide6.QtWidgets import QDialog
+    from ui.editors.node_list_dialog import NodeListDialog
+
+    dlg = NodeListDialog([{"id": 1, "name": "nasos", "display_name": "Насос"}])
+    ref = QDialog()
+    assert bool(dlg.windowFlags() & Qt.WindowType.WindowCloseButtonHint), \
+        "у окна нет бита кнопки закрытия — крестик снова неактивен"
+    assert dlg.windowFlags() == ref.windowFlags(), \
+        "набор флагов задан явно и разошёлся с обычным диалогом"
+    # обратная граница: кнопка «?» и без явных флагов не появляется
+    assert not (ref.windowFlags() & Qt.WindowType.WindowContextHelpButtonHint)
+
+
+@pytest.mark.parametrize("close_path", ["отмена", "esc", "крестик"])
+def test_все_три_пути_закрытия_дают_reject(qapp, close_path):
+    """Esc / «Отмена» / крестик — один исход: `reject`, класс не выбран."""
+    from PySide6.QtWidgets import QDialog
+    from ui.editors.node_list_dialog import NodeListDialog
+
+    dlg = NodeListDialog([{"id": 1, "name": "nasos", "display_name": "Насос"}])
+    if close_path == "отмена":
+        dlg.reject()
+    elif close_path == "esc":
+        dlg.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, NONE))
+    else:
+        dlg.close()                      # то же, что жмёт менеджер окон
+    assert dlg.result() == QDialog.DialogCode.Rejected, f"{close_path}: не reject"
+    assert dlg.get_selected_class() is None
+
+
+@pytest.mark.parametrize("tab_fixture", ["adv_tab", "simple_tab"])
+def test_отменённое_окно_снимает_кнопку_и_уводит_в_idle(request, tab_fixture,
+                                                        node_dialog):
+    """Обе графовые вкладки: закрытое без выбора окно не оставляет инструмент."""
+    tab = request.getfixturevalue(tab_fixture)
+    node_dialog.result = 0               # крестик / Esc / «Отмена»
+    tab.btn_add_node.click()
+    assert node_dialog.calls == 1
+    assert not tab.btn_add_node.isChecked(), "кнопка осталась нажатой"
+    assert tab._editor._current_mode == "idle"
+
+
+def test_третий_вызывающий_окна_тоже_снимает_кнопку(qapp, monkeypatch,
+                                                    node_dialog):
+    """`pipe_tab.py:415` — третье место, откуда открывают тот же диалог.
+
+    Своей `mode_group` у «Трасс» нет (инструменты через `_set_tool`), поэтому
+    7.1 её не касается; проверяется ровно приёмка 7.4 — отменённое окно
+    возвращает кнопку и инструмент.
+    """
+    from unittest.mock import MagicMock
+    from ui.tabs.pipe_tab import PipeTab
+
+    monkeypatch.setattr(PipeTab, "_download_artifacts", lambda self: None)
+    tab = PipeTab("test-uid", "проба 7.4", api_client=_api_stub())
+    tab.set_project_code("thermohydraulics")
+    tab._editor = MagicMock()
+    node_dialog.result = 0
+
+    tab.btn_add_node.click()
+
+    assert node_dialog.calls == 1
+    assert not tab.btn_add_node.isChecked(), "кнопка осталась нажатой"
+    assert tab.btn_polyline.isChecked(), "инструмент не вернулся к обводке"

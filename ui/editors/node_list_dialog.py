@@ -48,7 +48,14 @@ class NodeListDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Добавить узел оборудования")
         self.setMinimumSize(350, 500)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
+        # ⛔ Здесь стоял `setWindowFlags(... & ~WindowContextHelpButtonHint)` —
+        # единственный `setWindowFlags` во всём клиенте. Задав набор флагов
+        # ЯВНО, он забирал у окна `WindowCloseButtonHint`, которого в наборе
+        # не было: крестик рисовался, но был неактивен (жалоба «Отмена и Esc
+        # закрывают, крестик — нет»). Замер §MEFX7: с той строкой флаги 0x3003,
+        # у голого QDialog — 0x8003003, разница — ровно бит кнопки закрытия;
+        # кнопка «?» при этом выключена в ОБОИХ случаях, то есть строка
+        # не покупала ничего. Флаги диалогу не задаём — их ставит менеджер окон.
 
         self._classes = classes
         self._selected_class: dict | None = None
