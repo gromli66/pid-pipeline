@@ -13015,3 +13015,44 @@ in test_closing_tab_does_not_touch_dead_widgets`. Красных до краха
 («полный `suite_baseline` не судит: 4/4 exit 2, access violation») ДО этой
 сессии. Наследнику: если крах повторится, начинать с `test_tab_close_stops_threads`,
 а не с этого файла.
+
+### P3.11. Доработка №3: два замечания приёмки в ветках параллельного OCR (2026-08-25)
+
+Оба замера сняты на ЖИВОМ `DiagramWorkspace` (offscreen Qt), до правки и после.
+
+**Замечание 1 — привязка доступна во время перезапуска.** Названная причина
+(«`_ocr_notified` не сбрасывается») НЕ подтвердилась: флаг сбрасывается и поллер
+поднимается уже сейчас. Настоящая причина — перекраска ПО СТАТУСУ:
+
+| статус | binding до | сразу после клика | после тика опроса | `_ocr_notified` |
+|---|---|---|---|---|
+| `validated_graph` | True | False | False | False |
+| `contours_validated` | True | False | False | False |
+| **`ocr_bound`** | True | False | **True** | False |
+| **`generating_fxml`** | True | False | **True** | False |
+| **`completed`** | True | False | **True** | False |
+
+`_buttons_for_status` числит `ocr_binding` пройденным при `ocr_bound` и позже —
+`_start_ocr` гасил кнопку, тик опроса возвращал. Отсюда «временами»: три статуса
+из пяти. После правки (метка `_ocr_rerunning`) — False во всех пяти строках,
+бусина привязки `UNAVAILABLE`, бусина OCR `IN_PROGRESS`, и True обратно, как
+только приходит новый `has_ocr_result`.
+
+**Замечание 2 — пройденная привязка жёлтая.** Три ветки параллельного OCR красили
+кнопку жёлтым безусловно:
+
+| статус | после загрузки | после тика поллера (до правки) | после правки |
+|---|---|---|---|
+| `validated_graph` | жёлтая / AVAILABLE | жёлтая / AVAILABLE | жёлтая / AVAILABLE |
+| `contours_validated` | жёлтая / AVAILABLE | жёлтая / AVAILABLE | жёлтая / AVAILABLE |
+| `ocr_bound` | зелёная / COMPLETED | **жёлтая / AVAILABLE** | зелёная / COMPLETED |
+| `generating_fxml` | зелёная / COMPLETED | **жёлтая / AVAILABLE** | зелёная / COMPLETED |
+| `completed` | зелёная / COMPLETED | **жёлтая / AVAILABLE** | зелёная / COMPLETED |
+
+Адреса замечания (от `dev`: `:960-963`, `:989-992`, `:1036-1039`) пересверены — в
+ветке `:1026-1030`, `:1057-1061`, `:1110-1117`. Правило сведено в
+`_light_binding_button`; сторож не даёт появиться четвёртой копии.
+
+Зонды: AA→4 клетки, AB→5, AC→5, AD→1, AE→3, AF→4, AG→3; восстановление копией,
+`md5` сошёлся 2/2. Гейты: 24 файла `tests/ui` по воркспейсу — 506 passed;
+`lint_gate --check` exit 0.
