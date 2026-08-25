@@ -61,6 +61,7 @@ from app.api.ocr import (
     start_ocr,
     update_ocr_result,
 )
+from app.api.build_gate import GRAPH_READY_STATUSES, REBUILD_REFUSAL
 from app.models import Artifact, ArtifactType, Diagram, DiagramStatus
 
 UID = uuid.UUID("c5000000-1111-2222-3333-444455556666")
@@ -89,21 +90,34 @@ ALL_STATUSES = {s.value for s in DiagramStatus}
 # ── гейт статуса: какие статусы эндпоинт пускает ─────────────────────────
 #
 # Литералы, снятые ЧТЕНИЕМ кода. Всё, чего в множестве нет, — 400.
+#
+# `GRAPH_READY` — общий белый список восьми эндпоинтов: граф уже собран,
+# фазе B есть с чем работать. Всё, что раньше `BUILT`, — фаза A и сама сборка.
+# `ERROR` в решётке судится с ПУСТЫМ `error_stage`; упавшая сборка — отдельным
+# тестом ниже.
+GRAPH_READY = {"built", "validating_graph", "validated_graph",
+               "extracting_contours", "contours_extracted",
+               "contours_validated", "ocr_processing", "ocr_completed",
+               "ocr_bound", "generating_fxml", "completed", "error"}
+
 ACCEPTS = {
-    # У девяти из десяти статусного гейта НЕТ ВОВСЕ: пишут при любом статусе,
-    # включая `building_graph` и `error` от упавшей сборки.
-    "contours_extract": ALL_STATUSES,
-    "contours_validated_put": ALL_STATUSES,
-    "contours_auto_accept": ALL_STATUSES,
-    "contours_complete": ALL_STATUSES,
-    "contours_training_put": ALL_STATUSES,
-    "ocr_result_put": ALL_STATUSES,
-    "ocr_validation_save": ALL_STATUSES,
-    "ocr_recognize": ALL_STATUSES,
-    "ocr_binding_apply": ALL_STATUSES,
-    # Единственный со своим списком — и `building_graph` в нём ЕСТЬ, хотя
-    # первым же делом эндпоинт УДАЛЯЕТ `OCR_RESULT` (`app/api/ocr.py`).
-    "ocr_start": {"validated_junctions", "building_graph", "built",
+    "contours_extract": GRAPH_READY,
+    "contours_validated_put": GRAPH_READY,
+    "contours_auto_accept": GRAPH_READY,
+    "contours_complete": GRAPH_READY,
+    "contours_training_put": GRAPH_READY,
+    "ocr_result_put": GRAPH_READY,
+    "ocr_validation_save": GRAPH_READY,
+    "ocr_recognize": GRAPH_READY,
+    # Список взят у соседа по вкладке — `/binding/save` (`_BINDING_SAVE_STATUSES`):
+    # разъедься они, оператор получил бы «сохранить можно, применить нельзя».
+    # Отличие от `GRAPH_READY` ровно в двух клетках: до валидации графа
+    # применять нечего.
+    "ocr_binding_apply": GRAPH_READY - {"built", "validating_graph"},
+    # Единственный, у кого свой список был и до блока 5. Убран `building_graph`:
+    # эндпоинт первым же делом СНОСИТ `OCR_RESULT` (`app/api/ocr.py`), а сборка
+    # графа в этот момент ждёт текстовые блоки, чтобы слить их в свежий граф.
+    "ocr_start": {"validated_junctions", "built",
                   "validating_graph", "validated_graph", "extracting_contours",
                   "contours_extracted", "contours_validated", "ocr_completed",
                   "ocr_bound", "error"},
@@ -111,7 +125,10 @@ ACCEPTS = {
 
 #: Пускает ли эндпоинт `ERROR` с `error_stage` упавшей СБОРКИ ГРАФА.
 #: Решение №3 редтима: упавшая сборка — 400, упавший OCR фазу B не запирает.
-ACCEPTS_FAILED_BUILD = {e: True for e in ENDPOINTS}
+#: `/ocr/start` в перечень гейта не входит — это ЕГО штатный путь перезапуска
+#: (`error` в его списке стоял всегда), а сборку он не трогает.
+ACCEPTS_FAILED_BUILD = {e: False for e in ENDPOINTS}
+ACCEPTS_FAILED_BUILD["ocr_start"] = True
 
 
 # ── харнесс ──────────────────────────────────────────────────────────────
@@ -346,6 +363,82 @@ def test_a_failed_ocr_does_not_lock_phase_b(endpoint, layout, broker):
     _result, _db = _run(endpoint, diagram)
 
 
+# ── машинный признак отказа: клиент и сервер сведены ─────────────────────
+
+GATED = tuple(e for e in ENDPOINTS if e != "ocr_start")
+
+
+@pytest.mark.parametrize("endpoint", GATED)
+def test_refusal_carries_the_machine_marker(endpoint, layout, broker):
+    """В `detail` отказа есть машинный признак — по нему клиент морозит буфер.
+
+    Опознавать «граф пересобирается» по русской прозе нельзя: её перепишут, и
+    заслон клиента ослепнет молча. Признак ASCII и утверждается здесь, а не
+    в клиенте, потому что порождает его сервер.
+    """
+    with pytest.raises(HTTPException) as exc:
+        _run(endpoint, _diagram("building_graph"))
+    assert REBUILD_REFUSAL in str(exc.value.detail), endpoint
+
+
+def test_client_and_server_know_the_same_marker():
+    """Сведение копий: клиент носит СВОЮ константу (он пакуется отдельно).
+
+    Разъедься они — заслон перестанет срабатывать, и ни один тест клиента
+    этого не увидит: там подделка отвечает своей строкой.
+    """
+    from ui.tabs.save_mode import REBUILD_REFUSAL as client_marker
+    assert client_marker == REBUILD_REFUSAL
+
+
+#: Три ЗАПИСИ, куда клиент фазы B приходит ПЕРВЫМИ (замер §P5.3): у каждой был
+#: свой белый список ещё до блока 5, и гейт пересборки встал ПЕРЕД ним ради
+#: машинного признака. Проверяется вложенность — иначе гейт менял бы не только
+#: текст отказа, но и пускаемое множество, а это уже чужие пункты (3.1в/Н8+).
+NESTED_LISTS = {
+    "/validation/graph/save": {
+        "built", "validating_graph", "validated_graph", "contours_validated",
+        "ocr_completed", "ocr_bound", "generating_fxml", "completed"},
+    "/validation/graph/canvas/save": {
+        "ocr_completed", "ocr_bound", "generating_fxml", "completed"},
+    "/ocr/binding/save": {
+        "validated_graph", "extracting_contours", "contours_extracted",
+        "contours_validated", "ocr_processing", "ocr_completed", "ocr_bound",
+        "generating_fxml", "completed"},
+}
+
+
+@pytest.mark.parametrize("endpoint", sorted(NESTED_LISTS))
+def test_the_gate_only_changes_the_wording_there(endpoint):
+    """Список эндпоинта ВЛОЖЕН в `GRAPH_READY` — значит гейт не запер ни клетки.
+
+    Литералы сняты чтением кода, как и всё в этом файле; расширь кто-нибудь
+    любой из трёх списков за пределы `GRAPH_READY` — гейт начнёт запирать
+    то, что сосед пускал, и эта клетка скажет об этом вслух.
+    """
+    ready = {s.value for s in GRAPH_READY_STATUSES}
+    assert NESTED_LISTS[endpoint] <= ready, endpoint
+
+
+def test_nested_lists_are_the_real_ones():
+    """Сторож самих литералов: они те же, что в коде эндпоинтов."""
+    from app.api.ocr import _BINDING_SAVE_STATUSES
+    assert {s.value for s in _BINDING_SAVE_STATUSES} == \
+        NESTED_LISTS["/ocr/binding/save"]
+
+
+def test_other_400s_are_not_the_rebuild_refusal(layout, broker):
+    """Порог заперт с другой стороны: чужой 400 признака НЕ несёт.
+
+    Иначе клиент морозил бы буфер на любом отказе — например на «OCR result
+    not available yet» соседнего `/binding/save`, где правки оператора живы
+    и лечится всё повтором.
+    """
+    with pytest.raises(HTTPException) as exc:
+        _run("ocr_start", _diagram("uploaded"))
+    assert REBUILD_REFUSAL not in str(exc.value.detail)
+
+
 # ── что именно пишет пропущенный вызов ───────────────────────────────────
 
 def test_contours_complete_still_moves_forward(layout):
@@ -386,3 +479,57 @@ def test_binding_apply_writes_kks_when_allowed(storage, layout):
     written = json.loads(graph_path.read_text(encoding="utf-8"))
     assert written["nodes"][0]["kks_full"] == "10LBA10AA001"
     assert not graph_path.with_suffix(".tmp").exists(), "временный файл остался"
+
+
+# ── что переживает саму пересборку ───────────────────────────────────────
+#
+# Вторая половина блока 5: гейт запирает работу НА ВРЕМЯ сборки, а эти клетки
+# судят, что останется ПОСЛЕ неё. Считает настоящая `_artifacts_to_delete` —
+# не наше представление о ней.
+
+from app.api.rollback import _artifacts_to_delete                  # noqa: E402
+
+#: Цель отката кнопок, ведущих к пересборке: «Сборка схемы» →
+#: `validated_junctions`, «Проверка узлов» → `detected_junctions`. Обе РАНЬШЕ
+#: `BUILT`, то есть граф после них собирается заново.
+REBUILD_TARGETS = (DiagramStatus.VALIDATED_JUNCTIONS,
+                   DiagramStatus.DETECTED_JUNCTIONS)
+
+
+@pytest.mark.parametrize("target", REBUILD_TARGETS, ids=lambda s: s.value)
+def test_preserve_ocr_keeps_the_raw_and_kills_the_binding(target):
+    """Решение Максима: сырой OCR живёт, привязка гибнет.
+
+    Утверждается РАЗНИЦА внутри одного флага, а не «флаг работает»: до блока 5
+    `preserve_ocr` сохранял и `OCR_BINDING`, то есть после пересборки на узлах
+    нового поколения висели KKS от старых `node_id` — и никто об этом не знал.
+    """
+    doomed = set(_artifacts_to_delete(target, preserve_ocr=True))
+
+    assert ArtifactType.OCR_RESULT not in doomed, "сырой OCR снесён"
+    assert ArtifactType.OCR_CLEANED not in doomed, "чистый OCR снесён"
+    # Решение №4 редтима: ключи `block_N` от СЫРЫХ блоков, а не от узлов.
+    assert ArtifactType.OCR_VALIDATION not in doomed, "правки текстов снесены"
+    assert ArtifactType.OCR_BINDING in doomed, (
+        "привязка пережила пересборку — KKS повиснут на чужих узлах")
+
+
+@pytest.mark.parametrize("target", REBUILD_TARGETS, ids=lambda s: s.value)
+def test_rebuild_kills_the_contours(target):
+    """Контуры пересборку не переживают: они вливаются в граф по IoU молча."""
+    doomed = set(_artifacts_to_delete(target, preserve_ocr=True,
+                                      preserve_contours=False))
+    assert ArtifactType.CONTOURS_AUTO in doomed
+    assert ArtifactType.CONTOURS_VALIDATED in doomed
+
+
+def test_preserve_contours_still_saves_them_where_it_should():
+    """Порог заперт с другой стороны: сам флаг не сломан (пункт 5-1).
+
+    «Переделать OCR» (цель `validated_graph`) контуры по-прежнему бережёт —
+    их считают поточечно руками, и к распознаванию они отношения не имеют.
+    """
+    doomed = set(_artifacts_to_delete(DiagramStatus.VALIDATED_GRAPH,
+                                      preserve_contours=True))
+    assert ArtifactType.CONTOURS_VALIDATED not in doomed
+    assert ArtifactType.OCR_RESULT in doomed, "«Переделать OCR» не снёс старый OCR"

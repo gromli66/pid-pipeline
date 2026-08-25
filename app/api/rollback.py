@@ -181,10 +181,22 @@ def _artifacts_to_delete(
             CONTOURS_VALIDATED). SAM2 depends on image + COCO + pipe_mask,
             not on graph — contours survive graph rollback.
     """
+    # ⛔ `OCR_BINDING` в этом множестве НЕТ, и это блок 5 (решение Максима
+    # 2026-08-25). Флаг `preserve_ocr` носят только кнопки, чья цель отката
+    # РАНЬШЕ сборки, — а между сборками не выживают `id` узлов: они порядковые
+    # `node_N` от порядка компонент маски (`modules/graph/core/nodes.py`).
+    # Привязка держит `binding_map[node_id]`, то есть после пересборки она
+    # вешает KKS не на тот элемент. «Сохранить» её означало сохранить ложь.
+    #
+    # Что при этом ЖИВЁТ и почему:
+    #   • OCR_RESULT / OCR_CLEANED — сырые пиксельные блоки, к графу не
+    #     привязаны вовсе: распознавание считается параллельно сборке;
+    #   • OCR_VALIDATION — правки текстов с ключами `block_N` от ТЕХ ЖЕ сырых
+    #     блоков (решение №4 редтима): труд оператора переживает пересборку
+    #     легитимно, потому что зависит от блоков, а не от узлов.
     _OCR_ARTIFACTS = {
         ArtifactType.OCR_CLEANED,
         ArtifactType.OCR_RESULT,
-        ArtifactType.OCR_BINDING,
         ArtifactType.OCR_VALIDATION,
     }
     _CONTOUR_ARTIFACTS = {

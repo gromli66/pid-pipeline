@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.build_gate import require_graph_ready
 from app.db import get_async_db
 from app.models import Diagram, DiagramStatus, Artifact, ArtifactType
 from app.services.storage import StorageService
@@ -63,9 +64,11 @@ async def start_ocr(
     if not diagram:
         raise HTTPException(status_code=404, detail="Diagram not found")
 
+    # ⛔ `BUILDING_GRAPH` здесь БЫЛ и убран блоком 5: эндпоинт первым же делом
+    # СНОСИТ `OCR_RESULT` (ниже), а сборка графа в этот момент как раз ждёт
+    # текстовые блоки, чтобы слить их в свежий граф (`worker/tasks/ocr.py`).
     if diagram.status not in (
         DiagramStatus.VALIDATED_JUNCTIONS,
-        DiagramStatus.BUILDING_GRAPH,
         DiagramStatus.BUILT,
         DiagramStatus.VALIDATING_GRAPH,
         DiagramStatus.VALIDATED_GRAPH,
@@ -205,6 +208,8 @@ async def update_ocr_result(
     if not diagram:
         raise HTTPException(status_code=404, detail="Diagram not found")
 
+    require_graph_ready(diagram)
+
     storage = StorageService()
     content = await file.read()
 
@@ -260,6 +265,12 @@ async def save_ocr_binding(
 
     if not diagram:
         raise HTTPException(status_code=404, detail="Diagram not found")
+
+    # Гейт пересборки — перед собственным списком (тот в него ВЛОЖЕН, сторож —
+    # `test_graph_rebuild_gate.py`): пускаемое множество не меняется, меняется
+    # текст отказа. Сюда приходит первая из ТРЁХ записей вкладки привязки,
+    # поэтому без этой строки признак пересборки клиенту не доезжает вовсе.
+    require_graph_ready(diagram)
 
     # Binding требует: 1) граф провалидирован, 2) OCR результат есть
     if diagram.status not in _BINDING_SAVE_STATUSES:
@@ -360,6 +371,8 @@ async def save_ocr_validation(
     if not diagram:
         raise HTTPException(status_code=404, detail="Diagram not found")
 
+    require_graph_ready(diagram)
+
     storage = StorageService()
     content = await file.read()
     file_path, file_size = await storage.save_file(
@@ -429,6 +442,18 @@ async def apply_ocr_binding(
 
     Читает ocr_binding.json, обновляет node labels в graph_validated.json.
     """
+    # Гейт статуса — ПЕРВЫМ, до всякой работы с файлами: `binding_map[node_id]`
+    # ложится на узлы ТОГО поколения, что лежит на диске сейчас, и во время
+    # пересборки это KKS не на тот элемент либо тихий `updated: 0` (блок 5).
+    # Белый список взят у соседа по вкладке — `/binding/save`: разъедься они,
+    # оператор снова получил бы «сохранить можно, применить нельзя».
+    result = await db.execute(select(Diagram).where(Diagram.uid == uid))
+    diagram = result.scalar_one_or_none()
+    if not diagram:
+        raise HTTPException(status_code=404, detail="Diagram not found")
+
+    require_graph_ready(diagram, _BINDING_SAVE_STATUSES)
+
     storage = StorageService()
 
     # Загрузить binding
@@ -499,10 +524,8 @@ async def apply_ocr_binding(
     await asyncio.to_thread(tmp_path.write_text, graph_json, "utf-8")
     await asyncio.to_thread(tmp_path.replace, graph_path)
 
-    # Перевести статус → OCR_BOUND
-    diagram_result = await db.execute(select(Diagram).where(Diagram.uid == uid))
-    diagram = diagram_result.scalar_one_or_none()
-    if diagram and diagram.status in (
+    # Перевести статус → OCR_BOUND (диаграмма уже прочитана гейтом выше)
+    if diagram.status in (
         DiagramStatus.OCR_COMPLETED,
         DiagramStatus.VALIDATED_GRAPH,
         DiagramStatus.CONTOURS_VALIDATED,
@@ -533,6 +556,8 @@ async def recognize_ocr_boxes(
     diagram = result.scalar_one_or_none()
     if not diagram:
         raise HTTPException(status_code=404, detail="Diagram not found")
+
+    require_graph_ready(diagram)
 
     boxes = payload.get("boxes", []) if isinstance(payload, dict) else []
     if not boxes:

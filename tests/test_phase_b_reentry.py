@@ -65,9 +65,17 @@ ACCEPTS = {
                      "contours_extracted", "contours_validated",
                      "ocr_processing", "ocr_completed", "ocr_bound",
                      "generating_fxml", "completed"},
-    # У подтверждения контуров статусного гейта нет вовсе — принимается любой.
-    # Гейты сборки (BUILDING_GRAPH → 400) — предмет блока 5, не этого.
-    "contours_complete": {s.value for s in DiagramStatus},
+    # Блок 5: у подтверждения контуров появился WHITELIST-гейт пересборки
+    # (`app/api/build_gate.py`). Закрылись 19 клеток — вся фаза A, сама сборка
+    # и `error` (в этой решётке он всегда с ПУСТЫМ `error_stage`, а гейт судит
+    # именно по нему: решение №3 редтима разбирает `error` отдельно, см.
+    # `tests/test_graph_rebuild_gate.py`). Пускаемое множество — то же
+    # `GRAPH_READY`, что у остальных восьми эндпоинтов блока.
+    "contours_complete": {"built", "validating_graph", "validated_graph",
+                          "extracting_contours", "contours_extracted",
+                          "contours_validated", "ocr_processing",
+                          "ocr_completed", "ocr_bound", "generating_fxml",
+                          "completed", "error"},
 }
 
 # Статусы ПОСЛЕ контуров: подтверждение принимается, статус НЕ двигается.

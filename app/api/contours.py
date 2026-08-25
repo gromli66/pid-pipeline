@@ -24,6 +24,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.build_gate import require_graph_ready
 from app.db import get_async_db
 from app.models import Diagram, DiagramStatus, Artifact, ArtifactType
 from app.services.layout_dispatch import dispatch_layout
@@ -93,6 +94,8 @@ async def extract_contours(
     diagram = result.scalar_one_or_none()
     if not diagram:
         raise HTTPException(status_code=404, detail="Diagram not found")
+
+    require_graph_ready(diagram)
 
     # Invalidate previous auto result so GET /status reflects re-processing.
     old = await db.execute(
@@ -236,6 +239,8 @@ async def upload_contours_validated(
     if not diagram:
         raise HTTPException(status_code=404, detail="Diagram not found")
 
+    require_graph_ready(diagram)
+
     storage = StorageService()
     diagram_dir = storage.get_diagram_path(uid)
     contours_dir = diagram_dir / "contours"
@@ -296,6 +301,8 @@ async def auto_accept_contours(
     diagram = result.scalar_one_or_none()
     if not diagram:
         raise HTTPException(status_code=404, detail="Diagram not found")
+
+    require_graph_ready(diagram)
 
     # Load contours_auto
     auto_result = await db.execute(
@@ -389,6 +396,8 @@ async def complete_contour_validation(
     if not diagram:
         raise HTTPException(status_code=404, detail="Diagram not found")
 
+    require_graph_ready(diagram)
+
     # Check if validated already exists
     val_result = await db.execute(
         select(Artifact).where(
@@ -426,6 +435,8 @@ async def upload_contours_training(
     diagram = result.scalar_one_or_none()
     if not diagram:
         raise HTTPException(status_code=404, detail="Diagram not found")
+
+    require_graph_ready(diagram)
 
     storage = StorageService()
     diagram_dir = storage.get_diagram_path(uid)
