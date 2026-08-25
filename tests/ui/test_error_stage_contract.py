@@ -401,9 +401,15 @@ def exits(ws):
 # ── часть 1: два множества ───────────────────────────────────────────────
 
 def test_api_writers_are_exactly_one():
-    """`app/**` пишет РОВНО одно значение — и оно из `app/api/cvat.py`."""
+    """`app/**` пишет РОВНО одно значение — и оно из `app/api/cvat.py`.
+
+    Адрес переехал 466 → 459 правкой Б8 (блок 2 плана точечных болей): из `try`
+    подтверждения разметки вынесены ответ и серверный автозапуск сегментации,
+    и обработчик ошибки поднялся на семь строк. Писатель остался ОДИН — это
+    и есть утверждение теста; сдвиг адреса он поймал, как и должен.
+    """
     assert set(API_CONST) == API_WRITERS
-    assert API_CONST["fetching_annotations"] == ["app/api/cvat.py:466"]
+    assert API_CONST["fetching_annotations"] == ["app/api/cvat.py:459"]
 
 
 def test_worker_writers_are_exactly_ten():
