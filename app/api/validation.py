@@ -1047,6 +1047,14 @@ async def save_validated_graph(
         # кнопку «Сохранить». Вкладка открывается и из готовой схемы.
         DiagramStatus.GENERATING_FXML,
         DiagramStatus.COMPLETED,
+        # ⛔ `ERROR` — решение №3 редтима, доведённое до конца возвратом ревизии
+        # связки 3+5: «упавший OCR фазу B не запирает, оператор обязан
+        # сохранить контуры, которые считал руками». Не сохранял: ПЕРВАЯ запись
+        # вкладки «Контуры» приходит СЮДА (`ContourTab._save_graph` зовёт
+        # `super()` раньше `PUT /contours/validated`), и 400 здесь обрывал
+        # сохранение до контуров. Упавшую СБОРКУ это не пускает — её отбивает
+        # гейт выше по `error_stage`.
+        DiagramStatus.ERROR,
     ):
         raise HTTPException(
             status_code=400,
