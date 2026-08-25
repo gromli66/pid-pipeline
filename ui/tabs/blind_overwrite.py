@@ -65,6 +65,27 @@ class BlindOverwriteGuard:
         """
         return logging.getLogger(type(self).__module__)
 
+    def _ask_yes_cancel(self, title: str, text: str) -> bool:
+        """Вопрос «да / отмена» РУССКИМИ кнопками. `True` — оператор согласился.
+
+        Своя сборка, а не `QMessageBox.question`: у статической двери подписи
+        кнопок стандартные, то есть английские — замер этой сессии на боевом
+        PySide6 дал `['Cancel', '&Yes']`, — а `QTranslator` в проекте не
+        установлен вовсе. Прецедент своей сборки — диалог конфликта диаметров
+        (`ocr_binding_editor.py:2265-2267`).
+
+        Одна на оба вопроса графовых вкладок (запрет слепой перезаписи и
+        «Подтвердить»), чтобы они не разошлись, как разошлись две двери
+        вопроса о несохранённом (пункт 1-18, четыре клетки из четырёх).
+        """
+        box = QMessageBox(QMessageBox.Icon.Question, title, text,
+                          QMessageBox.StandardButton.NoButton, self)
+        yes = box.addButton("Да", QMessageBox.ButtonRole.YesRole)
+        cancel = box.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(cancel)
+        box.exec()
+        return box.clickedButton() is yes
+
     def _note_unreadable(self, artifacts: dict) -> None:
         """Разложить флаги отказа по реестру и предупредить оператора.
 
@@ -99,14 +120,10 @@ class BlindOverwriteGuard:
                 self._refuse_save("⚠️ Автосохранение отменено: серверная копия "
                                   "не прочитана — сохраните вручную")
                 return False
-            reply = QMessageBox.question(
-                self, "Сохранение затрёт серверную копию",
+            if not self._ask_yes_cancel(
+                "Сохранение затрёт серверную копию",
                 f"{self._BLIND_WRITE_WARNING[artifact]}\n\nСохранить всё равно?",
-                QMessageBox.StandardButton.Yes
-                | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Cancel,
-            )
-            if reply != QMessageBox.StandardButton.Yes:
+            ):
                 self._blind_log.warning(
                     "запись в %s отменена оператором: серверная копия "
                     "не прочитана", artifact)

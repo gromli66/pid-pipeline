@@ -724,7 +724,7 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
       - _setup_ui() → toolbar (из _setup_toolbar) + loading + status
       - _save_graph() → editor.save_graph + upload_validated_graph
       - _on_confirm() → безусловный save + emit confirmed
-      - has_unsaved_changes → undo_mgr.revision != _saved_revision
+      - has_unsaved_changes → верх undo-стека разошёлся с точкой сохранения
 
     Потомки обязаны реализовать:
       _create_editor() → BaseGraphEditor
@@ -766,8 +766,11 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
         self.temp_dir = Path(self._temp_dir_obj.name)
 
         self._editor: Optional[BaseGraphEditor] = None
-        # undo_mgr.revision на момент последнего успешного save
+        # Точка последнего успешного save: счётчик мутаций и САМА верхняя
+        # команда стека (см. `has_unsaved_changes`).
         self._saved_revision: int = 0
+        self._saved_top = None
+        self._saved_top_revision: int = 0
         # Артефакты, чьё состояние на сервере НЕИЗВЕСТНО: скачать не удалось
         # не по 404. Запись в них ждёт явного «да» оператора (1.x9).
         self._init_blind_overwrite()
@@ -924,20 +927,6 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
             if artifacts.get(flag):
                 self._unreadable_on_server.add(name)
 
-        if artifacts.get("saved_graph_download_failed"):
-            # Сохранённый граф МОГ лежать на сервере и просто не отдался (5xx,
-            # сеть, диск): открыт исходный, а `_save_graph` пишет обратно
-            # в graph_validated — прежняя валидация была бы затёрта молча.
-            logger.warning("graph_validated не скачался — открыт исходный граф")
-            QMessageBox.warning(
-                self, "Сохранённый граф не загружен",
-                "Не удалось скачать сохранённый граф — открыт ИСХОДНЫЙ, "
-                "без ваших прежних правок.\n\n"
-                "Сохранение из этой вкладки затрёт сохранённый граф на "
-                "сервере. Закройте вкладку и откройте её заново, когда связь "
-                "восстановится.",
-            )
-
         try:
             # Остаток раскладки (Э12): показывает только AdvancedGraphTab,
             # путь сохраняется здесь — artifacts дальше не передаются.
@@ -1023,6 +1012,12 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
                     # Не фатально: грузим граф в исходных координатах (legacy).
                     logger.exception("pre-transform не выполнен, гружу как есть: %s", exc)
 
+            # Предупреждение — ПОСЛЕ развилки холста: оно называет артефакт,
+            # который затрёт сохранение, а его выбирает `_canvas_mode` (5.1).
+            if artifacts.get("saved_graph_download_failed"):
+                self._warn_saved_graph_not_loaded(
+                    getattr(editor, "_canvas_mode", False))
+
             editor.load_data(
                 image_path=str(artifacts["original_image"]),
                 graph_path=str(graph_for_editor),
@@ -1043,6 +1038,39 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
                 self, "Ошибка",
                 f"Не удалось инициализировать редактор графа:\n{exc}"
             )
+
+    def _warn_saved_graph_not_loaded(self, canvas_mode: bool) -> None:
+        """`graph_validated` не отдался (5xx, сеть, диск) — сказать правду.
+
+        Правда у двух вкладок разная, и до пункта 5.1 текст был один на обеих.
+        В «Ручной правке» он врал дважды: обещал затереть сохранённый граф,
+        хотя `_save_graph` в холстовом режиме пишет в `graph_canvas`, и
+        объявлял открытым ИСХОДНЫЙ граф, хотя источник не прочитан и холст
+        оператора остаётся ему как есть (1.x9). Адресата записи выбирает
+        `_canvas_mode`, поэтому и спрашивается он — уже после развилки.
+        """
+        logger.warning(
+            "graph_validated не скачался — %s",
+            "холст оператора оставлен как есть" if canvas_mode
+            else "открыт исходный граф")
+        if canvas_mode:
+            QMessageBox.warning(
+                self, "Сохранённый граф не загружен",
+                "Не удалось скачать сохранённый граф — правки из него "
+                "в холст не попали.\n\n"
+                "Сохранение из этой вкладки затрёт холст «Ручной правки» "
+                "на сервере, а сохранённый граф не тронет. Закройте вкладку "
+                "и откройте её заново, когда связь восстановится.",
+            )
+            return
+        QMessageBox.warning(
+            self, "Сохранённый граф не загружен",
+            "Не удалось скачать сохранённый граф — открыт ИСХОДНЫЙ, "
+            "без ваших прежних правок.\n\n"
+            "Сохранение из этой вкладки затрёт сохранённый граф на "
+            "сервере. Закройте вкладку и откройте её заново, когда связь "
+            "восстановится.",
+        )
 
     def _appearance_editor(self):
         return self._editor
@@ -1234,11 +1262,48 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
     # Save & Confirm
     # =================================================================
 
+    def _undo_top(self):
+        """Верх undo-стека редактора (`None` — стек пуст)."""
+        stack = self._editor.undo_mgr.undo_stack
+        return stack[-1] if stack else None
+
+    def _mark_saved(self) -> None:
+        """Отметить точку сохранения: и счётчик, и саму верхнюю команду."""
+        self._saved_revision = self._editor.undo_mgr.revision
+        self._saved_top = self._undo_top()
+        self._saved_top_revision = self._saved_revision
+
     def has_unsaved_changes(self) -> bool:
-        """True если есть несохранённые изменения после последнего save."""
-        if self._editor:
-            return self._editor.undo_mgr.revision != self._saved_revision
-        return False
+        """True если есть несохранённые изменения после последнего save.
+
+        Считает НЕ счётчик мутаций: `undo_mgr.revision` растёт на КАЖДОЙ
+        мутации, включая undo и redo (`undo_manager.py:_committed` зовётся
+        из всех четырёх дверей). Поэтому полный Ctrl+Z возвращал дерево ровно
+        к загруженному, а вкладка продолжала спрашивать о несохранённом
+        (блок 5, п. 5.2; замер: rev 2 при отметке 0, стек пуст, рамка узла
+        в исходной). Точка сохранения помечена САМОЙ верхней командой стека
+        и сверяется по `is`: отмена до неё честно чистеет, отмена ЗА неё —
+        нет. Позиция в стеке для этого не годится и отвергнута самим кодом:
+        `deque(maxlen=100)` при переполнении застывает (коммент
+        `undo_manager.py:109-111`), а выброшенный объект тождественным
+        уже не станет.
+
+        ⛔ Флаг по-прежнему НЕ видит живого превью панели «Размеры» — оно
+        идёт мимо стека команд, и это несущее решение пункта 1.5: грязный
+        от превью флаг поручил бы автосейву возить на сервер картинку,
+        которую оператор не подтверждал.
+        """
+        if not self._editor:
+            return False
+        if self._editor.undo_mgr.revision == self._saved_revision:
+            return False
+        # `_saved_revision`, разошедшийся с отметкой, — это «грязно», взведённое
+        # РУКАМИ: так `ContourTab._save_graph` возвращает флаг, когда прошла
+        # только графовая половина записи (пункт 1-41). Своей точки сохранения
+        # у такого состояния нет, и судить по маркеру нельзя.
+        if self._saved_revision != self._saved_top_revision:
+            return True
+        return self._undo_top() is not self._saved_top
 
     #: артефакт → о чём предупредить, если писать в него придётся вслепую
     _BLIND_WRITE_WARNING = {
@@ -1329,7 +1394,7 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
             else:
                 self.api_client.upload_validated_graph(self.uid, graph_path)
 
-            self._saved_revision = self._editor.undo_mgr.revision
+            self._mark_saved()
             self.status_label.setText("Граф сохранён")
             return True
 
@@ -1364,13 +1429,10 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
         графа. Лишний POST дёшев — страхует от потери правок.
         """
         if self.has_unsaved_changes():
-            reply = QMessageBox.question(
-                self, "Сохранение",
+            if not self._ask_yes_cancel(
+                "Сохранение",
                 "Несохранённые изменения будут сохранены. Продолжить?",
-                QMessageBox.StandardButton.Yes
-                | QMessageBox.StandardButton.Cancel,
-            )
-            if reply != QMessageBox.StandardButton.Yes:
+            ):
                 return
 
         if not self._save_graph():

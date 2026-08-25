@@ -219,6 +219,13 @@ def dialogs(monkeypatch):
 
     for name in ("warning", "critical", "information", "question"):
         monkeypatch.setattr(QMessageBox, name, staticmethod(_rec))
+    # Вопрос «да / отмена» с пункта 5.3 собирается своими кнопками (русскими),
+    # мимо статической двери `QMessageBox.question`, — подменяется отдельно.
+    from ui.tabs.blind_overwrite import BlindOverwriteGuard
+    monkeypatch.setattr(
+        BlindOverwriteGuard, "_ask_yes_cancel",
+        lambda self, title, text:
+            _rec(self, title, text) == QMessageBox.StandardButton.Yes)
     return seen
 
 
