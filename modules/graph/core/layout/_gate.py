@@ -163,31 +163,42 @@ def _straight_broken(after_e, v16_e):
     return n
 
 
+def side_changed_edge(e, oe, ve, after_b, orig_b, v16_b):
+    """Вклад ОДНОГО ребра в счётчик `side_changed` — тот же судья, поэлементно.
+
+    Нужен адресному откату роутинга (К-10): его пер-рёберный сторож обязан
+    судить ТЕМ ЖЕ критерием, что и гейт прогона, иначе ход, который сторож
+    пропустил, а судья поймал, валит полным откатом ВЕСЬ роутинг графа.
+    Переизобретать критерий нельзя — `_side_changed` зовёт эту же функцию.
+    """
+    if oe is None or ve is None:
+        return 0
+    epo = {nid: (x, y) for nid, x, y in _block_endpoints(oe)}
+    epv = {nid: (x, y) for nid, x, y in _block_endpoints(ve)}
+    n = 0
+    for nid, x, y in _block_endpoints(e):
+        na, no, nv = after_b.get(nid), orig_b.get(nid), v16_b.get(nid)
+        if not na or is_connector(na):
+            continue
+        bb_a = na.get("bbox")
+        if not bb_a or nid not in epo or nid not in epv:
+            continue
+        allowed = set()
+        if no and no.get("bbox"):
+            allowed |= _side_set(*epo[nid], no["bbox"])
+        if nv and nv.get("bbox"):
+            allowed |= _side_set(*epv[nid], nv["bbox"])
+        cur = _side_set(x, y, bb_a)
+        if allowed and not (cur & allowed):
+            n += 1
+    return n
+
+
 def _side_changed(after_e, orig_e, v16_e, after_b, orig_b, v16_b):
     """Сторона входа в блок ушла с допустимой {orig} ∪ {v16}."""
-    n = 0
-    for eid, e in after_e.items():
-        oe, ve = orig_e.get(eid), v16_e.get(eid)
-        if oe is None or ve is None:
-            continue
-        epo = {nid: (x, y) for nid, x, y in _block_endpoints(oe)}
-        epv = {nid: (x, y) for nid, x, y in _block_endpoints(ve)}
-        for nid, x, y in _block_endpoints(e):
-            na, no, nv = after_b.get(nid), orig_b.get(nid), v16_b.get(nid)
-            if not na or is_connector(na):
-                continue
-            bb_a = na.get("bbox")
-            if not bb_a or nid not in epo or nid not in epv:
-                continue
-            allowed = set()
-            if no and no.get("bbox"):
-                allowed |= _side_set(*epo[nid], no["bbox"])
-            if nv and nv.get("bbox"):
-                allowed |= _side_set(*epv[nid], nv["bbox"])
-            cur = _side_set(x, y, bb_a)
-            if allowed and not (cur & allowed):
-                n += 1
-    return n
+    return sum(side_changed_edge(e, orig_e.get(eid), v16_e.get(eid),
+                                 after_b, orig_b, v16_b)
+               for eid, e in after_e.items())
 
 
 def verify(after, orig, base_v16, legal=None):

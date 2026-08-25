@@ -31,7 +31,7 @@ if not avoid_available():
 from modules.graph.core.layout import LayoutParams  # noqa: E402
 from modules.graph.core.layout.avoid_router import (  # noqa: E402
     apply_routing, route_graph)
-from modules.graph.core.layout import spread  # noqa: E402
+from modules.graph.core.layout import _gate, spread  # noqa: E402
 from modules.graph.core.graph_access import (  # noqa: E402
     edge_polyline, edges, nodes_by_id)
 from modules.graph.core.seating import reseat_all_endpoints  # noqa: E402
@@ -225,6 +225,75 @@ def test_pin_lands_on_port_not_corner():
 
 
 # ───────────────────────── apply_routing ─────────────────────────
+
+def _amnesty_graph():
+    """Класс К-10: смена стороны, порождённая угловой амнистией `_side_set`.
+
+    `a` — бокс 40x40 (bbox [80, 80, 120, 120]); канон сажает конец `e1`
+    в УГОЛ рамки (120, 120), то есть в стороны {R, B}. Пин роутинга — порт
+    в центре ПРАВОЙ грани (120, 100), то есть {R}. В базах (orig/v16) тот же
+    конец лежит на середине НИЖНЕЙ грани, поэтому допустимое множество судьи
+    `_gate._side_changed` — только {B}: судья считает уход на {R} сменой
+    стороны, а пер-рёберный сторож `apply_routing` пропускает ход через
+    угловую амнистию ({R} пересекается с {R, B}).
+
+    `e2` — независимый транзит q -> r сквозь бокс `w` в другом углу листа:
+    его обход законен и к сторонам отношения не имеет. Он и показывает цену
+    полного отката.
+
+    -> (graph, orig, v16)
+    """
+    a = _block("a", 100, 100)                       # bbox [80, 80, 120, 120]
+    poly = {"id": "p", "type": "block", "class_name": "testpoly",
+            "centroid": [300.0, 400.0],             # [y, x]
+            "bbox": [300.0, 200.0, 500.0, 400.0],
+            "segmentation": [300.0, 200.0, 500.0, 200.0,
+                             500.0, 400.0, 300.0, 400.0]}
+    g = _graph([a, poly, _block("q", 100, 800), _block("r", 500, 800),
+                _block("w", 300, 800, w=40, h=120)],
+               [_edge("e1", "a", "p"), _edge("e2", "q", "r")])
+    e1 = next(e for e in edges(g) if e["id"] == "e1")
+    assert e1["source_point"] == [120.0, 120.0], "фикстура не воспроизводит угол"
+    orig = deepcopy(g)
+    b1 = next(e for e in edges(orig) if e["id"] == "e1")
+    b1["source_point"] = [120.0, 100.0]     # [y, x]: середина НИЖНЕЙ грани
+    return g, orig, deepcopy(orig)
+
+
+def test_corner_amnesty_side_change_reverts_only_guilty_edge():
+    """К-10: смена стороны снимает ВИНОВНОЕ ребро, а не весь роутинг.
+
+    До правки оба маршрута принимал пер-рёберный сторож, судья прогона видел
+    рост `side_changed`, и полный откат забирал вместе с виновным `e1`
+    законный обход `e2` (бокс `w` возвращался на магистраль).
+    """
+    g, orig, v16 = _amnesty_graph()
+    e1 = next(e for e in edges(g) if e["id"] == "e1")
+    e2 = next(e for e in edges(g) if e["id"] == "e2")
+    assert spread.box_on_magi_drawn(g, nodes_by_id(g)) == {"w"}
+
+    stats = apply_routing(g, orig, v16, LayoutParams())
+    assert stats == {"routed": 1, "reverted": False, "reasons": [],
+                     "magi_before": 1, "magi_after": 0}
+    # виновное ребро снято адресно: конец вернулся на канон, обхода нет
+    assert e1["source_point"] == [120.0, 120.0] and e1["waypoints"] == []
+    # соседний законный обход пережил гейт — ради него правка и делалась
+    assert e2["waypoints"], "обход e2 убит вместе с чужой сменой стороны"
+    assert spread.box_on_magi_drawn(g, nodes_by_id(g)) == set()
+    assert _gate.verify(g, orig, v16, None)["side_changed"] == 0
+
+
+# ⚠ Сторожа «остальные 8 причин по-прежнему валят ВЕСЬ прогон» здесь НЕТ
+# СОЗНАТЕЛЬНО. Он был написан (инъекция в `spread.defects` через monkeypatch,
+# ожидание `reasons == ['defects']` и возврат обхода `e2`) и работал, но его
+# ИСПОЛНЕНИЕ в полном наборе детонировало access violation в
+# `tests/ui/test_tab_close_stops_threads.py`: 3 прогона из 3 против 0 из 2 без
+# него, каждый раз на ДРУГОМ тесте того файла (:546, :608, :649) — то есть
+# портится состояние процесса, а не конкретный тест. Бисект и числа —
+# `MEASUREMENTS §AL4.9`. Ветка полного отката к правке К-10 не относится
+# (диффом не тронута), проверена ЗОНДОМ (там же), поэтому набор её не стережёт,
+# пока причина детонации не разобрана отдельным пунктом.
+
 
 def test_apply_routing_clears_transit_and_keeps_nodes():
     """Гейт-обёртка: magi падает, координаты узлов не тронуты вообще."""

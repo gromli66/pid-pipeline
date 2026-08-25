@@ -18,6 +18,9 @@ libavoid (`vendor/adaptagrams`, загрузчик `_avoid_binding`).
   * итог судит trial-and-revert: сначала на каждом ребре (диагональ или новое
     прошивание = молчаливый fallback libavoid -> ребру оставляется прежняя
     геометрия), затем на всём прогоне гейтом «не хуже входа» (`apply_routing`).
+    Стороны входа пер-рёберный сторож судит ТЕМ ЖЕ критерием, что и гейт
+    прогона (`_gate.side_changed_edge`) — К-10: разойдясь, они превращали
+    один спорный конец в полный откат всего роутинга графа.
 
 Две ловушки разведки (обе покрыты tests/test_avoid_router.py):
   1. SWIG-GC: питоньи прокси владеют C++-объектами; пины/шейпы/коннекторы
@@ -416,6 +419,12 @@ def apply_routing(graph, orig, base_v16, params=None, legal=None):
     (диагонали/прямизна/стороны/наложения/бокс-на-магистрали), плюс
     `spread.defects` не хуже входа и `spread.box_on_magi_drawn` — упасть
     или остаться (ради него роутинг и затевался).
+
+    К-10: смена стороны входа снимается АДРЕСНО — виновное ребро, а не весь
+    прогон. `side_changed` остаётся в списке причин полного отката страховкой
+    (новый путь мутации сторон обязан упереться в гейт, а не пройти молча),
+    но роутингом больше не достижим: вклад каждого тронутого ребра в этот
+    счётчик заперт пер-рёберным сторожем, нетронутые рёбра гейт не меняет.
     """
     p = params or LayoutParams()
     byid = nodes_by_id(graph)
@@ -423,6 +432,11 @@ def apply_routing(graph, orig, base_v16, params=None, legal=None):
     pre_gate = _gate.verify(graph, orig, base_v16, legal)
     pre_magi = len(spread.box_on_magi_drawn(graph, byid))
     pre_defects = len(spread.defects(graph, byid, p.floor))
+
+    # К-10: базы судьи сторон — под рукой у пер-рёберного сторожа ниже
+    orig_b, v16_b = nodes_by_id(orig), nodes_by_id(base_v16)
+    orig_e = {e["id"]: e for e in edges(orig)}
+    v16_e = {e["id"]: e for e in edges(base_v16)}
 
     ends_new = {}
     routed = route_graph(graph, p, ends_new)
@@ -438,6 +452,8 @@ def apply_routing(graph, orig, base_v16, params=None, legal=None):
             continue
         saved[eid] = (e, _snapshot(e))
         pre_sides = _end_sides(byid, e)
+        pre_side_gate = _gate.side_changed_edge(
+            e, orig_e.get(eid), v16_e.get(eid), byid, orig_b, v16_b)
         if eid in ends_new:
             # этап A: концы — в выбранные порты (пины роутинга)
             e["source_point"] = deepcopy(ends_new[eid][0])
@@ -463,7 +479,21 @@ def apply_routing(graph, orig, base_v16, params=None, legal=None):
         post_sides = _end_sides(byid, e)
         side_ok = all(post_sides.get(nid, s) & s for nid, s in
                       pre_sides.items())
-        if not _ortho(edge_polyline(e)) or not side_ok:
+        # К-10: сторож выше сравнивает стороны с ТЕКУЩИМ состоянием, а судья
+        # прогона — с {orig} ∪ {v16}. Конец, стоявший на УГЛУ, попадает у
+        # `_gate._side_set` сразу в две смежные стороны (угловая амнистия),
+        # и уход на вторую из них сторож пропускает, а судья считает сменой
+        # стороны — рост `side_changed` откатывал ВЕСЬ роутинг графа. Спрос
+        # с ребра тем же критерием делает откат адресным: виновное ребро
+        # снимается здесь, соседние обходы живут.
+        post_side_gate = _gate.side_changed_edge(
+            e, orig_e.get(eid), v16_e.get(eid), byid, orig_b, v16_b)
+        side_gate_ok = post_side_gate <= pre_side_gate
+        if not side_gate_ok:
+            # единственный след класса: по нему его и считают на корпусе
+            log.debug("роутинг %s: сторона входа ушла с допустимой по судье "
+                      "прогона (угловая амнистия) — адресный откат", eid)
+        if not _ortho(edge_polyline(e)) or not side_ok or not side_gate_ok:
             _restore(e, saved.pop(eid)[1])
             stats["routed"] -= 1
 
