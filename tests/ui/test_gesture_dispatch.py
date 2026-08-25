@@ -282,49 +282,23 @@ def _visible_handles(editor):
     return len(_handle_centres(editor)) // 2
 
 
-# Сдвиг ручек НАРУЖУ от угла в «Проверке схемы» (пункт 4.5, 2026-08-25).
-# Число здесь АБСОЛЮТНОЕ, а не прочитанное из `RESIZE_HANDLE_OFFSET`: тест,
-# считающий свой вход из проверяемой константы, зелен при любом её значении.
-# Сам факт заперт `test_simple_handle_offset_is_the_measured_one`.
-SIMPLE_HANDLE_OFFSET = 22.0
+def _bbox_corners(editor, nid):
+    """Четыре угла рамки узла — в том же виде, что отдаёт `_handle_centres`.
 
-
-def _expected_handle_centres(editor, nid):
-    """Где ОБЯЗАНЫ стоять четыре ручки — в том же виде, что `_handle_centres`.
-
-    В «Ручной правке» это углы рамки; в «Проверке схемы» ручки сдвинуты
-    наружу по диагонали, чтобы уйти из-под порога клика по узлу
-    (`CLICK_THRESHOLD` = 20 в растровой сцене): там нажатие у угла уходит в
-    отложенное решение «клик или тяга», и тяга за ручку не открывается.
+    Ручка сидит НА углу во ВСЕХ трёх редакторах. Сдвиг наружу пробовали
+    пунктом 4.5 и сняли по приёмке глазами: в растровой сцене он задан в её
+    единицах и на зуме разлетался. Корень оказался не в геометрии ручки —
+    см. `SimpleGraphEditor._node_drag_allowed`.
     """
-    from ui.editors.advanced_graph_editor import AdvancedGraphEditor
-
-    off = 0.0 if isinstance(editor, AdvancedGraphEditor) else SIMPLE_HANDLE_OFFSET
-    d = off / (2 ** 0.5)
     x1, y1, x2, y2 = editor.nodes[nid]["bbox"]
-    pts = [(x1 - d, y1 - d), (x2 + d, y1 - d), (x1 - d, y2 + d), (x2 + d, y2 + d)]
-    return [c for xy in sorted(pts) for c in xy]
+    return [c for xy in sorted([(x1, y1), (x2, y1), (x1, y2), (x2, y2)])
+            for c in xy]
 
 
 def _grab_point(editor, nid):
-    """Точка захвата ручки «правый-низ» — центр ручки, а не голый угол рамки."""
-    from ui.editors.advanced_graph_editor import AdvancedGraphEditor
-
-    off = 0.0 if isinstance(editor, AdvancedGraphEditor) else SIMPLE_HANDLE_OFFSET
-    d = off / (2 ** 0.5)
+    """Точка захвата ручки «правый-низ» — она же правый-нижний угол рамки."""
     bb = editor.nodes[nid]["bbox"]
-    return (float(bb[2]) + d, float(bb[3]) + d)
-
-
-def test_simple_handle_offset_is_the_measured_one():
-    """Замок на константу 4.5: подъём/снятие сдвига обязан сказать об этом
-    вслух, а не ослепить сторожей выше молча."""
-    from ui.editors.advanced_graph_editor import AdvancedGraphEditor
-    from ui.editors.simple_graph_editor import SimpleGraphEditor
-
-    assert SimpleGraphEditor.RESIZE_HANDLE_OFFSET == SIMPLE_HANDLE_OFFSET
-    assert AdvancedGraphEditor.RESIZE_HANDLE_OFFSET == 0.0,         "«Ручная правка» задета — её геометрия ручек обязана остаться прежней"
-    assert SIMPLE_HANDLE_OFFSET > SimpleGraphEditor.CLICK_THRESHOLD,         "сдвиг не выводит ручку из-под порога клика — правка бессмысленна"
+    return (float(bb[2]), float(bb[3]))
 
 
 def _depth(editor):
@@ -781,7 +755,7 @@ def test_click_from_resize_mode_still_switches_between_boxes(ed_poly):
     _tool_click(ed_poly, box_b)
 
     assert _visible_handles(ed_poly) == 4, "ручки не переехали на соседнюю рамку"
-    assert _handle_centres(ed_poly) == pytest.approx(_expected_handle_centres(ed_poly, box_b)), \
+    assert _handle_centres(ed_poly) == pytest.approx(_bbox_corners(ed_poly, box_b)), \
         "ручки сидят не на той рамке, по которой кликнули"
     assert (_geom(ed_poly), _depth(ed_poly)) == (g0, depth0)
 
@@ -797,6 +771,23 @@ def simple(qapp, raster):
 
     editor = SimpleGraphEditor()
     editor._canvas_mode = True
+    assert editor.load_data(raster, str(corpus.graph_path(UID)))
+    editor.resize(1400, 900)
+    return editor
+
+
+@pytest.fixture
+def simple_raster(qapp, raster):
+    """«Проверка схемы» в РАСТРОВОМ режиме — как вкладка работает в бою.
+
+    Соседняя фикстура `simple` ставит `_canvas_mode = True` (порог клика 8),
+    и явление «угол рамки накрыт порогом клика по узлу» на ней почти не
+    воспроизводится. Боевая вкладка растровая: `CLICK_THRESHOLD` = 20, и
+    именно там угол мелкой рамки тонул в отложенной тяге.
+    """
+    from ui.editors.simple_graph_editor import SimpleGraphEditor
+
+    editor = SimpleGraphEditor()
     assert editor.load_data(raster, str(corpus.graph_path(UID)))
     editor.resize(1400, 900)
     return editor
@@ -885,7 +876,7 @@ def test_click_on_captured_handle_does_not_start_sticky_resize(simple):
     assert list(simple.nodes[nid]["bbox"]) == bbox0, \
         "рамка поехала за курсором при отпущенной кнопке (липкий ресайз)"
     assert _depth(simple) == depth0, "движение без кнопки записало шаг undo"
-    assert _handle_centres(simple) == pytest.approx(_expected_handle_centres(simple, nid)), \
+    assert _handle_centres(simple) == pytest.approx(_bbox_corners(simple, nid)), \
         "ручки уехали с углов рамки"
 
 
@@ -1080,11 +1071,11 @@ def test_undo_inside_resize_mode_keeps_handles_on_the_restored_bbox(
     nid, corner = _free_corner_node(ed)
     _ctrl_down(ed)
     _dclick(ed, *_cxy(ed, nid), mods=CTRL)
-    corners0 = _expected_handle_centres(ed, nid)
+    corners0 = _bbox_corners(ed, nid)
     assert _handle_centres(ed) == pytest.approx(corners0)
 
     _drag(ed, *corner, 30.0, 20.0)
-    assert _handle_centres(ed) == pytest.approx(_expected_handle_centres(ed, nid)), \
+    assert _handle_centres(ed) == pytest.approx(_bbox_corners(ed, nid)), \
         "после протяжки ручки уехали с углов — тест слеп"
 
     ed.undo()
@@ -1106,7 +1097,7 @@ def test_undo_of_a_foreign_command_keeps_exactly_four_handles(ed):
 
     _ctrl_down(ed)
     _dclick(ed, *_cxy(ed, nid), mods=CTRL)
-    corners = _expected_handle_centres(ed, nid)
+    corners = _bbox_corners(ed, nid)
     assert _handle_centres(ed) == pytest.approx(corners)
 
     ed.undo()                                      # отмена ЧУЖОЙ команды
@@ -1164,7 +1155,7 @@ def test_redo_inside_resize_mode_survives_the_exit(request, editor_fixture):
     ed.redo()
     assert (_geom(ed), _edges_full(ed), _depth(ed)) == (g1, edges1, depth1), \
         "redo не вернул ресайз (проверять нечего)"
-    assert _handle_centres(ed) == pytest.approx(_expected_handle_centres(ed, nid)), \
+    assert _handle_centres(ed) == pytest.approx(_bbox_corners(ed, nid)), \
         "после redo ручки не на восстановленной рамке"
 
     _esc(ed)
@@ -1172,3 +1163,88 @@ def test_redo_inside_resize_mode_survives_the_exit(request, editor_fixture):
     assert _geom(ed) == g1, "Esc после redo откатил возвращённый ресайз"
     assert _edges_full(ed) == edges1
     assert _depth(ed) == depth1, "Esc после redo тронул стек undo"
+
+
+# ── тяга узла: разрешена в «Ручной правке», запрещена в «Проверке схемы» ──
+#
+# Первые тесты на сам крючок `_node_drag_allowed`, которым диспетчер решает,
+# уводить ли нажатие в отложенное «клик или тяга». До правки 4.5-А его в
+# «Проверке схемы» не переопределял никто: тяга там РАЗРЕШЕНА, но НЕ
+# РЕАЛИЗОВАНА (базовые `_start_ctrl_drag`/`_update_ctrl_drag` — заглушки
+# `pass`), поэтому она только воровала нажатия у ручек размера — единственного
+# жеста, которому настоящее нажатие нужно (правило 1.8).
+#
+# Проверяются ДАННЫЕ (геометрия узлов и глубина undo), а не `_ctrl_lmb_*`:
+# внутренняя кухня уезжает вместе с декомпозицией этапа 10.
+
+
+def test_ctrl_drag_does_not_move_a_node_in_the_validation_tab(simple):
+    """«Проверка схемы»: Ctrl+ЛКМ с проводкой по узлу НИЧЕГО не двигает.
+
+    Утверждается РАЗНИЦА с соседней вкладкой, а не просто «данные целы»:
+    ровно тот же жест в «Ручной правке» узел увозит
+    (`test_ctrl_drag_moves_only_the_grabbed_node`). Здесь перемещения узлов
+    нет как жеста, и после правки нет уже и разрешения на него.
+    """
+    nid = _nodes_with_bbox(simple)[0]
+    x, y = _cxy(simple, nid)
+    g0, depth0 = _geom(simple), _depth(simple)
+
+    _drag(simple, x, y, 60.0, 30.0)
+
+    assert _geom(simple) == g0, "узел поехал за курсором в «Проверке схемы»"
+    assert _depth(simple) == depth0, "протяжка записала шаг undo"
+
+
+def test_ctrl_drag_still_moves_a_node_in_the_manual_tab(ed):
+    """Замок с другой стороны: в «Ручной правке» тяга в idle ЖИВА.
+
+    Без него запрет в «Проверке схемы» мог бы уехать в базовый класс и тихо
+    убить перемещение узлов на холсте — там это боевой жест.
+    """
+    assert ed._current_mode in ("", "idle"), "фикстура не в idle — тест не тот"
+    nid = _nodes_with_bbox(ed)[0]
+    x, y = _cxy(ed, nid)
+    before = list(ed.nodes[nid]["centroid"])
+    depth0 = _depth(ed)
+
+    _drag(ed, x, y, 60.0, 30.0)
+
+    after = ed.nodes[nid]["centroid"]
+    assert abs(after[1] - before[1] - 60.0) <= DRAG_TOL, "узел не поехал по X"
+    assert abs(after[0] - before[0] - 30.0) <= DRAG_TOL, "узел не поехал по Y"
+    assert _depth(ed) == depth0 + 1, "жест не лёг одним шагом undo"
+
+
+def test_press_on_an_intercepted_corner_now_reaches_the_handle(simple_raster):
+    """Следствие, ради которого правка и делалась: нажатие по углу, накрытому
+    порогом клика по узлу, доходит до ручки НАСТОЯЩИМ событием.
+
+    ⚠ Фикстура выбрана ПОД ЯВЛЕНИЕ, а не на глаз: у рамки 20x20 собственный
+    угол лежит в ~14 px от собственного центроида, то есть внутри
+    `CLICK_THRESHOLD` = 20. В корпусной фикстуре `d74eb9f1` таких узлов НЕТ
+    НИ ОДНОГО (замер: 0 из 66), поэтому `_free_corner_node` отбирает как раз
+    те углы, где перехвата нет, — и ситуация, ради которой делалась правка,
+    им не игралась ни разу (найдено ревизией, В7).
+
+    До правки: нажатие тонуло в отложенной тяге, инструмент получал
+    синтетический клик `event=None`, тяга за ручку не открывалась и рамка
+    не менялась. После: рамка растёт на дельту жеста.
+    """
+    ed_r = simple_raster
+    _ctrl_down(ed_r)
+    x, y = _free_spot(ed_r)
+    nid = ed_r.add_equipment_node(x, y, 1, "test_eq", width=20, height=20)
+    assert _visible_handles(ed_r) == 4, "ручки не открылись после добавления"
+    bbox0 = list(ed_r.nodes[nid]["bbox"])
+    corner = (float(bbox0[2]), float(bbox0[3]))
+
+    # замок фикстуры: угол ДОЛЖЕН быть накрыт порогом клика, иначе тест
+    # проверяет не тот механизм и зелен даже без правки
+    assert ed_r.find_node_at(*corner) is not None,         "угол не перехвачен порогом клика — фикстура вне явления"
+
+    _drag(ed_r, *corner, 30.0, 20.0)
+
+    bbox1 = ed_r.nodes[nid]["bbox"]
+    assert bbox1[2] == pytest.approx(bbox0[2] + 30.0, abs=DRAG_TOL),         "рамка не выросла по X — нажатие снова украдено отложенной тягой"
+    assert bbox1[3] == pytest.approx(bbox0[3] + 20.0, abs=DRAG_TOL),         "рамка не выросла по Y"

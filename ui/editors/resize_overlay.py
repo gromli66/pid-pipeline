@@ -57,8 +57,7 @@ class ResizableNodeOverlay:
     def __init__(self, scene: QGraphicsScene, bbox: list,
                  min_size: int = 15,
                  on_resize: Optional[Callable] = None,
-                 on_commit: Optional[Callable] = None,
-                 handle_offset: float = 0.0):
+                 on_commit: Optional[Callable] = None):
         """
         Args:
             scene: QGraphicsScene для добавления handles
@@ -66,22 +65,18 @@ class ResizableNodeOverlay:
             min_size: Минимальный размер bbox по каждой оси
             on_resize: Callback(new_bbox) при каждом движении handle
             on_commit: Callback() при завершении drag (mouseRelease)
-            handle_offset: сдвиг ручки НАРУЖУ по диагонали от угла, px сцены.
-                0 — ручка на самом углу (как было). Смещение уводит ручку
-                из-под порога клика по узлу (`CLICK_THRESHOLD`), который в
-                растровой сцене втрое шире, чем на холсте; drag_to сдвиг
-                компенсирует, поэтому угол по-прежнему идёт за курсором.
 
-        ⚠ Оверлей ОБЩИЙ с «Ручной правкой»: параметр инстансный и по умолчанию
-        даёт ровно прежнее поведение, класс-константы не трогаются. Радиус
-        захвата параметром НЕ вынесен — план 4.5 прямо просил его не трогать.
+        ⚠ Оверлей ОБЩИЙ с «Ручной правкой» и слоем ОКР — геометрия ручек у
+        всех троих одна: ручка сидит НА углу рамки. Сдвиг наружу пробовали в
+        пункте 4.5 (уводил ручку из-под порога клика по узлу) и сняли: в
+        растровой сцене он задан в её единицах, поэтому на зуме разлетался, а
+        корень был не в геометрии ручки — см. `SimpleGraphEditor._node_drag_allowed`.
         """
         self._scene = scene
         self._bbox = bbox.copy()
         self._min_size = min_size
         self._on_resize = on_resize
         self._on_commit = on_commit
-        self._handle_offset = float(handle_offset)
 
         # Handle items
         self._handles: dict[str, QGraphicsRectItem] = {}
@@ -132,25 +127,11 @@ class ResizableNodeOverlay:
     # Handle positions
     # =================================================================
 
-    def _corner_shift(self, corner: str) -> tuple:
-        """Сдвиг ручки от угла НАРУЖУ по диагонали: (dx, dy) в px сцены."""
-        if not self._handle_offset:
-            return (0.0, 0.0)
-        d = self._handle_offset / (2 ** 0.5)     # по диагонали, поровну на оси
-        sx = -d if corner in ("tl", "bl") else d
-        sy = -d if corner in ("tl", "tr") else d
-        return (sx, sy)
-
     def handle_centres(self) -> dict:
-        """Центры четырёх ручек в координатах сцены — с учётом смещения."""
+        """Центры четырёх ручек в координатах сцены — это углы рамки."""
         x1, y1, x2, y2 = self._bbox
-        base = {"tl": (x1, y1), "tr": (x2, y1),
+        return {"tl": (x1, y1), "tr": (x2, y1),
                 "bl": (x1, y2), "br": (x2, y2)}
-        out = {}
-        for corner, (cx, cy) in base.items():
-            sx, sy = self._corner_shift(corner)
-            out[corner] = (cx + sx, cy + sy)
-        return out
 
     def _update_handle_positions(self):
         """Обновить позиции 4 handles по текущему bbox."""
@@ -215,11 +196,6 @@ class ResizableNodeOverlay:
         new_bbox = self._bbox.copy()
         handle = self._dragging_handle
         ms = self._min_size
-
-        # Ручка нарисована СНАРУЖИ угла — снимаем сдвиг, иначе угол прыгнул бы
-        # к курсору на всю величину смещения в первый же кадр тяги.
-        sx, sy = self._corner_shift(handle)
-        x, y = x - sx, y - sy
 
         # Двигаем соответствующие углы
         if handle == "tl":

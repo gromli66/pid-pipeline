@@ -611,6 +611,24 @@ class ContourEditor(SimpleGraphEditor):
         # Other node or edge → standard deletion (inherited)
         super()._ctrl_right_click_delete(x, y)
 
+    def _node_drag_allowed(self) -> bool:
+        """В «Контурах» отложенное решение «клик или тяга» остаётся КАК БЫЛО.
+
+        `SimpleGraphEditor` его запретил — там тяга узла не реализована и
+        только воровала нажатия у ручек размера. В «Контурах» ручек размера
+        нет вовсе (двойной клик подавлен, :494), зато отложенная ветка меняет
+        поведение видимого жеста: сегодня Ctrl+ПРОТЯЖКА по узлу ОТМЕНЯЕТ
+        переключение контура (порог `DRAG_THRESHOLD` пройден → на отпускании
+        `_on_ctrl_lmb_click` не зовётся), а без неё инструмент срабатывал бы
+        сразу на нажатии. Менять это — не задача пункта про посадку, поэтому
+        вкладка явно оставлена на прежнем пути.
+
+        ⚠ Тяга вершин полигона сюда не относится: она взводит
+        `_ctrl_lmb_pending` на СВОЁМ пути (`mousePressEvent`, :517-521) до
+        обращения к базовому диспетчеру, поэтому от этого крючка не зависит.
+        """
+        return True
+
     def _start_ctrl_drag(self, node_id: str):
         """In edit_polygon: check vertex first, then fallback."""
         if (self._current_mode == "edit_polygon"
