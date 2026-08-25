@@ -125,6 +125,21 @@ LAUNCH_BY_ERROR = {
     ("junctions", "detecting_junctions"): ("detecting_junctions", JUNCTION_TASK),
 }
 
+# ── таблица идемпотентного выхода ────────────────────────────────────────
+#
+# Клетка, где эндпоинт отвечает 200 БЕЗ перехода и БЕЗ отправки: статус уже
+# целевой. Заведена блоком 2 плана точечных болей (Б8-пара, 2026-08-25) —
+# сегментацию теперь ставит сервер сразу после подтверждения разметки CVAT,
+# и необновлённый десктоп зовёт `/segment` из `segmenting` на КАЖДОМ счастливом
+# пути; до этой ветки он получал 400 и показывал оператору окно ошибки.
+# Ключ — (эндпоинт, статус), значение — статус в ответе. Обе редакции —
+# независимые литералы, сторож ниже сверяет их между собой.
+IDEMPOTENT_BEFORE = {}
+IDEMPOTENT = {
+    ("segment", "segmenting"): "segmenting",
+}
+
+
 # ── таблица отказа отправки ──────────────────────────────────────────────
 #
 # Значения — правила, а не строки статусов: правило одно на весь эндпоинт,
@@ -416,6 +431,23 @@ def test_dispatch_failure_changed_by_exactly_the_declared_cells():
         assert value == (503, ENTRY, KEPT, 2), key
 
 
+def test_idempotent_exit_changed_by_exactly_the_declared_cells():
+    """Б8-пара завела ровно одну клетку идемпотентного выхода и ни одной сверх.
+
+    Клетка обязана лежать ВНЕ таблицы запуска: иначе один и тот же вход
+    описывался бы двумя правилами, и перебор судил бы то, что первым проверит.
+    """
+    assert IDEMPOTENT_BEFORE == {}
+    assert IDEMPOTENT == {("segment", "segmenting"): "segmenting"}
+
+    for (endpoint, value), answer in IDEMPOTENT.items():
+        assert endpoint in ENDPOINTS
+        assert DiagramStatus(value).value == value
+        assert DiagramStatus(answer).value == answer
+        for stage in ERROR_STAGES:
+            assert _launch(endpoint, value, stage) is None, (endpoint, value, stage)
+
+
 def test_button_table_changed_only_where_the_button_exists():
     """Кнопка вернулась у четырёх эндпоинтов из пяти — и это замер, не недоделка.
 
@@ -450,8 +482,16 @@ def test_launch_over_every_status(endpoint, status, dispatched):
         db = FakeDB(diagram)
         cell = (endpoint, status.value, stage)
         launch = _launch(*cell)
+        idempotent = IDEMPOTENT.get((endpoint, status.value))
 
-        if launch is None:
+        if idempotent is not None:
+            result = asyncio.run(CALL[endpoint](db))
+            assert result["status"] == idempotent, cell
+            assert result["task_id"] is None, cell
+            assert _state(diagram) == entry, cell
+            assert db.commits == 0, cell
+            assert dispatched == [], cell
+        elif launch is None:
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(CALL[endpoint](db))
             assert exc.value.status_code == 400, cell
@@ -482,6 +522,18 @@ def test_dispatch_failure_over_every_status(endpoint, status, broker_down):
         db = FakeDB(diagram)
         cell = (endpoint, status.value, stage)
         launch = _launch(*cell)
+        idempotent = IDEMPOTENT.get((endpoint, status.value))
+
+        if idempotent is not None:
+            # Идемпотентный выход отвечает ДО всякой отправки — мёртвый брокер
+            # на этой клетке неотличим от живого, и это не совпадение, а замок:
+            # ответ «уже бежит» не имеет права зависеть от брокера.
+            result = asyncio.run(CALL[endpoint](db))
+            assert result["status"] == idempotent, cell
+            assert _state(diagram) == entry, cell
+            assert db.commits == 0, cell
+            assert broker_down == [], cell
+            continue
 
         if launch is None:
             with pytest.raises(HTTPException) as exc:

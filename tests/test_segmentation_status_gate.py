@@ -52,6 +52,14 @@ ALLOWED_STATUSES = frozenset({
     "error",
 })
 
+# Идемпотентный выход (Б8-пара, блок 2 плана точечных болей 2026-08-25):
+# статус УЖЕ целевой — 200 и НИ ОДНОЙ отправки, по образцу `app/api/graph.py`.
+# Ветка нужна потому, что сегментацию теперь ставит сервер сразу после
+# подтверждения разметки, и необновлённый десктоп зовёт `/segment` из
+# `segmenting` на каждом счастливом пути. Обе редакции — независимые литералы.
+IDEMPOTENT_BEFORE = frozenset()          # до правки: 400, как у любого чужого статуса
+IDEMPOTENT = frozenset({"segmenting"})
+
 # Значения `error_stage`, которые реально пишет конвейер (`set_diagram_error`),
 # плюс те, что называет `_STAGE_DISPATCH`. `None` — ошибка без стадии.
 ERROR_STAGES = [
@@ -171,10 +179,24 @@ def test_status_machine_size_is_locked():
 
 def test_table_keys_name_real_statuses():
     """Сторож набора: ключ таблицы — существующий статус, а не опечатка."""
-    for value in ALLOWED_STATUSES:
+    for value in ALLOWED_STATUSES | IDEMPOTENT:
         assert DiagramStatus(value).value == value
     for _restart, target, _tasks in DISPATCH.values():
         assert DiagramStatus(target).value == target
+
+
+def test_idempotent_exit_changed_by_exactly_the_declared_cells():
+    """Б8-пара завела ровно одну клетку идемпотентного выхода и ни одной сверх.
+
+    Обе редакции — независимые литералы, поэтому правка одной без другой краснит
+    этот сторож: «переход вне зафиксированного набора» (`PROTOCOL §Гейты`)
+    ловится здесь, а не глазами ревизора. Клетка не пересекается с гейтом:
+    `segmenting` в `_ALLOWED_STATUSES` не входит и входить не должен — из него
+    запускать заново нечего.
+    """
+    assert IDEMPOTENT_BEFORE == frozenset()
+    assert IDEMPOTENT == frozenset({"segmenting"})
+    assert not (IDEMPOTENT & ALLOWED_STATUSES)
 
 
 def test_error_stage_vocabulary_covers_the_dispatch_table():
@@ -190,7 +212,16 @@ def test_segment_gate_over_every_status(status, dispatched):
     diagram = _diagram(status)
     db = FakeDB(diagram)
 
-    if status.value in ALLOWED_STATUSES:
+    if status.value in IDEMPOTENT:
+        # Уже бежит: 200 без перехода, без коммита и без отправки.
+        result = asyncio.run(start_segmentation(UID, db=db))
+        assert result["status"] == status.value
+        assert result["task_id"] is None
+        assert result["restart_from"] is None
+        assert diagram.status is status
+        assert db.commits == 0
+        assert dispatched == []
+    elif status.value in ALLOWED_STATUSES:
         result = asyncio.run(start_segmentation(UID, db=db))
         assert result["status"] == "segmenting"
         assert diagram.status is DiagramStatus.SEGMENTING

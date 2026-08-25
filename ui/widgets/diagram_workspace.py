@@ -2608,17 +2608,19 @@ class DiagramWorkspace(QWidget):
 
     @Slot()
     def _on_cvat_confirmed(self):
-        """CVAT сохранил аннотации → скачать аннотации → авто-старт сегментации.
+        """CVAT сохранил аннотации → скачать аннотации.
 
-        Сегментация запускается автоматически (как junction → построение графа),
-        без отдельной кнопки.
+        Сегментацию ставит СЕРВЕР — тем же вызовом, что скачивает аннотации
+        (`app/api/cvat.py`, Б8). Прежде звено двигал этот метод, и закрытая
+        вкладка или упавший клиент останавливали схему навсегда. Свой вызов
+        `_start_segmentation` убран, иначе задача уходила бы дважды; кнопка
+        «Выделение труб» остаётся — она нужна откатам, ERROR и случаю, когда
+        у сервера не поднялся брокер.
         """
         logger.info("CVAT confirmed, fetching annotations")
-        fetched = False
         try:
             result = self.api_client.fetch_cvat_annotations(self._uid)
             count = result.get("annotation_count", 0)
-            fetched = True
             self.status_message.emit(
                 f"✅ Получено {count} валидированных аннотаций", 5000,
             )
@@ -2628,11 +2630,9 @@ class DiagramWorkspace(QWidget):
                 f"Не удалось получить аннотации:\n{exc.message}",
             )
 
+        # Возвращает слежение за статусом и обновляет бусины/кнопки —
+        # старт сегментации для этого больше не нужен.
         self._close_tab_and_restore_header()
-
-        # Авто-запуск сегментации сразу после CVAT — не по кнопке.
-        if fetched:
-            self._start_segmentation()
 
     def _has_saved_canvas(self) -> bool:
         """Есть ли у диаграммы сохранённый холст «Ручной правки».

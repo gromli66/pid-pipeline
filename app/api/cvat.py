@@ -441,14 +441,7 @@ async def fetch_cvat_annotations(
         stage.complete({"annotation_count": annotation_count})
 
         await db.commit()
-        
-        return {
-            "status": "validated_bbox",
-            "annotation_count": annotation_count,
-            "coco_path": str(coco_path.relative_to(storage_path)),
-            "yolo_path": str(yolo_path.relative_to(storage_path)),
-        }
-        
+
     except CVATLabelMismatchError as exc:
         # Разошлись метки CVAT и конфиг проекта. Диаграмму в ERROR НЕ уводим:
         # на диск ничего не записано, чинится в CVAT, после чего та же кнопка
@@ -465,11 +458,43 @@ async def fetch_cvat_annotations(
         diagram.error_message = str(exc)[:500]
         diagram.error_stage = "fetching_annotations"
         await db.commit()
-        
+
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch annotations: {exc}"
         )
+
+    # Б8: конвейер после подтверждения разметки двигает СЕРВЕР, а не десктоп.
+    # До правки следующее звено ставил только клиент (`_on_cvat_confirmed` →
+    # `_start_segmentation`): закрытая вкладка или упавший клиент — и схема
+    # стояла навсегда. Отправка идёт ВНЕ `try` выше намеренно: мёртвый брокер
+    # не должен уводить диаграмму в `error` с `error_stage='fetching_annotations'` —
+    # аннотации получены, этап завершён, и это его настоящий исход.
+    # Best-effort: отказ отправки НЕ валит подтверждение — состояние остаётся
+    # `validated_bbox`, ответ 200, кнопка «Выделение труб» рабочая.
+    from app.api.segmentation import dispatch_segmentation  # локально: app/api/__init__ тянет весь пакет
+
+    sent = await dispatch_segmentation(db, diagram)
+    if sent["task_id"] is None:
+        logger.warning(
+            "Автозапуск сегментации не удался (%s) — диаграмма осталась в "
+            "'%s', оператор запускает кнопкой «Выделение труб»",
+            sent["error"], diagram.status.value,
+            extra={"event": "dispatch_failed"},
+        )
+    else:
+        logger.info(
+            "Сегментация запущена автоматически после подтверждения разметки (%s)",
+            sent["task_id"], extra={"event": "auto_dispatch"},
+        )
+
+    return {
+        "status": diagram.status.value,
+        "annotation_count": annotation_count,
+        "coco_path": str(coco_path.relative_to(storage_path)),
+        "yolo_path": str(yolo_path.relative_to(storage_path)),
+        "segmentation_task_id": sent["task_id"],
+    }
 
 
 # Из этих статусов возвращаться на валидацию bbox нельзя (ещё до неё / уже там).
