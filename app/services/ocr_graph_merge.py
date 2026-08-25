@@ -80,11 +80,22 @@ def merge_ocr_result_into_graph(
     graph["text_blocks"] = tblocks
     graph.setdefault("bindings", [])
 
+    # ⛔ Через временный файл: `open(path, "w")` УСЕКАЕТ граф в нулевой размер
+    # ещё до того, как в него что-то ляжет, и падение посреди `json.dump`
+    # (диск кончился, воркер убит по таймауту) оставляет оператора без графа
+    # вовсе. `Path.replace` == `os.replace`: атомарен на POSIX, перезаписывает
+    # на Windows (блок 5; тот же класс, что `/ocr/binding/apply`).
+    tmp_path = graph_path.with_suffix(".merge.tmp")
     try:
-        with open(graph_path, "w", encoding="utf-8") as f:
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(graph, f, ensure_ascii=False, indent=2)
+        tmp_path.replace(graph_path)
     except Exception as exc:  # noqa: BLE001
         logger.warning("merge_ocr: не удалось записать граф %s: %s", graph_path, exc)
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
         return 0
 
     logger.info("merge_ocr: перенесено %d блоков в %s", len(tblocks), graph_path.name)

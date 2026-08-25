@@ -21,6 +21,17 @@ from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
+#: Машинный признак отказа гейта пересборки — КОПИЯ `app.api.build_gate
+#: .REBUILD_REFUSAL`. Копия, а не импорт: клиент пакуется PyInstaller-ом
+#: отдельно от сервера и `app.api` в сборку не тянет. Сведение обеих копий
+#: держит `tests/test_graph_rebuild_gate.py`.
+REBUILD_REFUSAL = "graph_rebuilding"
+
+#: Что видит оператор, когда его правки повисли в воздухе.
+REBUILD_BANNER = ("⛔ Граф пересобран заново — эта вкладка держит СТАРУЮ схему, "
+                  "и сохранить её больше некуда. Закройте вкладку и откройте "
+                  "заново; автосохранение остановлено.")
+
 
 class NonInteractiveSaveMixin:
     """Право вкладки задавать вопросы во время сохранения.
@@ -38,6 +49,11 @@ class NonInteractiveSaveMixin:
     #: чем кончилось сохранение без права спрашивать — строка оператору
     save_refusal: str = ""
 
+    #: ЛИПКАЯ метка «буфер несвежий»: сервер отбил запись гейтом пересборки,
+    #: и всё, что лежит во вкладке, считается против мёртвого поколения узлов.
+    #: Снимается только пересозданием вкладки — это и есть «перезагрузите».
+    save_blocked_reason: str = ""
+
     @contextmanager
     def non_interactive_save(self):
         """Сохранение БЕЗ вопросов: тик таймера, а не жест оператора.
@@ -53,6 +69,25 @@ class NonInteractiveSaveMixin:
             yield
         finally:
             self._save_interactive = previous
+
+    def rebuild_banner(self, exc) -> str:
+        """Отказ гейта пересборки → пометить буфер несвежим. Иначе — `""`.
+
+        Зовётся из `except` каждого пути записи. Признак машинный (`ASCII` в
+        `detail`), а не «сервер ответил 400»: у соседних отказов — «OCR result
+        not available yet», слепая перезапись, битый JSON — правки оператора
+        живы и лечатся повтором, морозить буфер там нельзя.
+
+        Полное закрытие окна «после BUILT» (штамп поколения в самом графе) —
+        кандидат в дорогу; здесь дешёвый заслон: пока вкладка жива, она больше
+        не пишет, и автосохранение её не воскрешает.
+        """
+        if REBUILD_REFUSAL not in str(getattr(exc, "message", None) or exc):
+            return ""
+        self.save_blocked_reason = REBUILD_BANNER
+        logger.warning("буфер %s uid=%s помечен несвежим: граф пересобран",
+                       type(self).__name__, getattr(self, "uid", "?"))
+        return REBUILD_BANNER
 
     def _refuse_save(self, text: str) -> None:
         """Сказать строкой то, что оператору сказал бы диалог.

@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.build_gate import require_graph_ready
 from app.core import obs
 from app.db import get_async_db
 from app.models import Diagram, DiagramStatus, Artifact, ArtifactType
@@ -1025,6 +1026,15 @@ async def save_validated_graph(
     if not diagram:
         raise HTTPException(status_code=404, detail="Diagram not found")
 
+    # Гейт пересборки — ПЕРЕД собственным списком, и это не дубль: список ниже
+    # ВЛОЖЕН в `GRAPH_READY_STATUSES` (сторож — `test_graph_rebuild_gate.py`),
+    # поэтому пускаемое множество не меняется ни на клетку. Меняется ТЕКСТ
+    # отказа: у пересборки он несёт машинный признак, по которому вкладка
+    # морозит буфер и глушит автосохранение (блок 5). Без этого правка жила бы
+    # на пути, которого клиент не потребляет: сохранение «Проверки схемы»
+    # и «Привязки» приходит СЮДА, а не на гейты `contours`/`ocr`.
+    require_graph_ready(diagram)
+
     if diagram.status not in (
         DiagramStatus.BUILT,
         DiagramStatus.VALIDATING_GRAPH,
@@ -1105,6 +1115,10 @@ async def save_canvas_graph(
 
     if not diagram:
         raise HTTPException(status_code=404, detail="Diagram not found")
+
+    # Гейт пересборки — перед собственным списком (см. `/graph/save` выше):
+    # множество не меняется, меняется текст отказа.
+    require_graph_ready(diagram)
 
     # «Ручная правка» доступна с OCR_COMPLETED и переоткрывается после экспорта
     if diagram.status not in (

@@ -315,6 +315,15 @@ def test_operator_rollback_still_works(bench):
     ослабляет утверждение: фаза A линейна, повторный проход там разрушающий,
     и диалог отката остаётся именно у неё. Что фаза B теперь молчит,
     утверждает `tests/ui/test_phase_b_free_entry.py`.
+
+    ⚠ ВТОРОЙ осознанный пересъём (блок 5, 2026-08-25): прежняя редакция
+    утверждала «независимые OCR и контуры пережили явный откат» — и это
+    противоречит новой семантике. «Сборка схемы» — не соседний этап, а
+    ПЕРЕСБОРКА: `id` узлов между сборками не выживают (порядковые `node_N` от
+    порядка компонент маски), поэтому контуры сбрасываются вместе с графом, а
+    из OCR гибнет привязка. Живёт то, что от узлов не зависит: сырые блоки и
+    правки их текстов. Утверждение не ослаблено, а РАЗВЁРНУТО — теперь оно
+    называет обе стороны границы поимённо.
     """
     ws, server = bench(DiagramStatus.CONTOURS_VALIDATED, GRAPH_STATE)
     ws.load_diagram(UID, "схема оператора")
@@ -324,14 +333,43 @@ def test_operator_rollback_still_works(bench):
     assert [c[0] for c in FakeMsgBox.calls] == ["question"], (
         f"явный откат перестал спрашивать: {FakeMsgBox.calls}"
     )
-    assert server.rollbacks == [("validated_junctions", True, True)], (
+    assert server.rollbacks == [("validated_junctions", True, False)], (
         f"явный откат ушёл не так: {server.rollbacks}"
     )
-    # preserve-флаги на месте: независимые OCR и контуры пережили явный откат.
-    assert ArtifactType.CONTOURS_VALIDATED in server.artifacts
+    # Пережили пересборку: сырой OCR и правки его текстов — они висят на
+    # блоках, а не на узлах.
     assert ArtifactType.OCR_RESULT in server.artifacts
+    assert ArtifactType.OCR_CLEANED in server.artifacts
+    assert ArtifactType.OCR_VALIDATION in server.artifacts
+    # Погибли: всё, что держит `node_id` или садится на узлы по IoU.
+    assert ArtifactType.OCR_BINDING not in server.artifacts
+    assert ArtifactType.CONTOURS_AUTO not in server.artifacts
+    assert ArtifactType.CONTOURS_VALIDATED not in server.artifacts
     assert ArtifactType.GRAPH_VALIDATED not in server.artifacts
     assert ArtifactType.GRAPH_CANVAS not in server.artifacts
+
+
+def test_junction_rollback_keeps_the_raw_ocr(bench):
+    """Зеркальная дыра блока 5: «Проверка узлов» тоже ведёт к пересборке.
+
+    Её цель (`detected_junctions`) раньше сборки ровно так же, а флагов у
+    кнопки не было вовсе — и сырой OCR гиб против решения «сырой живёт».
+    Политики двух кнопок выровнены; утверждается РАЗНИЦА с прежним поведением
+    (сырой цел) и та же граница (привязка и контуры гибнут).
+    """
+    ws, server = bench(DiagramStatus.CONTOURS_VALIDATED, GRAPH_STATE)
+    ws.load_diagram(UID, "схема оператора")
+
+    ws._action_buttons["junction"].click()
+
+    assert server.rollbacks == [("detected_junctions", True, False)], (
+        f"откат «Проверки узлов» ушёл не так: {server.rollbacks}"
+    )
+    assert ArtifactType.OCR_RESULT in server.artifacts, (
+        "«Проверка узлов» снесла сырой OCR — против решения Максима")
+    assert ArtifactType.OCR_VALIDATION in server.artifacts
+    assert ArtifactType.OCR_BINDING not in server.artifacts
+    assert ArtifactType.CONTOURS_VALIDATED not in server.artifacts
 
 
 def test_phase_b_entry_is_no_longer_a_rollback(bench):

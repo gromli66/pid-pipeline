@@ -1257,6 +1257,11 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
         if not self._editor:
             return False
 
+        # Буфер уже помечен несвежим гейтом пересборки — писать некуда.
+        if self.save_blocked_reason:
+            self.status_label.setText(self.save_blocked_reason)
+            return False
+
         # Куда пишем — тем и определяется, что под угрозой: холст уходит
         # в graph_canvas, вкладки в оригинальных координатах — в graph_validated.
         artifact = ("graph_canvas"
@@ -1306,14 +1311,20 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
             return True
 
         except Exception as exc:
+            # Гейт пересборки — не «не удалось», а «больше некуда»: буфер
+            # мёртв, и говорить о нём надо иначе (блок 5).
+            banner = self.rebuild_banner(exc)
             # По таймеру — строкой, а не модалкой посреди работы (1-38).
             if self._save_interactive:
                 QMessageBox.warning(
-                    self, "Ошибка",
-                    f"Не удалось сохранить граф:\n{exc}"
+                    self, "Схема пересобрана" if banner else "Ошибка",
+                    banner or f"Не удалось сохранить граф:\n{exc}"
                 )
             else:
-                self._refuse_save(f"⚠️ Автосохранение не удалось: {exc}")
+                self._refuse_save(
+                    banner or f"⚠️ Автосохранение не удалось: {exc}")
+            if banner:
+                self.status_label.setText(banner)
             return False
         finally:
             QApplication.restoreOverrideCursor()
