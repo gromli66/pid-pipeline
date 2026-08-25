@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Slot, Qt, QThread
 from PySide6.QtGui import QColor, QPixmap, QIcon
 
-from ui.services.api_client import APIClient
+from ui.services.api_client import APIClient, APIError
 from ui.services.recognize_worker import RecognizeWorker
 from ui.services.thread_lifetime import hand_over
 from ui.services.ui_settings import UISettings
@@ -740,9 +740,29 @@ class AdvancedGraphTab(SimpleGraphTab):
             ed.set_edge_bad_color(QColor("#e67e22"))
 
     def set_project_code(self, project_code: str):
-        """Установить код проекта + передать config dir в editor."""
+        """Установить код проекта + передать config dir и названия классов в editor."""
         super().set_project_code(project_code)
         self._sync_editor_config_dir()
+        self._sync_editor_class_names()
+
+    def _sync_editor_class_names(self):
+        """Забрать из API русские названия классов для панели «Размер объектов».
+
+        Не критично: не ответил сервер или поля нет (старый сервер) — редактор
+        покажет внутренние английские имена, как до перевода.
+        """
+        if not (self._editor and self._project_code):
+            return
+        try:
+            result = self.api_client.get_project_classes(self._project_code)
+        except APIError as exc:
+            logger.warning("Названия классов не загружены (%s) — покажем англ. имена", exc)
+            return
+        self._editor.class_display_names = {
+            c["name"]: c["display_name"]
+            for c in result.get("classes", [])
+            if c.get("name") and c.get("display_name")
+        }
 
     def _sync_editor_config_dir(self):
         """Передать путь к configs в editor для KKS нормализации (B6.5)."""

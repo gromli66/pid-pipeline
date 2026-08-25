@@ -43,7 +43,7 @@ class ObjectResizePanel(QFrame):
         )
 
         # колбэки (назначаются извне, обычно вкладкой)
-        self.on_class_changed = None    # (name: str) -> None
+        self.on_class_changed = None    # (name: str) -> None, name — внутреннее англ. имя
         self.on_select_all = None       # () -> None
         self.on_select_one = None       # () -> None
         self.on_filter = None           # (kind: 'box'|'poly') -> None
@@ -238,10 +238,17 @@ class ObjectResizePanel(QFrame):
             fn(*args)
 
     def _class_changed(self, name: str):
+        """Наружу уходит ВНУТРЕННЕЕ имя класса, а не то, что видно в комбобоксе.
+
+        Редактор сравнивает его с `node['class_name']`, поэтому подменять на
+        русское нельзя: берём из userData, текст пункта — только фолбэк для
+        проектов без перевода.
+        """
         if self._populating:
             return
-        if name and callable(self.on_class_changed):
-            self.on_class_changed(name)
+        internal = self._class_combo.currentData() or name
+        if internal and callable(self.on_class_changed):
+            self.on_class_changed(internal)
 
     def _size_preview(self, _v=None):
         """Живое превью размеров боксов (Ширина/Высота)."""
@@ -281,12 +288,23 @@ class ObjectResizePanel(QFrame):
     # ───────────────────── обновление состояния ─────────────────────
 
     def set_classes(self, names, current=None):
-        """Заполнить выпадающий список классов."""
+        """Заполнить выпадающий список классов.
+
+        Args:
+            names: последовательность пар `(внутреннее_имя, отображаемое)`.
+                   Для совместимости принимается и список простых строк —
+                   тогда имя и подпись совпадают.
+            current: ВНУТРЕННЕЕ имя выбранного класса.
+        """
+        pairs = [(n, n) if isinstance(n, str) else tuple(n) for n in names]
         self._populating = True
         self._class_combo.clear()
-        self._class_combo.addItems(list(names))
-        if current and current in names:
-            self._class_combo.setCurrentText(current)
+        for internal, shown in pairs:
+            self._class_combo.addItem(shown, userData=internal)
+        if current is not None:
+            idx = self._class_combo.findData(current)
+            if idx >= 0:
+                self._class_combo.setCurrentIndex(idx)
         self._populating = False
 
     def set_state(self, kind: str, count: int,
