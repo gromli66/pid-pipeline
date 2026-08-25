@@ -261,6 +261,20 @@ class CVATClient:
         response.raise_for_status()
         return len(missing)
 
+    def set_label_color(self, label_id: int, color: str) -> None:
+        """Перекрасить СУЩЕСТВУЮЩУЮ метку.
+
+        `ensure_project_labels` цвет не меняет — он уходит в CVAT только вместе с
+        новой меткой. Чтобы вернуть раскраску в уже созданном проекте, метку надо
+        править точечно.
+        """
+        response = self._client.patch(
+            f"/api/labels/{label_id}",
+            headers={**self._get_headers(), "Content-Type": "application/json"},
+            json={"color": color},
+        )
+        response.raise_for_status()
+
     @_cvat_call("get_or_create_project")
     def get_or_create_project(
         self,

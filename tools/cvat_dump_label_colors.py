@@ -22,7 +22,14 @@ modules/configs), поэтому файл сначала доставляетс�
     docker compose exec api python tools/cvat_dump_label_colors.py --project-id 2
     docker compose exec api python tools/cvat_dump_label_colors.py --project-id 2 --fallback-project-id 3
 
-Ничего не пишет и не меняет — только читает.
+Обратный режим — вернуть цвета из конфига уже СОЗДАННОМУ проекту (метки там
+русские, сопоставление ru → en идёт через `display_labels`). Без --yes только
+показывает, что поменялось бы:
+
+    docker compose exec api python tools/cvat_dump_label_colors.py --apply-to 3
+    docker compose exec api python tools/cvat_dump_label_colors.py --apply-to 3 --yes
+
+Без --yes ничего не пишет и не меняет — только читает.
 """
 from __future__ import annotations
 
@@ -50,12 +57,55 @@ def colors_by_name(client, project_id: int) -> dict:
     }
 
 
+def apply_colors(client, project_id: int, project_code: str, confirmed: bool) -> int:
+    """Вернуть цвета из конфига меткам уже созданного проекта."""
+    cfg = ProjectLoader().load(project_code)
+    if cfg is None:
+        print(f"[ERR] проект '{project_code}' не найден в конфигах")
+        return 1
+    if not cfg.class_colors:
+        print(f"[ERR] в конфиге '{project_code}' нет блока class_colors — нечего применять")
+        return 1
+
+    # метки в проекте русские: ru → en, как в `to_internal`
+    internal = {sort_key(display_name(cfg, cls.name)): cls.name for cls in cfg.classes}
+
+    planned, skipped = [], []
+    for lbl in client.get_project_labels(project_id):
+        en = internal.get(sort_key(lbl["name"]))
+        wanted = cfg.class_colors.get(en) if en else None
+        if not wanted:
+            skipped.append(lbl["name"])
+        elif (lbl.get("color") or "").lower() != wanted:
+            planned.append((lbl["id"], lbl["name"], lbl.get("color") or "—", wanted))
+
+    for label_id, name, was, now in planned:
+        print(f"  label {label_id:>4}  {was} -> {now}    {name}")
+    if skipped:
+        print(f"[ВНИМАНИЕ] метки без цвета в конфиге ({len(skipped)}): {skipped}")
+
+    if not planned:
+        print("[ОК] цвета уже совпадают с конфигом — менять нечего")
+        return 0
+
+    if not confirmed:
+        print(f"\n[ПРОБНЫЙ ПРОГОН] поменялось бы меток: {len(planned)}. Повторите с --yes, чтобы записать.")
+        return 0
+
+    for label_id, name, _was, now in planned:
+        client.set_label_color(label_id, now)
+    print(f"[ГОТОВО] перекрашено меток: {len(planned)}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--list", action="store_true", help="показать все проекты CVAT (id + имя)")
     ap.add_argument("--project-id", type=int, help="проект-эталон со старыми (английскими) метками")
     ap.add_argument("--fallback-project-id", type=int, help="проект-добивка для классов, которых нет в эталоне")
     ap.add_argument("--project-code", default="thermohydraulics", help="код проекта пайплайна (по умолчанию thermohydraulics)")
+    ap.add_argument("--apply-to", type=int, metavar="PROJECT_ID", help="вернуть цвета из конфига существующему проекту CVAT")
+    ap.add_argument("--yes", action="store_true", help="действительно записать цвета (без него — только показать)")
     args = ap.parse_args()
 
     client = get_cvat_client()
@@ -64,8 +114,11 @@ def main() -> int:
         list_projects(client)
         return 0
 
+    if args.apply_to:
+        return apply_colors(client, args.apply_to, args.project_code, args.yes)
+
     if not args.project_id:
-        ap.error("нужен --project-id (или --list, чтобы найти его)")
+        ap.error("нужен --project-id, --apply-to (или --list, чтобы найти их)")
 
     cfg = ProjectLoader().load(args.project_code)
     if cfg is None:
