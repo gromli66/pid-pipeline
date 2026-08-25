@@ -96,6 +96,27 @@ def _status_ge(current: DiagramStatus, threshold: DiagramStatus) -> bool:
     return _STATUS_IDX.get(current, -1) >= _STATUS_IDX.get(threshold, 999)
 
 
+def _status_label(status_value: str) -> str:
+    """Русская подпись статуса для диалога — без значка и без ключа.
+
+    Словарь подписей один на клиента (`ui/widgets/diagram_list.py`); пятый
+    самодельный маппинг здесь не заводится. Значок («✓», «⏳») — метка строки
+    списка, а не часть названия, и в тексте вопроса лишний. Термины `OCR` и
+    `Bbox` внутри подписи легальны: это слова, а не технические ключи.
+    """
+    from ui.widgets.diagram_list import STATUS_LABELS
+
+    try:
+        label = STATUS_LABELS.get(DiagramStatus(status_value), "")
+    except ValueError:
+        label = ""
+    if not label:
+        return status_value
+    while label and not label[0].isalnum():
+        label = label[1:]
+    return label.strip() or status_value
+
+
 # Каждая бусина: (idx, key, completed_when, in_progress_statuses, available_when)
 _BEAD_DEFS = [
     (BEAD_FRAME,         "frame",       DiagramStatus.FRAME_CLEANED,
@@ -595,6 +616,31 @@ class DiagramWorkspace(QWidget):
         ("edit_graph",  "Ручная правка"),
         ("fxml",        "Экспорт"),
     ]
+
+    #: Русская подпись кнопки по её ключу. Одна на класс: тот же словарь
+    #: собирался локально трижды (`_KEY_LABELS = {k: v for k, v in ...}`),
+    #: и четвёртую копию плодить незачем.
+    _KEY_LABELS = dict(_BUTTON_DEFS)
+
+    #: Ключи фазы B: «Проверка схемы» ⇄ «Контуры» ⇄ «Привязка» ⇄ «Ручная
+    #: правка». Вход в уже пройденный этап здесь НЕ откат (решения Максима
+    #: №7/№8): этапы разные, работа независимая, и посмотреть на сделанное
+    #: оператор имеет право без разрушения конвейера. Серверные гейты фазы B
+    #: повторное сохранение и подтверждение принимают (Н2/Н2с/3.1в/Н8+).
+    #: Фаза A (`frame`…`graph`) линейна, повторный проход там разрушающий —
+    #: она остаётся за диалогом отката.
+    _PHASE_B_FREE_ENTRY = ("val_graph", "contours", "ocr_binding", "edit_graph")
+
+    #: Артефакты, независимые от графа, при откате graph/contour-этапов
+    #: сохраняются: OCR и SAM2 считаются параллельно сборке.
+    _PRESERVE_OCR_KEYS = ("graph", "val_graph", "contours")
+    #: `ocr` здесь — пункт 5-1 дороги: «Переделать OCR» не должно сносить
+    #: SAM2-контуры (их считают поточечно руками). После Н3+ клик по
+    #: пройденному распознаванию откатов не делает вовсе, но rollback-путь
+    #: остаётся достижим с других кнопок — страховка та же однострочная.
+    #: В `_PRESERVE_OCR_KEYS` ключа `ocr` быть НЕ должно: при «Переделать OCR»
+    #: старые OCR-артефакты обязаны сноситься.
+    _PRESERVE_CONTOURS_KEYS = ("graph", "val_graph", "contours", "ocr")
 
     def __init__(
         self,
@@ -1909,6 +1955,40 @@ class DiagramWorkspace(QWidget):
     # Кнопки действий — фоновые процессы
     # =================================================================
 
+    def _rollback_consequence(self, target: str) -> str:
+        """Что станет с холстом «Ручной правки» при откате до `target`.
+
+        Граница та же, что на сервере (`app/api/rollback.py: canvas_dies`):
+        цель «Привязка подписей» и позже холст сохраняет, более ранняя —
+        сносит вместе с файлом. `graph_canvas.json` — единственное место, где
+        живут правки оператора, и до этого пункта диалог о нём молчал: строка
+        «все последующие артефакты будут удалены» формально не врала, но слов
+        «Ручная правка» и «холст» в ней не было.
+        """
+        try:
+            keeps_canvas = _status_ge(DiagramStatus(target), DiagramStatus.OCR_BOUND)
+        except ValueError:
+            keeps_canvas = False
+        if keeps_canvas:
+            return ("Холст «Ручной правки» сохранится, "
+                    "раскладка будет пересчитана.")
+        return ("Правки в «Ручной правке» будут потеряны: "
+                "холст соберётся заново из проверенной схемы.")
+
+    def _confirm_ocr_restart(self) -> bool:
+        """Спросить про повторный запуск распознавания. True — запускаем."""
+        reply = QMessageBox.question(
+            self, "Распознавание текста",
+            "Распознавание текста уже выполнено.\n"
+            "Запустить его заново?\n\n"
+            "Прежний результат распознавания будет удалён, "
+            "привязку подписей придётся пройти снова.\n"
+            "Схема и контуры не пострадают.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return reply == QMessageBox.StandardButton.Yes
+
     @Slot()
     def _on_button_click(self, key: str, original_handler):
         """Обработчик клика по кнопке — если этап уже пройден, предложить откат."""
@@ -1933,15 +2013,36 @@ class DiagramWorkspace(QWidget):
             original_handler()
             return
 
+        # Фаза B: вход в пройденный этап — не откат. Раньше здесь был один
+        # диалог на все кнопки: «Да» разрушал конвейер, «Нет» не открывал
+        # ничего, то есть посмотреть на сделанное было нельзя вовсе.
+        # Устаревание холста после правки ловит sha (`canvas_state.is_stale`) —
+        # удалять руками нечего.
+        if key in self._PHASE_B_FREE_ENTRY:
+            original_handler()
+            return
+
+        # Распознавание — не вкладка, а POST: `_start_ocr` сносит сырой
+        # результат (`app/api/ocr.py`) и жжёт минуты CPU. Поэтому повторный
+        # клик спрашивает про ПЕРЕЗАПУСК, а не про откат: конвейер назад
+        # не идёт (решение №6 редтима).
+        if key == "ocr":
+            if key in completed and not self._confirm_ocr_restart():
+                return
+            original_handler()
+            return
+
         if key in completed:
             # Этап уже пройден — предложить откат
             target = self._ROLLBACK_TARGET.get(key, "")
             reply = QMessageBox.question(
                 self, "Откат",
-                f"Этап «{key}» уже пройден.\n"
-                f"Откатить до «{target}» и перезапустить?\n\n"
-                f"Все последующие артефакты будут удалены.",
+                f"Этап «{self._KEY_LABELS.get(key, key)}» уже пройден.\n"
+                f"Вернуться к «{_status_label(target)}» и пройти его заново?\n\n"
+                f"{self._rollback_consequence(target)}\n"
+                f"Артефакты последующих этапов будут удалены.",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
             )
             if reply != QMessageBox.StandardButton.Yes:
                 return
@@ -1949,8 +2050,8 @@ class DiagramWorkspace(QWidget):
                 QApplication.setOverrideCursor(Qt.WaitCursor)
                 # Preserve OCR/contour artifacts when rolling back graph/contour stages,
                 # because OCR and SAM2 run in parallel and are independent of graph.
-                preserve_ocr = key in ("graph", "val_graph", "contours")
-                preserve_contours = key in ("graph", "val_graph", "contours")
+                preserve_ocr = key in self._PRESERVE_OCR_KEYS
+                preserve_contours = key in self._PRESERVE_CONTOURS_KEYS
                 result = self.api_client.rollback_diagram(
                     self._uid, target,
                     preserve_ocr=preserve_ocr,

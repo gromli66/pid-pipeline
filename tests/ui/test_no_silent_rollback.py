@@ -303,20 +303,28 @@ def test_frame_tab_close_keeps_saved_cleaning(bench):
 # ── явный откат оператора — не тронут ────────────────────────────────────
 
 def test_operator_rollback_still_works(bench):
-    """Кнопка пройденного этапа по-прежнему спрашивает и откатывает.
+    """Кнопка пройденного этапа ФАЗЫ A по-прежнему спрашивает и откатывает.
 
     Порог заперт с другой стороны: сняты откаты, которых оператор не просил,
     а не его возможность откатить.
+
+    ⚠ Осознанный пересъём (блок 3 «точечных болей», пункт Н3+, 2026-08-25):
+    прежняя редакция брала кнопку «Проверка схемы». Она в фазе B, а вход в
+    пройденный этап фазы B откатом больше НЕ является (решения Максима
+    №7/№8) — клик уходит прямо во вкладку. Замена на «Сборку схемы» не
+    ослабляет утверждение: фаза A линейна, повторный проход там разрушающий,
+    и диалог отката остаётся именно у неё. Что фаза B теперь молчит,
+    утверждает `tests/ui/test_phase_b_free_entry.py`.
     """
     ws, server = bench(DiagramStatus.CONTOURS_VALIDATED, GRAPH_STATE)
     ws.load_diagram(UID, "схема оператора")
 
-    ws._action_buttons["val_graph"].click()
+    ws._action_buttons["graph"].click()
 
     assert [c[0] for c in FakeMsgBox.calls] == ["question"], (
         f"явный откат перестал спрашивать: {FakeMsgBox.calls}"
     )
-    assert server.rollbacks == [("built", True, True)], (
+    assert server.rollbacks == [("validated_junctions", True, True)], (
         f"явный откат ушёл не так: {server.rollbacks}"
     )
     # preserve-флаги на месте: независимые OCR и контуры пережили явный откат.
@@ -324,6 +332,23 @@ def test_operator_rollback_still_works(bench):
     assert ArtifactType.OCR_RESULT in server.artifacts
     assert ArtifactType.GRAPH_VALIDATED not in server.artifacts
     assert ArtifactType.GRAPH_CANVAS not in server.artifacts
+
+
+def test_phase_b_entry_is_no_longer_a_rollback(bench):
+    """Второй берег того же пересъёма — на том же стенде, что и первый.
+
+    Клик по пройденной «Проверке схемы» ни о чём не спрашивает и ничего не
+    сносит: артефакты фазы B на месте, журнал откатов пуст.
+    """
+    ws, server = bench(DiagramStatus.CONTOURS_VALIDATED, GRAPH_STATE)
+    ws.load_diagram(UID, "схема оператора")
+
+    ws._action_buttons["val_graph"].click()
+
+    assert FakeMsgBox.calls == [], f"вход в фазу B снова спрашивает: {FakeMsgBox.calls}"
+    assert server.rollbacks == [], f"вход в фазу B откатил конвейер: {server.rollbacks}"
+    assert ArtifactType.GRAPH_VALIDATED in server.artifacts
+    assert ArtifactType.GRAPH_CANVAS in server.artifacts
 
 
 # ── бусина и кнопка после «зашёл — вышел» ────────────────────────────────
