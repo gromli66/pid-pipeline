@@ -95,6 +95,19 @@ def is_ortho(e, tol=ec.DIAG_TOL):
     return all(_ortho_seg(a, b, tol) for a, b in zip(pts, pts[1:]))
 
 
+def is_straight(e, tol=ec.DIAG_TOL):
+    """Труба УЖЕ ПРЯМАЯ: два конца, между ними один сегмент по оси.
+
+    Не то же самое, что `is_ortho`, и разница замерена (§MEFX4A): лестница
+    из десяти изломов тоже «идёт по осям», но её маршрут роутер умеет
+    упростить — запрет на вызов поверх неё поднял изломы на девяти холстах
+    корпуса. Прямую же улучшить нельзя: маршрут поверх неё только добавит
+    обход, и гейт откатит уже готовый ход.
+    """
+    pts = edge_pts(e)
+    return bool(pts) and len(pts) == 2 and _ortho_seg(pts[0], pts[1], tol)
+
+
 def diag_segments_of(e):
     """[(индекс, отклонение)] косых сегментов ребра (короткие не судятся)."""
     pts = edge_pts(e)
@@ -527,6 +540,18 @@ def score(graph):
 _NOT_WORSE = ("along_own", "along_foreign", "through", "corner",
               "adrift", "conn_off", "poly_off", "near")
 
+# Причины отказа (К-4): те же три ветки `_attempt`, которые снаружи
+# восстанавливал стенд (`tools/smooth_bench.py:119`), — теперь движок
+# называет их сам, а оператору есть что показать кроме «осталось N».
+REFUSAL_KINDS = ("нет кандидата", "сверх бюджета", "лестница исчерпана")
+
+
+def _refuse(stats, kind):
+    """Отказ с НАЗВАННОЙ причиной. Общий счётчик остаётся суммой трёх
+    вёдер: его читают стенд (`tools/smooth_bench.py:418`) и тесты."""
+    stats["отклонено"] += 1
+    stats[kind] += 1
+
 
 def accepts(before, after):
     """Гейт хода: выигрыш ЛЕКСИКОГРАФИЧЕСКИ (косые -> отклонение ->
@@ -560,7 +585,8 @@ def smooth(graph, route_fn=None, reseat_fn=None, budget=BUDGET,
     вырождаются: движок не изобретает своей геометрии маршрутов.
     """
     stats = {"колено": 0, "излом": 0, "скольжение": 0, "коннектор": 0,
-             "узел": 0, "отклонено": 0, "осталось": 0, "раунды": 0}
+             "узел": 0, "отклонено": 0, "осталось": 0, "раунды": 0,
+             **{k: 0 for k in REFUSAL_KINDS}}
     for _round in range(max_rounds):
         stats["раунды"] += 1
         applied = 0
@@ -645,6 +671,10 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
         return None
 
     # ── 1. КОЛЕНО: ничего не двигаем ───────────────────────────────────
+    # Гейта И2 здесь НЕТ и он не нужен: кандидатом ребро становится только
+    # косым или со ступенькой (см. отбор в `smooth`), то есть ПРЯМЫМ сюда
+    # не приходит — замер по 20 холстам корпуса дал 0 срабатываний из 95
+    # (§MEFX4A). Ставить его тут значит завести мёртвую ветку.
     if route_fn is not None:
         cur = live_edge()
         if cur is not None and route_fn(cur):
@@ -663,11 +693,11 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
 
     step = shift_target(e)
     if step is None:
-        stats["отклонено"] += 1
+        _refuse(stats, "нет кандидата")
         return False        # многоступенчатый / косая внутри маршрута — оператору
     axis, d = step
     if d > budget:
-        stats["отклонено"] += 1
+        _refuse(stats, "сверх бюджета")
         return False        # «супер движение» — не наш случай, в очаги
     sidx = step_index(e)    # ДО мутаций: после сдвига шажок не распознать
 
@@ -687,7 +717,13 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
             cur[key] = [new[1], new[0]]
             shift_run(cur, role, axis, sign * d, sidx)  # участок едет с концом
             drop_collinear(cur)          # схлопнуть ставший лишним шажок
-            if route_fn is not None:
+            # И2 (решение Максима №5): роутер не зовётся поверх УЖЕ ПРЯМОЙ
+            # трубы — сдвиг только что её выпрямил, улучшать нечего, а
+            # маршрут, построенный заново, стоит лишней libavoid-сессии и
+            # умеет отменить готовый ход: гейт видит новые косые и
+            # откатывает всё лекарство. Граница именно `is_straight`, а не
+            # `is_ortho` — см. докстринг предиката.
+            if route_fn is not None and not is_straight(cur):   # И2
                 route_fn(cur)
             if accepts(before, score(graph)):
                 stats["скольжение"] += 1
@@ -708,7 +744,7 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
             if cur is not None:
                 shift_run(cur, role, axis, sign * d, sidx)
                 drop_collinear(cur)      # схлопнуть ставший лишним шажок
-                if route_fn is not None:
+                if route_fn is not None and not is_straight(cur):   # И2
                     route_fn(cur)
             if reseat_fn is not None:
                 reseat_fn(nid)
@@ -734,7 +770,7 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
                 if cur is not None:
                     shift_run(cur, role, axis, sign * d, sidx)
                     drop_collinear(cur)  # схлопнуть ставший лишним шажок
-                    if route_fn is not None:
+                    if route_fn is not None and not is_straight(cur):   # И2
                         route_fn(cur)
                 if reseat_fn is not None:
                     reseat_fn(nid)
@@ -743,5 +779,5 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
                     return True
                 restore()
 
-    stats["отклонено"] += 1
+    _refuse(stats, "лестница исчерпана")
     return False

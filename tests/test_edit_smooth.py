@@ -386,3 +386,228 @@ def test_declining_router_changes_nothing(canvas):
 
     assert st_router == st_none, "роутер-отказ изменил выбор лекарств"
     assert g_router == g_none, "роутер-отказ изменил холст"
+
+
+# ── И2: роутер не зовётся поверх уже прямой трубы (блок 4.2) ───────────
+#
+# Решение Максима №5 (`pains-manual-edit-fxml`, блок 4) — вторая
+# «бесплатная правка» решения №16. Вызовов `route_fn` в лестнице ЧЕТЫРЕ:
+# колено и по одному после каждого сдвига (скольжение / коннектор / узел).
+# После сдвига `drop_collinear` уже выпрямил трубу, и маршрут, построенный
+# поверх прямой, в лучшем случае стоит лишней libavoid-сессии, а в худшем
+# отменяет ход, который гейт принял бы.
+
+
+class _SpyRouter:
+    """Роутер-наблюдатель: считает вызовы и отдельно — вызовы на ПРЯМОЙ.
+
+    Возвращает False («колено не построилось») и ничего не меняет —
+    штатный ответ лестницы редактора для большинства рёбер.
+    """
+
+    def __init__(self):
+        self.calls = 0
+        self.over_straight = 0
+
+    def __call__(self, edge):
+        self.calls += 1
+        if es.is_straight(edge):
+            self.over_straight += 1
+        return False
+
+
+class _JoggingRouter:
+    """Роутер, который на ПРЯМОЙ трубе строит лишнее колено вбок.
+
+    Модель боевой лестницы в худшем: она строит маршрут ЗАНОВО (libavoid) и
+    не обязана повторить прямую. Поверх выпрямленного хода это отменяет сам
+    ход — гейт видит две новые косые и откатывает всё лекарство.
+    """
+
+    def __call__(self, edge):
+        pts = es.edge_pts(edge)
+        if not pts or len(pts) != 2:
+            return False
+        (x0, y0), (x1, y1) = pts
+        edge["waypoints"] = [[y0 + 40.0, (x0 + x1) / 2.0]]
+        return True
+
+
+def _canvas_step_slides():
+    """Ступенька 12px, которую закрывает СКОЛЬЖЕНИЕ конца по грани рамки
+    (лекарство 2): оборудование и коннектор не двигаются."""
+    a = _box("a", 100.0, 100.0)
+    c = _conn("c", 400.0, 112.0)
+    e = _edge("e1", "a", "c", (120.0, 100.0), (400.0, 112.0),
+              [(260.0, 100.0), (260.0, 112.0)])
+    return _g([a, c], [e])
+
+
+def _canvas_step_between_boxes():
+    """Та же ступенька 10px, но оба конца на РАМКАХ и посажены ВНУТРЬ:
+    скользить некуда (конец не на грани), коннектора нет — лестница
+    доходит до последнего лекарства, СДВИГА УЗЛА."""
+    a = _box("a", 100.0, 140.0, w=30.0, h=30.0)
+    b = _box("b", 620.0, 150.0)
+    e = _edge("e1", "a", "b", (115.0, 140.0), (620.0, 150.0),
+              [(200.0, 140.0), (200.0, 150.0)])
+    return _g([a, b], [e])
+
+
+# Площадки вызова `route_fn` сняты грепом (`route_fn` в edit_smooth.py — 4
+# штуки: колено :668, скольжение :709, коннектор :730, узел :756), и на
+# каждую заведена своя фикстура: холст назван лекарством, которым лестница
+# его закрывает. Проверено зондом — снятие гейта на любой из четырёх
+# площадок краснит хотя бы один случай ниже (таблица в MEASUREMENTS §MEFX4A).
+_STRAIGHT_PIPE_CASES = [
+    ("коннектор", _canvas_single_step),      # площадки 1 (колено) и 3
+    ("скольжение", _canvas_step_slides),     # площадка 2
+    ("узел", _canvas_step_between_boxes),    # площадка 4
+]
+
+
+@pytest.mark.parametrize("remedy, canvas", _STRAIGHT_PIPE_CASES)
+def test_router_is_not_called_over_a_straight_pipe(remedy, canvas):
+    """И2: лекарство берётся то же, что без роутера, и ни один из четырёх
+    вызовов не приходится на уже прямую трубу."""
+    g = canvas()
+    spy = _SpyRouter()
+
+    st = es.smooth(g, route_fn=spy, reseat_fn=None)
+
+    assert st[remedy] == 1, f"лекарство изменилось: {st}"
+    assert spy.over_straight == 0, \
+        f"роутер позвали поверх прямой трубы {spy.over_straight} раз(а)"
+
+
+def test_router_is_still_called_on_a_diagonal():
+    """Обратная полярность: колено — лекарство №1, и запрет не имеет права
+    его отменить. Без этого теста «роутер не зовут» было бы зелёным и у
+    правки, выключившей роутинг вовсе."""
+    a = _box("a", 100.0, 100.0)
+    b = _box("b", 400.0, 200.0)
+    e = _edge("e1", "a", "b", (120.0, 100.0), (380.0, 200.0))
+    g = _g([a, b], [e])
+    assert not es.is_ortho(e), "фикстура обязана быть косой"
+    spy = _SpyRouter()
+
+    es.smooth(g, route_fn=spy, reseat_fn=None)
+
+    assert spy.calls >= 1, "роутер не позвали на косой трубе — колено умерло"
+    assert spy.over_straight == 0
+
+
+@pytest.mark.parametrize("remedy, canvas", _STRAIGHT_PIPE_CASES)
+def test_a_straightened_pipe_survives_a_router_that_rebuilds_it(remedy,
+                                                                canvas):
+    """РАЗНИЦА, ради которой И2 и делается: ход, выпрямивший трубу, больше
+    не отменяется маршрутом, построенным поверх него.
+
+    До правки роутер звался безусловно, лишнее колено рождало две косые,
+    гейт откатывал ход целиком — и ступенька доживала до оператора."""
+    g = canvas()
+    e = g["links"][0]
+
+    st = es.smooth(g, route_fn=_JoggingRouter(), reseat_fn=None)
+
+    assert st[remedy] == 1, f"выпрямление отменено роутером: {st}"
+    assert es.count_steps(g) == 0, "ступенька пережила сглаживание"
+    assert e["waypoints"] == [], f"труба не стала прямой: {e['waypoints']}"
+
+
+# ── К-4: причина отказа названа (блок 4.3) ─────────────────────────────
+#
+# Инкременты «отклонено» стоят в трёх РАЗНЫХ ветках лестницы, а наружу
+# уходили суммой — оператор видел только «осталось N». Вёдра отдаются
+# раздельно; сумма остаётся прежней, её читают стенд
+# (`tools/smooth_bench.py:418`) и отчёт редактора.
+
+
+def _refusals(st):
+    return {k: st[k] for k in es.REFUSAL_KINDS}
+
+
+def _edge_without_candidate():
+    """Косая ВНУТРИ маршрута: одиночной ступеньки нет, прямой диагонали
+    тоже — сдвигать нечего."""
+    a = _box("a", 100.0, 100.0)
+    b = _box("b", 300.0, 150.0)
+    e = _edge("e1", "a", "b", (100.0, 100.0), (300.0, 150.0),
+              [(200.0, 150.0)])
+    return [a, b], e
+
+
+def _edge_over_budget():
+    """Прямая диагональ с расхождением 100px — «супер движение»."""
+    a = _box("a2", 700.0, 100.0)
+    b = _box("b2", 1000.0, 200.0)
+    e = _edge("e2", "a2", "b2", (720.0, 100.0), (980.0, 200.0))
+    return [a, b], e
+
+
+def _edge_exhausted_ladder():
+    """Кандидат В бюджете, но лекарства нечем взять: якорь оператора на
+    ОБОИХ концах — конец не скользит, узлы не двигаются."""
+    a = _box("a3", 1300.0, 500.0)
+    b = _box("b3", 1500.0, 508.0)
+    e = _edge("e3", "a3", "b3", (1320.0, 500.0), (1480.0, 508.0))
+    ports.set_edge_pin(a, e, "source", 1320.0, 500.0)
+    ports.set_edge_pin(b, e, "target", 1480.0, 508.0)
+    return [a, b], e
+
+
+def test_refusal_no_candidate_is_its_own_bucket():
+    nodes, e = _edge_without_candidate()
+    assert es.shift_target(e) is None, "фикстура обязана быть без кандидата"
+
+    st = es.smooth(_g(nodes, [e]), route_fn=None, reseat_fn=None)
+
+    assert _refusals(st) == {"нет кандидата": 1, "сверх бюджета": 0,
+                             "лестница исчерпана": 0}, st
+    assert st["отклонено"] == 1
+
+
+def test_refusal_over_budget_is_its_own_bucket():
+    nodes, e = _edge_over_budget()
+    # Порог заперт с ДВУХ сторон (`PROTOCOL §3`): вход абсолютный, и сам
+    # факт «фикстура лежит за порогом» сказан вслух — подъём BUDGET
+    # покраснеет, а не ослепит сторож молча.
+    assert es.shift_target(e) == ("y", 100.0)
+    assert es.BUDGET < 100.0, "фикстура обязана лежать ЗА бюджетом"
+
+    st = es.smooth(_g(nodes, [e]), route_fn=None, reseat_fn=None)
+
+    assert _refusals(st) == {"нет кандидата": 0, "сверх бюджета": 1,
+                             "лестница исчерпана": 0}, st
+    assert st["отклонено"] == 1
+
+
+def test_refusal_exhausted_ladder_is_its_own_bucket():
+    """Третье ведро план не называл вовсе (нашёл редтим): все лекарства
+    срезал гейт `accepts`."""
+    nodes, e = _edge_exhausted_ladder()
+    assert es.shift_target(e) == ("y", 8.0)
+    assert 8.0 <= es.BUDGET, "фикстура обязана лежать В бюджете"
+
+    st = es.smooth(_g(nodes, [e]), route_fn=None, reseat_fn=None)
+
+    assert _refusals(st) == {"нет кандидата": 0, "сверх бюджета": 0,
+                             "лестница исчерпана": 1}, st
+    assert st["отклонено"] == 1
+
+
+def test_refusal_buckets_sum_to_the_total_on_a_mixed_canvas():
+    """Агрегат проверяется на СМЕШАННОМ холсте (`PROTOCOL §3`): на
+    однородном сумма сошлась бы и с одним ведром на всех."""
+    nodes, edges = [], []
+    for make in (_edge_without_candidate, _edge_over_budget,
+                 _edge_exhausted_ladder):
+        ns, e = make()
+        nodes += ns
+        edges.append(e)
+
+    st = es.smooth(_g(nodes, edges), route_fn=None, reseat_fn=None)
+
+    assert _refusals(st) == {"нет кандидата": 1, "сверх бюджета": 1,
+                             "лестница исчерпана": 1}, st
+    assert st["отклонено"] == sum(_refusals(st).values()) == 3
