@@ -145,7 +145,8 @@ class SimpleGraphTab(BaseGraphTab):
             self._editor.set_pending_node_class(selected)
             self._set_mode("add_node_from_list")
             self.status_label.setText(
-                f"Ctrl+ЛКМ с протяжкой — обведите узел: {selected['name']}"
+                "Ctrl+ЛКМ с протяжкой — обведите узел: "
+                f"{selected.get('display_name') or selected['name']}"
             )
         else:
             # Пользователь отменил — вернуться в idle

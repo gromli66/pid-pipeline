@@ -16,6 +16,7 @@ from app.schemas.project import (
     ProjectConfigInfo,
 )
 from app.services.project_loader import get_project_loader, ProjectLoader
+from app.services.class_display import display_name
 
 router = APIRouter()
 
@@ -159,15 +160,24 @@ async def get_project_classes(
     project_code: str,
     loader: ProjectLoader = Depends(get_project_loader),
 ):
-    """Получить список классов проекта."""
+    """Получить список классов проекта.
+
+    `name` — внутреннее английское имя, его клиент кладёт в узел графа.
+    `display_name` — что показать человеку (`display_labels` из YAML); при
+    отсутствии перевода равно `name`, так что старые клиенты, читающие только
+    `name`, продолжают работать без изменений.
+    """
     config = loader.load(project_code)
     if not config:
         raise HTTPException(status_code=404, detail=f"Project config not found: {project_code}")
-    
+
     return {
         "project_code": project_code,
         "num_classes": config.num_classes,
-        "classes": [{"id": c.id, "name": c.name} for c in config.classes],
+        "classes": [
+            {"id": c.id, "name": c.name, "display_name": display_name(config, c.name)}
+            for c in config.classes
+        ],
     }
 
 

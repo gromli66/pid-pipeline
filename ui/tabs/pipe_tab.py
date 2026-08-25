@@ -425,7 +425,8 @@ class PipeTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
             self._editor.set_pending_node_class(selected)
             self._set_tool("add_node")
             self.status_label.setText(
-                f"Ctrl+LMB drag для добавления: {selected['name']}"
+                "Ctrl+LMB drag для добавления: "
+                f"{selected.get('display_name') or selected['name']}"
             )
         else:
             self.btn_add_node.setChecked(False)
