@@ -24,6 +24,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtCore import Qt, QRectF
 
+from modules.graph_to_fxml import TEXT_STYLES
 from ui.editors.graph_data import GraphDataModel
 from ui.editors.undo_manager import UndoManager
 from ui.editors.mode_handlers.base_handler import ModeHandler
@@ -683,6 +684,15 @@ class BaseGraphEditor(QGraphicsView):
         """
         return None
 
+    def _edge_label_visible(self) -> bool:
+        """Виртуальный. Видна ли подпись диаметра.
+
+        Base: состояний отображения нет — подпись видна всегда, как и была.
+        Advanced (`OcrLayerMixin`): только в состоянии 'ocr' — там же, где
+        живёт единственный жест её правки, и там же, где виден ОКР-слой.
+        """
+        return True
+
     def create_edge_item(self, edge_key: tuple, edge_data: dict,
                          color: QColor = None) -> QGraphicsPathItem:
         """Создать визуальный элемент ребра + подпись диаметра. Public — для Commands."""
@@ -710,7 +720,19 @@ class BaseGraphEditor(QGraphicsView):
         return item
 
     def _create_edge_label(self, edge_key: tuple, edge_data: dict, text: str):
-        """Создать подпись диаметра (только число) на середине ребра."""
+        """Создать подпись диаметра (только число) на середине ребра.
+
+        Кегль — из общей таблицы `TEXT_STYLES` (одно число на все подписи
+        графовых вкладок и на выгрузку, решение Максима 2026-08-25 №3);
+        семейство шрифта остаётся экранным — Tahoma в клиент не бандлим
+        (решение №7), общий у экрана и файла только кегль. Пиксельный размер,
+        а не пунктовый: кегль в FXML — это em в координатах холста, ровно
+        тех, в которых живёт сцена, и `pointSize` дал бы на 96 dpi 24 px
+        вместо 18.
+
+        Видимость — не безусловная: подпись живёт в состоянии 'ocr'
+        (см. `_edge_label_visible`), в FXML её нет вовсе.
+        """
         sp = edge_data.get('source_point')
         tp = edge_data.get('target_point')
         if not sp or not tp:
@@ -730,11 +752,13 @@ class BaseGraphEditor(QGraphicsView):
             mid_x = (sp[1] + tp[1]) / 2
 
         label = QGraphicsSimpleTextItem(display)
-        font = QFont("sans-serif", 6)
+        font = QFont("sans-serif")
+        font.setPixelSize(int(TEXT_STYLES['diameter'].size))
         font.setBold(True)
         label.setFont(font)
         label.setBrush(QBrush(QColor(255, 255, 255, 200)))
         label.setZValue(5)
+        label.setVisible(self._edge_label_visible())
 
         # Center ON the edge (not above)
         br = label.boundingRect()

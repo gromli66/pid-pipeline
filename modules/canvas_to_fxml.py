@@ -74,6 +74,7 @@ from modules.graph_to_fxml import (
     PANE_BACKGROUND,
     REVERSE_VERTICAL_CLASSES,
     SKIP_CLASS_NAMES,
+    TEXT_STYLES,
     SkinGeometry,
     _DIRECTION_TO_AXIS,
     _infer_napravlenie_direction,
@@ -93,9 +94,11 @@ from modules.graph_to_fxml import (
 logger = logging.getLogger(__name__)
 
 # Кегль KKS-подписи — константа (решение «17−»: формула 0.35*min(w,h) выкинута,
-# на фикс-размерах холста она давала разнобой 7..16). Значение согласуется по
-# тестовому листу; правится одним числом.
-KKS_FONT_SIZE = 10.0
+# на фикс-размерах холста она давала разнобой 7..16). С блока 3 линии «Ручная
+# правка + FXML» число не своё, а из общей таблицы стилей: одно на все виды
+# подписи и на оба пути выгрузки (решение Максима 2026-08-25 №3). Прежнее
+# локальное 10.0 расходилось и с `<Text>` того же листа, и с растровым путём.
+KKS_FONT_SIZE = TEXT_STYLES['kks'].size
 
 # Размер авто-датчика расхода у шайбы = родной размер датчика на холсте
 # (FIXED_SIZES['datchik']). Без деления на 3: на холсте все датчики 30x30,

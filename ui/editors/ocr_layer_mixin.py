@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QGraphicsRectItem, QGraphicsSimpleTextItem, QGraphicsLineItem,
 )
 
+from modules.graph_to_fxml import TEXT_STYLES
 from ui.editors.mode_handlers.base_handler import ModeHandler
 
 
@@ -37,7 +38,15 @@ _COLOR_TEXT_BG = QColor(0, 0, 0, 140)         # подложка под текс
 _NODE_CENTROID = QColor(52, 152, 219, 230)    # синий центроид (COLOR_CENTROID)
 _NODE_EQUIP_GREY = QColor(235, 235, 235, 245) # серый bbox оборудования (COLOR_EQUIP_GREY)
 _NODE_CONNECTOR = QColor(150, 150, 150, 200)  # серый коннектор (COLOR_CONNECTOR)
-_LABEL_PT = 9
+# Кегль подписи текст-блока — из общей таблицы стилей: то же число, которое
+# уйдёт в `<Text>` выгрузки (решение Максима 2026-08-25 №3). Пиксельный размер,
+# а не пунктовый, и ⛔ БЕЗ `_ocr_vis_scale()`: кегль FXML — это em в
+# координатах ХОЛСТА, ровно тех, в которых живёт сцена. Домножение на
+# вписывание растра снова развело бы экран с файлом — а именно оно и стояло
+# здесь: при `_bg_scale` ≈ 0.22 боевого листа подпись на экране шла ~2 px
+# против 40 в файле. Семейство остаётся экранным: Tahoma в клиент не бандлим
+# (решение №7), общий у экрана и выгрузки только кегль.
+_LABEL_PX = int(TEXT_STYLES['text_block'].size)
 
 _MIN_BLOCK_SIZE = 5.0
 _BLOCK_Z = 50.0
@@ -186,7 +195,7 @@ class OcrLayerMixin:
         bg = None
         if text:
             font = QFont("DejaVu Sans")
-            font.setPointSizeF(max(0.5, _LABEL_PT * self._ocr_vis_scale()))
+            font.setPixelSize(_LABEL_PX)
             fm = QFontMetricsF(font)
             th = fm.height()
             tw = fm.horizontalAdvance(text)
@@ -497,6 +506,16 @@ class OcrLayerMixin:
                 if it is not None:
                     it.setVisible(visible)
 
+    def _edge_label_visible(self) -> bool:
+        """Подпись диаметра живёт по правилу ОКР-слоя, а не своему.
+
+        В FXML подписи диаметра нет вовсе, а правит её единственный жест —
+        Ctrl+2ЛКМ по ребру в «ОКР привязке» (`mouseDoubleClickEvent`, ветка
+        `regime == "ocr"`). Вне этого состояния она была картинкой без
+        смысла и без паритета — решение Максима 2026-08-25 по приёмке mefx-2.
+        """
+        return getattr(self, "display_regime", "base") == "ocr"
+
     # -----------------------------------------------------------------
     # Hit-test
     # -----------------------------------------------------------------
@@ -636,7 +655,7 @@ class OcrLayerMixin:
             return []
         x1, y1, x2, y2 = [float(v) for v in bbox]
         font = QFont("DejaVu Sans")
-        font.setPointSizeF(max(0.5, _LABEL_PT * self._ocr_vis_scale()))
+        font.setPixelSize(_LABEL_PX)
         fm = QFontMetricsF(font)
         th = fm.height()
         tw = fm.horizontalAdvance(text)

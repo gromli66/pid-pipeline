@@ -35,7 +35,7 @@ import math
 import argparse
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Optional
+from typing import NamedTuple, Optional
 from xml.sax.saxutils import escape
 
 # ============================================================================
@@ -802,7 +802,7 @@ def generate_flow_detectors(nodes, edges, graph_scale=1.0):
             f'unit="{FLOW_DETECTOR_UNIT}"',
             f'kks="{DETECTOR_DEFAULT_KKS}"',
             'kksVisible="true"',
-            f'kksFontSize="{max(3.0, min(det_w, det_h) * 0.35):.1f}"',
+            f'kksFontSize="{TEXT_STYLES["kks"].size:.1f}"',
             'kksTextOffset="1.0"',
             'valueVisible="false"',
         ]
@@ -831,11 +831,34 @@ _TEXT_VERTICAL_RATIO = 1.3
 # Кегль шрифта ≈ короткой стороне блока (перпендикуляр к направлению чтения).
 _TEXT_FONT_RATIO = 0.9
 _TEXT_COLOR = "#000000"
-# Единый шрифт подписей: System Regular, фиксированный кегль 40, текст по центру бокса.
-_TEXT_FONT_NAME = "System Regular"
-_TEXT_FONT_SIZE = 40.0
-# Оценка средней ширины символа System относительно кегля (для центрирования строки).
-_TEXT_CHAR_W_FACTOR = 0.55
+
+
+class TextStyle(NamedTuple):
+    """Стиль подписи: семейство шрифта, кегль, жирность."""
+    family: str
+    size: float
+    bold: bool
+
+
+#: Стили подписей — ОДНА таблица на выгрузку и на экран (решение Максима
+#: 2026-08-25 №3: кегль фиксированный, 18 для всех видов подписи).
+#: ⛔ Кегль НЕ доля от размера бокса: доли `0.35·min(w,h)` и `0.4·min(w,h)`
+#: давали на одном листе 5.1 и 7.2 (замер §MEFX3) — отсюда жалоба «на одном
+#: листе подписи разного размера». Прежний кегль `<Text>` был 40.0, и 125
+#: подписей корпуса из 158 не влезали в свою рамку; при 18 их 51.
+#: ⚠ `family` — СЕМЕЙСТВО, а НЕ начертание: полное имя начертания в атрибуте
+#: `name` («Tahoma Bold») JavaFX молча подменяет на System (баг JDK-8089450),
+#: поэтому жирность уходит отдельным inline-стилем.
+#: Границы охвата (редтим 2026-08-25): у скиновой KKS-подписи семейство и
+#: начертание атрибутами не задаются вовсе — в файл уходит только кегль;
+#: подпись диаметра в FXML не печатается совсем, её кегль читает редактор.
+#: Редактор берёт отсюда ТОЛЬКО кегль — Tahoma в клиент не бандлим (решение №7).
+TEXT_STYLES = {
+    'text_block': TextStyle('Tahoma', 18.0, True),   # OCR-блок → <Text>
+    'kks': TextStyle('Tahoma', 18.0, True),          # оборудование → kksFontSize
+    'diameter': TextStyle('Tahoma', 18.0, True),     # диаметр — только экран
+}
+_TEXT_BOLD_STYLE = "-fx-font-weight: bold;"
 
 
 def build_node_kks_map(graph_data: dict) -> dict:
@@ -865,7 +888,15 @@ def generate_fxml_text(block: dict):
       • горизонтальный блок — текст как есть (слева направо);
       • вертикальный (height > width * _TEXT_VERTICAL_RATIO) — текст повёрнут на
         90° влево (CCW), читается снизу-вверх, внутри того же bbox.
-    Кегль ≈ короткой стороне блока, цвет чёрный.
+    Кегль и шрифт — из `TEXT_STYLES['text_block']`, цвет чёрный.
+
+    ⭐ Выравнивание отдаёт ФОРМАТ, а не расчёт (решение Максима 2026-08-25,
+    вариант Б): `layoutX` — край рамки, `wrappingWidth` — её ширина, дальше
+    работает `textAlignment="CENTER"`. Раньше координата считалась из ОЦЕНКИ
+    длины строки (`len(text) * size * 0.55`), калиброванной под System: у
+    другого семейства символ шире, и подпись уезжала по X тем сильнее, чем
+    длиннее строка. ⚠ `textAlignment` стоял в выгрузке и раньше, но для
+    однострочного `<Text>` без `wrappingWidth` он мёртв — потому и жила оценка.
     """
     bbox = block.get('bbox')
     if not bbox or len(bbox) != 4:
@@ -880,35 +911,40 @@ def generate_fxml_text(block: dict):
     cy = (y1 + y2) / 2.0
 
     vertical = h > w * _TEXT_VERTICAL_RATIO
-    # Единый шрифт System Regular, фиксированный кегль 40 (не зависит от размера бокса).
-    font_size = _TEXT_FONT_SIZE
+    style = TEXT_STYLES['text_block']
+    font_size = style.size
     esc = escape(text, {'"': '&quot;', "'": '&apos;'})
-    # Приблизительная длина строки при данном кегле — для центрирования по центру бокса.
-    est_len = len(text) * font_size * _TEXT_CHAR_W_FACTOR
 
     if vertical:
         # Поворот 90° влево (angle=-90) вокруг локальной точки (0,0):
         # локальная (px,py) → (py,-px). Повёрнутая строка занимает по x толщину
-        # [layout_x .. layout_x+F], по y длину [layout_y-L .. layout_y].
-        # Центрируем толщину по cx, длину — по cy.
+        # [layout_x .. layout_x+F], по y длину [layout_y-W .. layout_y], где W —
+        # `wrappingWidth`. Берём W = высоте рамки и сажаем нижний конец на её
+        # нижнюю грань: строка ложится ровно вдоль рамки и центрируется в ней
+        # средствами формата. Толщина строки центрируется кеглем, не оценкой.
         layout_x = cx - font_size / 2.0
-        layout_y = cy + est_len / 2.0
-        lines = [
-            f'        <Text layoutX="{max(0.0, layout_x):.1f}" layoutY="{max(0.0, layout_y):.1f}" text="{esc}" fill="{_TEXT_COLOR}" textAlignment="CENTER" textOrigin="TOP">',
-            f'            <font><Font name="{_TEXT_FONT_NAME}" size="{font_size:.1f}"/></font>',
-            '            <transforms><Rotate angle="-90.0" pivotX="0.0" pivotY="0.0"/></transforms>',
-            '        </Text>',
-        ]
-        return "\n".join(lines)
+        layout_y = y2
+        wrapping = h
+    else:
+        # Горизонтальный: строка занимает всю ширину рамки от её левого края,
+        # центрируется внутри неё; по Y — центр рамки минус половина кегля.
+        layout_x = x1
+        layout_y = cy - font_size / 2.0
+        wrapping = w
 
-    # Горизонтальный: строка центрируется по центру бокса (по X и по Y).
-    layout_x = cx - est_len / 2.0
-    layout_y = cy - font_size / 2.0
+    head = (f'        <Text layoutX="{max(0.0, layout_x):.1f}"'
+            f' layoutY="{max(0.0, layout_y):.1f}"'
+            f' wrappingWidth="{wrapping:.1f}" text="{esc}" fill="{_TEXT_COLOR}"'
+            f' textAlignment="CENTER" textOrigin="TOP"')
+    if style.bold:
+        head += f' style="{_TEXT_BOLD_STYLE}"'
     lines = [
-        f'        <Text layoutX="{max(0.0, layout_x):.1f}" layoutY="{max(0.0, layout_y):.1f}" text="{esc}" fill="{_TEXT_COLOR}" textAlignment="CENTER" textOrigin="TOP">',
-        f'            <font><Font name="{_TEXT_FONT_NAME}" size="{font_size:.1f}"/></font>',
-        '        </Text>',
+        head + '>',
+        f'            <font><Font name="{style.family}" size="{font_size:.1f}"/></font>',
     ]
+    if vertical:
+        lines.append('            <transforms><Rotate angle="-90.0" pivotX="0.0" pivotY="0.0"/></transforms>')
+    lines.append('        </Text>')
     return "\n".join(lines)
 
 
@@ -1064,18 +1100,11 @@ def generate_fxml_control(node, geometry: SkinGeometry, node_id: str,
     if kks:
         attrs.append(f'kks="{escape(str(kks), {chr(34): "&quot;", chr(39): "&apos;"})}"')
         attrs.append('kksVisible="true"')
-        # Размер шрифта KKS: пропорционален размеру элемента,
-        # но с scale-aware минимумом чтобы текст оставался читаемым
-        # Используем итоговые (уменьшенные для датчика) размеры,
-        # чтобы шрифт KKS масштабировался вместе с элементом
-        vis_w = width
-        vis_h = height
-        kks_font = min(vis_w, vis_h) * 0.35
-        # При сильном масштабировании (A4) элементы маленькие →
-        # min clamp обеспечивает читаемость (не менее 40% высоты элемента)
-        min_font = max(3.0, min(vis_w, vis_h) * 0.4) if graph_scale < 0.2 else 3.0
-        kks_font = max(min_font, kks_font)
-        attrs.append(f'kksFontSize="{kks_font:.1f}"')
+        # Кегль KKS — из общей таблицы, а НЕ доля от размера элемента: доли
+        # 0.35 и 0.4 давали на одном листе 5.1 и 7.2 (замер §MEFX3), то есть
+        # ровно ту жалобу «на одном листе подписи разного размера», ради
+        # которой решение №3 и принято.
+        attrs.append(f'kksFontSize="{TEXT_STYLES["kks"].size:.1f}"')
         # KKS ближе к узлу
         attrs.append('kksTextOffset="1.0"')
 
