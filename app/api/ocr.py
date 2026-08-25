@@ -488,10 +488,16 @@ async def apply_ocr_binding(
             updated += 1
 
     # Сохранить обновлённый граф (atomic write)
+    #
+    # ⛔ `replace`, а не `rename`: у `Path.rename` на Windows нет перезаписи —
+    # `os.rename` на существующий файл поднимает `FileExistsError`, а граф на
+    # этом пути существует ВСЕГДА (без него выше 404). То есть на Windows
+    # эндпоинт не работал вовсе. `Path.replace` == `os.replace`: атомарен на
+    # POSIX и перезаписывает на Windows.
     tmp_path = graph_path.with_suffix(".tmp")
     graph_json = json.dumps(graph, ensure_ascii=False, indent=2)
     await asyncio.to_thread(tmp_path.write_text, graph_json, "utf-8")
-    await asyncio.to_thread(tmp_path.rename, graph_path)
+    await asyncio.to_thread(tmp_path.replace, graph_path)
 
     # Перевести статус → OCR_BOUND
     diagram_result = await db.execute(select(Diagram).where(Diagram.uid == uid))
