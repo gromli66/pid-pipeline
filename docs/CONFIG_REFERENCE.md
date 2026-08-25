@@ -15,6 +15,7 @@
    - 3.1 project / cvat
    - 3.2 classes
    - 3.2.1 display_labels
+   - 3.2.2 class_colors
    - 3.3 detection
    - 3.4 segmentation
    - 3.5 skeleton
@@ -199,6 +200,32 @@ display_labels:
 > старая останется, а уже размеченные задачи начнут возвращать имя, которого в конфиге больше
 > нет, — возврат аннотаций встанет с кодом `cvat_label_unknown`. Список закрыт тестом
 > `tests/test_class_display.py::test_display_labels_are_frozen`.
+
+### 3.2.2 `class_colors`
+
+Цвет метки класса в CVAT. Ключ — английское `name` из §3.2, значение — строка `#rrggbb`.
+
+```yaml
+class_colors:
+  armatura_ruchn: "#ff6b6b"
+  klapan_obratn: "#33ddff"
+  # ... всего 42 записи
+```
+
+| Параметр | Тип | Default | Описание |
+|----------|-----|---------|----------|
+| `class_colors` | dict[str, str] | `{}` | `name` класса → цвет метки CVAT. Пустой словарь (или отсутствие блока) = цвет выбирает сам CVAT |
+
+Парсится в `ProjectConfig.class_colors`, проверяется `class_display.validate_colors()`, уходит в
+CVAT через `create_labels_from_config()` (`app/services/cvat_client.py`). `ProjectLoader._parse_yaml()`
+**падает**, если непустой блок покрывает не все классы, задаёт цвет несуществующему классу или
+значение не в формате `#rrggbb`.
+
+> **Без этого блока раскраска классов не воспроизводится.** Цвет метки CVAT назначает сам, если его
+> не передали при создании, — поэтому у нового проекта те же классы выглядят иначе, чем у старого.
+> Цвет действует при **создании** метки: существующие метки ни `create_project()`, ни
+> `ensure_project_labels()` не перекрашивают (для этого нужен `PATCH /api/labels/{id}`). Снять
+> цвета с уже существующего проекта CVAT: `tools/cvat_dump_label_colors.py`.
 
 ### 3.3 `detection`
 

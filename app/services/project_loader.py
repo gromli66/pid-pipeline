@@ -275,6 +275,8 @@ class ProjectConfig:
     save_visualizations: bool = False
     # en_name → отображаемое название класса. Пустой словарь = показывать англ. имена.
     display_labels: Dict[str, str] = field(default_factory=dict)
+    # en_name → цвет метки CVAT '#rrggbb'. Пустой словарь = цвет выбирает CVAT.
+    class_colors: Dict[str, str] = field(default_factory=dict)
 
     @property
     def yolo(self) -> DetectionModelConfig:
@@ -320,6 +322,9 @@ class ProjectLoader:
 
         display_labels = data.get("display_labels") or {}
         class_display.validate([c.name for c in classes], display_labels)
+
+        class_colors = data.get("class_colors") or {}
+        class_display.validate_colors([c.name for c in classes], class_colors)
 
         # ─── Detection config (backward compat: yolo → detection.models.default) ───
         detection_data = data.get("detection", {})
@@ -534,6 +539,7 @@ class ProjectLoader:
             config_path=str(yaml_path),
             save_visualizations=project.get("save_visualizations", False),
             display_labels=display_labels,
+            class_colors=class_colors,
         )
 
     def load(self, project_code: str) -> Optional[ProjectConfig]:

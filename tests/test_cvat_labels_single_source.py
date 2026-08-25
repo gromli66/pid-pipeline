@@ -57,6 +57,13 @@ def test_helper_returns_every_class_once(config):
     }
 
 
+def test_helper_carries_configured_colors(config):
+    """Цвет метки берётся из `class_colors`, иначе CVAT красит её сам."""
+    by_name = {l.name: l.color for l in create_labels_from_config(config)}
+    for cls in config.classes:
+        assert by_name[display_name(config, cls.name)] == config.class_colors.get(cls.name)
+
+
 def test_helper_returns_alphabetical_order(config):
     """Порядок создания меток = алфавит: другого источника сортировки у CVAT нет."""
     names = [l.name for l in create_labels_from_config(config)]
