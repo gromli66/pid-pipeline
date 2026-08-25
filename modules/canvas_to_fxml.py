@@ -315,10 +315,20 @@ def generate_flow_detectors_canvas(nodes, edges) -> tuple:
 
 def generate_canvas_fxml(graph_data: dict,
                          stroke_width: float = LINE_STROKE_WIDTH,
-                         use_diameter: bool = True,
+                         use_diameter: bool = False,
                          bridge_gap_factor: float = BRIDGE_GAP_STROKE_FACTOR,
                          node_order: str = 'sections') -> str:
     """Полный FXML-документ из графа холста. Identity: без масштабов.
+
+    use_diameter: ⛔ ВЫКЛЮЧЕН для холста (решение Максима 2026-08-25 №1).
+    Толщина линии здесь имеет ровно два источника — дефолт `stroke_width`
+    (2.0 == редакторский EDGE_WIDTH) либо кисть оператора `render_width`.
+    Диаметр ни при чём: `calculate_diameter_stroke` превращала Dv300 в 12.0,
+    и труба уезжала в FXML вшестеро толще той, что оператор видел на холсте,
+    — прямое нарушение договора 1:1 (`base_graph_editor.py:102-110`).
+    Ветка жива для легаси-пути `generate_fxml` и ключа CLI `--no-diameter`.
+    Следствие: одинаковая толщина меняет и МОСТЫ — «кого рвать» решает уже
+    не диаметр, а горизонтальность, а разрыв становится однородным.
 
     node_order: 'sections' — линии/контролы/прямоугольники/полигоны/тексты
     секциями (как старый конвертер); 'document' — узловые элементы в порядке
