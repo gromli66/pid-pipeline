@@ -369,6 +369,25 @@ def test_регулятор_разрыва_доходит_до_экрана(brid
     assert ed._bridge_cuts == wide
 
 
+def test_разрывы_переживают_пересборку_сцены(bridged):
+    """Шов с блоком 1: «Светлый лист» рвёт сцену целиком — разрывы обязаны вернуться.
+
+    `set_light_theme` уходит в `setup_scene` (`scene.clear()` + полная
+    пересборка), а не в `_redraw_all`; пересчёт разрывов обязан стоять на
+    ОБОИХ путях. Переключатель сверяется с ПРОТИВОПОЛОЖНЫМ значением:
+    при `light == self._light_theme` он выходит сразу, и тест с дефолтным
+    `True` был бы зелёным на любом коде.
+    """
+    ed, g = bridged
+    ed.set_show_skins(True)
+    before = {e["id"]: _scene_segments(ed, e) for e in g["links"]}
+    assert ed._light_theme is True, "дефолт темы сдвинулся"
+    ed.set_light_theme(False)
+    after = {e["id"]: _scene_segments(ed, e) for e in g["links"]}
+    assert after == before
+    assert sum(1 for v in after.values() if v > 1) == BRIDGE_EDGES
+
+
 def test_разрывы_в_граф_не_пишутся(bridged):
     """⛔ Решение №2: разрывы вычисляемые, файл от предпросмотра не меняется."""
     ed, g = bridged
