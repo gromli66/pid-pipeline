@@ -614,6 +614,14 @@ def answer(monkeypatch):
         return asked.next_reply()
 
     monkeypatch.setattr(QMessageBox, "question", staticmethod(_question))
+    # Вопрос о слепой перезаписи с пункта 5.3 собирается своими кнопками
+    # (русскими), мимо статической двери, — и подменяется ПОСЛЕ фикстуры
+    # `dialogs`: обе висят на одном тесте, побеждает поставленная последней.
+    from ui.tabs.blind_overwrite import BlindOverwriteGuard
+    monkeypatch.setattr(
+        BlindOverwriteGuard, "_ask_yes_cancel",
+        lambda self, title, text:
+            _question(self, title, text) == QMessageBox.StandardButton.Yes)
     return asked
 
 
