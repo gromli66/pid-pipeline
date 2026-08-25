@@ -23,7 +23,7 @@ from app.models.stage import ProcessingStage, StageStatus, StageType
 from app.config import settings
 from app.core import obs
 from app.core.logging import get_logger
-from app.core.errors import StageStateError
+from app.core.errors import CVATLabelMismatchError, StageStateError
 
 logger = get_logger(__name__)
 
@@ -132,6 +132,73 @@ def parse_coco_annotations(coco_json: dict) -> Tuple[List[Dict], Dict[int, str]]
     return annotations, category_map
 
 
+def denormalize_coco_labels(coco_json: dict, project_config) -> None:
+    """Привести категории из выгрузки CVAT к каноническому виду (правка на месте).
+
+    CVAT нумерует `category_id` позицией метки в проекте (`1 + индекс`, см.
+    datumaro coco exporter), а не её id. Как только метки создаются в алфавитном
+    порядке отображаемых названий, `category_id - 1` перестаёт быть `class_id`.
+    Эта прослойка сопоставляет категории ПО ИМЕНИ и восстанавливает канонические
+    id из `classes:` — дальше по конвейеру ничего менять не пришлось.
+
+    Порядок разбора имени:
+      а) уже каноническое английское имя — путь задач из старого CVAT-проекта;
+      б) отображаемое название из `display_labels` — путь новых задач;
+      в) иначе метка не опознана → `CVATLabelMismatchError`.
+
+    Вариант «оставить как есть» для (в) отвергнут сознательно: имя ушло бы в
+    артефакт, `class_id` посчитался бы из позиции, и объекты молча уехали бы в
+    чужой класс (замер: до 135 из 209 на одной схеме), а фильтры по именам
+    `truba`/`annotation`/`napravlenie` в сегментации и скелете перестали бы
+    срабатывать. Лучше остановиться и показать оператору, какую метку чинить.
+    """
+    from app.services import class_display
+
+    canonical = {cls.name: cls.id for cls in project_config.classes}
+    by_display = class_display.to_internal(project_config)
+
+    remap: Dict[int, int] = {}
+    unknown: List[str] = []
+    for category in coco_json.get("categories", []):
+        name = category.get("name", "")
+        if name in canonical:
+            en_name = name
+        else:
+            en_name = by_display.get(class_display.sort_key(name))
+        if en_name is None:
+            unknown.append(name)
+            continue
+        remap[category.get("id")] = canonical[en_name]
+
+    if unknown:
+        affected = sum(
+            1 for ann in coco_json.get("annotations", [])
+            if ann.get("category_id") not in remap
+        )
+        logger.error(
+            "cvat labels mismatch: unknown=%s affected_annotations=%s",
+            unknown, affected,
+            extra={"phase": "cvat_validation", "step": "confirm", "event": "error",
+                   "code": CVATLabelMismatchError.code, "unknown_labels": unknown,
+                   "affected_annotations": affected},
+        )
+        raise CVATLabelMismatchError(
+            f"Метки CVAT не опознаны: {', '.join(repr(n) for n in unknown)}. "
+            f"Затронуто аннотаций: {affected}. Аннотации не сохранены. "
+            f"Верните меткам исходные названия в CVAT (или добавьте класс в "
+            f"конфиг проекта) и повторите «Получить аннотации».",
+            stage="cvat_validation",
+            step="confirm",
+        )
+
+    coco_json["categories"] = [
+        {"id": cls.id, "name": cls.name, "supercategory": ""}
+        for cls in project_config.classes
+    ]
+    for ann in coco_json.get("annotations", []):
+        ann["category_id"] = remap[ann["category_id"]]
+
+
 def annotations_to_yolo_txt(annotations: List[Dict]) -> str:
     """Конвертация аннотаций в YOLO формат."""
     lines = []
@@ -150,6 +217,7 @@ def annotations_to_yolo_txt(annotations: List[Dict]) -> str:
 def _fetch_cvat_annotations_sync(
     task_id: int,
     output_dir: Path,
+    project_config,
 ) -> Tuple[Path, Path, int]:
     """
     Синхронная функция для получения аннотаций из CVAT.
@@ -198,6 +266,11 @@ def _fetch_cvat_annotations_sync(
         # ДО записи на диск, чтобы источник истины был чистым и ниже ничего менять не пришлось.
         from app.services.coco_normalize import normalize_coco_segmentation
         normalize_coco_segmentation(coco_data)
+
+        # Категории CVAT -> канонические имена и id проекта. Строго ДО разбора и
+        # записи: ниже `class_id` считается как `category_id - 1`, а имена классов
+        # уходят в артефакт, по которому потом фильтруют сегментация и скелет.
+        denormalize_coco_labels(coco_data, project_config)
 
         annotations, _ = parse_coco_annotations(coco_data)
         annotation_count = len(annotations)
@@ -304,6 +377,15 @@ async def fetch_cvat_annotations(
             detail="CVAT task not found"
         )
     
+    from app.services.project_loader import get_project_loader
+
+    project_config = get_project_loader().load(diagram.project_code)
+    if not project_config:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Project config not found: {diagram.project_code}",
+        )
+
     # Путь к директории detection
     storage_path = Path(settings.STORAGE_PATH)
     detection_dir = storage_path / str(diagram.uid) / "detection"
@@ -319,6 +401,7 @@ async def fetch_cvat_annotations(
                 _fetch_cvat_annotations_sync,
                 diagram.cvat_task_id,
                 detection_dir,
+                project_config,
             )
         
         # Быстрые DB writes после долгой операции (неявная транзакция)
@@ -366,6 +449,15 @@ async def fetch_cvat_annotations(
             "yolo_path": str(yolo_path.relative_to(storage_path)),
         }
         
+    except CVATLabelMismatchError as exc:
+        # Разошлись метки CVAT и конфиг проекта. Диаграмму в ERROR НЕ уводим:
+        # на диск ничего не записано, чинится в CVAT, после чего та же кнопка
+        # «Получить аннотации» отработает из того же статуса validating_bbox.
+        _fail_cvat_stage(stage, exc, default_step="confirm")
+        await db.commit()
+
+        raise HTTPException(status_code=400, detail=str(exc))
+
     except Exception as exc:
         _fail_cvat_stage(stage, exc, default_step="confirm")
         # Откатываем статус при ошибке
@@ -539,13 +631,13 @@ async def retry_fetch_annotations(
 
 def _create_cvat_task_sync(diagram, project_config, image_path: Path, yolo_path: Path):
     """Синхронное создание CVAT task."""
-    from app.services.cvat_client import get_cvat_client, CVATLabel
+    from app.services.cvat_client import get_cvat_client, create_labels_from_config
     from app.services.cvat_export import create_exporter_from_config, Detection
 
     cvat_client = get_cvat_client()
 
-    # Labels из конфига
-    labels = [CVATLabel(name=cls.name) for cls in project_config.classes]
+    # Labels из конфига — общий источник с воркером (worker/tasks/detection.py)
+    labels = create_labels_from_config(project_config)
 
     # Получаем или создаём проект
     project_id = cvat_client.get_or_create_project(

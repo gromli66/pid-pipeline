@@ -1,8 +1,8 @@
 # API.md — Справочник REST API
 
 **Аудитория:** DEV
-**Версия:** 1.1
-**Обновлено:** 2026-04-09
+**Версия:** 1.2
+**Обновлено:** 2026-08-25
 **Связанные документы:** [ARCHITECTURE.md](ARCHITECTURE.md), [STATUS_MACHINE.md](STATUS_MACHINE.md), [DATA_FORMATS.md](DATA_FORMATS.md)
 
 ---
@@ -64,7 +64,7 @@ curl http://localhost:8000/health
 | GET | `/summary` | Краткий список для UI (код, имя, кол-во диаграмм) |
 | GET | `/{project_code}` | Проект по коду |
 | GET | `/{project_code}/config` | Конфигурация проекта из YAML |
-| GET | `/{project_code}/classes` | Список классов оборудования |
+| GET | `/{project_code}/classes` | Список классов оборудования (внутреннее имя + отображаемое) |
 | GET | `/{project_code}/detection-models` | Доступные модели детекции |
 
 ```bash
@@ -77,6 +77,31 @@ curl http://localhost:8000/api/projects/thermohydraulics/classes
 # Модели детекции
 curl http://localhost:8000/api/projects/thermohydraulics/detection-models
 ```
+
+#### Ответ `GET /{project_code}/classes`
+
+```json
+{
+  "project_code": "thermohydraulics",
+  "num_classes": 42,
+  "classes": [
+    {"id": 1, "name": "armatura_ruchn", "display_name": "Арматура ручная"},
+    {"id": 2, "name": "klapan_obratn", "display_name": "Клапан обратный"}
+  ]
+}
+```
+
+| Поле | Тип | Обязательное | Описание |
+|------|-----|-------------|----------|
+| `project_code` | str | ✅ | Код проекта из запроса |
+| `num_classes` | int | ✅ | Длина `classes` |
+| `classes[].id` | int | ✅ | Канонический 1-based id класса (порядок `classes:` в YAML) |
+| `classes[].name` | str | ✅ | **Внутреннее английское имя.** Именно оно уходит в `class_name` узла графа, в скины и в FXML |
+| `classes[].display_name` | str | ✅ | Что показать человеку (`display_labels`, см. [CONFIG_REFERENCE.md §3.2.1](CONFIG_REFERENCE.md)). Без перевода равно `name` |
+
+Список отдаётся в порядке `classes:`; сортировка по алфавиту — забота клиента
+(`NodeListDialog`, см. [UI_GUIDE.md §9.3](UI_GUIDE.md)). `display_name` **добавлено**, а не
+подменило `name`: клиент любой версии, читающий только `name`, продолжает работать.
 
 ---
 

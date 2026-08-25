@@ -50,6 +50,8 @@ from ui.editors.ocr_layer_mixin import (
     OcrLayerMixin, AddOcrBlockHandler, OcrBindHandler,
 )
 from ui.editors.mode_handlers.base_handler import ModeHandler
+# Тот же ключ, что у меток CVAT и палитры вставки узла — чтобы порядок совпадал.
+from app.services.class_display import sort_key as _class_sort_key
 
 
 # Стрелка потока: в FXML это Polygon-треугольник, а не скин (generate_fxml_triangle),
@@ -287,8 +289,12 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         # Callback в таб для синхронизации кнопок-флагов режима.
         self.regime_callback: Optional[callable] = None
 
+        # en_name → отображаемое название класса; заполняет вкладка из API.
+        # Пусто = показывать внутренние имена, как было до перевода.
+        self.class_display_names: dict[str, str] = {}
+
         # ── Режим «Размер объектов» ──
-        self._resize_class: str | None = None      # выбранный класс
+        self._resize_class: str | None = None      # выбранный класс (ВНУТРЕННЕЕ имя)
         self._resize_sel: set[str] = set()         # node_id экземпляров в наборе
         self._resize_frames: list = []             # QGraphicsItem жёлтых рамок
         # Базлайн для живого превью (геометрия до изменения + снимок модели для undo).
@@ -3962,12 +3968,26 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         return 'box'
 
     def get_present_equipment_classes(self) -> list:
-        """Классы equipment, реально присутствующие на схеме (отсортировано)."""
+        """Классы equipment, реально присутствующие на схеме.
+
+        Возвращает пары `(внутреннее_имя, отображаемое)`, отсортированные по
+        отображаемому. Внутреннее имя — то, что лежит в `class_name` узла, и
+        именно оно ходит наружу; перевод только для показа.
+        """
         names = {
             n.get('class_name') for n in self.nodes.values()
             if n.get('type') == 'equipment' and n.get('class_name')
         }
-        return sorted(names)
+        return sorted(
+            ((n, self.class_display_names.get(n, n)) for n in names),
+            key=lambda pair: _class_sort_key(pair[1]),
+        )
+
+    def display_class_name(self, name: str | None) -> str:
+        """Отображаемое название класса; внутреннее имя, если перевода нет."""
+        if not name:
+            return ""
+        return self.class_display_names.get(name, name)
 
     def _instances_of_class(self, name: str | None) -> list:
         """node_id всех equipment-экземпляров класса name."""
@@ -3981,9 +4001,10 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
     # ── вход/выход в режим ──
 
     def _enter_resize_objects(self):
-        classes = self.get_present_equipment_classes()
-        if self._resize_class not in classes:
-            self._resize_class = classes[0] if classes else None
+        classes = self.get_present_equipment_classes()   # пары (внутреннее, показ)
+        present = [internal for internal, _ in classes]
+        if self._resize_class not in present:
+            self._resize_class = present[0] if present else None
         if callable(self.resize_panel_classes_cb):
             self.resize_panel_classes_cb(classes, self._resize_class)
         if callable(self.resize_panel_show_cb):
@@ -4014,7 +4035,8 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self._resize_sel = set(self._instances_of_class(self._resize_class))
         self._update_resize_panel()
         self.update_status(
-            f"Класс «{self._resize_class}»: в наборе {len(self._resize_sel)}"
+            f"Класс «{self.display_class_name(self._resize_class)}»: "
+            f"в наборе {len(self._resize_sel)}"
         )
 
     def resize_select_one_mode(self):
