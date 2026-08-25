@@ -28,6 +28,33 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 
+def pick_graph_artifact(db, diagram_uid):
+    """Куда сливать текст: правленый оператором граф ВПЕРЁД сырого.
+
+    Отдельной функцией — чтобы решение о ПРЕДПОЧТЕНИИ было проверяемо: внутри
+    задачи его закрывают подмены тяжёлых модулей, и ошибка направления
+    сортировки там не видна ничему (блок 5).
+
+    ⛔ `.desc()` обязателен: `ORDER BY <bool>` идёт ПО ВОЗРАСТАНИЮ, то есть
+    `False` (`graph.json`) первым, — и при обеих строках merge лил текст
+    в СЫРОЙ граф сборки, а не в тот, что правил оператор. Молча: `n_merged`
+    при этом честно ненулевой, а `graph_validated` оставался без текста.
+    """
+    from app.models import Artifact, ArtifactType
+
+    return (
+        db.query(Artifact)
+        .filter(
+            Artifact.diagram_uid == diagram_uid,
+            Artifact.artifact_type.in_((
+                ArtifactType.GRAPH_VALIDATED, ArtifactType.GRAPH_JSON,
+            )),
+        )
+        .order_by((Artifact.artifact_type == ArtifactType.GRAPH_VALIDATED).desc())
+        .first()
+    )
+
+
 @celery_app.task(
     bind=True,
     name="worker.tasks.ocr.task_run_ocr",
@@ -178,17 +205,7 @@ def task_run_ocr(self, diagram_uid: str):
             # честная ошибка этапа: стадия `failed`, `error_stage='ocr'`,
             # артефакт не закоммичен, повтор возможен (файл на диске остаётся).
             from app.services.ocr_graph_merge import merge_ocr_result_into_graph
-            graph_art = (
-                db.query(Artifact)
-                .filter(
-                    Artifact.diagram_uid == diagram_uid,
-                    Artifact.artifact_type.in_((
-                        ArtifactType.GRAPH_VALIDATED, ArtifactType.GRAPH_JSON,
-                    )),
-                )
-                .order_by(Artifact.artifact_type == ArtifactType.GRAPH_VALIDATED)
-                .first()
-            )
+            graph_art = pick_graph_artifact(db, diagram_uid)
             if graph_art:
                 n_merged = merge_ocr_result_into_graph(
                     storage_path / graph_art.file_path, ocr_result_path,
