@@ -28,6 +28,7 @@
 """
 import os
 import uuid
+from datetime import datetime
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -807,15 +808,37 @@ def test_a_refused_restart_does_not_mark_the_tab_as_rerunning(status, bench):
 def test_the_grey_button_survives_both_lighters(status, bench):
     """Дефект B повторного возврата: гашение обязано пережить ОБА зажигающих
     пути — тик OCR-поллера и приход стадий; своего статуса у них нет, порог
-    берётся от `_last_status`. Первая редакция правки гасила только в
-    `_apply_status`, и один тик возвращал кнопку.
+    берётся от `_last_status`.
+
+    ⛔ Возврат ревизии №2 (класс 1-43/1-44): прежняя редакция наблюдала одно
+    зажигание из `_apply_status` — тик выходил первой строкой (признак уже
+    взведён загрузкой), а пустой список стадий не доходил до зажигающей ветки.
+    Фикстура доведена до обеих веток и УТВЕРЖДАЕТ их прохождение, а не
+    предполагает его.
     """
     ws, api = bench(status, stages=[])
     assert not ws._action_buttons["ocr"].isEnabled(), "не погасла на отрисовке"
 
+    # Тик поллера — по-настоящему: признак снят, артефакт «приходит» тиком.
+    ws._ocr_notified = False
     api.has_ocr_result = True
     ws._check_ocr_artifact()
+    assert ws._ocr_notified is True, "тик не дошёл до зажигающей ветки — стенд не тот"
     assert not ws._action_buttons["ocr"].isEnabled(), "тик поллера зажёг обратно"
 
-    ws._on_stages_updated(UID, [])
+    # Стадии — двумя подачами со СВЕЖИМИ строками (без отметки времени фильтр
+    # свежести отсеял бы их до красящих точек): running → completed меняет
+    # набор бегущих в обе стороны, и `_on_stages_updated` оба раза проходит
+    # полный цикл перерисовки кнопок (`_update_buttons` штатным путём) —
+    # ровно тот путь, которым регрессия «стадии красят сами» и вернулась бы.
+    def _fresh(st):
+        stamp = datetime.utcnow().isoformat()
+        return [{"id": 11, "stage_type": "ocr", "status": st, "attempt": 1,
+                 "error_message": None, "started_at": stamp,
+                 "created_at": stamp}]
+
+    ws._on_stages_updated(UID, _fresh("running"))
+    assert not ws._action_buttons["ocr"].isEnabled(), (
+        "бегущая стадия зажгла кнопку")
+    ws._on_stages_updated(UID, _fresh("completed"))
     assert not ws._action_buttons["ocr"].isEnabled(), "стадии зажгли обратно"
