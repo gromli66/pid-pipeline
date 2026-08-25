@@ -314,6 +314,7 @@ def test_wait_cursor_is_dropped_before_the_failure_report(open_tab,
     assert "cursor" in seen, "отказ не дошёл до отчёта — тест проверяет не то"
     assert seen["cursor"] is None, "отчёт открылся под курсором ожидания"
     assert QApplication.overrideCursor() is None
+    assert tab.status_label.text() != "Сглаживание…",         "строка «идёт работа» пережила отказ и осталась висеть"
 
 
 #: Корпусный холст `tools/bench/smooth_corpus/edited/` (в git, 20 файлов),
