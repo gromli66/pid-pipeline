@@ -215,32 +215,27 @@ def test_phase_b_entry_is_free_after_a_foreign_action(bench):
 
 # ── распознавание: свой диалог, не откатный ──────────────────────────────
 
-def test_ocr_asks_about_restart_not_rollback(bench):
-    """`ocr` — не вкладка, а POST: спрашиваем про ПЕРЕЗАПУСК (решение №6).
+def test_ocr_click_never_rolls_back(bench):
+    """`ocr` — не вкладка, а POST: клик по нему конвейер назад НЕ ведёт.
 
-    `_start_ocr` сносит сырой результат распознавания и жжёт минуты CPU,
-    поэтому молчаливый клик здесь неуместен. Но и конвейер назад не идёт.
+    ⚠ Осознанный пересъём (возврат приёмки глазами 2026-08-25): здесь стояли
+    две клетки про диалог «Перезапустить распознавание?». Вопрос переехал из
+    ветки клика в сам `_start_ocr` — это единственная воронка всех путей к
+    `POST /ocr/start`, а ветка клика была одной дверью из двух да ещё под
+    мёртвым условием `key in completed`. Сам вопрос со всеми путями судит
+    `tests/ui/test_ocr_restart_asks.py`; здесь остаётся то, за чем следит
+    ЭТОТ файл, — что клик не откатывает конвейер.
+
+    Обработчик подменён журналом, поэтому до `_start_ocr` дело не доходит и
+    диалога тут нет по построению — это и есть причина пересъёма.
     """
     ws, api, opened = bench()
     _click(ws, "ocr", opened)
 
-    assert len(FakeMsgBox.calls) == 1
-    kind, title, text = FakeMsgBox.calls[0]
-    assert kind == "question"
-    assert "Откат" not in title, f"диалог всё ещё откатный: {title}"
     assert api.rollbacks == [], "перезапуск распознавания откатил конвейер"
-    assert opened == ["ocr"]
-
-
-def test_ocr_restart_refused_does_nothing(bench):
-    """Порог заперт с другой стороны: «Нет» — и распознавание не трогается."""
-    ws, api, opened = bench()
-    FakeMsgBox.answer = QMessageBox.StandardButton.No
-    _click(ws, "ocr", opened)
-
-    assert len(FakeMsgBox.calls) == 1
-    assert opened == [], "отказ оператора не остановил перезапуск"
-    assert api.rollbacks == []
+    assert opened == ["ocr"], "клик не дошёл до обработчика"
+    assert [c[1] for c in FakeMsgBox.calls if c[0] == "question"
+            and c[1] == "Откат"] == [], "диалог всё ещё откатный"
 
 
 def test_restarting_ocr_does_not_touch_contours(bench):
