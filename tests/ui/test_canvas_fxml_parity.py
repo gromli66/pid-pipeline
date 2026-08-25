@@ -397,3 +397,203 @@ def test_разрывы_в_граф_не_пишутся(bridged):
     ed.set_show_skins(True)
     assert json.dumps(ed.model.graph_data, sort_keys=True) == before
     assert all("cuts" not in e and "bridge_cuts" not in e for e in ed.edges_data)
+
+
+# ── доработка mefx-2: разрывы пересчитываются на завершении жеста ─────────
+#
+# Возврат приёмки Максима 2026-08-25: «скины/разрывы видно, но новые после
+# перетаскивания коннектора — не всегда». Пересчёт жил ТОЛЬКО в
+# `_before_draw_all_edges`, то есть в полной перерисовке; жесты, которые
+# обновляют пути рёбер поштучно (`_update_edge_path`), оставляли на сцене
+# разрывы прошлой перерисовки — новое пересечение без разрыва, снятое
+# пересечение с разрывом, висящим в воздухе.
+#
+# ⛔ Разрывы считаются по ВСЕМУ листу, поэтому проверяется НЕ ребро жеста.
+# Оператор тянет конец `edge_1`, а рвётся `edge_2`, к которому он не
+# прикасался: связь «жест → затронутые рёбра» через инцидентность НЕ
+# работает, и набор заперт именно на этом (замер §MEFX2ж).
+
+#: Синтетический лист доработки: труба сверху вниз мимо горизонтальной,
+#: пересечения нет; тяга её конца на угол блока даёт РОВНО один мост.
+CROSS_NONE = {"edge_1": 1, "edge_2": 1}          # кусков у каждого ребра
+CROSS_ONE = {"edge_1": 1, "edge_2": 2}           # один разрыв на `edge_2`
+#: Куда тянуть конец `edge_1` на блоке: угол (500, 500) — труба уходит
+#: правее и пересекает `edge_2`; (400, 500) — центр нижней грани, как было.
+EP_CROSS = (500.0, 500.0)
+EP_BACK = (400.0, 500.0)
+
+
+def _crossing_graph() -> dict:
+    """Блок, длинная труба от него вниз и короткая горизонтальная сбоку.
+
+    Числа подобраны так, что мост рождается ровно от одного жеста и вдали
+    от узлов (`BRIDGE_NODE_CLEARANCE_PX` = 15): пересечение ложится в
+    (500, 700), ближайший узел `la` — в (430, 700).
+    Координаты двойственны: `centroid`/`*_point` = `[y, x]`, `bbox` = `[x, y]`.
+    """
+    nodes = [
+        {"id": "blk", "type": "equipment", "centroid": [400.0, 400.0],
+         "bbox": [300.0, 300.0, 500.0, 500.0], "segmentation": None,
+         "class_id": 99, "class_name": "unknow", "degree": 1},
+        {"id": "far", "type": "connector", "centroid": [900.0, 400.0],
+         "bbox": None, "segmentation": None, "class_id": -1,
+         "class_name": "connector", "degree": 1},
+        {"id": "la", "type": "connector", "centroid": [700.0, 430.0],
+         "bbox": None, "segmentation": None, "class_id": -1,
+         "class_name": "connector", "degree": 1},
+        {"id": "lb", "type": "connector", "centroid": [700.0, 620.0],
+         "bbox": None, "segmentation": None, "class_id": -1,
+         "class_name": "connector", "degree": 1},
+    ]
+    links = [
+        {"id": "edge_1", "source": "blk", "target": "far",
+         "source_point": [500.0, 400.0], "target_point": [900.0, 400.0],
+         "waypoints": []},
+        {"id": "edge_2", "source": "la", "target": "lb",
+         "source_point": [700.0, 430.0], "target_point": [700.0, 620.0],
+         "waypoints": []},
+    ]
+    return {"directed": False, "multigraph": False,
+            "graph": {"image_size": [1000, 1200]},
+            "nodes": nodes, "links": links, "text_blocks": [], "bindings": []}
+
+
+@pytest.fixture
+def crossing(qapp, tmp_path):
+    ed = _new_editor(tmp_path, _crossing_graph())
+    ed.set_show_skins(True)
+    yield ed
+    _dispose(ed, qapp)
+
+
+def _pieces(ed) -> dict:
+    """{edge_id: сколько кусков нарисовано} по ЖИВЫМ предметам сцены."""
+    out = {}
+    for e in ed.edges_data:
+        key = ed.model.edge_key(e["source"], e["target"])
+        if key in ed.edge_items:
+            out[e["id"]] = _scene_segments(ed, e)
+    return out
+
+
+def _pieces_expected(ed) -> dict:
+    """Сколько кусков ДОЛЖНО быть по данным — счётом от генератора выгрузки."""
+    cuts = compute_bridge_cuts(ed.edges_data, ed.nodes, base_stroke=BASE,
+                               use_diameter=False, graph_scale=1.0,
+                               bridge_gap_factor=ed.bridge_gap_factor)
+    out = {}
+    for e in ed.edges_data:
+        if ed.model.edge_key(e["source"], e["target"]) in ed.edge_items:
+            out[e["id"]] = 1 + len(cuts.get(e["id"], ()))
+    return out
+
+
+def _drag_endpoint(ed, key, endpoint, x, y):
+    """Полный жест переноса конца ребра: press -> move -> release."""
+    ed._start_endpoint_drag((key, endpoint))
+    ed._drag_endpoint_to(x, y)
+    ed._end_endpoint_drag()
+
+
+def test_синтетика_доработки_рождает_ровно_один_мост(crossing):
+    """Замок обстановки: без него «разрыв появился» сравнивало бы ноль с нулём.
+
+    До жеста мостов НЕТ вовсе, после — ровно один, и рвётся ЧУЖОЕ ребро.
+    Числа абсолютные, а не полученные вызовом проверяемого механизма.
+    """
+    ed = crossing
+    key = ed.model.edge_key("blk", "far")
+    assert _pieces_expected(ed) == CROSS_NONE
+    _drag_endpoint(ed, key, "source", *EP_CROSS)
+    assert _pieces_expected(ed) == CROSS_ONE
+    # Ребро жеста — `edge_1`, а разрыв достаётся `edge_2`: связь по
+    # инцидентности здесь заведомо не работает.
+    assert ed.model.find_edge_data(key)["id"] == "edge_1"
+
+
+def test_тяга_коннектора_рвёт_чужую_трубу_без_переключения_скинов(crossing):
+    """⭐ Гейт возврата: разрыв появляется НА ЗАВЕРШЕНИИ жеста, а не после
+    следующей полной перерисовки и не после переключения «Скинов»."""
+    ed = crossing
+    assert _pieces(ed) == CROSS_NONE
+    _drag_endpoint(ed, ed.model.edge_key("blk", "far"), "source", *EP_CROSS)
+    assert _pieces(ed) == CROSS_ONE
+    assert _pieces(ed) == _pieces_expected(ed)
+
+
+def test_обратная_тяга_убирает_разрыв(crossing):
+    """Симметрия: снятое пересечение не оставляет разрыв висеть в воздухе."""
+    ed = crossing
+    key = ed.model.edge_key("blk", "far")
+    _drag_endpoint(ed, key, "source", *EP_CROSS)
+    assert _pieces(ed) == CROSS_ONE
+    _drag_endpoint(ed, key, "source", *EP_BACK)
+    assert _pieces(ed) == CROSS_NONE
+    assert _pieces(ed) == _pieces_expected(ed)
+
+
+def test_undo_и_redo_тяги_дают_ту_же_картину_что_жест(crossing):
+    """Требование возврата: откат и повтор рисуют ровно то же, что прямой жест."""
+    ed = crossing
+    before = _pieces(ed)
+    _drag_endpoint(ed, ed.model.edge_key("blk", "far"), "source", *EP_CROSS)
+    after = _pieces(ed)
+    assert after == CROSS_ONE and before == CROSS_NONE, "жест не сдвинул картину"
+    ed.undo()
+    assert _pieces(ed) == before
+    ed.redo()
+    assert _pieces(ed) == after
+
+
+def test_тяга_узла_тоже_доносит_разрыв_до_сцены(crossing):
+    """Не только коннектор: снапшот узла закрывается `finalize()`, а он
+    перерисовку НЕ зовёт (`undo_manager.py`) — путь был тот же битый."""
+    ed = crossing
+    assert _pieces(ed) == CROSS_NONE
+    ed.start_drag_node("la")
+    ed.drag_node_to(370.0, 700.0)     # горизонтальная труба уезжает под блок
+    ed.end_drag_node()
+    assert _pieces(ed) == CROSS_ONE
+    assert _pieces(ed) == _pieces_expected(ed)
+
+
+def test_протяжка_waypoint_и_её_redo_доносят_разрывы(crossing):
+    """Гранулярная команда: у неё и `execute`, и `redo` идут мимо перерисовки."""
+    ed = crossing
+    key = ed.model.edge_key("la", "lb")
+    ed._add_waypoint_on_segment(key, 0, 520.0, 700.0)
+    assert _pieces(ed) == CROSS_NONE, "добавление waypoint мостов не рождает"
+
+    ed._start_waypoint_drag((key, 0))
+    ed._drag_waypoint_to(350.0, 800.0)    # колено ныряет за вертикальную трубу
+    ed._end_waypoint_drag()
+    crossed = _pieces(ed)
+    assert crossed == {"edge_1": 1, "edge_2": 3}, "два моста на одном ребре"
+    assert crossed == _pieces_expected(ed)
+
+    ed.undo()
+    assert _pieces(ed) == CROSS_NONE
+    ed.redo()
+    assert _pieces(ed) == crossed
+
+
+def test_удалённый_мост_не_оставляет_разрыв_в_воздухе(crossing):
+    """Обратная половина боли: ребро-мост убрали, а разрыв на чужой трубе
+    остался. Затронуто ребро, которого в жесте нет вовсе."""
+    ed = crossing
+    _drag_endpoint(ed, ed.model.edge_key("blk", "far"), "source", *EP_CROSS)
+    assert _pieces(ed) == CROSS_ONE
+
+    ed.selected_edges = {ed.model.edge_key("blk", "far")}
+    ed.batch_delete()
+    assert _pieces(ed) == {"edge_2": 1}
+    assert _pieces(ed) == _pieces_expected(ed)
+
+
+def test_вне_скинов_пересчёт_не_запускается(crossing):
+    """Цена платится только за предпросмотр: без скинов жест разрывов не считает."""
+    ed = crossing
+    ed.set_show_skins(False)
+    _drag_endpoint(ed, ed.model.edge_key("blk", "far"), "source", *EP_CROSS)
+    assert ed._bridge_cuts == {}
+    assert _pieces(ed) == CROSS_NONE
