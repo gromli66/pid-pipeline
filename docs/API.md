@@ -406,6 +406,8 @@ curl -X POST "http://localhost:8000/api/graph/{uid}/generate-fxml?page_size=A3"
 | POST | `/{uid}/validation/save` | Сохранить `ocr_validation.json` |
 | GET | `/{uid}/validation` | Скачать `ocr_validation.json` |
 
+⚠ **Пока граф пересобирается, записи фазы B отвечают 400** — и здесь, и в `/api/contours`, и на сохранении графа. Гейт один (`app/api/build_gate.py`), таблица допустимых статусов и машинный признак отказа — [STATUS_MACHINE.md §4а](STATUS_MACHINE.md#4а-пересборка-графа-против-фазы-b).
+
 ### Start OCR
 
 ```bash
@@ -443,6 +445,8 @@ curl -X POST "http://localhost:8000/api/diagrams/{uid}/rollback?target_status=de
 | `preserve_contours` (query) | bool, default false | Сохранить contour артефакты |
 
 Удаляет из БД артефакты всех этапов после target. Устанавливает `status = target`, очищает `error_message` и `error_stage`. Подробнее — см. [STATUS_MACHINE.md §4](STATUS_MACHINE.md#4-rollback-system).
+
+⚠ `preserve_ocr` бережёт `OCR_CLEANED`, `OCR_RESULT` и `OCR_VALIDATION`, но **не** `OCR_BINDING`: привязка держит `node_id`, а `id` узлов между сборками графа не выживают. Что гибнет и что живёт при пересборке — [STATUS_MACHINE.md §4а](STATUS_MACHINE.md#4а-пересборка-графа-против-фазы-b).
 
 ---
 
