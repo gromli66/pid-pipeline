@@ -545,10 +545,18 @@ def create_labels_from_config(project_config) -> List[CVATLabel]:
     Побочный эффект порядка: CVAT нумерует `category_id` в выгрузке позицией
     метки, поэтому на возврате обязательна `denormalize_coco_labels`
     (`app/api/cvat.py`) — без неё `category_id - 1` даст чужой класс.
+
+    Цвет берётся из блока `class_colors` (ключ — английское имя класса). Без него
+    цвет метки выбирает сам CVAT, и раскраска классов у разметчика меняется от
+    проекта к проекту. Цвет действует при СОЗДАНИИ метки: уже существующие метки
+    ни `create_project`, ни `ensure_project_labels` не перекрашивают.
     """
     from app.services.class_display import display_name, display_order
 
     return [
-        CVATLabel(name=display_name(project_config, cls.name))
+        CVATLabel(
+            name=display_name(project_config, cls.name),
+            color=project_config.class_colors.get(cls.name),
+        )
         for cls in display_order(project_config)
     ]

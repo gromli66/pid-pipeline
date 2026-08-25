@@ -12,12 +12,16 @@
 от того, как именно набрано название.
 """
 
+import re
 from typing import Dict, List, Sequence
 
 # CVAT хранит имя метки в SafeCharField(max_length=64) и МОЛЧА обрезает лишнее
 # (cvat/apps/engine/models.py). Проверяем сами, чтобы не поймать обрезанное имя
 # на возврате аннотаций.
 CVAT_LABEL_MAX_LEN = 64
+
+# Цвет метки CVAT хранит строкой вида "#rrggbb" (cvat/apps/engine/serializers.py).
+_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 
 def sort_key(name: str) -> str:
@@ -103,3 +107,41 @@ def validate(class_names: Sequence[str], labels: Dict[str, str]) -> None:
                 f"display_labels: название класса '{en}' совпадает с внутренним "
                 f"именем класса '{clash}': {ru!r}"
             )
+
+
+def validate_colors(class_names: Sequence[str], colors: Dict[str, str]) -> None:
+    """Проверить блок `class_colors`. Пустой словарь допустим.
+
+    Пустой блок = цвет меток выбирает сам CVAT, то есть поведение до появления
+    блока. Непустой обязан покрывать все классы: дыра означала бы, что часть
+    меток снова красит CVAT, и раскраска разъедется от проекта к проекту.
+
+    Raises:
+        ValueError: цвет задан для несуществующего класса, покрытие неполное
+            или значение не в формате `#rrggbb`.
+    """
+    if not colors:
+        return
+
+    known = set(class_names)
+
+    unknown = sorted(set(colors) - known)
+    if unknown:
+        raise ValueError(
+            f"class_colors: цвет задан для несуществующих классов: {unknown}"
+        )
+
+    missing = sorted(known - set(colors))
+    if missing:
+        raise ValueError(
+            f"class_colors: нет цвета для классов: {missing}. "
+            f"Класс без цвета CVAT покрасит сам, и раскраска разъедется."
+        )
+
+    bad = sorted(
+        f"{en}={value!r}" for en, value in colors.items() if not _COLOR_RE.match(str(value))
+    )
+    if bad:
+        raise ValueError(
+            f"class_colors: цвет должен быть в формате '#rrggbb': {bad}"
+        )
