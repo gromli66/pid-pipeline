@@ -76,6 +76,12 @@ class AutoSaveService(QObject):
             return
         if self._tab is None:
             return
+        # Буфер помечен несвежим гейтом пересборки (блок 5): граф на сервере
+        # пересобран, и узлов, к которым привязаны правки вкладки, больше нет.
+        # Раньше тик молча ретраил каждые 120 с и, когда статус минует гейт,
+        # заливал СТАРОЕ поколение поверх нового — окно «после BUILT».
+        if self._announce_stale_buffer():
+            return
         if not hasattr(self._tab, 'has_unsaved_changes'):
             return
         if not self._tab.has_unsaved_changes():
@@ -100,6 +106,23 @@ class AutoSaveService(QObject):
             if hasattr(self._tab, 'status_label'):
                 self._tab.status_label.setText(
                     refusal or "⚠️ Автосохранение не удалось")
+            # Отказ, помеченный гейтом пересборки, повторять нечем — метка
+            # липкая, и следующий тик отличался бы только лишним запросом.
+            self._announce_stale_buffer()
+
+    def _announce_stale_buffer(self) -> bool:
+        """Буфер вкладки несвежий → сказать и ОСТАНОВИТЬСЯ. True, если так."""
+        reason = getattr(self._tab, 'save_blocked_reason', "")
+        if not reason:
+            return False
+        logger.warning("Автосохранение остановлено для %s: %s",
+                       type(self._tab).__name__, reason)
+        if hasattr(self._tab, 'status_label'):
+            self._tab.status_label.setText(reason)
+        if self._status_callback:
+            self._status_callback(reason)
+        self.stop()
+        return True
 
     def _call_save(self, tab) -> bool:
         """Вызвать метод сохранения вкладки."""

@@ -1692,6 +1692,11 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
 
     def _save_binding(self) -> bool:
         """Сохранить привязки и обновлённые OCR-блоки на сервер."""
+        # Буфер уже помечен несвежим гейтом пересборки — писать некуда.
+        if self.save_blocked_reason:
+            self.status_label.setText(self.save_blocked_reason)
+            return False
+
         if not self._confirm_blind_overwrite(*self._BLIND_WRITE_ARTIFACTS):
             self.status_label.setText("Сохранение отменено")
             return False
@@ -1862,14 +1867,22 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
             # Единственный след ошибки — файл лога клиента: в собранном .exe
             # sys.stderr = None, и печать трассировки в консоль пропадает.
             logger.error("Не удалось сохранить привязки OCR: %s", exc, exc_info=True)
+            # Гейт пересборки — не «не удалось», а «больше некуда»: привязка
+            # держит `node_id`, а узлы нового поколения о них не знают (блок 5).
+            # ⚠ Эта вкладка льёт ВЕСЬ граф через `/graph/save` (шаг 5 выше),
+            # то есть отбитой может оказаться любая из трёх её записей.
+            banner = self.rebuild_banner(exc)
             # По таймеру — строкой, а не модалкой посреди работы (1-38).
             if self._save_interactive:
                 QMessageBox.warning(
-                    self, "Ошибка",
-                    f"Не удалось сохранить привязки:\n{exc}"
+                    self, "Схема пересобрана" if banner else "Ошибка",
+                    banner or f"Не удалось сохранить привязки:\n{exc}"
                 )
             else:
-                self._refuse_save(f"⚠️ Автосохранение не удалось: {exc}")
+                self._refuse_save(
+                    banner or f"⚠️ Автосохранение не удалось: {exc}")
+            if banner:
+                self.status_label.setText(banner)
             return False
         finally:
             QApplication.restoreOverrideCursor()
