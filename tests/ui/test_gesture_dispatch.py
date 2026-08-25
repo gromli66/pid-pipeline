@@ -282,11 +282,49 @@ def _visible_handles(editor):
     return len(_handle_centres(editor)) // 2
 
 
-def _bbox_corners(editor, nid):
-    """Четыре угла рамки узла — в том же виде, что отдаёт `_handle_centres`."""
+# Сдвиг ручек НАРУЖУ от угла в «Проверке схемы» (пункт 4.5, 2026-08-25).
+# Число здесь АБСОЛЮТНОЕ, а не прочитанное из `RESIZE_HANDLE_OFFSET`: тест,
+# считающий свой вход из проверяемой константы, зелен при любом её значении.
+# Сам факт заперт `test_simple_handle_offset_is_the_measured_one`.
+SIMPLE_HANDLE_OFFSET = 22.0
+
+
+def _expected_handle_centres(editor, nid):
+    """Где ОБЯЗАНЫ стоять четыре ручки — в том же виде, что `_handle_centres`.
+
+    В «Ручной правке» это углы рамки; в «Проверке схемы» ручки сдвинуты
+    наружу по диагонали, чтобы уйти из-под порога клика по узлу
+    (`CLICK_THRESHOLD` = 20 в растровой сцене): там нажатие у угла уходит в
+    отложенное решение «клик или тяга», и тяга за ручку не открывается.
+    """
+    from ui.editors.advanced_graph_editor import AdvancedGraphEditor
+
+    off = 0.0 if isinstance(editor, AdvancedGraphEditor) else SIMPLE_HANDLE_OFFSET
+    d = off / (2 ** 0.5)
     x1, y1, x2, y2 = editor.nodes[nid]["bbox"]
-    return [c for xy in sorted([(x1, y1), (x2, y1), (x1, y2), (x2, y2)])
-            for c in xy]
+    pts = [(x1 - d, y1 - d), (x2 + d, y1 - d), (x1 - d, y2 + d), (x2 + d, y2 + d)]
+    return [c for xy in sorted(pts) for c in xy]
+
+
+def _grab_point(editor, nid):
+    """Точка захвата ручки «правый-низ» — центр ручки, а не голый угол рамки."""
+    from ui.editors.advanced_graph_editor import AdvancedGraphEditor
+
+    off = 0.0 if isinstance(editor, AdvancedGraphEditor) else SIMPLE_HANDLE_OFFSET
+    d = off / (2 ** 0.5)
+    bb = editor.nodes[nid]["bbox"]
+    return (float(bb[2]) + d, float(bb[3]) + d)
+
+
+def test_simple_handle_offset_is_the_measured_one():
+    """Замок на константу 4.5: подъём/снятие сдвига обязан сказать об этом
+    вслух, а не ослепить сторожей выше молча."""
+    from ui.editors.advanced_graph_editor import AdvancedGraphEditor
+    from ui.editors.simple_graph_editor import SimpleGraphEditor
+
+    assert SimpleGraphEditor.RESIZE_HANDLE_OFFSET == SIMPLE_HANDLE_OFFSET
+    assert AdvancedGraphEditor.RESIZE_HANDLE_OFFSET == 0.0,         "«Ручная правка» задета — её геометрия ручек обязана остаться прежней"
+    assert SIMPLE_HANDLE_OFFSET > SimpleGraphEditor.CLICK_THRESHOLD,         "сдвиг не выводит ручку из-под порога клика — правка бессмысленна"
 
 
 def _depth(editor):
@@ -743,7 +781,7 @@ def test_click_from_resize_mode_still_switches_between_boxes(ed_poly):
     _tool_click(ed_poly, box_b)
 
     assert _visible_handles(ed_poly) == 4, "ручки не переехали на соседнюю рамку"
-    assert _handle_centres(ed_poly) == pytest.approx(_bbox_corners(ed_poly, box_b)), \
+    assert _handle_centres(ed_poly) == pytest.approx(_expected_handle_centres(ed_poly, box_b)), \
         "ручки сидят не на той рамке, по которой кликнули"
     assert (_geom(ed_poly), _depth(ed_poly)) == (g0, depth0)
 
@@ -786,9 +824,9 @@ def _free_spot(editor, margin=60.0):
 
 def _free_corner_node(editor, need_edges=True):
     """Оборудование с рамкой, у которого правый-нижний угол лежит ВНЕ радиуса
-    перехвата всех центроидов (`find_node_at` по углу молчит): press по такому
-    углу уходит хендлеру напрямую — настоящая протяжка за ручку. Возвращает
-    (nid, (x, y) угла)."""
+    перехвата всех центроидов (`find_node_at` по точке захвата молчит): press
+    туда уходит хендлеру напрямую — настоящая протяжка за ручку. Возвращает
+    (nid, (x, y) ЦЕНТРА РУЧКИ) — он же угол, если вкладка ручки не смещает."""
     for nid, nd in editor.nodes.items():
         bb = nd.get("bbox")
         seg = nd.get("segmentation")
@@ -803,9 +841,9 @@ def _free_corner_node(editor, need_edges=True):
         if need_edges and not any(nid in (e.get("source"), e.get("target"))
                                   for e in editor.edges_data):
             continue                      # откат обязан вернуть и рёбра
-        corner = (float(bb[2]), float(bb[3]))
-        if editor.find_node_at(*corner) is None:
-            return nid, corner
+        grab = _grab_point(editor, nid)
+        if editor.find_node_at(*grab) is None:
+            return nid, grab
     raise AssertionError("в корпусе нет рамки со свободным правым-нижним углом")
 
 
@@ -847,7 +885,7 @@ def test_click_on_captured_handle_does_not_start_sticky_resize(simple):
     assert list(simple.nodes[nid]["bbox"]) == bbox0, \
         "рамка поехала за курсором при отпущенной кнопке (липкий ресайз)"
     assert _depth(simple) == depth0, "движение без кнопки записало шаг undo"
-    assert _handle_centres(simple) == pytest.approx(_bbox_corners(simple, nid)), \
+    assert _handle_centres(simple) == pytest.approx(_expected_handle_centres(simple, nid)), \
         "ручки уехали с углов рамки"
 
 
@@ -1012,8 +1050,7 @@ def test_two_drags_undone_inside_resize_mode_survive_escape(request,
     g0, edges0, depth0 = _geom(ed), _edges_full(ed), _depth(ed)
 
     _drag(ed, *corner, 30.0, 20.0)
-    bb = ed.nodes[nid]["bbox"]
-    corner2 = (float(bb[2]), float(bb[3]))
+    corner2 = _grab_point(ed, nid)
     assert ed.find_node_at(*corner2) is None, \
         "после первой протяжки угол попал под перехват — обстановка не собралась"
     _drag(ed, *corner2, 25.0, 15.0)
@@ -1043,11 +1080,11 @@ def test_undo_inside_resize_mode_keeps_handles_on_the_restored_bbox(
     nid, corner = _free_corner_node(ed)
     _ctrl_down(ed)
     _dclick(ed, *_cxy(ed, nid), mods=CTRL)
-    corners0 = _bbox_corners(ed, nid)
+    corners0 = _expected_handle_centres(ed, nid)
     assert _handle_centres(ed) == pytest.approx(corners0)
 
     _drag(ed, *corner, 30.0, 20.0)
-    assert _handle_centres(ed) == pytest.approx(_bbox_corners(ed, nid)), \
+    assert _handle_centres(ed) == pytest.approx(_expected_handle_centres(ed, nid)), \
         "после протяжки ручки уехали с углов — тест слеп"
 
     ed.undo()
@@ -1069,7 +1106,7 @@ def test_undo_of_a_foreign_command_keeps_exactly_four_handles(ed):
 
     _ctrl_down(ed)
     _dclick(ed, *_cxy(ed, nid), mods=CTRL)
-    corners = _bbox_corners(ed, nid)
+    corners = _expected_handle_centres(ed, nid)
     assert _handle_centres(ed) == pytest.approx(corners)
 
     ed.undo()                                      # отмена ЧУЖОЙ команды
@@ -1127,7 +1164,7 @@ def test_redo_inside_resize_mode_survives_the_exit(request, editor_fixture):
     ed.redo()
     assert (_geom(ed), _edges_full(ed), _depth(ed)) == (g1, edges1, depth1), \
         "redo не вернул ресайз (проверять нечего)"
-    assert _handle_centres(ed) == pytest.approx(_bbox_corners(ed, nid)), \
+    assert _handle_centres(ed) == pytest.approx(_expected_handle_centres(ed, nid)), \
         "после redo ручки не на восстановленной рамке"
 
     _esc(ed)

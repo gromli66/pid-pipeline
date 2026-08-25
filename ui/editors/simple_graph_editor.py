@@ -33,6 +33,17 @@ class SimpleGraphEditor(BaseGraphEditor):
     Потомок: AdvancedGraphEditor.
     """
 
+    # Сдвиг ручек размера НАРУЖУ от угла рамки, px растровой сцены (4.5).
+    # Зачем: Ctrl+ЛКМ сначала спрашивает `find_node_at` (CLICK_THRESHOLD=20 у
+    # растровых вкладок), и попадание в узел уводит нажатие в отложенное
+    # решение «клик или тяга» — инструмент получает синтетический клик, а он
+    # тягу не открывает (правило 1.8). Ручка на самом углу почти всегда сидит
+    # под этим порогом соседнего коннектора: замер §P4.6 — доступно 90.4 %
+    # пространства ручек. Сдвиг ЗА порог поднимает до 98.3 % (потолок метрики
+    # 98.9 %) и вдвое СНИЖАЕТ перехват чужим узлом (1.6 % → 0.8 %).
+    # Число подобрано в единицах ЭТОЙ сцены, а не перенесено с холста-донора.
+    RESIZE_HANDLE_OFFSET = 22.0
+
     def __init__(self):
         super().__init__()
 
@@ -153,7 +164,11 @@ class SimpleGraphEditor(BaseGraphEditor):
                 if not node_shape_is_polygon(n2):
                     s2 = self._lift_to_seat_rect(n2, s2, p1[0], p1[1])
                 seats = (s1, s2)
-        except Exception as exc:
+        except (TypeError, KeyError, IndexError, ValueError,
+                ZeroDivisionError) as exc:
+            # Битая геометрия узла: нет центроида, короткий контур, вырожденная
+            # рамка. Шире не ловим — «Контуры» могут себе позволить общий
+            # `except` (у них есть старые точки), у нового ребра их нет.
             import logging
             logging.getLogger(__name__).debug(
                 "Посадка пары %s-%s диспетчером не удалась (%s) — "
@@ -393,6 +408,7 @@ class SimpleGraphEditor(BaseGraphEditor):
             min_size=15,
             on_resize=lambda new_bbox: self._on_node_resized(node_id, new_bbox),
             on_commit=lambda: self._commit_resize(node_id),
+            handle_offset=self.RESIZE_HANDLE_OFFSET,
         )
         self._resize_overlay.show()
         self.update_status(f"Resize: {node_id} — тяните за углы, Escape для отмены")

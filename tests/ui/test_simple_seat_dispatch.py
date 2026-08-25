@@ -347,3 +347,35 @@ def test_resize_out_of_span_lands_on_the_near_corner(qapp, tmp_path):
 
     sp, _tp = _ends(ed, "a", "b")
     assert sp == [150.0, 250.0], f"ближний угол потерян: {sp}"
+
+
+# ── 8. Контракт ошибок на стороне «Проверки схемы» ───────────────────────
+
+def test_broken_geometry_falls_back_to_the_canon_not_to_zero(qapp, tmp_path,
+                                                             monkeypatch):
+    """Диспетчер отказал — пара садится КАНОНОМ, а не тихим [0, 0].
+
+    У «Контуров» при отказе есть старые точки, у нового ребра их нет:
+    `create_edge_data` подставил бы [0, 0] (graph_data.py:471-472), и труба
+    уехала бы в левый верхний угол листа. Подмена проверяется на факт вызова —
+    переезд `dispatch_connect` в другой модуль сделал бы её немой.
+    """
+    a = _box("a", 100, 150, 200, 250)
+    b = _conn("b", 600.0, 200.0)
+    ed = _editor(qapp, tmp_path, [a, b])
+
+    calls = []
+
+    def _boom(*args, **kwargs):
+        calls.append(1)
+        raise ValueError("геометрия не сошлась")
+
+    monkeypatch.setattr("ui.editors.simple_graph_editor.dispatch_connect", _boom)
+    assert ed.add_edge("a", "b")
+
+    assert calls, "подмена не сработала — посадка идёт мимо диспетчера"
+    sp, tp = _ends(ed, "a", "b")
+    assert sp != [0.0, 0.0] and tp != [0.0, 0.0], "конец сел в [0, 0]"
+    # канон сажает конец на правую грань рамки, конец коннектора — в центроид
+    assert sp == [200.0, 200.0]
+    assert tp == [200.0, 600.0]

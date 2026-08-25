@@ -154,6 +154,13 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
     # + рамка слоя ОКР (текст-блоки и рамки ОКР-объектов) — своя ручка.
     SIZE_FACTOR_KEYS = SimpleGraphEditor.SIZE_FACTOR_KEYS + ("OCR_BORDER_W",)
 
+    # Ручки размера — на самом углу, как было (4.5). Сдвиг наружу нужен
+    # «Проверке схемы», где `_node_drag_allowed` всегда True и нажатие у угла
+    # уходит в отложенную тягу. Здесь этот метод переопределён («только в
+    # idle»), в режиме размеров тяга запрещена, и ручка получает НАСТОЯЩЕЕ
+    # нажатие — терять нечего, а сдвиг сместил бы привычную геометрию холста.
+    RESIZE_HANDLE_OFFSET = 0.0
+
     def __init__(self):
         super().__init__()
         self._init_ocr_layer()
