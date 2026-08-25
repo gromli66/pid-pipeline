@@ -683,6 +683,15 @@ class BaseGraphEditor(QGraphicsView):
         """
         return None
 
+    def _edge_label_visible(self) -> bool:
+        """Виртуальный. Видна ли подпись диаметра.
+
+        Base: состояний отображения нет — подпись видна всегда, как и была.
+        Advanced (`OcrLayerMixin`): только в состоянии 'ocr' — там же, где
+        живёт единственный жест её правки, и там же, где виден ОКР-слой.
+        """
+        return True
+
     def create_edge_item(self, edge_key: tuple, edge_data: dict,
                          color: QColor = None) -> QGraphicsPathItem:
         """Создать визуальный элемент ребра + подпись диаметра. Public — для Commands."""
@@ -710,7 +719,18 @@ class BaseGraphEditor(QGraphicsView):
         return item
 
     def _create_edge_label(self, edge_key: tuple, edge_data: dict, text: str):
-        """Создать подпись диаметра (только число) на середине ребра."""
+        """Создать подпись диаметра (только число) на середине ребра.
+
+        ⛔ **Кегль ВНУТРЕННИЙ и таблице `TEXT_STYLES` не подчиняется** (решение
+        Максима 2026-08-25 по доработке mefx-3). Подпись диаметра в FXML не
+        печатается вообще — значит паритета с файлом у неё нет, и файловое
+        число 18 к ней отношения не имеет: это служебная подсказка оператору,
+        её размер — вопрос читаемости холста, а не выгрузки. Одинаково во всех
+        вкладках, включая «Проверку схемы».
+
+        Видимость — не безусловная: подпись живёт в состоянии 'ocr'
+        (см. `_edge_label_visible`), там же, где её единственный жест правки.
+        """
         sp = edge_data.get('source_point')
         tp = edge_data.get('target_point')
         if not sp or not tp:
@@ -735,6 +755,7 @@ class BaseGraphEditor(QGraphicsView):
         label.setFont(font)
         label.setBrush(QBrush(QColor(255, 255, 255, 200)))
         label.setZValue(5)
+        label.setVisible(self._edge_label_visible())
 
         # Center ON the edge (not above)
         br = label.boundingRect()
