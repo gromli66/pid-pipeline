@@ -13056,3 +13056,22 @@ in test_closing_tab_does_not_touch_dead_widgets`. Красных до краха
 Зонды: AA→4 клетки, AB→5, AC→5, AD→1, AE→3, AF→4, AG→3; восстановление копией,
 `md5` сошёлся 2/2. Гейты: 24 файла `tests/ui` по воркспейсу — 506 passed;
 `lint_gate --check` exit 0.
+
+### P3.12. Доработка №4: «Ручная правка» на время перезапуска OCR (2026-08-25)
+
+Замер на живом `DiagramWorkspace` (offscreen Qt) — та же механика, что у привязки
+в §P3.11: кнопку гасит `_start_ocr`, а `_update_buttons` возвращает её ПО СТАТУСУ
+на первом же тике опроса.
+
+| статус | edit_graph до | сразу после клика | после тика (до правки) | после тика (после правки) |
+|---|---|---|---|---|
+| `ocr_bound` | True | False | **True** | False / бусина UNAVAILABLE |
+| `generating_fxml` | True | False | **True** | False / бусина UNAVAILABLE |
+| `completed` | True | False | **True** | False / бусина UNAVAILABLE |
+
+По приходу нового `has_ocr_result` — `True` во всех трёх строках, бусина
+`AVAILABLE`/`COMPLETED` по статусу. Гейт раскладки не тронут: `_gate_blocked`
+правка не читает и не пишет, сторож это запирает.
+
+Зонды: AH→4 клетки, AI→3, AJ→4, AK→1; восстановление копией, `md5` сошёлся.
+Гейты: 24 файла `tests/ui` по воркспейсу — 514 passed; `lint_gate --check` exit 0.
