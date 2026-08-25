@@ -95,7 +95,7 @@ def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydrauli
         # Импорты внутри task (избегаем circular imports)
         from app.models import Diagram, DiagramStatus, Artifact, ArtifactType
         from app.services.project_loader import get_project_loader
-        from app.services.cvat_client import get_cvat_client, CVATLabel
+        from app.services.cvat_client import get_cvat_client, create_labels_from_config
         from app.services.cvat_export import (
             CVATExporter,
             Detection,
@@ -330,8 +330,8 @@ def task_detect_yolo(self, diagram_uid: str, project_code: str = "thermohydrauli
 
             # Авторизация через CVAT_TOKEN (в settings)
 
-            # Создаём labels из конфига проекта
-            labels = [CVATLabel(name=cls.name) for cls in project_config.classes]
+            # Labels из конфига — общий источник с API (app/api/cvat.py)
+            labels = create_labels_from_config(project_config)
 
             # Получаем или создаём проект
             project_id = cvat_client.get_or_create_project(

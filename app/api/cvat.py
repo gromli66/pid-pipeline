@@ -631,13 +631,13 @@ async def retry_fetch_annotations(
 
 def _create_cvat_task_sync(diagram, project_config, image_path: Path, yolo_path: Path):
     """Синхронное создание CVAT task."""
-    from app.services.cvat_client import get_cvat_client, CVATLabel
+    from app.services.cvat_client import get_cvat_client, create_labels_from_config
     from app.services.cvat_export import create_exporter_from_config, Detection
 
     cvat_client = get_cvat_client()
 
-    # Labels из конфига
-    labels = [CVATLabel(name=cls.name) for cls in project_config.classes]
+    # Labels из конфига — общий источник с воркером (worker/tasks/detection.py)
+    labels = create_labels_from_config(project_config)
 
     # Получаем или создаём проект
     project_id = cvat_client.get_or_create_project(

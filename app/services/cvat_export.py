@@ -49,18 +49,28 @@ class CVATExporter:
         self,
         class_names: List[str],
         class_mapping: Optional[Dict[int, int]] = None,
+        unknown_class_id: Optional[int] = None,
     ):
         """
         Args:
-            class_names: Список имён классов CVAT (0-indexed)
+            class_names: Список имён классов CVAT (0-indexed). Это ОТОБРАЖАЕМЫЕ
+                         имена — они уходят в obj.names, и CVAT сопоставляет
+                         аннотации с метками проекта именно по ним.
             class_mapping: YOLO class_id → CVAT class_id (0-based)
                           Если None, используется identity mapping
+            unknown_class_id: CVAT class_id (0-based) класса unknown. Считается
+                          по ВНУТРЕННИМ английским именам: в `class_names` могут
+                          лежать русские названия, и поиск строкой там не сработает.
+                          Если None — ищем по `class_names` (проект без перевода).
         """
         self.class_names = class_names
         self.class_mapping = class_mapping or {i: i for i in range(len(class_names))}
+        self.unknown_class_id = unknown_class_id
 
     def _unknown_cvat_id(self) -> Optional[int]:
         """CVAT class_id (0-based) класса unknown, или None если его нет."""
+        if self.unknown_class_id is not None:
+            return self.unknown_class_id
         for idx, name in enumerate(self.class_names):
             if name.strip().lower() in self._UNKNOWN_NAMES:
                 return idx
@@ -279,19 +289,35 @@ def create_exporter_from_config(project_config) -> CVATExporter:
     Returns:
         CVATExporter
     """
-    # Получаем имена классов
-    class_names = [cls.name for cls in project_config.classes]
-    
+    from app.services.class_display import display_name
+
+    # Имена классов для obj.names — ОТОБРАЖАЕМЫЕ: CVAT сопоставляет аннотации
+    # с метками проекта по имени (dataset_manager/bindings.py:_get_label_id),
+    # а метки там теперь русские. Порядок остаётся порядком `classes:` — он же
+    # индекс в obj.names, на который ссылается class_mapping. Позиция метки в
+    # самом проекте CVAT значения не имеет: сопоставление идёт по имени, а не
+    # по индексу, и незнакомое имя CVAT отвергает с ошибкой, а не молча.
+    class_names = [display_name(project_config, cls.name) for cls in project_config.classes]
+
     # Создаём маппинг YOLO → CVAT (0-based)
     # project_config.yolo.class_mapping содержит YOLO → CVAT category_id (1-based)
     # Конвертируем в 0-based для YOLO формата
     class_mapping = {}
     for yolo_id, cvat_category_id in project_config.yolo.class_mapping.items():
         class_mapping[yolo_id] = cvat_category_id - 1  # CVAT 1-based → 0-based
-    
+
+    # Индекс класса unknown считаем по внутренним именам: в class_names лежат
+    # отображаемые, и строковый поиск "unknow" по ним ничего не найдёт.
+    unknown_class_id = next(
+        (i for i, cls in enumerate(project_config.classes)
+         if cls.name.strip().lower() in CVATExporter._UNKNOWN_NAMES),
+        None,
+    )
+
     return CVATExporter(
         class_names=class_names,
         class_mapping=class_mapping,
+        unknown_class_id=unknown_class_id,
     )
 
 
