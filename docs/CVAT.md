@@ -1,8 +1,8 @@
 # CVAT.md
 
 **Аудитория:** DEV / ALL
-**Версия:** 1.1
-**Обновлено:** 2026-06-17
+**Версия:** 1.2
+**Обновлено:** 2026-08-25
 **Связанные документы:** ARCHITECTURE.md, STATUS_MACHINE.md, API.md, DEPLOYMENT.md
 
 ---
@@ -94,7 +94,7 @@ validated_bbox ◀── fetch-annotations ◀── confirm ◀─────�
 
 **create-task** — идемпотентен: если `cvat_task_id` уже есть, возвращает существующий. Создаёт project через `get_or_create_project()` (по `cvat_project_name` из конфига). Labels из `project_config.classes`.
 
-**fetch-annotations** — долгая операция (экспорт из CVAT может занять до 2 минут). Выполняется через `asyncio.to_thread()` вне DB-транзакции. При ошибке — статус → `error`, `error_stage = "fetching_annotations"`.
+**fetch-annotations** — долгая операция (экспорт из CVAT может занять до 2 минут). Выполняется через `asyncio.to_thread()` вне DB-транзакции. При ошибке — статус → `error`, `error_stage = "fetching_annotations"`. Исключение — неопознанная метка (`CVATLabelMismatchError`, ответ 400): статус остаётся `validating_bbox`, чинить нужно в CVAT, см. §7.
 
 ---
 
@@ -153,11 +153,29 @@ annotations/
 
 1. `CVATClient.export_annotations(task_id, format="COCO 1.0")` → ZIP
 2. Распаковка → поиск JSON
-3. `parse_coco_annotations(coco_json)` → список аннотаций + category_map
-4. Сохранение `coco_validated.json` (полный COCO) и `yolo_validated.txt` (YOLO формат)
-5. Создание артефактов `COCO_VALIDATED` и `YOLO_VALIDATED` в БД
+3. `normalize_coco_segmentation(coco_data)` → RLE-маски CVAT в полигоны
+4. `denormalize_coco_labels(coco_data, project_config)` → канонические имена и id категорий
+5. `parse_coco_annotations(coco_json)` → список аннотаций + category_map
+6. Сохранение `coco_validated.json` (полный COCO) и `yolo_validated.txt` (YOLO формат)
+7. Создание артефактов `COCO_VALIDATED` и `YOLO_VALIDATED` в БД
 
-**parse_coco_annotations** конвертирует COCO bbox `[x, y, w, h]` (абсолютные) в YOLO normalized `[x_center, y_center, width, height]`. Category_id: COCO может быть как 0-based, так и 1-based (зависит от источника/экспортёра CVAT) → YOLO 0-based. Код использует `cat_map` без жёсткой проверки базы индексации.
+**denormalize_coco_labels** приводит категории к каноническому виду **до** разбора и записи на
+диск. Нужна потому, что CVAT нумерует `category_id` **позицией метки в проекте** (`1 + индекс`,
+см. datumaro coco exporter), а не её id: как только метки создаются в порядке отображаемых
+названий (§6), `category_id - 1` перестаёт быть `class_id`. Функция сопоставляет категории
+**по имени** — сначала как каноническое английское имя (задачи из старого CVAT-проекта), затем
+через `display_labels` (§3.2.1 [CONFIG_REFERENCE.md](CONFIG_REFERENCE.md)) — и восстанавливает
+`categories[].id` из `classes:` вместе с `annotations[].category_id`.
+
+Метка, не опознанная ни одним способом, поднимает `CVATLabelMismatchError`
+(`error_code = cvat_label_unknown`): эндпоинт отвечает **400**, на диск не пишется ничего,
+диаграмма остаётся в `validating_bbox`. Так бывает, если метку переименовали или добавили руками
+в CVAT, либо правили `display_labels` после создания проекта. Чинится в CVAT, после чего та же
+кнопка «Получить аннотации» отрабатывает повторно. Вариант «оставить имя как есть» отвергнут
+сознательно: объекты молча уехали бы в чужой класс, а фильтры по именам `truba`/`annotation`/
+`napravlenie` в сегментации и скелете перестали бы срабатывать.
+
+**parse_coco_annotations** конвертирует COCO bbox `[x, y, w, h]` (абсолютные) в YOLO normalized `[x_center, y_center, width, height]` и считает `class_id = category_id - 1`. После шага 4 категории гарантированно 1-based и канонические, так что прежняя неопределённость с базой индексации снята.
 
 ---
 
@@ -206,3 +224,7 @@ categories[i].id (1-based), categories[i].name
 annotations[i].bbox = [x, y, w, h]  — абсолютные координаты
 annotations[i].category_id (1-based)
 ```
+
+В `coco_validated.json` на диске `categories` всегда канонические: 42 записи, id 1..42 в порядке
+`classes:` из YAML, имена английские — это результат `denormalize_coco_labels` (§7). То, что
+отдаёт сам CVAT до неё, может отличаться и именами, и нумерацией.

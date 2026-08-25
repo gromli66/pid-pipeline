@@ -155,6 +155,19 @@ class CVATExportError(CVATError):
     code = "cvat_export"
 
 
+class CVATLabelMismatchError(PipelineError):
+    """Метка из выгрузки CVAT не сопоставилась ни с одним классом проекта.
+
+    Намеренно НЕ наследник `CVATError`: транспорт отработал, аннотации получены —
+    разошлись метки проекта в CVAT и `classes`/`display_labels` в YAML (метку
+    переименовали руками, добавили свою, либо правили `display_labels` после
+    создания проекта). Чинится оператором в CVAT, а не повтором запроса, поэтому
+    семейство отдельное — как у `StageStateError`.
+    """
+
+    code = "cvat_label_unknown"
+
+
 # --- Состояние пайплайна -----------------------------------------------------
 
 class StageStateError(PipelineError):

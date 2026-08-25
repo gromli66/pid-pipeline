@@ -1,0 +1,387 @@
+{
+  "licenses": [
+    {
+      "name": "",
+      "id": 0,
+      "url": ""
+    }
+  ],
+  "info": {
+    "contributor": "",
+    "date_created": "",
+    "description": "",
+    "url": "",
+    "version": "",
+    "year": ""
+  },
+  "categories": [
+    {
+      "id": 1,
+      "name": "armatura_ruchn",
+      "supercategory": ""
+    },
+    {
+      "id": 2,
+      "name": "klapan_obratn",
+      "supercategory": ""
+    },
+    {
+      "id": 3,
+      "name": "regulator_ruchn",
+      "supercategory": ""
+    },
+    {
+      "id": 4,
+      "name": "armatura_electro",
+      "supercategory": ""
+    },
+    {
+      "id": 5,
+      "name": "regulator_electro",
+      "supercategory": ""
+    },
+    {
+      "id": 6,
+      "name": "drossel",
+      "supercategory": ""
+    },
+    {
+      "id": 7,
+      "name": "perehod",
+      "supercategory": ""
+    },
+    {
+      "id": 8,
+      "name": "klapan_obratn_seroprivod",
+      "supercategory": ""
+    },
+    {
+      "id": 9,
+      "name": "armatura_seroprivod",
+      "supercategory": ""
+    },
+    {
+      "id": 10,
+      "name": "regulator_seroprivod",
+      "supercategory": ""
+    },
+    {
+      "id": 11,
+      "name": "armatura_membr_electro",
+      "supercategory": ""
+    },
+    {
+      "id": 12,
+      "name": "nasos",
+      "supercategory": ""
+    },
+    {
+      "id": 13,
+      "name": "ventilaytor",
+      "supercategory": ""
+    },
+    {
+      "id": 14,
+      "name": "predohran",
+      "supercategory": ""
+    },
+    {
+      "id": 15,
+      "name": "condensatootvod",
+      "supercategory": ""
+    },
+    {
+      "id": 16,
+      "name": "rashodomernaya_shaiba",
+      "supercategory": ""
+    },
+    {
+      "id": 17,
+      "name": "vodostruiniy_nasos",
+      "supercategory": ""
+    },
+    {
+      "id": 18,
+      "name": "teploobmen",
+      "supercategory": ""
+    },
+    {
+      "id": 19,
+      "name": "zaglushka",
+      "supercategory": ""
+    },
+    {
+      "id": 20,
+      "name": "gidrozatvor",
+      "supercategory": ""
+    },
+    {
+      "id": 21,
+      "name": "bak",
+      "supercategory": ""
+    },
+    {
+      "id": 22,
+      "name": "voronka",
+      "supercategory": ""
+    },
+    {
+      "id": 23,
+      "name": "filtr_meh",
+      "supercategory": ""
+    },
+    {
+      "id": 24,
+      "name": "separator",
+      "supercategory": ""
+    },
+    {
+      "id": 25,
+      "name": "kapleulov",
+      "supercategory": ""
+    },
+    {
+      "id": 26,
+      "name": "celindr_turb",
+      "supercategory": ""
+    },
+    {
+      "id": 27,
+      "name": "redukcion_ustr",
+      "supercategory": ""
+    },
+    {
+      "id": 28,
+      "name": "bistro_redukc_ustr",
+      "supercategory": ""
+    },
+    {
+      "id": 29,
+      "name": "separator_paro",
+      "supercategory": ""
+    },
+    {
+      "id": 30,
+      "name": "dearator",
+      "supercategory": ""
+    },
+    {
+      "id": 31,
+      "name": "silfonnii_kompensator",
+      "supercategory": ""
+    },
+    {
+      "id": 32,
+      "name": "electronagrevat",
+      "supercategory": ""
+    },
+    {
+      "id": 33,
+      "name": "smotrowoe_steclo",
+      "supercategory": ""
+    },
+    {
+      "id": 34,
+      "name": "datchik",
+      "supercategory": ""
+    },
+    {
+      "id": 35,
+      "name": "annotation",
+      "supercategory": ""
+    },
+    {
+      "id": 36,
+      "name": "output",
+      "supercategory": ""
+    },
+    {
+      "id": 37,
+      "name": "truba",
+      "supercategory": ""
+    },
+    {
+      "id": 38,
+      "name": "unknow",
+      "supercategory": ""
+    },
+    {
+      "id": 39,
+      "name": "strelka",
+      "supercategory": ""
+    },
+    {
+      "id": 40,
+      "name": "background",
+      "supercategory": ""
+    },
+    {
+      "id": 41,
+      "name": "napravlenie",
+      "supercategory": ""
+    },
+    {
+      "id": 42,
+      "name": "vozdushnik",
+      "supercategory": ""
+    }
+  ],
+  "images": [
+    {
+      "id": 1,
+      "width": 2000,
+      "height": 1500,
+      "file_name": "image.png",
+      "license": 0,
+      "flickr_url": "",
+      "coco_url": "",
+      "date_captured": 0
+    }
+  ],
+  "annotations": [
+    {
+      "id": 1,
+      "image_id": 1,
+      "category_id": 1,
+      "segmentation": [],
+      "area": 2501.0,
+      "bbox": [
+        150.0,
+        230.0,
+        41.0,
+        61.0
+      ],
+      "iscrowd": 0,
+      "attributes": {
+        "occluded": false,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": 2,
+      "image_id": 1,
+      "category_id": 1,
+      "segmentation": [],
+      "area": 2604.0,
+      "bbox": [
+        200.0,
+        260.0,
+        42.0,
+        62.0
+      ],
+      "iscrowd": 0,
+      "attributes": {
+        "occluded": false,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": 3,
+      "image_id": 1,
+      "category_id": 2,
+      "segmentation": [],
+      "area": 2709.0,
+      "bbox": [
+        250.0,
+        290.0,
+        43.0,
+        63.0
+      ],
+      "iscrowd": 0,
+      "attributes": {
+        "occluded": false,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": 4,
+      "image_id": 1,
+      "category_id": 12,
+      "segmentation": [],
+      "area": 2816.0,
+      "bbox": [
+        300.0,
+        320.0,
+        44.0,
+        64.0
+      ],
+      "iscrowd": 0,
+      "attributes": {
+        "occluded": false,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": 5,
+      "image_id": 1,
+      "category_id": 34,
+      "segmentation": [],
+      "area": 2925.0,
+      "bbox": [
+        350.0,
+        350.0,
+        45.0,
+        65.0
+      ],
+      "iscrowd": 0,
+      "attributes": {
+        "occluded": false,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": 6,
+      "image_id": 1,
+      "category_id": 37,
+      "segmentation": [],
+      "area": 3036.0,
+      "bbox": [
+        400.0,
+        380.0,
+        46.0,
+        66.0
+      ],
+      "iscrowd": 0,
+      "attributes": {
+        "occluded": false,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": 7,
+      "image_id": 1,
+      "category_id": 41,
+      "segmentation": [],
+      "area": 3149.0,
+      "bbox": [
+        450.0,
+        410.0,
+        47.0,
+        67.0
+      ],
+      "iscrowd": 0,
+      "attributes": {
+        "occluded": false,
+        "rotation": 0.0
+      }
+    },
+    {
+      "id": 8,
+      "image_id": 1,
+      "category_id": 42,
+      "segmentation": [],
+      "area": 3264.0,
+      "bbox": [
+        500.0,
+        440.0,
+        48.0,
+        68.0
+      ],
+      "iscrowd": 0,
+      "attributes": {
+        "occluded": false,
+        "rotation": 0.0
+      }
+    }
+  ]
+}

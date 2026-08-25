@@ -1,8 +1,8 @@
 # DATA_FORMATS.md — Форматы данных P&ID Pipeline
 
 **Аудитория:** DEV / ML
-**Версия:** 1.4
-**Обновлено:** 2026-08-03
+**Версия:** 1.5
+**Обновлено:** 2026-08-25
 **Связанные документы:** [ARCHITECTURE.md](ARCHITECTURE.md), [STATUS_MACHINE.md](STATUS_MACHINE.md), [MODULES.md](MODULES.md)
 
 ---
@@ -53,17 +53,16 @@
     }
   ],
   "categories": [
-    {"id": 0, "name": "armatura_ruchn"},
-    {"id": 1, "name": "armatura_electro"},
-    {"id": 2, "name": "nasos"},
-    {"id": 3, "name": "truba"},
-    {"id": 4, "name": "annotation"}
+    {"id": 1, "name": "armatura_ruchn"},
+    {"id": 2, "name": "klapan_obratn"},
+    {"id": 3, "name": "regulator_ruchn"},
+    {"id": 4, "name": "armatura_electro"}
   ],
   "annotations": [
     {
       "id": 1,
       "image_id": 1,
-      "category_id": 0,
+      "category_id": 1,
       "bbox": [1200, 850, 180, 160],
       "area": 28800,
       "segmentation": [[1200, 850, 1380, 850, 1380, 1010, 1200, 1010]],
@@ -80,14 +79,16 @@
 |------|-----|-------------|----------|
 | `id` | int | ✅ | Уникальный ID аннотации (ann_id). Ключ связи с graph node и contour |
 | `image_id` | int | ✅ | Ссылка на `images[].id` |
-| `category_id` | int | ✅ | Ссылка на `categories[].id` |
+| `category_id` | int | ✅ | Ссылка на `categories[].id`. **1-based**: `class_id = category_id - 1` |
 | `bbox` | `[x, y, w, h]` | ✅ | Bounding box в формате COCO |
 | `area` | float | ✅ | Площадь аннотации (пикселей) |
 | `segmentation` | `[[x1, y1, ...]]` | ✅ | Список полигонов (обычно один) |
 | `iscrowd` | int | ✅ | Всегда `0` |
 | `score` | float | — | Confidence YOLO (только в `coco_predicted.json`) |
 
-**Особые категории:** `truba` (трубопровод) и `annotation` (текстовые подписи) исключаются при генерации `node_mask` и при SAM2 inference — они не являются узлами оборудования.
+**Особые категории:** `truba` (трубопровод) и `annotation` (текстовые подписи) исключаются при генерации `node_mask` и при SAM2 inference — они не являются узлами оборудования. Отбор идёт **по имени класса**, поэтому имена в `categories` обязаны быть каноническими английскими.
+
+**Категории в `coco_validated.json` всегда канонические:** 42 записи, id 1..42 в порядке `classes:` из `thermohydraulics.yaml`, имена английские. Это гарантирует `denormalize_coco_labels()` (`app/api/cvat.py`) — CVAT сам нумерует категории позицией метки в проекте и, начиная с русских меток, отдаёт другие имена и номера. См. [CVAT.md §7](CVAT.md).
 
 ---
 

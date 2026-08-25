@@ -397,7 +397,7 @@ def exits(ws):
 def test_api_writers_are_exactly_one():
     """`app/**` пишет РОВНО одно значение — и оно из `app/api/cvat.py`."""
     assert set(API_CONST) == API_WRITERS
-    assert API_CONST["fetching_annotations"] == ["app/api/cvat.py:374"]
+    assert API_CONST["fetching_annotations"] == ["app/api/cvat.py:466"]
 
 
 def test_worker_writers_are_exactly_ten():
