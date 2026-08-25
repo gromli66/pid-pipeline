@@ -104,8 +104,19 @@ def test_фикстура_несёт_узлы_заведомо_разного_р
 
 def test_таблица_несёт_один_кегль_на_все_виды_подписи():
     """Одно число вместо четырёх (40.0 / 10.0 / 0.35·min / 0.4·min)."""
-    assert set(TEXT_STYLES) == {"text_block", "kks", "diameter"}
-    assert [s.size for s in TEXT_STYLES.values()] == [SIZE, SIZE, SIZE]
+    assert set(TEXT_STYLES) == {"text_block", "kks"}
+    assert [s.size for s in TEXT_STYLES.values()] == [SIZE, SIZE]
+
+
+def test_подписи_диаметра_в_таблице_файла_нет():
+    """⛔ Решение Максима по доработке mefx-3.
+
+    Таблица — про то, что уходит В ФАЙЛ. Подпись диаметра в FXML не
+    печатается, паритета с файлом у неё нет, кегль у неё свой внутренний
+    (`base_graph_editor._create_edge_label`). Запись в таблице означала бы
+    обещание, которого выгрузка не выполняет.
+    """
+    assert "diameter" not in TEXT_STYLES
 
 
 def test_оценка_ширины_строки_удалена_а_не_поправлена():
@@ -186,3 +197,46 @@ def test_kks_кегль_один_и_тот_же_на_холстовом_пути
 def test_kks_кегль_один_и_тот_же_на_растровом_пути():
     """Легаси-путь (граф без холста) обязан говорить то же число."""
     assert _kks_sizes(generate_fxml(_with_kks(_fixture()))) == {SIZE}
+
+
+# ── подпись диаметра в файл не уходит ────────────────────────────────────
+
+#: Текст-блок, изображающий подпись диаметра, и ребро, к которому он привязан.
+DN_TEXT = "Dn300"
+DN_BLOCK = "dn_block"
+
+
+def _with_diameter_block(graph: dict, bind: bool) -> dict:
+    """Тот же лист плюс блок «Dn300»; `bind` — привязать его к ребру или нет."""
+    graph.setdefault("text_blocks", []).append(
+        {"id": DN_BLOCK, "bbox": list(HBOX), "text": DN_TEXT})
+    if bind:
+        e = graph["links"][0]
+        graph["bindings"] = [{"kind": "edge", "block_id": DN_BLOCK,
+                              "edge_key": f'{e["source"]}|{e["target"]}',
+                              "text": DN_TEXT}]
+    return graph
+
+
+def _texts(xml: str) -> list:
+    return re.findall(r'<Text [^>]*text="([^"]*)"', xml)
+
+
+@pytest.mark.parametrize("gen", ["canvas", "raster"])
+def test_подпись_диаметра_в_выгрузку_не_печатается(gen):
+    """⛔ Решение Максима: в FXML подписи диаметра нет — и новой эмиссии не заводим.
+
+    Держит это не «мы её не пишем», а исключение по привязке: блок, привязанный
+    к РЕБРУ, в `<Text>` не идёт (`bound_block_ids`). Замок ниже — про РАЗНИЦУ,
+    а не про совпадение: тот же блок БЕЗ привязки печатается, значит тест
+    видит именно работу исключения, а не отсутствие блока.
+    """
+    def render(bind):
+        g = _with_diameter_block(_fixture(), bind)
+        if gen == "canvas":
+            canvas, _t, _s = pretransform(g)
+            return generate_canvas_fxml(canvas)
+        return generate_fxml(g)
+
+    assert DN_TEXT in _texts(render(bind=False)), "фикстура ниже порога"
+    assert DN_TEXT not in _texts(render(bind=True))

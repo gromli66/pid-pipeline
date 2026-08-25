@@ -24,7 +24,6 @@ from PySide6.QtGui import (
 )
 from PySide6.QtCore import Qt, QRectF
 
-from modules.graph_to_fxml import TEXT_STYLES
 from ui.editors.graph_data import GraphDataModel
 from ui.editors.undo_manager import UndoManager
 from ui.editors.mode_handlers.base_handler import ModeHandler
@@ -722,16 +721,15 @@ class BaseGraphEditor(QGraphicsView):
     def _create_edge_label(self, edge_key: tuple, edge_data: dict, text: str):
         """Создать подпись диаметра (только число) на середине ребра.
 
-        Кегль — из общей таблицы `TEXT_STYLES` (одно число на все подписи
-        графовых вкладок и на выгрузку, решение Максима 2026-08-25 №3);
-        семейство шрифта остаётся экранным — Tahoma в клиент не бандлим
-        (решение №7), общий у экрана и файла только кегль. Пиксельный размер,
-        а не пунктовый: кегль в FXML — это em в координатах холста, ровно
-        тех, в которых живёт сцена, и `pointSize` дал бы на 96 dpi 24 px
-        вместо 18.
+        ⛔ **Кегль ВНУТРЕННИЙ и таблице `TEXT_STYLES` не подчиняется** (решение
+        Максима 2026-08-25 по доработке mefx-3). Подпись диаметра в FXML не
+        печатается вообще — значит паритета с файлом у неё нет, и файловое
+        число 18 к ней отношения не имеет: это служебная подсказка оператору,
+        её размер — вопрос читаемости холста, а не выгрузки. Одинаково во всех
+        вкладках, включая «Проверку схемы».
 
         Видимость — не безусловная: подпись живёт в состоянии 'ocr'
-        (см. `_edge_label_visible`), в FXML её нет вовсе.
+        (см. `_edge_label_visible`), там же, где её единственный жест правки.
         """
         sp = edge_data.get('source_point')
         tp = edge_data.get('target_point')
@@ -752,8 +750,7 @@ class BaseGraphEditor(QGraphicsView):
             mid_x = (sp[1] + tp[1]) / 2
 
         label = QGraphicsSimpleTextItem(display)
-        font = QFont("sans-serif")
-        font.setPixelSize(int(TEXT_STYLES['diameter'].size))
+        font = QFont("sans-serif", 6)
         font.setBold(True)
         label.setFont(font)
         label.setBrush(QBrush(QColor(255, 255, 255, 200)))

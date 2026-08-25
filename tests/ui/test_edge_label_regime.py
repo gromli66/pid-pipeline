@@ -10,8 +10,12 @@
 `OcrLayerMixin` уже держит правило «слой виден только в 'ocr'»
 (`_refresh_ocr_layer_visibility`), подпись диаметра встаёт в тот же ряд.
 
-**3.1, экранная половина.** Кегль подписей графовых вкладок берётся из
-`modules.graph_to_fxml.TEXT_STYLES` — той же таблицы, что и у выгрузки.
+**3.1, экранная половина.** Кегль подписи ТЕКСТ-БЛОКА берётся из
+`modules.graph_to_fxml.TEXT_STYLES` — той же таблицы, что и у выгрузки: этот
+текст в файл уходит, значит паритет ему положен.
+⛔ **Подпись диаметра файловой константе НЕ подчиняется** (решение Максима по
+доработке mefx-3): в FXML её нет вовсе, паритета с файлом у неё нет, кегль
+внутренний и прежний — одинаковый во всех вкладках, включая «Проверку схемы».
 ⚠ **Общий у экрана и файла ТОЛЬКО кегль** (решение №7): Tahoma в клиент не
 бандлим, семейство на экране остаётся прежним (`sans-serif` у диаметра,
 `DejaVu Sans` у подписи текст-блока).
@@ -45,6 +49,9 @@ FIXTURES = os.path.join(os.path.dirname(os.path.dirname(__file__)),
 
 #: Кегль решения №3 — абсолютное число, не выведенное из таблицы.
 SIZE = 18
+#: Внутренний кегль подписи диаметра (pt). В FXML она не печатается, поэтому
+#: файловому числу не подчиняется — решение Максима по доработке mefx-3.
+DIAM_PT = 6
 #: Сколько рёбер фикстуры получают диаметр (замок порога).
 DIAM_COUNT = 5
 #: Живых текст-блоков с текстом в `d74eb9f1` — число абсолютное, фикстура в git.
@@ -191,12 +198,40 @@ def test_правка_диаметра_по_клику_работает_как_�
 
 # ── 3.1 кегль подписей — из общей таблицы ────────────────────────────────
 
-def test_кегль_подписи_диаметра_из_общей_таблицы(ed):
+def test_кегль_подписи_диаметра_внутренний_и_таблице_файла_не_подчиняется(ed):
+    """⛔ Решение Максима по доработке mefx-3.
+
+    Подпись диаметра в FXML не печатается (замок —
+    `tests/test_fxml_text_style.py`), паритета с файлом у неё нет, поэтому
+    файловое число 18 к ней не относится: кегль внутренний, прежний.
+    """
     editor, _g = ed
     editor.set_display_regime("ocr")
-    sizes = {it.font().pixelSize() for it in _labels(editor)}
-    assert sizes == {SIZE}
-    assert TEXT_STYLES["diameter"].size == float(SIZE)
+    assert {it.font().pointSize() for it in _labels(editor)} == {DIAM_PT}
+    assert {it.font().pixelSize() for it in _labels(editor)} != {SIZE}
+    assert "diameter" not in TEXT_STYLES
+
+
+def test_кегль_подписи_диаметра_одинаков_и_в_проверке_схемы(qapp, tmp_path):
+    """Внутреннее число одно на ВСЕ вкладки, а не только на холст.
+
+    «Проверка схемы» — второй потребитель `_create_edge_label`; состояний
+    отображения у неё нет, поэтому подпись там видна всегда, как и была.
+    """
+    from ui.editors.simple_graph_editor import SimpleGraphEditor
+
+    editor = SimpleGraphEditor()
+    editor._canvas_mode = True
+    assert editor.load_data(*_write(tmp_path, _diameter_graph()))
+    editor.resize(1400, 900)
+    try:
+        labels = _labels(editor)
+        assert len(labels) == DIAM_COUNT
+        assert {it.font().pointSize() for it in labels} == {DIAM_PT}
+        assert len(_visible_labels(editor)) == DIAM_COUNT, \
+            "у «Проверки схемы» состояний нет — прятать нечего"
+    finally:
+        _dispose(editor, qapp)
 
 
 def test_кегль_подписи_текст_блока_из_общей_таблицы(ed):
