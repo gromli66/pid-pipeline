@@ -321,6 +321,17 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self._skin_pixmaps: dict[str, QPixmap] = {}   # class_name → QPixmap | None (кэш)
         self._skin_items: dict[str, list] = {}        # node_id → [pixmap_item]
 
+        # ── Разрывы мостов «— | —»: предпросмотр FXML, часть слоя скинов ──
+        # edge_id → [(s, gap)]; ⛔ в граф не пишутся (решение Максима №2).
+        self._bridge_cuts: dict = {}
+        # Множитель ширины разрыва — единственный регулятор оформления, который
+        # уходит в выгрузку (шторка «Размер объектов» → UISettings → generate).
+        # ⚠ Вкладка его сюда пока не передаёт (`advanced_graph_tab.py:387`
+        # кладёт значение только в UISettings, а редактор про uid не знает) —
+        # предпросмотр идёт на дефолте 3.0, том же, что и у генератора.
+        from modules.graph_to_fxml import BRIDGE_GAP_STROKE_FACTOR
+        self.bridge_gap_factor: float = BRIDGE_GAP_STROKE_FACTOR
+
     # =================================================================
     # Overrides — Base/Simple hooks
     # =================================================================
@@ -510,8 +521,45 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         return pen
 
     def _before_draw_all_edges(self):
-        """Очистить perp scores перед перерисовкой."""
+        """Очистить perp scores и пересчитать разрывы перед перерисовкой."""
         self.edge_perp_scores.clear()
+        self._recompute_bridge_cuts()
+
+    def _recompute_bridge_cuts(self):
+        """Разрывы мостов для предпросмотра FXML («Скины»).
+
+        Считает ТА ЖЕ `compute_bridge_cuts`, что и генератор, и ТЕМИ ЖЕ
+        аргументами, что уйдут в выгрузку (`canvas_to_fxml.generate_canvas_fxml`):
+        `base_stroke` = EDGE_WIDTH == `LINE_STROKE_WIDTH`, диаметр выключен
+        (2.1), масштаба у холста нет — `graph_scale` жёстко 1.0.
+        ⛔ Результат никуда не сохраняется: решение Максима №2 — разрывы
+        остаются вычисляемыми, файл графа от предпросмотра не меняется.
+
+        ⚠ Цена квадратична по рёбрам (замер §MEFX2б: 8.4 мс на 118 рёбрах,
+        ~250 мс на 418). Поэтому зовётся только из общего пути перерисовки
+        рёбер — то есть на завершении жеста и на пересборке сцены, а не на
+        кадр, — и только при включённом предпросмотре.
+
+        ⚠ Место вызова — `_before_draw_all_edges`, а не `_redraw_overlays`:
+        оверлеи рисуются ПОСЛЕ рёбер в обоих путях (`setup_scene` и
+        `_redraw_all`), и посчитанные там разрывы приезжали бы на одну
+        перерисовку позже.
+        """
+        if not self.show_skins:
+            self._bridge_cuts = {}
+            return
+        from modules.graph_to_fxml import compute_bridge_cuts
+        self._bridge_cuts = compute_bridge_cuts(
+            self.edges_data, self.nodes,
+            base_stroke=self.EDGE_WIDTH, use_diameter=False, graph_scale=1.0,
+            bridge_gap_factor=self.bridge_gap_factor,
+        )
+
+    def _edge_cuts(self, edge_data: dict):
+        """Разрывы ЭТОГО ребра — только пока включён предпросмотр FXML."""
+        if not self._bridge_cuts:
+            return None
+        return self._bridge_cuts.get(edge_data.get('id'))
 
     def _before_edge_draw(self, key: tuple, edge: dict):
         """Вычислить перпендикулярность ДО рисования."""

@@ -75,7 +75,9 @@ DV_COUNT = 5
 BASE = 2.0
 
 #: Мосты `089feca2` при `use_diameter=False`, `bridge_gap_factor=3.0`
-#: (замер §MEFX2б: разорванных рёбер 5, разрывов 7).
+#: (замер §MEFX2б: разорванных рёбер 5, разрывов 7). Список абсолютный —
+#: считать его вызовом проверяемой функции значит вывести вход из выхода.
+BRIDGE_IDS = ("edge_2", "edge_4", "edge_14", "edge_18", "edge_44")
 BRIDGE_EDGES = 5
 BRIDGE_CUTS = 7
 
@@ -147,9 +149,25 @@ def thick(qapp, tmp_path):
     _dispose(ed, qapp)
 
 
+def _bridge_graph() -> dict:
+    """`089feca2` плюс диаметр на разрываемых рёбрах.
+
+    Без него аргумент `use_diameter=False` НЕДОКАЗУЕМ: в исходных байтах
+    диаметров нет, все толщины 2.0, и сторож остался бы зелёным при
+    возврате диаметра в путь разрывов. С Dv300 старое правило дало бы тем
+    же пяти рёбрам разрыв 36 px вместо 6 — ровно то изменение мостов,
+    которым решение №1 оплачено (замер §MEFX2б).
+    """
+    g = _fixture_graph("089feca2")
+    for e in g["links"]:
+        if e["id"] in BRIDGE_IDS:
+            e["diameter_value"] = DV
+    return g
+
+
 @pytest.fixture
 def bridged(qapp, tmp_path):
-    g = _fixture_graph("089feca2")
+    g = _bridge_graph()
     ed = _new_editor(tmp_path, g)
     yield ed, g
     _dispose(ed, qapp)
@@ -239,11 +257,17 @@ def test_фикстура_разрывов_несёт_мосты(bridged):
     cuts = compute_bridge_cuts(ed.edges_data, ed.nodes, base_stroke=BASE,
                                use_diameter=False, graph_scale=1.0,
                                bridge_gap_factor=3.0)
+    assert set(cuts) == set(BRIDGE_IDS)
     assert len(cuts) == BRIDGE_EDGES
     assert sum(len(v) for v in cuts.values()) == BRIDGE_CUTS
-    assert compute_bridge_cuts(ed.edges_data, ed.nodes, base_stroke=BASE,
-                               use_diameter=False, graph_scale=1.0,
-                               bridge_gap_factor=3.0) == cuts, "функция недетерминирована"
+    # Оба аргумента выгрузки на этой фикстуре РАЗЛИЧАЮЩИЕ — иначе сторож,
+    # который их сверяет, зелен при любом их значении.
+    assert cuts != compute_bridge_cuts(ed.edges_data, ed.nodes, base_stroke=BASE,
+                                       use_diameter=True, graph_scale=1.0,
+                                       bridge_gap_factor=3.0)
+    assert cuts != compute_bridge_cuts(ed.edges_data, ed.nodes, base_stroke=BASE,
+                                       use_diameter=False, graph_scale=1.0,
+                                       bridge_gap_factor=WIDE_GAP)
 
 
 # ── 2.1 + 2.2: толщина ───────────────────────────────────────────────────
