@@ -41,6 +41,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox    # noqa: E402
 import ui.widgets.error_report_dialog as erd               # noqa: E402
 import ui.widgets.diagram_workspace as dw                  # noqa: E402
 from ui.services.api_client import DiagramStatus           # noqa: E402
+from ui.widgets.progress_beads import BeadState            # noqa: E402
 
 UID = str(uuid.UUID("0c111111-2222-3333-4444-555566667777"))
 
@@ -133,6 +134,10 @@ class FakeAPI:
 
     def start_ocr(self, uid):
         self.started.append(uid)
+        # Сервер удаляет `OCR_RESULT` в самом начале `/ocr/start`
+        # (`app/api/ocr.py`) — без этого стенд судил бы состояние, которого
+        # у оператора не бывает.
+        self.has_ocr_result = False
         return {"status": "dispatched", "task_id": "task-0001"}
 
     def rollback_diagram(self, uid, target_status, preserve_ocr=False,
@@ -397,3 +402,242 @@ def test_error_report_refusal_short_circuits(bench):
 
     assert FakeMsgBox.calls == [], f"лишний вопрос после отказа: {FakeMsgBox.calls}"
     assert api.started == []
+
+
+# ── дверь привязки на время перезапуска (замечание приёмки, доработка №3) ──
+#
+# Замечание Максима: во время подтверждённого перезапуска распознавания кнопка
+# и бусина «Привязка» ВРЕМЕНАМИ снова доступны. «Временами» — это статус:
+# `_buttons_for_status` числит `ocr_binding` пройденным при `ocr_bound` и позже,
+# поэтому `_start_ocr` гасил кнопку, а первый же тик опроса возвращал её на
+# место. Дверь вела в пустую вкладку: сервер удаляет `OCR_RESULT` в самом
+# начале `/ocr/start`.
+#
+# ⚠ Названная в замечании причина («`_ocr_notified` не сбрасывается») ЗАМЕРОМ НЕ
+# подтвердилась: `_start_ocr` сбрасывает флаг и поднимает поллер с самого начала
+# (см. `test_restart_resets_the_artifact_flag_and_starts_the_poll`). Настоящая
+# причина — перекраска ПО СТАТУСУ, и лечится она отдельной меткой перезапуска.
+
+# Статусы, при которых привязка включается ПО СТАТУСУ, а не по артефакту:
+# ровно там замечание и воспроизводилось.
+BINDING_GREEN_BY_STATUS = ["ocr_bound", "generating_fxml", "completed"]
+
+# Где привязка вообще достижима: порог `_binding_reachable` — `validated_graph`
+# (доработка pains-1). Раньше него дверь закрыта и БЕЗ перезапуска — вкладке
+# нечего показывать, `graph_validated.json` ещё не существует.
+BINDING_REACHABLE = [s for s in ALL_GREEN
+                     if s not in ("building_graph", "built", "validating_graph")]
+
+
+def _tick(ws, status):
+    """Тик опроса статуса — то, что клиент делает каждые 2 секунды."""
+    ws._apply_status(DiagramStatus(status))
+
+
+def test_restart_resets_the_artifact_flag_and_starts_the_poll(bench):
+    """Часть, которая работала и до правки, — заперта, чтобы не сломать её.
+
+    Замер приёмки №3: `_ocr_notified` сбрасывается и поллер поднимается уже
+    сейчас. Клетка нужна, чтобы правка метки перезапуска не «починила» это
+    второй раз и чтобы наследник не искал дефект здесь.
+    """
+    ws, api = bench("completed")
+
+    _click_ocr(ws)
+
+    assert api.started == [UID]
+    assert ws._ocr_notified is False, "флаг готовности не сброшен"
+    assert ws._ocr_poll_timer.isActive(), "поллер артефакта не поднят"
+
+
+@pytest.mark.parametrize("status", ALL_GREEN)
+def test_binding_stays_closed_until_a_new_result(status, bench):
+    """Гейт замечания: пока идёт перезапуск, привязки нет — при ЛЮБОМ статусе.
+
+    Проверяется ТИК опроса, а не мгновение после клика: до правки кнопка
+    гасла и возвращалась на первом же тике.
+    """
+    ws, api = bench(status)
+
+    _click_ocr(ws)
+    _tick(ws, status)
+
+    assert not ws._action_buttons["ocr_binding"].isEnabled(), (
+        f"{status}: привязка снова доступна во время перезапуска"
+    )
+    assert ws.beads.get_state(dw.BEAD_OCR_BINDING) == BeadState.UNAVAILABLE, status
+
+
+@pytest.mark.parametrize("status", BINDING_REACHABLE)
+def test_binding_returns_when_the_new_result_arrives(status, bench):
+    """Порог с другой стороны: новый результат — и дверь открыта снова.
+
+    Утверждается РАЗНИЦА: закрыта во время счёта, открыта после него. Без
+    второй половины правка «погасить навсегда» осталась бы зелёной.
+    """
+    ws, api = bench(status)
+
+    _click_ocr(ws)
+    _tick(ws, status)
+    assert not ws._action_buttons["ocr_binding"].isEnabled(), status
+
+    api.has_ocr_result = True          # воркер положил новый ocr_result
+    ws._check_ocr_artifact()
+    _tick(ws, status)
+
+    assert ws._ocr_rerun_in_flight() is False, "метка перезапуска не снята"
+    assert ws._action_buttons["ocr_binding"].isEnabled(), (
+        f"{status}: привязка не вернулась после нового результата"
+    )
+
+
+@pytest.mark.parametrize("status", ALL_GREEN)
+def test_ocr_bead_spins_during_the_rerun(status, bench):
+    """Бусина распознавания крутится по-настоящему, а не показывает «готово».
+
+    Строки стадии на этот момент может ещё не быть — её заводит воркер, — и
+    по статусу бусина остаётся зелёной. Оператор смотрел бы на «готово» у
+    этапа, который в эту секунду считается заново.
+    """
+    ws, _api = bench(status)
+
+    _click_ocr(ws)
+    _tick(ws, status)
+
+    assert ws.beads.get_state(dw.BEAD_OCR) == BeadState.IN_PROGRESS, status
+
+
+@pytest.mark.parametrize("status", ["building_graph", "built", "validating_graph"])
+def test_binding_stays_closed_before_its_own_threshold(status, bench):
+    """Сторож границы: раньше «Проверки схемы» привязка закрыта и БЕЗ перезапуска.
+
+    Порог `_binding_reachable` (доработка pains-1) старше этой правки: вкладка
+    кладёт подписи на узлы ПРОВЕРЕННОГО графа, которого там ещё нет. Без этой
+    клетки предыдущий тест пришлось бы писать по всем статусам и он краснел бы
+    на чужом, законном замке.
+    """
+    ws, api = bench(status)
+
+    api.has_ocr_result = True
+    ws._check_ocr_artifact()
+    _tick(ws, status)
+
+    assert not ws._action_buttons["ocr_binding"].isEnabled(), status
+
+
+def test_a_fresh_load_of_a_finished_diagram_keeps_the_binding_open(bench):
+    """Сторож границы: метка перезапуска НЕ гасит привязку на свежей загрузке.
+
+    `_ocr_notified` на готовой схеме тоже False (ветка опроса артефакта на
+    статусы после контуров не заходит), поэтому гасить по нему было нельзя —
+    оператор потерял бы дверь в законно пройденную привязку. Отдельная метка
+    заведена ровно из-за этой клетки.
+    """
+    ws, _api = bench("completed")
+
+    assert ws._ocr_notified is False, "стенд не воспроизводит свежую загрузку"
+    assert ws._ocr_rerun_in_flight() is False
+    assert ws._action_buttons["ocr_binding"].isEnabled(), (
+        "привязка закрыта на схеме, где её давно прошли"
+    )
+
+
+def test_refused_restart_does_not_close_the_binding(bench):
+    """Оператор ответил «Нет» — ничего не гаснет: перезапуска не было."""
+    ws, api = bench("completed")
+    FakeMsgBox.answer = QMessageBox.StandardButton.No
+
+    _click_ocr(ws)
+    _tick(ws, "completed")
+
+    assert api.started == []
+    assert ws._ocr_rerun_in_flight() is False
+    assert ws._action_buttons["ocr_binding"].isEnabled()
+
+
+# ── цвет пройденной привязки (второе замечание приёмки, доработка №3) ─────
+#
+# Замечание Максима: во время пересчёта раскладки ПРОЙДЕННАЯ привязка горит
+# жёлтым. Три ветки параллельного OCR красили кнопку жёлтым БЕЗУСЛОВНО, стоило
+# появиться `has_ocr_result`, — а жёлтый значит «сделай это». Замер §P3.11: при
+# `ocr_bound`/`generating_fxml`/`completed` кнопка после загрузки зелёная, а
+# после первого же тика поллера — жёлтая.
+
+# Статусы, при которых привязка УЖЕ пройдена (порог `OCR_BOUND`).
+BINDING_DONE = ["ocr_bound", "generating_fxml", "completed"]
+
+# Статусы, при которых привязка ещё ВПЕРЕДИ, — там жёлтый честен.
+BINDING_AHEAD = ["validated_graph", "extracting_contours",
+                 "contours_extracted", "contours_validated"]
+
+
+def _binding_colour(ws):
+    css = ws._action_buttons["ocr_binding"].styleSheet()
+    for name, style in (("жёлтая", dw._BTN_STYLE_YELLOW),
+                        ("зелёная", dw._BTN_STYLE_GREEN),
+                        ("серая", dw._BTN_STYLE_GRAY),
+                        ("синяя", dw._BTN_STYLE_BLUE)):
+        if css == style:
+            return name
+    return "иная"
+
+
+def _artifact_branches(ws, status):
+    """Прогнать ВСЕ три ветки параллельного OCR по очереди.
+
+    Перебор ведётся списком, а не выборкой: правило было написано трижды, и
+    замечание вылезло ровно потому, что чинили бы одну ветку из трёх.
+    """
+    yield "поллер", lambda: (setattr(ws, "_ocr_notified", False),
+                             ws._check_ocr_artifact())
+    yield "apply_status/B6.4", lambda: (setattr(ws, "_ocr_notified", False),
+                                        ws._apply_status(DiagramStatus(status)))
+    yield "apply_status/elif", lambda: (setattr(ws, "_ocr_notified", True),
+                                        ws._apply_status(DiagramStatus(status)))
+
+
+@pytest.mark.parametrize("status", BINDING_DONE)
+def test_passed_binding_stays_green_on_every_branch(status, bench):
+    """Пройденная привязка остаётся зелёной — какая бы ветка ни сработала."""
+    ws, _api = bench(status)
+
+    for name, run in _artifact_branches(ws, status):
+        run()
+        assert _binding_colour(ws) == "зелёная", f"{status}/{name}"
+        assert ws.beads.get_state(dw.BEAD_OCR_BINDING) == BeadState.COMPLETED, (
+            f"{status}/{name}"
+        )
+
+
+@pytest.mark.parametrize("status", BINDING_AHEAD)
+def test_pending_binding_is_yellow_on_every_branch(status, bench):
+    """Порог с другой стороны: пока привязка ВПЕРЕДИ, жёлтый честен.
+
+    Без этой клетки правка «красить зелёным всегда» осталась бы зелёной, а
+    оператор перестал бы видеть, что этап ждёт его работы.
+    """
+    ws, _api = bench(status)
+
+    for name, run in _artifact_branches(ws, status):
+        run()
+        assert _binding_colour(ws) == "жёлтая", f"{status}/{name}"
+        assert ws.beads.get_state(dw.BEAD_OCR_BINDING) == BeadState.AVAILABLE, (
+            f"{status}/{name}"
+        )
+
+
+def test_all_three_branches_share_one_rule():
+    """Правило цвета живёт в ОДНОЙ точке, а не тремя копиями.
+
+    Сторож не про стиль: три копии одного правила и разъехались — их правили
+    порознь. Пока ветки зовут общий метод, четвёртая копия не появится молча.
+    """
+    import inspect
+
+    for func in (dw.DiagramWorkspace._apply_status,
+                 dw.DiagramWorkspace._check_ocr_artifact):
+        src = inspect.getsource(func)
+        assert "_light_binding_button" in src, func.__name__
+        assert "_BTN_STYLE_YELLOW" not in src, (
+            f"{func.__name__}: правило цвета снова расписано на месте"
+        )

@@ -663,6 +663,7 @@ class DiagramWorkspace(QWidget):
         self._active_tab_key = ""  # Ключ: "cvat", "junction", "pipe", "graph"
         self._btn_back_injected = None  # Кнопка ← Назад внутри вкладки
         self._ocr_notified = False  # B6.4: OCR ready notification sent
+        self._ocr_rerunning = False  # идёт подтверждённый перезапуск OCR
         self._was_status_watching = False  # Paused status polling while tab is open
         # Отказы отправки, о которых сказал веер: ключ бусины → отпечаток строк
         # `/stages` этого этапа, известных НА МОМЕНТ отказа (None — не прочитались).
@@ -833,6 +834,7 @@ class DiagramWorkspace(QWidget):
         self._masks_completion_sent = False
         self._stop_ocr_poll()
         self._ocr_notified = False
+        self._ocr_rerunning = False
         self._fxml_save_prompted = True
         self._prtx_armed = False
         self._prtx_skip_next = False
@@ -1017,17 +1019,15 @@ class DiagramWorkspace(QWidget):
                 ocr_info = self.api_client.get_ocr_status(self._uid)
                 if ocr_info.get("has_ocr_result"):
                     self._ocr_notified = True
+                    self._ocr_rerunning = False     # новый результат пришёл
                     self._stop_ocr_poll()
                     self.beads.set_state(BEAD_OCR, BeadState.COMPLETED)
                     if "ocr" in self._action_buttons:
                         self._action_buttons["ocr"].setEnabled(True)
                         self._action_buttons["ocr"].setStyleSheet(_BTN_STYLE_GREEN)
-                    # Привязка — только с проверенным графом (`_binding_reachable`).
-                    if (_binding_reachable(status)
-                            and "ocr_binding" in self._action_buttons):
-                        self._action_buttons["ocr_binding"].setEnabled(True)
-                        self._action_buttons["ocr_binding"].setStyleSheet(_BTN_STYLE_YELLOW)
-                        self.beads.set_state(BEAD_OCR_BINDING, BeadState.AVAILABLE)
+                    # Привязка — только с проверенным графом (`_binding_reachable`),
+                    # и цветом по тому, пройден ли этап (`_light_binding_button`).
+                    self._light_binding_button(status)
                     # «Ручная правка» по факту OCR-артефакта БОЛЬШЕ НЕ ОТКРЫВАЕТСЯ:
                     # гейт §3.2 — сначала привязка, потом готовая раскладка
                     # (ui/services/layout_gate.py, применяется в _on_stages_updated).
@@ -1053,12 +1053,9 @@ class DiagramWorkspace(QWidget):
             if "ocr" in self._action_buttons:
                 self._action_buttons["ocr"].setEnabled(True)
                 self._action_buttons["ocr"].setStyleSheet(_BTN_STYLE_GREEN)
-            # Привязка — только с проверенным графом (`_binding_reachable`).
-            if (_binding_reachable(status)
-                    and "ocr_binding" in self._action_buttons):
-                self._action_buttons["ocr_binding"].setEnabled(True)
-                self._action_buttons["ocr_binding"].setStyleSheet(_BTN_STYLE_YELLOW)
-                self.beads.set_state(BEAD_OCR_BINDING, BeadState.AVAILABLE)
+            # Привязка — только с проверенным графом (`_binding_reachable`),
+            # и цветом по тому, пройден ли этап (`_light_binding_button`).
+            self._light_binding_button(status)
             # «Ручная правка» по факту OCR-артефакта БОЛЬШЕ НЕ ОТКРЫВАЕТСЯ:
             # гейт §3.2 — сначала привязка, потом готовая раскладка
             # (ui/services/layout_gate.py, применяется в _on_stages_updated).
@@ -1066,6 +1063,32 @@ class DiagramWorkspace(QWidget):
     # =================================================================
     # OCR artifact polling (independent of DiagramStatus changes)
     # =================================================================
+
+    def _light_binding_button(self, status) -> None:
+        """Зажечь кнопку и бусину привязки по факту готового OCR-результата.
+
+        ⛔ Цвет решает НЕ артефакт, а ПРОЙДЕН ЛИ ЭТАП: при `ocr_bound` и позже
+        привязка уже сделана, и жёлтое «сделай это» там врёт. Замечание приёмки
+        2026-08-25: во время пересчёта раскладки тик поллера перекрашивал
+        готовую зелёную привязку в жёлтую, и оператор видел, как пройденный
+        этап снова просится в работу (замер §P3.11).
+
+        Порог достижимости — тот же `_binding_reachable`, что и у гейта
+        сохранения на сервере; раньше него привязка ВПЕРЕДИ и жёлтый честен.
+
+        Одна точка на три ветки параллельного OCR (`_apply_status` × 2 и
+        `_check_ocr_artifact`): правило было написано трижды, и разъехаться
+        ему было нечем помешать.
+        """
+        btn = self._action_buttons.get("ocr_binding")
+        if btn is None or not _binding_reachable(status):
+            return
+        done = _status_ge(status, DiagramStatus.OCR_BOUND)
+        btn.setEnabled(True)
+        btn.setStyleSheet(_BTN_STYLE_GREEN if done else _BTN_STYLE_YELLOW)
+        self.beads.set_state(
+            BEAD_OCR_BINDING,
+            BeadState.COMPLETED if done else BeadState.AVAILABLE)
 
     def _start_ocr_poll(self):
         """Запустить периодическую проверку OCR артефакта."""
@@ -1090,6 +1113,7 @@ class DiagramWorkspace(QWidget):
             ocr_info = self.api_client.get_ocr_status(self._uid)
             if ocr_info.get("has_ocr_result"):
                 self._ocr_notified = True
+                self._ocr_rerunning = False         # новый результат пришёл
                 self._stop_ocr_poll()
                 logger.info("OCR artifact detected via poll for %s", self._uid[:8])
                 self.status_message.emit(
@@ -1107,11 +1131,7 @@ class DiagramWorkspace(QWidget):
                 # статуса нет. Тик, заставший статус раньше «Проверки схемы»,
                 # дверь не открывает — её откроет `_apply_status` тем же
                 # правилом, когда статус дойдёт (ветка `_ocr_notified` выше).
-                if (_binding_reachable(self._last_status)
-                        and "ocr_binding" in self._action_buttons):
-                    self._action_buttons["ocr_binding"].setEnabled(True)
-                    self._action_buttons["ocr_binding"].setStyleSheet(_BTN_STYLE_YELLOW)
-                    self.beads.set_state(BEAD_OCR_BINDING, BeadState.AVAILABLE)
+                self._light_binding_button(self._last_status)
                 # «Ручная правка» по факту OCR-артефакта БОЛЬШЕ НЕ ОТКРЫВАЕТСЯ:
                 # гейт §3.2 — сначала привязка, потом готовая раскладка
                 # (ui/services/layout_gate.py, применяется в _on_stages_updated).
@@ -1155,6 +1175,14 @@ class DiagramWorkspace(QWidget):
         if (target.get(BEAD_OCR) != BeadState.COMPLETED
                 and _ocr_stage_running(getattr(self, "_last_stages", None))):
             target[BEAD_OCR] = BeadState.IN_PROGRESS
+
+        # ПЕРЕЗАПУСК РАСПОЗНАВАНИЯ: строки стадии может ещё не быть (её заводит
+        # воркер), а результат сервер уже удалил. Пока новый не пришёл, OCR
+        # крутится, а привязке кормиться нечем — и то и другое ВОПРЕКИ статусу,
+        # который про перезапуск не знает (у OCR своего статуса нет).
+        if self._ocr_rerun_in_flight():
+            target[BEAD_OCR] = BeadState.IN_PROGRESS
+            target[BEAD_OCR_BINDING] = BeadState.UNAVAILABLE
 
         # Перекрыть pipe/junction если подтверждены по отдельности
         if status == DiagramStatus.VALIDATING_MASKS:
@@ -1349,6 +1377,19 @@ class DiagramWorkspace(QWidget):
             processing.add("fxml")
             available.discard("fxml")
             completed.discard("fxml")
+
+        # ПЕРЕЗАПУСК РАСПОЗНАВАНИЯ: сервер удаляет `OCR_RESULT` в самом начале
+        # `/ocr/start`, значит кормиться привязке сейчас нечем. Гасим её
+        # НЕЗАВИСИМО от статуса: `_buttons_for_status` считает `ocr_binding`
+        # пройденным при `ocr_bound` и позже, поэтому `_start_ocr` гасил кнопку,
+        # а первый же тик опроса возвращал её на место (замер §P3.11).
+        if self._ocr_rerun_in_flight():
+            processing.add("ocr")
+            available.discard("ocr")
+            completed.discard("ocr")
+            processing.discard("ocr_binding")
+            available.discard("ocr_binding")
+            completed.discard("ocr_binding")
 
         # Map error_stage to button key for retry
         _STAGE_TO_KEY = {
@@ -2006,6 +2047,16 @@ class DiagramWorkspace(QWidget):
                 return True
         return False
 
+    def _ocr_rerun_in_flight(self) -> bool:
+        """Идёт подтверждённый ПЕРЕЗАПУСК распознавания — результата сейчас нет.
+
+        Флаг живёт от успешного `POST /ocr/start` до нового `has_ocr_result`.
+        Отдельный от `_ocr_notified` он не для красоты: тот False и на СВЕЖЕЙ
+        загрузке готовой схемы (ветка опроса артефакта не заходит на статусы
+        после контуров), и по нему привязку гасить нельзя — она там законна.
+        """
+        return bool(getattr(self, "_ocr_rerunning", False))
+
     def _confirm_ocr_restart(self) -> bool:
         """Спросить про повторный запуск распознавания. True — запускаем."""
         reply = QMessageBox.question(
@@ -2223,6 +2274,10 @@ class DiagramWorkspace(QWidget):
                 self._action_buttons["edit_graph"].setEnabled(False)
                 self._action_buttons["edit_graph"].setStyleSheet(_BTN_STYLE_GRAY)
             self._ocr_notified = False
+            # Метка «идёт перезапуск» — её читают `_update_buttons`/`_update_beads`.
+            # Без неё они перекрашивают привязку обратно по статусу на первом же
+            # тике опроса, и оператор видит открытую дверь в пустую вкладку.
+            self._ocr_rerunning = True
             self.status_provider.watch(self._uid)
             self._start_ocr_poll()
             self.status_message.emit("🔍 OCR запущен", 3000)
