@@ -358,9 +358,16 @@ def test_a_started_ocr_spins_at_the_very_same_status(bench):
 
     Без этой половины утверждение выше было бы зелёным и у клиента, который
     красит бусину OCR красной всегда (`PROTOCOL §3`).
+
+    ⚠ Свидетельство «ушёл» переснято блоком pains-1 (боль 1.4): «в процессе»
+    ведёт теперь ЖИВАЯ строка `/stages`, которую заводит сама задача, а не
+    набор чужих статусов. Прежняя редакция обходилась без строки — и была бы
+    зелёной у клиента, который крутит бусину всю сборку графа, то есть ровно
+    у того, чью ложь чинит блок.
     """
     b = bench(ocr_broker_dead=False)
     b.confirm_junctions()
+    b.poll_stages([stage_row("ocr", status="running", row_id=9)])
     b.poll_status(SrvStatus.BUILDING_GRAPH)
 
     assert b.ocr_bead() is BeadState.IN_PROGRESS
@@ -376,7 +383,11 @@ def test_ocr_disabled_by_config_is_not_a_refusal(bench):
     b.confirm_junctions()
     b.poll_status(SrvStatus.BUILDING_GRAPH)
 
-    assert b.ocr_bead() is BeadState.IN_PROGRESS
+    assert b.ocr_bead() is not BeadState.ERROR
+    # И не крутится: с pains-1 (боль 1.4) кружок ведёт живая стадия, а у
+    # выключенного OCR её нет. Прежняя редакция ждала здесь IN_PROGRESS —
+    # «идёт распознавание» там, где распознавание отключено конфигом.
+    assert b.ocr_bead() is BeadState.UNAVAILABLE
 
 
 def test_already_past_repeat_is_not_a_refusal(bench):
@@ -464,4 +475,6 @@ def test_another_diagram_does_not_inherit_the_refusal(bench):
     b.ws.load_diagram(UID, "другая схема")
 
     assert b.ws._dispatch_refusals == {}
-    assert b.ocr_bead() is BeadState.IN_PROGRESS
+    # Красного нет — и «в процессе» тоже: перезагрузка сбрасывает снимок
+    # стадий (pains-1, Б1), а без живой строки `ocr` крутить нечего.
+    assert b.ocr_bead() is BeadState.UNAVAILABLE

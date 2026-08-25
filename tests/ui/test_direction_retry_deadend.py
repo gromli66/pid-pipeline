@@ -78,6 +78,7 @@ RUNTIME_ERROR_STAGES = [
     "segmenting",
     "skeletonizing",
     "skeletonizing_simple",
+    "skeletonizing_final",
     "detecting_junctions",
     "building_graph",
     "validating_graph",
@@ -113,6 +114,10 @@ RED_BY_ERROR_STAGE = {
     "segmenting": "segment",
     "skeletonizing": "segment",
     "skeletonizing_simple": "pipe",
+    # pains-1 (боль 1, Б16): значение финальной скелетизации ведёт на её
+    # собственную кнопку. `skeletonizing_simple` остаётся клеткой легаси —
+    # так помечены строки `error_stage`, записанные ДО переезда писателя.
+    "skeletonizing_final": "junction",
     "detecting_junctions": "junction",
     "building_graph": "graph",
     "validating_graph": "val_graph",
@@ -153,7 +158,9 @@ FAILED_KEY_BY_STAGE_TYPE = {
     "skeletonization": "segment",
     "mask_validation": "pipe",
     "junction_classification": "junction",
-    "final_skeletonization": "segment",
+    # pains-1 (боль 1, Б16): работа финальной скелетизации принадлежит
+    # «Проверке узлов» — там же, где её бусина.
+    "final_skeletonization": "junction",
     "graph_building": "graph",
     "graph_validation": "val_graph",
     "contour_extraction": "contours",
@@ -417,15 +424,22 @@ def test_grids_changed_by_exactly_one_cell_each():
     Обе редакции — независимые литералы, поэтому правка одной карты без
     другой краснит этот сторож: «переход вне зафиксированного набора»
     (`PROTOCOL §Гейты`) ловится здесь, а не глазами ревизора.
+
+    ⚠ Блок болей pains-1 (2026-08-25) добавил ВТОРУЮ клетку в каждую решётку —
+    финальную скелетизацию (боль 1, Б16). Клетки названы поимённо, а не
+    посчитаны: разница «на одну» стала бы разницей «на сколько-нибудь», и
+    сторож перестал бы ловить незаявленную правку карты.
     """
     added = {k: v for k, v in RED_BY_ERROR_STAGE.items()
              if RED_BY_ERROR_STAGE_BEFORE.get(k) != v}
-    assert added == {"direction_classification": "segment"}
+    assert added == {"direction_classification": "segment",
+                     "skeletonizing_final": "junction"}
     assert set(RED_BY_ERROR_STAGE_BEFORE) - set(RED_BY_ERROR_STAGE) == set()
 
     added = {k: v for k, v in FAILED_KEY_BY_STAGE_TYPE.items()
              if FAILED_KEY_BY_STAGE_TYPE_BEFORE.get(k) != v}
-    assert added == {"direction_classification": "segment"}
+    assert added == {"direction_classification": "segment",
+                     "final_skeletonization": "junction"}
     assert set(FAILED_KEY_BY_STAGE_TYPE_BEFORE) - set(FAILED_KEY_BY_STAGE_TYPE) == set()
 
 

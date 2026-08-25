@@ -12,12 +12,17 @@
 чтобы тест был headless и не зависел от Qt.
 """
 
+import ast
 import importlib.util
 import sys
 from datetime import datetime
 from pathlib import Path
 
 import pytest
+
+from app.models.stage import StageType
+
+ROOT = Path(__file__).resolve().parents[2]
 
 _MODULE_PATH = (
     Path(__file__).resolve().parents[2] / "ui" / "services" / "progress_model.py"
@@ -203,3 +208,83 @@ def test_single_running_still_reports_stage_percents():
     assert ps.running_stage == "detection"
     assert ps.stage_percents.get("detection", 0) > 0
     assert ps.stage_percent == ps.stage_percents["detection"]
+
+
+# ── канон пайплайна: решётка блока болей pains-1 (Б19) ───────────────────
+#
+# Канон обязан совпадать с тем, что конвейер РЕАЛЬНО заводит. Стадия-призрак
+# держит вес в знаменателе и не завершается никогда, поэтому процент не доходит
+# до 100 структурно (замер 0.9); стадия, которой в каноне нет, наоборот, не
+# показывается вовсе. Множество снимается `ast`-разбором `app/**` и `worker/**`
+# при каждом прогоне: новый этап попадает в решётку сам, а не после того, как
+# о нём вспомнят.
+
+CANON_SIZE = 13
+
+
+def _stage_types_used_by_the_server():
+    """Значения `StageType`, которые вообще упоминает код сервера и воркера."""
+    used = set()
+    for package in ("app", "worker"):
+        for path in sorted((ROOT / package).rglob("*.py")):
+            if "__pycache__" in path.parts:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Attribute)
+                        and isinstance(node.value, ast.Name)
+                        and node.value.id == "StageType"):
+                    used.add(StageType[node.attr].value)
+    return used
+
+
+def test_canon_is_exactly_what_the_server_writes():
+    """Ни призраков, ни пропущенных этапов.
+
+    До правки в каноне жили три призрака (`upload`, `mask_validation`,
+    `graph_validation`) — строк с такими типами не заводит НИКТО, — а реальная
+    `direction_classification` не значилась вовсе.
+    """
+    canon = list(progress_model._PIPELINE)
+    assert len(canon) == len(set(canon)) == CANON_SIZE, canon
+    assert set(canon) == _stage_types_used_by_the_server(), (
+        sorted(set(canon) ^ _stage_types_used_by_the_server())
+    )
+
+
+def test_canon_order_follows_the_chain():
+    """Порядок канона — порядок конвейера, иначе ETA врёт.
+
+    Направление — первое звено цепочки `POST /segment`
+    (`app/api/segmentation.py`: `chain(direction -> segment)`), а перекрёстки
+    диспетчит САМА финальная скелетизация (`worker/tasks/skeleton.py`:
+    `task_detect_junctions` уходит из `task_skeletonize_simple`).
+    """
+    canon = list(progress_model._PIPELINE)
+    assert canon.index("direction_classification") < canon.index("segmentation")
+    assert canon.index("final_skeletonization") < canon.index("junction_classification")
+
+
+def test_labels_and_budgets_cover_the_canon_exactly():
+    """Три карты канона — одно множество ключей, без сирот и без дыр."""
+    canon = set(progress_model._PIPELINE)
+    assert set(progress_model._STAGE_LABELS) == canon, (
+        sorted(set(progress_model._STAGE_LABELS) ^ canon)
+    )
+    assert set(progress_model._DEFAULT_BUDGETS) == canon, (
+        sorted(set(progress_model._DEFAULT_BUDGETS) ^ canon)
+    )
+
+
+def test_percent_reaches_the_end_of_the_canon():
+    """Пройденный конвейер доходит до конца шкалы, а не упирается в призраков.
+
+    Числа абсолютные и сняты прогоном (`MEASUREMENTS §P1`): весь канон, кроме
+    экспорта, — **97 %** после правки против **92 %** до неё (знаменатель
+    590 -> 555). Порог заперт с двух сторон: 100 здесь быть не может — экспорт
+    не завершён, а его завершение процент форсирует отдельной веткой.
+    """
+    stages = [_stage(st, "completed", duration_seconds=1)
+              for st in progress_model._PIPELINE if st != "fxml_generation"]
+    ps = compute_progress(stages, now=NOW)
+    assert 97 <= ps.percent < 100, ps.percent
