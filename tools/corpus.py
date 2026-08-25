@@ -25,6 +25,8 @@ sha256 — `tests/fixtures/graph/README.md`).
     corpus.load_graph("d74eb9f1")          # dict (node-link)
     corpus.corpus_paths()                  # {uid8: Path}, фикстуры + storage
     corpus.corpus_paths(include_storage=False)   # только то, что есть в git
+    corpus.canvas_slice_paths()            # {uid8: graph_canvas.json} — срез Э4
+    corpus.edited_canvas_paths()           # {имя: graph_edited*.json} — срез Э4
 """
 from __future__ import annotations
 
@@ -35,6 +37,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 FIXTURE_DIR = REPO / "tests" / "fixtures" / "graph"
 STORAGE_DIR = REPO / "storage" / "diagrams"
+SMOOTH_DIR = REPO / "tools" / "bench" / "smooth_corpus"
 
 
 def fixture_paths() -> dict[str, Path]:
@@ -57,6 +60,35 @@ def corpus_paths(include_storage: bool = True) -> dict[str, Path]:
     found = storage_paths() if include_storage else {}
     found.update(fixture_paths())
     return dict(sorted(found.items()))
+
+
+def canvas_slice_paths() -> dict[str, Path]:
+    """Сырые ХОЛСТЫ (после раскладки) из среза в git: {uid8: путь}.
+
+    Отдельный вход, а не расширение `corpus_paths`: `graph_validated.json`
+    лежит в координатах растра (`image_size` вроде 1247x1978), а холст — в
+    листе 1920x1080, и смешивать их в одном словаре значит подсунуть стенду
+    Э4 не ту систему координат. Живой storage сюда НЕ подмешивается: срез
+    для того и снят, чтобы отвязать стенд от машины (`plan §0.3`).
+    """
+    raw = SMOOTH_DIR / "raw"
+    if not raw.is_dir():
+        return {}
+    return {p.name[:-len("_canvas.json")]: p
+            for p in sorted(raw.glob("*_canvas.json"))}
+
+
+def edited_canvas_paths() -> dict[str, Path]:
+    """ПРАВЛЕНЫЕ холсты (после жестов оператора) из среза в git: {имя: путь}.
+
+    Копия корпуса `tools/bench/edit_corpus/`, который лежит вне git
+    (`.gitignore:37`) и на чистом клоне отсутствует. Ключ — имя файла, как
+    у эталона `edit_bench`: uid у этих сохранений нет.
+    """
+    edited = SMOOTH_DIR / "edited"
+    if not edited.is_dir():
+        return {}
+    return {p.name: p for p in sorted(edited.glob("graph_edited*.json"))}
 
 
 def graph_path(uid8: str) -> Path | None:
