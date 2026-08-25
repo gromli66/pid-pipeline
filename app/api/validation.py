@@ -65,6 +65,26 @@ _SIMPLE_ALREADY_PAST = (
     DiagramStatus.COMPLETED,
 )
 
+# Подмножество ветки выше, при котором контуры уже закрыты, а значит геометрия
+# финальная и холст «Ручной правки» имеет смысл. Повторное подтверждение здесь
+# могло сменить ИСТИНУ (оператор правил граф), и холст надо пересчитать —
+# иначе вкладка честно предупреждает «Схема изменилась, холст будет пересобран
+# заново», пересобирает его локальным pretransform БЕЗ раскладки, и оператор
+# получает ту самую жалобу «ничего не изменилось» (приёмка глазами 2026-08-25).
+#
+# ⛔ Раньше контуров не раскладываем: они ещё поменяют геометрию, и диспетчер
+# позовёт `complete_contour_validation` сам («Контуры закрыты — геометрия
+# финальная, можно раскладывать»). Тот же порог, с которого раскладку зовёт
+# соседняя дверь `/graph/complete`.
+_SIMPLE_LAYOUT_AFTER = (
+    DiagramStatus.CONTOURS_VALIDATED,
+    DiagramStatus.OCR_PROCESSING,
+    DiagramStatus.OCR_COMPLETED,
+    DiagramStatus.OCR_BOUND,
+    DiagramStatus.GENERATING_FXML,
+    DiagramStatus.COMPLETED,
+)
+
 # Маппинг mask_type → (stage_folder, filename)
 MASK_STORAGE_MAP = {
     "junction_mask_validated": ("junction", "junction_mask_validated.png"),
@@ -894,6 +914,18 @@ async def complete_simple_graph_validation(
     _ocr_on = bool(_pc and getattr(_pc.ocr, "enabled", True))
 
     task_id = None
+    if already_past and diagram.status in _SIMPLE_LAYOUT_AFTER:
+        # Истина фазы B могла смениться — холст на неё больше не годится.
+        # Диспетчер идемпотентен по sha: на неизменённом графе ответит
+        # ALREADY_FRESH и не сделает НИ ЕДИНОЙ минуты работы, на изменённом —
+        # поставит пересчёт, о котором вкладка и предупреждает.
+        # ⛔ Без `force`: решение №9 в силе — холст законно затирает СМЕНА
+        # ИСТИНЫ, а её видно и без флага. С `force` метка `operator_saved`
+        # слетала бы и на неизменённом графе (та же ловушка, что закрыта в Н1).
+        # ⚠ Свежесть считает ОДИН модуль (`modules/graph/core/canvas_state`) —
+        # проверять её здесь вторым кодом нельзя: две реализации канона дают
+        # расходящиеся sha и ложное «устарело».
+        await dispatch_layout(uid, db)
     if not already_past:
         obs.bind(uid=str(uid), phase="validation")
         previous_state = (diagram.status, diagram.error_stage, diagram.error_message)

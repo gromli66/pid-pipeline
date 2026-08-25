@@ -484,3 +484,177 @@ def test_binding_gate_table_is_the_one_the_endpoint_uses():
     from app.api.ocr import _BINDING_SAVE_STATUSES
 
     assert {s.value for s in _BINDING_SAVE_STATUSES} == ACCEPTS["binding_save"]
+
+
+# ── возврат приёмки №2: правка графа из фазы B требует пересчёта холста ───
+#
+# Репро Максима: «Ручная правка» → возврат в «Проверку схемы» (свободный вход,
+# Н3+) → правка графа → снова «Ручная правка» → вкладка предупреждает «Схема
+# изменилась, холст будет пересобран заново» — и пересобирает его локальным
+# pretransform, БЕЗ раскладки. Пересчитать было некому: ветка already_past
+# принимала подтверждение, но диспетчер не звала. Раньше этот путь был
+# недостижим (400), дыру открыл свободный вход.
+
+async def _fail_if_called(*args, **kwargs):
+    """Подмена отправки задач: на этих клетках её быть не должно."""
+    raise AssertionError(f"лишняя отправка задачи: {args} {kwargs}")
+
+
+def _layout_journal(monkeypatch, no_tasks=True):
+    """Журнал вызовов раскладки для эндпоинтов `validation.py`."""
+    import app.api.validation as validation_api
+
+    dispatched = []
+
+    async def _layout(uid, db, force=False):
+        dispatched.append((str(uid), force))
+        return {"status": "stub"}
+
+    monkeypatch.setattr(validation_api, "dispatch_layout", _layout)
+    if no_tasks:
+        monkeypatch.setattr(validation_api, "async_safe_dispatch", _fail_if_called)
+    return dispatched
+
+
+def _confirm_simple(status):
+    from app.api.validation import complete_simple_graph_validation
+
+    diagram = _diagram(status)
+    db = FakeDB(diagram, {ArtifactType.GRAPH_VALIDATED:
+                          _artifact(f"{UID}/graph/graph_validated.json")})
+    asyncio.run(complete_simple_graph_validation(UID, db=db))
+    return diagram
+
+
+def test_reentry_confirm_dispatches_the_layout_recompute(storage, monkeypatch):
+    """Повторное подтверждение «Проверки схемы» ставит пересчёт раскладки.
+
+    Без `force`: решение №9 в силе — холст законно затирает СМЕНА ИСТИНЫ, а её
+    диспетчер видит сам по sha. На неизменённом графе это стоит ноль работы
+    (см. `test_untouched_graph_costs_no_work`).
+    """
+    dispatched = _layout_journal(monkeypatch)
+
+    diagram = _confirm_simple("completed")
+
+    assert diagram.status is DiagramStatus.COMPLETED, "статус всё-таки сдвинулся"
+    assert dispatched == [(str(UID), False)], (
+        "пересчёт холста не поставлен — вкладка обещает пересборку, "
+        "а делать её некому"
+    )
+
+
+@pytest.mark.parametrize("status", ["contours_validated", "ocr_processing",
+                                    "ocr_completed", "ocr_bound",
+                                    "generating_fxml", "completed"])
+def test_reentry_dispatches_from_every_closed_contour_status(status, storage,
+                                                             monkeypatch):
+    """Клетка на каждый статус ветки `already_past`, где контуры уже закрыты.
+
+    Перебор ведётся полным списком, а не выборкой (`PROTOCOL §3`): дефект и
+    вылез там, где стенд смотрел на одну клетку.
+    """
+    dispatched = _layout_journal(monkeypatch)
+
+    _confirm_simple(status)
+
+    assert dispatched == [(str(UID), False)], status
+
+
+@pytest.mark.parametrize("status", ["extracting_contours", "contours_extracted"])
+def test_open_contours_do_not_dispatch_yet(status, storage, monkeypatch):
+    """Порог с другой стороны: пока контуры НЕ закрыты, раскладку не зовём.
+
+    Они ещё поменяют геометрию, и `/contours/complete` позовёт диспетчер сам
+    («Контуры закрыты — геометрия финальная, можно раскладывать»). Без этой
+    клетки правка молча начала бы жечь 2-5 минут CPU раньше времени.
+    """
+    dispatched = _layout_journal(monkeypatch)
+
+    _confirm_simple(status)
+
+    assert dispatched == [], status
+
+
+def test_forward_path_still_dispatches_ocr_and_no_layout(storage, monkeypatch):
+    """Прямой путь не тронут: из `validating_graph` уходит OCR, раскладки нет.
+
+    Контуры там ещё впереди и снова поменяют геометрию — раскладывать рано.
+    """
+    import app.api.validation as validation_api
+    import app.services.project_loader as project_loader
+
+    class _Loader:
+        def load(self, code):
+            return type("_C", (), {"ocr": type("_O", (), {"enabled": True})()})()
+
+    monkeypatch.setattr(project_loader, "get_project_loader", lambda: _Loader())
+
+    dispatched = _layout_journal(monkeypatch, no_tasks=False)
+    tasks = []
+
+    async def _task(name, args=None, **kw):
+        tasks.append(name)
+        return "task-0001"
+
+    monkeypatch.setattr(validation_api, "async_safe_dispatch", _task)
+
+    diagram = _confirm_simple("validating_graph")
+
+    assert diagram.status is DiagramStatus.VALIDATED_GRAPH
+    assert tasks == ["worker.tasks.ocr.task_run_ocr"]
+    assert dispatched == [], "на прямом пути раскладку звать рано"
+
+
+def test_untouched_graph_costs_no_work():
+    """Вторая половина требования: без правки графа пересчёта НЕ происходит.
+
+    Судится наблюдаемым исходом, а не фактом вызова: решает не эндпоинт, а
+    диспетчер — по sha холста. Второй реализации канона свежести в эндпоинте
+    заводить нельзя (`modules/graph/core/canvas_state`: две реализации канона =
+    расходящиеся sha = ложное «устарело»), поэтому клетка проверяет НАСТОЯЩУЮ
+    политику раскладки.
+    """
+    from app.services.layout_policy import plan_dispatch, ALREADY_FRESH, DISPATCH
+
+    fresh = {"layout_applied": True, "stale": False}
+    stale = {"layout_applied": True, "stale": True}
+
+    assert plan_dispatch("sha", fresh, [], force=False)[0] == ALREADY_FRESH, (
+        "неизменённый граф всё-таки заказал пересчёт"
+    )
+    assert plan_dispatch("sha", stale, [], force=False)[0] == DISPATCH, (
+        "изменённый граф не заказал пересчёт"
+    )
+
+
+def test_both_doors_of_phase_b_dispatch_the_same_way(storage, monkeypatch):
+    """Две двери повторного подтверждения ведут себя ОДИНАКОВО.
+
+    `/graph/complete` (подтверждение из «Ручной правки») звал пересчёт с самого
+    Н2, `/graph/complete-simple` (подтверждение из «Проверки схемы») — нет.
+    Оператор о разнице между эндпоинтами не знает: он нажимает «Подтвердить».
+    """
+    from app.api.validation import (complete_graph_validation,
+                                    complete_simple_graph_validation)
+    from worker.celery_app import celery_app
+
+    dispatched = _layout_journal(monkeypatch, no_tasks=False)
+
+    class _AsyncResult:
+        id = "task-0001"
+
+    monkeypatch.setattr(celery_app, "send_task", lambda *a, **kw: _AsyncResult())
+
+    seen = {}
+    for name, call in (("complete", complete_graph_validation),
+                       ("complete-simple", complete_simple_graph_validation)):
+        dispatched.clear()
+        db = FakeDB(_diagram("completed"),
+                    {ArtifactType.GRAPH_VALIDATED:
+                     _artifact(f"{UID}/graph/graph_validated.json")})
+        asyncio.run(call(UID, db=db))
+        seen[name] = list(dispatched)
+
+    assert seen["complete"] == seen["complete-simple"], f"двери разошлись: {seen}"
+    assert seen["complete"] == [(str(UID), False)]

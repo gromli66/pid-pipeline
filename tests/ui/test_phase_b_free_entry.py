@@ -539,3 +539,112 @@ def test_the_bench_judges_by_real_endpoints(live):
         api.save_binding()
     assert exc.value.status_code == 400
     assert api.refusals and api.refusals[0][0] == 400
+
+
+# ── связка «пересчёт поставлен → гейт сам открывает дверь» (приёмка №2) ───
+#
+# Повторное подтверждение «Проверки схемы» после правки графа ставит новую
+# задачу раскладки (сервер, `tests/test_phase_b_reentry.py`). Дальше дверь
+# «Ручной правки» обязана закрыться на время счёта и ОТКРЫТЬСЯ САМА, когда
+# счёт кончился, — без ручного «Обновить». Эту связку чинил пункт 1.3 дороги
+# («раскладка заканчивалась, а кнопка оставалась серой навсегда»), и правка
+# приёмки №2 впервые делает её достижимой ПОВТОРНО, уже после готовой схемы.
+
+from datetime import datetime                              # noqa: E402
+
+from ui.widgets.progress_beads import BeadState            # noqa: E402
+
+
+def _layout_row(stage_id, status, *, created=None):
+    return {"id": stage_id, "stage_type": "layout", "status": status,
+            "attempt": 1, "created_at": created or datetime.utcnow().isoformat(),
+            "started_at": None if status == "pending" else (
+                created or datetime.utcnow().isoformat()),
+            "metrics_json": None}
+
+
+class GateAPI(FakeAPI):
+    """FakeAPI + поверхность, которую читает путь стадий."""
+
+    def get_stage_durations(self):
+        return {}
+
+
+@pytest.fixture
+def gate_bench(qapp, monkeypatch):
+    """Воркспейс на готовой схеме — для связки гейта раскладки."""
+    FakeMsgBox.calls = []
+    FakeMsgBox.answer = QMessageBox.StandardButton.Yes
+    monkeypatch.setattr(dw, "QMessageBox", FakeMsgBox)
+
+    made = []
+
+    def _make():
+        api = GateAPI(DiagramStatus.COMPLETED)
+        ws = dw.DiagramWorkspace(api, FakeStatusProvider())
+        ws.load_diagram(UID, "схема оператора")
+        made.append(ws)
+        return ws, api
+
+    yield _make
+
+    for ws in made:
+        ws._stop_ocr_poll()
+        ws.hide()
+        ws.setParent(None)
+        ws.deleteLater()
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+def test_gate_closes_for_the_recompute_and_reopens_by_itself(gate_bench):
+    """Дверь ждёт пересчёт и открывается сама, когда он закончился.
+
+    Утверждается РАЗНИЦА, а не совпадение с «до»: сначала дверь открыта на
+    старой готовой раскладке, потом закрыта на новой бегущей, потом открыта
+    снова. Совпадение «открыта в конце» было бы зелёным и без пересчёта.
+    """
+    ws, _api = gate_bench()
+
+    ws._on_stages_updated(UID, [_layout_row(5, "completed",
+                                            created="2026-08-25T10:00:00")])
+    assert ws._layout_gate.allow is True, "дверь заперта на готовой раскладке"
+
+    # Оператор правил граф и подтвердил — сервер поставил новую раскладку.
+    running = [_layout_row(5, "completed", created="2026-08-25T10:00:00"),
+               _layout_row(6, "pending")]
+    ws._on_stages_updated(UID, running)
+
+    assert ws._layout_gate.allow is False, "дверь не закрылась на время счёта"
+    assert ws._layout_gate.waiting is True, ws._layout_gate.reason
+    assert ws.beads.get_state(dw.BEAD_EDIT_GRAPH) == BeadState.IN_PROGRESS
+    assert ws._gate_blocked is True
+
+    # Раскладка досчиталась.
+    done = [_layout_row(5, "completed", created="2026-08-25T10:00:00"),
+            _layout_row(6, "completed")]
+    ws._on_stages_updated(UID, done)
+
+    assert ws._layout_gate.allow is True, "дверь не открылась после пересчёта"
+    assert ws._gate_blocked is False
+    assert ws._action_buttons["edit_graph"].isEnabled(), (
+        "кнопка осталась серой — ровно боль 1.3, только на повторном круге"
+    )
+    assert ws.beads.get_state(dw.BEAD_EDIT_GRAPH) != BeadState.IN_PROGRESS, (
+        "бусина крутится после конца счёта"
+    )
+
+
+def test_failed_recompute_still_lets_the_operator_in(gate_bench):
+    """Пересчёт упал — дверь открыта с предупреждением, а не заперта.
+
+    Замок здесь был бы хуже отсутствия раскладки: оператор остался бы без
+    единого способа войти в собственную схему.
+    """
+    ws, _api = gate_bench()
+
+    failed = _layout_row(6, "failed")
+    failed["error_message"] = "libavoid упал"
+    ws._on_stages_updated(UID, [failed])
+
+    assert ws._layout_gate.allow is True
+    assert ws._layout_gate.warn and "не удалась" in ws._layout_gate.warn
