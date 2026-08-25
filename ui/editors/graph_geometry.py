@@ -1249,3 +1249,103 @@ def boundary_mark_points(outline: List[Tuple[float, float]],
     back = _walk(False)
     fwd = _walk(True)
     return list(reversed(back)) + [(cx, cy)] + fwd
+
+
+# =====================================================================
+# ДИСПЕТЧЕР ПОСАДКИ (блок 4 «точечных болей», 2026-08-25)
+# =====================================================================
+#
+# Выбор нужной `connect_*` по форме пары узлов жил внутри
+# `ContourEditor._recalculate_edges_for_node` (contour_editor.py:306-355).
+# «Проверка схемы» повторить его не могла и сажала концы каноном
+# `modules/graph/core/seating`, из-за чего строгая ось терялась. Решение
+# Максима 2026-08-25 («да, как в Контурах», досрочное исполнение Г5/Г5а/Г5в
+# пунктов 8-2…8-4 дороги) — ветвление вынесено сюда без изменений и
+# используется обеими вкладками.
+
+
+def node_shape_is_polygon(node: dict) -> bool:
+    """Форма узла для ДИСПЕТЧЕРА — контур?
+
+    Сырой seg-чек легаси-ветвления, НЕ `BaseGraphEditor._node_has_polygon`:
+    тот дополнительно смотрит `_draws_polygon` (в «Ручной правке» у скинового
+    узла контур не рисуется). В «Проверке схемы» и «Контурах» ответы
+    совпадают; сводить их в одну функцию — работа пункта 10-1 дороги, здесь
+    ветвление обязано остаться тем же, что было, иначе вынос не бит-в-бит.
+    """
+    seg = node.get("segmentation")
+    return (node.get("type", "connector") == "equipment"
+            and bool(seg) and isinstance(seg, list) and len(seg) >= 6)
+
+
+def _dispatch_bbox(node: dict, connector_radius: float) -> List[float]:
+    """Виртуальный bbox узла — копия `BaseGraphEditor._get_node_bbox`.
+
+    Единственная утечка self-состояния из редактора в диспетчер: радиус
+    виртуального бокса коннектора (`CONNECTOR_MARKER_RADIUS`, у растровых
+    вкладок 8, у холста 4.0). Поэтому он — ПАРАМЕТР, а не константа.
+    """
+    node_type = node.get("type", "connector")
+    bbox = node.get("bbox")
+    if node_type == "equipment" and bbox and len(bbox) == 4:
+        return bbox
+    cx, cy = node["centroid"][1], node["centroid"][0]
+    r = connector_radius
+    return [cx - r, cy - r, cx + r, cy + r]
+
+
+def dispatch_connect(src_node: dict, tgt_node: dict,
+                     connector_radius: float = 8.0
+                     ) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+    """Посадка пары узлов «как в Контурах»: строгая ось важнее центра.
+
+    Возвращает ((sx, sy), (tx, ty)) — точку на ИСТОЧНИКЕ и точку на ЦЕЛИ,
+    обе в (x, y). Формат `source_point`/`target_point` в графе — [y, x],
+    конверсию делает вызывающий.
+
+    ⚠ Порядок узлов ЗНАЧИМ и здесь НЕ нормализуется: `dispatch(s, t)` и
+    `dispatch(t, s)` дают разный ответ примерно на 45 % рёбер, потому что
+    ветвление спрашивает про источник раньше, чем про цель. Нормализация
+    внутри сломала бы бит-в-бит совпадение с «Контурами», и ни один тест
+    этого бы не заметил; кому нужна симметрия — нормализует пару В ВЫЗОВЕ
+    (так делает «Проверка схемы», см. `SimpleGraphEditor._seat_pair_dispatch`).
+
+    ⚠ Контракт ошибок: битую геометрию функция НЕ прячет — исключение уходит
+    вызывающему. «Контуры» ловят его и оставляют старые точки
+    (`contour_editor.py:357-361`), у `add_edge` старых точек нет, поэтому там
+    фолбэк — канонная посадка пары, а не тихий [0, 0] из `create_edge_data`.
+    """
+    src_seg = src_node.get("segmentation")
+    tgt_seg = tgt_node.get("segmentation")
+    src_bbox = _dispatch_bbox(src_node, connector_radius)
+    tgt_bbox = _dispatch_bbox(tgt_node, connector_radius)
+
+    src_has_poly = node_shape_is_polygon(src_node)
+    tgt_has_poly = node_shape_is_polygon(tgt_node)
+    src_is_connector = src_node.get("type", "connector") == "connector"
+    tgt_is_connector = tgt_node.get("type", "connector") == "connector"
+
+    # ⚠ В трёх ветках распаковка ПЕРЕВЁРНУТА (`p2, p1`): туда `connect_*`
+    # отдаёт первой точку ЦЕЛИ. Это главное место ошибки при переносе.
+    if src_is_connector and tgt_has_poly:
+        pt = (src_node["centroid"][1], src_node["centroid"][0])
+        p1, p2, _ = connect_point_polygon(pt, tgt_seg)
+    elif tgt_is_connector and src_has_poly:
+        pt = (tgt_node["centroid"][1], tgt_node["centroid"][0])
+        p2, p1, _ = connect_point_polygon(pt, src_seg)
+    elif src_is_connector:
+        pt = (src_node["centroid"][1], src_node["centroid"][0])
+        p1, p2, _ = connect_point_bbox(pt, tgt_bbox)
+    elif tgt_is_connector:
+        pt = (tgt_node["centroid"][1], tgt_node["centroid"][0])
+        p2, p1, _ = connect_point_bbox(pt, src_bbox)
+    elif src_has_poly and tgt_has_poly:
+        p1, p2, _ = connect_polygon_polygon(src_seg, tgt_seg)
+    elif src_has_poly:
+        p2, p1, _ = connect_bbox_polygon(tgt_bbox, src_seg)
+    elif tgt_has_poly:
+        p1, p2, _ = connect_bbox_polygon(src_bbox, tgt_seg)
+    else:
+        p1, p2, _ = connect_bbox_bbox(src_bbox, tgt_bbox)
+
+    return (p1, p2)

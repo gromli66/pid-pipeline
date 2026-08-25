@@ -22,11 +22,7 @@ from ui.editors.simple_graph_editor import SimpleGraphEditor
 from ui.editors.mode_handlers.contour_handler import ApplyContourHandler
 from ui.editors.mode_handlers.polygon_handlers import EditPolygonHandler
 from ui.editors.polygon_overlay import PolygonVertexOverlay
-from ui.editors.graph_geometry import (
-    connect_bbox_bbox, connect_bbox_polygon,
-    connect_polygon_polygon, connect_point_bbox,
-    connect_point_polygon,
-)
+from ui.editors.graph_geometry import dispatch_connect
 
 logger = logging.getLogger(__name__)
 
@@ -286,7 +282,7 @@ class ContourEditor(SimpleGraphEditor):
     def _recalculate_edges_for_node(self, node_id: str):
         """Recalculate connection points for all edges touching node_id.
 
-        Uses graph_geometry.connect_* functions to compute new
+        Uses graph_geometry.dispatch_connect to compute new
         source_point / target_point, then updates the visual.
         """
         connected = self.model.get_connected_edges(node_id)
@@ -303,52 +299,16 @@ class ContourEditor(SimpleGraphEditor):
             if not src_node or not tgt_node:
                 continue
 
-            src_seg = src_node.get("segmentation")
-            tgt_seg = tgt_node.get("segmentation")
-            src_bbox = self._get_node_bbox(src_id)
-            tgt_bbox = self._get_node_bbox(tgt_id)
-
-            src_type = src_node.get("type", "connector")
-            tgt_type = tgt_node.get("type", "connector")
-
-            src_has_poly = (
-                src_type == "equipment"
-                and src_seg
-                and isinstance(src_seg, list)
-                and len(src_seg) >= 6
-            )
-            tgt_has_poly = (
-                tgt_type == "equipment"
-                and tgt_seg
-                and isinstance(tgt_seg, list)
-                and len(tgt_seg) >= 6
-            )
-
-            # Connector nodes: use point-based connection
-            src_is_connector = src_type == "connector"
-            tgt_is_connector = tgt_type == "connector"
-
             try:
-                if src_is_connector and tgt_has_poly:
-                    pt = (src_node["centroid"][1], src_node["centroid"][0])
-                    p1, p2, _ = connect_point_polygon(pt, tgt_seg)
-                elif tgt_is_connector and src_has_poly:
-                    pt = (tgt_node["centroid"][1], tgt_node["centroid"][0])
-                    p2, p1, _ = connect_point_polygon(pt, src_seg)
-                elif src_is_connector:
-                    pt = (src_node["centroid"][1], src_node["centroid"][0])
-                    p1, p2, _ = connect_point_bbox(pt, tgt_bbox)
-                elif tgt_is_connector:
-                    pt = (tgt_node["centroid"][1], tgt_node["centroid"][0])
-                    p2, p1, _ = connect_point_bbox(pt, src_bbox)
-                elif src_has_poly and tgt_has_poly:
-                    p1, p2, _ = connect_polygon_polygon(src_seg, tgt_seg)
-                elif src_has_poly:
-                    p2, p1, _ = connect_bbox_polygon(tgt_bbox, src_seg)
-                elif tgt_has_poly:
-                    p1, p2, _ = connect_bbox_polygon(src_bbox, tgt_seg)
-                else:
-                    p1, p2, _ = connect_bbox_bbox(src_bbox, tgt_bbox)
+                # Ветвление вынесено в graph_geometry.dispatch_connect
+                # (блок 4 «точечных болей», 2026-08-25) — тем же кодом сажает
+                # концы «Проверка схемы». Радиус виртуального бокса коннектора
+                # передаётся явно: это единственная величина, которую ветвление
+                # брало у редактора (через _get_node_bbox).
+                p1, p2 = dispatch_connect(
+                    src_node, tgt_node,
+                    connector_radius=self.CONNECTOR_MARKER_RADIUS,
+                )
 
                 # source_point/target_point format: [y, x]
                 edge_data["source_point"] = [p1[1], p1[0]]
