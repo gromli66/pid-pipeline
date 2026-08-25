@@ -1248,3 +1248,222 @@ def test_press_on_an_intercepted_corner_now_reaches_the_handle(simple_raster):
     bbox1 = ed_r.nodes[nid]["bbox"]
     assert bbox1[2] == pytest.approx(bbox0[2] + 30.0, abs=DRAG_TOL),         "рамка не выросла по X — нажатие снова украдено отложенной тягой"
     assert bbox1[3] == pytest.approx(bbox0[3] + 20.0, abs=DRAG_TOL),         "рамка не выросла по Y"
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# Блок 7 линии «Ручная правка + FXML»: повторный клик по активной кнопке
+# ═════════════════════════════════════════════════════════════════════════
+#
+# Кнопки-инструменты живут на ВКЛАДКЕ (`mode_group`), а не в редакторе,
+# поэтому здесь поднимается настоящая вкладка. Перебор ведётся списком,
+# снятым С САМОЙ ГРУППЫ (`mode_group.buttons()`), а не выборкой: новая
+# кнопка попадает в него сама, без правки набора.
+
+
+class _StubNodeDialog:
+    """Подмена `NodeListDialog`: считает, сколько раз окно открывали.
+
+    Настоящий диалог модален и подвесил бы набор (PROTOCOL §5, «зонд может
+    повиснуть»), а счётчик открытий — то самое наблюдение, которым
+    отличается «вышли из инструмента» от «открыли окно заново».
+    """
+
+    calls = 0
+    result = 1                       # 1 = «Добавить», 0 = отмена/крестик/Esc
+
+    def __init__(self, classes, parent=None):
+        type(self).calls += 1
+
+    def exec(self):
+        return type(self).result
+
+    def get_selected_class(self):
+        return {"id": 1, "name": "nasos", "display_name": "Насос"}
+
+
+@pytest.fixture
+def node_dialog(monkeypatch):
+    """Диалог выбора класса — подменён на счётчик открытий."""
+    import ui.editors.node_list_dialog as nld
+
+    _StubNodeDialog.calls = 0
+    _StubNodeDialog.result = 1
+    monkeypatch.setattr(nld, "NodeListDialog", _StubNodeDialog)
+    return _StubNodeDialog
+
+
+def _api_stub():
+    from unittest.mock import MagicMock
+
+    api = MagicMock()
+    api.get_project_classes.return_value = {
+        "classes": [{"id": 1, "name": "nasos", "display_name": "Насос"}]
+    }
+    return api
+
+
+def _tab_with_editor(tab, raster, uid):
+    """Довести вкладку до «редактор готов», минуя сеть.
+
+    В бою это делает `_init_editor` (скачивание артефактов); здесь редактор
+    подставляется руками, но связь, от которой зависит состояние кнопок,
+    ставится та же — `mode_callback` (`base_graph_tab.py:947`).
+    """
+    editor = tab._create_editor()
+    editor._canvas_mode = True
+    assert editor.load_data(raster, str(corpus.graph_path(uid)))
+    editor.resize(1400, 900)
+    editor.mode_callback = tab._on_mode_changed
+    tab._editor = editor
+    tab._on_editor_ready()
+    return tab
+
+
+@pytest.fixture
+def adv_tab(qapp, raster, monkeypatch):
+    """«Ручная правка» целиком: десять кнопок-инструментов в `mode_group`."""
+    from ui.tabs.advanced_graph_tab import AdvancedGraphTab
+    from ui.tabs.base_graph_tab import BaseGraphTab
+
+    monkeypatch.setattr(BaseGraphTab, "_download_artifacts", lambda self: None)
+    tab = AdvancedGraphTab(UID, "test", api_client=_api_stub())
+    tab.set_project_code("thermohydraulics")
+    return _tab_with_editor(tab, raster, UID)
+
+
+@pytest.fixture
+def simple_tab(qapp, raster, monkeypatch):
+    """«Проверка схемы»: те же кнопки приходят из общего предка."""
+    from ui.tabs.simple_graph_tab import SimpleGraphTab
+    from ui.tabs.base_graph_tab import BaseGraphTab
+
+    monkeypatch.setattr(BaseGraphTab, "_download_artifacts", lambda self: None)
+    tab = SimpleGraphTab(UID, "test", api_client=_api_stub())
+    tab.set_project_code("thermohydraulics")
+    return _tab_with_editor(tab, raster, UID)
+
+
+def _mode_of(tab):
+    """Карта «кнопка → режим», снятая с самой вкладки."""
+    return {btn: mode for mode, btn in tab._get_mode_button_map().items()}
+
+
+def _checked(tab):
+    """Какие кнопки-инструменты сейчас нажаты."""
+    return [b for b in tab.mode_group.buttons() if b.isChecked()]
+
+
+def test_состав_кнопок_инструмента_снят_с_группы(adv_tab, simple_tab):
+    """Замок перебора: числа абсолютные, и у КАЖДОЙ кнопки группы есть режим.
+
+    Без этого перебор ниже мог бы обойти девять кнопок из десяти и остаться
+    зелёным (PROTOCOL: «перебор ведётся списком, снятым грепом, а не выборкой»).
+    """
+    assert len(adv_tab.mode_group.buttons()) == 10
+    assert len(simple_tab.mode_group.buttons()) == 3
+    for tab, n in ((adv_tab, 10), (simple_tab, 3)):
+        modes = _mode_of(tab)
+        assert len(modes) == n, "кнопка группы без режима — перебор её не увидит"
+        assert set(modes) == set(tab.mode_group.buttons())
+
+
+@pytest.mark.parametrize("tab_fixture", ["adv_tab", "simple_tab"])
+def test_повторный_клик_по_активной_кнопке_возвращает_idle(request, tab_fixture,
+                                                           node_dialog):
+    """Гейт 7.1: второй клик по нажатой кнопке = выход, а не перезапуск.
+
+    Перебираются ВСЕ кнопки группы обеих вкладок. Замер ДО правки
+    (`MEASUREMENTS §MEFX7`): режим оставался прежним, кнопка — нажатой,
+    у всех 13 кнопок двух вкладок.
+    """
+    tab = request.getfixturevalue(tab_fixture)
+    modes = _mode_of(tab)
+    for btn in tab.mode_group.buttons():
+        mode = modes[btn]
+        btn.click()
+        assert tab._editor._current_mode == mode, f"{mode}: не вошли"
+        assert _checked(tab) == [btn], f"{mode}: не одна кнопка нажата"
+
+        btn.click()
+        assert tab._editor._current_mode == "idle", f"{mode}: не вышли в idle"
+        assert _checked(tab) == [], f"{mode}: кнопка осталась нажатой"
+
+
+@pytest.mark.parametrize("tab_fixture", ["adv_tab", "simple_tab"])
+def test_клик_по_ДРУГОЙ_кнопке_переключает_инструмент(request, tab_fixture,
+                                                      node_dialog):
+    """Обратная граница: toggle не должен превращать смену инструмента в выход.
+
+    Без неё «повторный клик выключает» проходило бы и у кода, который гасит
+    инструмент на ЛЮБОЙ клик по группе.
+    """
+    tab = request.getfixturevalue(tab_fixture)
+    modes = _mode_of(tab)
+    btns = tab.mode_group.buttons()
+    for prev, btn in zip(btns, btns[1:]):
+        tab._set_mode("idle")          # общий старт: инструмент не выбран
+        prev.click()
+        assert _checked(tab) == [prev]
+        btn.click()
+        assert tab._editor._current_mode == modes[btn], "клик по соседней кнопке не вошёл"
+        assert _checked(tab) == [btn], "нажатой осталась не та кнопка"
+
+
+def test_выключенный_инструмент_больше_не_рождает_узлы(adv_tab):
+    """Утверждается РАЗНИЦА в ДАННЫХ, а не только состояние кнопки.
+
+    Тот же самый жест: при активном инструменте перекрёсток на холсте
+    появляется, после выхода из инструмента — нет.
+    """
+    ed = adv_tab._editor
+    n0 = len(ed.nodes)
+
+    adv_tab.btn_add_connector.click()
+    x, y = _free_spot(ed)
+    _press(ed, x, y, mods=CTRL)
+    _release(ed, x, y, mods=CTRL)
+    assert len(ed.nodes) == n0 + 1, "инструмент не создал перекрёсток"
+
+    adv_tab.btn_add_connector.click()          # тот же клик по кнопке = выход
+    x2, y2 = _free_spot(ed)
+    assert (x2, y2) != (x, y), "вторая точка совпала с первой — жест не тот"
+    _press(ed, x2, y2, mods=CTRL)
+    _release(ed, x2, y2, mods=CTRL)
+    assert len(ed.nodes) == n0 + 1, "инструмент остался активным после выхода"
+
+
+def test_повторный_клик_по_добавить_узел_не_открывает_окно_заново(simple_tab,
+                                                                  node_dialog):
+    """У кнопки с диалогом своя ветка toggle: второй клик = выход, не второе окно.
+
+    Замер ДО правки (`MEASUREMENTS §MEFX7`): окно открывалось второй раз
+    (`calls` = 2) — ровно то, что оператор описал как «крестик не сработал».
+    """
+    simple_tab.btn_add_node.click()
+    assert node_dialog.calls == 1
+    assert simple_tab._editor._current_mode == "add_node_from_list"
+
+    simple_tab.btn_add_node.click()
+    assert node_dialog.calls == 1, "второй клик снова открыл список классов"
+    assert simple_tab._editor._current_mode == "idle"
+    assert _checked(simple_tab) == []
+
+
+@pytest.mark.parametrize("tab_fixture", ["adv_tab", "simple_tab"])
+def test_подсказка_каждой_кнопки_обещает_выход(request, tab_fixture):
+    """7.2: обещание выхода стоит у ВСЕХ кнопок группы, а не у одной.
+
+    До правки строка «Повторное нажатие кнопки или Esc — выйти из
+    инструмента» была ровно у одной кнопки («Оптимизировать») — и была
+    неправдой. Перебор идёт по той же группе, поэтому новая кнопка обязана
+    принести обещание с собой.
+
+    ⚠ Замок Э4-00 подменяет подсказку «Оптимизировать» на причину блокировки
+    (`_apply_layout_lock`); фикстура — холст БЕЗ раскладки, там подсказка
+    своя (это же условие стережёт `tests/ui/test_layout_lock_buttons.py`).
+    """
+    tab = request.getfixturevalue(tab_fixture)
+    promise = "Повторное нажатие кнопки или Esc — выйти из инструмента."
+    missing = [b.text() for b in tab.mode_group.buttons()
+               if promise not in b.toolTip()]
+    assert missing == [], f"кнопки без обещания выхода: {missing}"

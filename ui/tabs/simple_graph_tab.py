@@ -54,6 +54,11 @@ class SimpleGraphTab(BaseGraphTab):
 
     def _setup_toolbar(self, toolbar: QHBoxLayout):
         self.mode_group = QButtonGroup(self)
+        # Неэксклюзивна НАВСЕГДА (7.1): в эксклюзивной группе Qt не даёт
+        # отжать активную кнопку, и повторный клик по инструменту не может
+        # означать выход. «Одна нажата за раз» держит `_on_mode_changed`.
+        # Прецедент рядом — `AdvancedGraphTab.regime_group` (:103).
+        self.mode_group.setExclusive(False)
 
         # --- add_edge ---
         self.btn_add_edge = QPushButton("Добавить ребро")
@@ -63,12 +68,13 @@ class SimpleGraphTab(BaseGraphTab):
             "Ctrl+ЛКМ по центроиду первого узла, затем Ctrl+ЛКМ по центроиду второго "
             "— ребро создаётся.\n"
             "Esc — сбросить выбор. Ctrl+ПКМ — удалить ребро или узел под курсором.\n"
-            "Навигация: ЛКМ — двигать схему, колесо мыши — масштаб."
+            "Навигация: ЛКМ — двигать схему, колесо мыши — масштаб.\n"
+            "Повторное нажатие кнопки или Esc — выйти из инструмента."
         )
         self.btn_add_edge.setStyleSheet(
             "QPushButton:checked { background-color: #4CAF50; color: white; }"
         )
-        self.btn_add_edge.clicked.connect(lambda: self._set_mode("add_edge"))
+        self.btn_add_edge.clicked.connect(lambda: self._toggle_mode("add_edge"))
         self.mode_group.addButton(self.btn_add_edge)
         toolbar.addWidget(self.btn_add_edge)
 
@@ -79,12 +85,13 @@ class SimpleGraphTab(BaseGraphTab):
             "Добавить перекрёсток — точку соединения/разветвления труб.\n"
             "Ctrl+ЛКМ по ребру — вставить перекрёсток в это место (ребро делится надвое).\n"
             "Ctrl+ЛКМ по свободному месту — отдельный (изолированный) перекрёсток.\n"
-            "Ctrl+ПКМ — удалить узел или ребро под курсором."
+            "Ctrl+ПКМ — удалить узел или ребро под курсором.\n"
+            "Повторное нажатие кнопки или Esc — выйти из инструмента."
         )
         self.btn_add_connector.setStyleSheet(
             "QPushButton:checked { background-color: #FF9800; color: white; }"
         )
-        self.btn_add_connector.clicked.connect(lambda: self._set_mode("add_connector"))
+        self.btn_add_connector.clicked.connect(lambda: self._toggle_mode("add_connector"))
         self.mode_group.addButton(self.btn_add_connector)
         toolbar.addWidget(self.btn_add_connector)
 
@@ -98,7 +105,8 @@ class SimpleGraphTab(BaseGraphTab):
             "Выберите класс, затем Ctrl+ЛКМ с протяжкой — обведите рамкой область узла. "
             "Слишком маленькая рамка — отмена.\n"
             "Класс остаётся выбранным: можно обвести несколько узлов подряд.\n"
-            "Ctrl+ПКМ — удалить узел под курсором. Esc — выйти из режима."
+            "Ctrl+ПКМ — удалить узел под курсором.\n"
+            "Повторное нажатие кнопки или Esc — выйти из инструмента."
         )
         self.btn_add_node.setStyleSheet(
             "QPushButton:checked { background-color: #2196F3; color: white; }"
@@ -121,6 +129,12 @@ class SimpleGraphTab(BaseGraphTab):
     @Slot()
     def _on_add_node_from_list(self):
         """Открыть диалог выбора класса → установить pending_node_class."""
+        # Отдельная ветка toggle (7.1): у этой кнопки клик ведёт в диалог, а не
+        # в `_toggle_mode`, поэтому «кнопку отжали» надо перехватить ДО открытия
+        # окна — иначе повторный клик показывает список классов заново.
+        if not self.btn_add_node.isChecked():
+            self._set_mode("idle")
+            return
         if not self._editor:
             self.btn_add_node.setChecked(False)
             return
