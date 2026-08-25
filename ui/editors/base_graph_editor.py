@@ -543,23 +543,38 @@ class BaseGraphEditor(QGraphicsView):
         """Хук перед рисованием одного ребра. Base: no-op. Advanced: compute perp."""
         pass
 
-    def _build_edge_path(self, source_point, waypoints, target_point) -> QPainterPath:
+    def _build_edge_path(self, source_point, waypoints, target_point,
+                         cuts=None) -> QPainterPath:
         """Построить QPainterPath: source → waypoints → target.
 
-        Points в формате [y, x].
+        Points в формате [y, x] — здесь и проходит граница с генератором,
+        который живёт в (x, y) (`CODING_GUIDE §6`).
+
+        cuts: разрывы моста `[(s, gap), …]`, где `s` — арк-длина от начала
+        полилинии. Формат и числа — ровно те, что уйдут в FXML
+        (`graph_to_fxml.compute_bridge_cuts`), поэтому и режет их та же
+        функция генератора: второй копии правила «где рвать» не заводим.
+        Ребро остаётся ОДНИМ предметом сцены, куски разделяет `moveTo`.
         """
         path = QPainterPath()
         if not source_point or not target_point:
             return path
 
-        sx, sy = source_point[1], source_point[0]
-        path.moveTo(sx, sy)
-
+        pts = [(source_point[1], source_point[0])]
         for wp in (waypoints or []):
-            path.lineTo(wp[1], wp[0])
+            pts.append((wp[1], wp[0]))
+        pts.append((target_point[1], target_point[0]))
 
-        tx, ty = target_point[1], target_point[0]
-        path.lineTo(tx, ty)
+        if cuts:
+            from modules.graph_to_fxml import _split_polyline_with_gaps
+            parts = [p for p in _split_polyline_with_gaps(pts, cuts) if len(p) >= 2]
+        else:
+            parts = [pts]
+
+        for part in parts:
+            path.moveTo(part[0][0], part[0][1])
+            for x, y in part[1:]:
+                path.lineTo(x, y)
         return path
 
     # ---- лист, подложка, тема ----
@@ -660,11 +675,20 @@ class BaseGraphEditor(QGraphicsView):
         """
         return edge_data.get('source_point'), edge_data.get('target_point')
 
+    def _edge_cuts(self, edge_data: dict):
+        """Виртуальный. Разрывы моста ДЛЯ ОТРИСОВКИ ребра (данные не меняются).
+
+        Base: предпросмотра FXML нет — рёбра целые. Advanced: разрывы при
+        включённых «Скинах».
+        """
+        return None
+
     def create_edge_item(self, edge_key: tuple, edge_data: dict,
                          color: QColor = None) -> QGraphicsPathItem:
         """Создать визуальный элемент ребра + подпись диаметра. Public — для Commands."""
         _sp, _tp = self._visual_edge_ends(edge_key, edge_data)
-        path = self._build_edge_path(_sp, edge_data.get('waypoints', []), _tp)
+        path = self._build_edge_path(_sp, edge_data.get('waypoints', []), _tp,
+                                     self._edge_cuts(edge_data))
 
         if color is not None:
             pen = QPen(color, self.EDGE_WIDTH)
@@ -736,7 +760,8 @@ class BaseGraphEditor(QGraphicsView):
             return
 
         _sp, _tp = self._visual_edge_ends(edge_key, edge_data)
-        path = self._build_edge_path(_sp, edge_data.get('waypoints', []), _tp)
+        path = self._build_edge_path(_sp, edge_data.get('waypoints', []), _tp,
+                                     self._edge_cuts(edge_data))
         self.edge_items[edge_key].setPath(path)
 
         pen = self._get_edge_pen(edge_data, edge_key)
