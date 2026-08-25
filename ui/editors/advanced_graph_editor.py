@@ -484,13 +484,18 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         Приоритет — индивидуальная толщина ребра (режим «Размер ребра»).
         Флаг edge_data['dashed'] делает ребро пунктирным во всех режимах.
 
-        Как и цвет, индивидуальная толщина видна в режиме style и при включённых
-        скинах (предпросмотр FXML, куда она уходит всегда).
+        Толщина оператора видна ВЕЗДЕ, кроме состояния 'perp': в нём ширина
+        несёт собственный смысл — сигнал «ребро неперпендикулярно», и чужое
+        число его бы затёрло. Раньше условие было обратным (только 'style'
+        или включённые скины), и в состояниях 'base' и 'ocr' холст показывал
+        2.0 там, где в выгрузку уходило render_width, — редактор врал.
+        Скины старше состояния: включённый предпросмотр FXML показывает
+        кисть и в 'perp' (так было и до правки).
         """
         color = self._get_edge_color(edge_data, key)
 
         render_width = edge_data.get('render_width')
-        if render_width and (self.display_regime == "style" or self.show_skins):
+        if render_width and (self.display_regime != "perp" or self.show_skins):
             pen_width = float(render_width)
         elif (self.display_regime == "perp" and key
                 and key in self.edge_perp_scores
