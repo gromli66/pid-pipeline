@@ -82,7 +82,9 @@ def _lock_buttons(tab):
 
     2026-08-02: «Авто-выравнивание» ИЗ ЗАМКА ВЫВЕДЕНО — за ней теперь не
     прежний auto_fix (он и давал регрессию), а Э4-сглаживание, которое как
-    раз для холста после раскладки и предназначено."""
+    раз для холста после раскладки и предназначено. 2026-08-25 (4.1): у неё
+    свой замок, ОБРАТНЫЙ — запирается там, где раскладки нет, — поэтому в
+    этот перебор она по-прежнему не входит."""
     return (tab.btn_optimize_edge, tab.btn_optimize_all)
 
 
@@ -174,15 +176,24 @@ def test_autofix_button_free_after_layout(qapp, monkeypatch, tmp_path):
     assert called == ["smooth"], f"после раскладки ожидалось сглаживание: {called}"
 
 
-def test_autofix_button_keeps_legacy_on_fallback_canvas(qapp, monkeypatch,
-                                                        tmp_path):
-    """На фолбэк-холсте (раскладка не запускалась) кнопка по-прежнему зовёт
-    прежний auto_fix — там он в родной среде."""
-    tab = _make_tab(monkeypatch, tmp_path, _graph(layout_applied=False))
+@pytest.mark.parametrize("layout_applied", [False, None],
+                         ids=["фолбэк", "легаси-без-метки"])
+def test_autofix_button_is_locked_without_layout(qapp, monkeypatch, tmp_path,
+                                                 layout_applied):
+    """ПЕРЕОБЪЯВЛЕН 4.1 (2026-08-25): на холсте БЕЗ раскладки кнопка заперта.
+
+    Было наоборот — «кнопка по-прежнему зовёт прежний auto_fix, там он в
+    родной среде». Родной средой он не оказался: медианное выравнивание
+    цепочек идёт без единой проверки коллизий и без отката хода, а ветка
+    достижима в обычном рабочем цикле (подробности и оба пути —
+    `tests/ui/test_auto_fix_button_contract.py`).
+    """
+    tab = _make_tab(monkeypatch, tmp_path, _graph(layout_applied=layout_applied))
+    assert not tab.btn_auto_fix.isEnabled()
     called = []
     monkeypatch.setattr(tab._editor, "smooth_canvas",
                         lambda *a, **k: called.append("smooth") or {})
     monkeypatch.setattr(tab._editor, "auto_fix",
                         lambda *a, **k: called.append("autofix"))
     tab._auto_fix()
-    assert called == ["autofix"], f"на фолбэк-холсте ожидался auto_fix: {called}"
+    assert called == [], f"прежний auto_fix запущен на холсте без раскладки: {called}"
