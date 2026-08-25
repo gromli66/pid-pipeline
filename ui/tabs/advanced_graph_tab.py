@@ -390,15 +390,41 @@ class AdvancedGraphTab(SimpleGraphTab):
             p.on_apply = lambda w, h, s: self._editor and self._editor.apply_resize(w, h, s)
             p.on_visibility = self._on_resize_panel_visibility
             # Разрыв моста — общая настройка схемы (per uid), уходит в FXML-генерацию.
-            p.on_bridge_gap = lambda v: UISettings.instance().set_appearance(
-                self.uid, "bridge_gap_factor", float(v)
-            )
+            p.on_bridge_gap = self._on_bridge_gap_changed
             cur = float(UISettings.instance().get_appearance(
                 self.uid, "bridge_gap_factor", 3.0
             ))
             p.set_bridge_gap(cur)
             self._resize_panel = p
         return self._resize_panel
+
+    def _on_bridge_gap_changed(self, value: float):
+        """«Применить разрыв»: множитель в настройки И в предпросмотр (7.5).
+
+        До правки он доходил только до запроса генерации
+        (`diagram_workspace.py:2370`), а редактор рисовал разрывы дефолтом
+        `BRIDGE_GAP_STROKE_FACTOR` = 3.0 — оператор, сдвинувший бегунок, видел
+        новую ширину только в готовом файле. Регулятор единственный в таблице
+        оформления, который уходит в ВЫГРУЗКУ (`UI_GUIDE §11.4`), поэтому
+        расхождение экрана и файла здесь дороже обычного.
+        """
+        value = float(value)
+        UISettings.instance().set_appearance(self.uid, "bridge_gap_factor", value)
+        self._apply_bridge_gap(value)
+
+    def _apply_bridge_gap(self, value: float):
+        """Положить множитель в редактор и свести разрывы предпросмотра.
+
+        Пересчёт — та же дверь, что у жестов (`_sync_bridge_cuts`): при
+        выключенных «Скинах» она выходит сразу, а включение скинов считает
+        разрывы заново уже с новым множителем.
+        """
+        ed = self._editor
+        if ed is None or not hasattr(ed, "bridge_gap_factor"):
+            return
+        ed.bridge_gap_factor = float(value)
+        if hasattr(ed, "_sync_bridge_cuts"):
+            ed._sync_bridge_cuts()
 
     def _on_resize_panel_visibility(self, shown: bool):
         """Панель показана → сдвинуть видимую область редактора вправо,
@@ -734,6 +760,12 @@ class AdvancedGraphTab(SimpleGraphTab):
         if hasattr(ed, "set_size_factor"):
             self._apply_saved_size(
                 "size_ocr_border", lambda f: ed.set_size_factor("OCR_BORDER_W", f))
+        # 7.5: множитель разрыва живёт per-uid и уходит в выгрузку — предпросмотр
+        # обязан считать его тем же числом при ЛЮБОМ положении бегунка, включая
+        # сохранённое с прошлого открытия (панель «Размеры» может не открываться
+        # вовсе, а генератор читает настройку всегда).
+        self._apply_bridge_gap(UISettings.instance().get_appearance(
+            self.uid, "bridge_gap_factor", 3.0))
 
     def apply_default_appearance(self):
         super().apply_default_appearance()
