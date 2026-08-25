@@ -1086,8 +1086,12 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
             panel, "Размер коннекторов", "size_connector",
             lambda f: self._set_editor_size("CONNECTOR_DRAW_RADIUS", f),
         )
+        # Подпись по вердикту 7.3: имя «рамка боксов» было у́же действия —
+        # под пером ходят рамки bbox, контуры полигонов, маркеры коннекторов,
+        # OCR-маркеры и стрелки (замер `MEASUREMENTS §MEFX7.5`: 424 предмета
+        # сцены из 416). Ключ хранения не менялся — `size_outline`.
         self._add_size_setting(
-            panel, "Толщина рамки боксов", "size_outline",
+            panel, "Толщина контуров и маркеров", "size_outline",
             lambda f: self._set_editor_size("OUTLINE_WIDTH", f),
         )
         # П8: подсветка стороны блока, где есть подключение. По умолчанию — вкл.

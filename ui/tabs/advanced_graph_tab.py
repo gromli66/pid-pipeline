@@ -732,12 +732,15 @@ class AdvancedGraphTab(SimpleGraphTab):
     def _build_appearance_controls(self, panel):
         from PySide6.QtGui import QColor
         super()._build_appearance_controls(panel)
+        # ⛔ Здесь был регулятор «Ребро без диаметра» (`edge_no_diam_color`).
+        # Снят вердиктом Максима по таблице 7.3: замер `MEASUREMENTS §MEFX7.5` —
+        # 0 изменённых предметов сцены во ВСЕХ четырёх состояниях при поле шума 0.
+        # Умер не опечаткой ключа, а потерянным читателем: `COLOR_NO_DIAMETER`
+        # никто не читал с тех пор, как из состояния «ОКР привязка» убрали красную
+        # подсветку рёбер без диаметра. Правило Максима: не оптимизируем — убираем.
         self._add_color_setting(
-            panel, "Ребро без диаметра", "edge_no_diam_color", QColor(255, 60, 40),
-            lambda c: self._editor and self._editor.set_edge_no_diameter_color(c),
-        )
-        self._add_color_setting(
-            panel, "Неперпенд. ребро", "edge_bad_color", QColor("#e67e22"),
+            panel, "Неперпенд. ребро (в «Перпендикулярности»)", "edge_bad_color",
+            QColor("#e67e22"),
             lambda c: self._editor and self._editor.set_edge_bad_color(c),
         )
         # Слой ОКР (текст-блоки и рамки ОКР-объектов) — одна ручка.
@@ -752,9 +755,7 @@ class AdvancedGraphTab(SimpleGraphTab):
         if ed is None:
             return
         from PySide6.QtGui import QColor
-        if hasattr(ed, "set_edge_no_diameter_color"):
-            self._apply_saved_color("edge_no_diam_color", QColor(255, 60, 40),
-                                    ed.set_edge_no_diameter_color)
+        if hasattr(ed, "set_edge_bad_color"):
             self._apply_saved_color("edge_bad_color", QColor("#e67e22"),
                                     ed.set_edge_bad_color)
         if hasattr(ed, "set_size_factor"):
@@ -773,8 +774,7 @@ class AdvancedGraphTab(SimpleGraphTab):
         if ed is None:
             return
         from PySide6.QtGui import QColor
-        if hasattr(ed, "set_edge_no_diameter_color"):
-            ed.set_edge_no_diameter_color(QColor(255, 60, 40, 180))
+        if hasattr(ed, "set_edge_bad_color"):
             ed.set_edge_bad_color(QColor("#e67e22"))
 
     def set_project_code(self, project_code: str):

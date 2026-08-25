@@ -367,7 +367,12 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
 
         style → индивидуальный цвет (render_color) или белый по умолчанию;
         perp  → оранжевый для неперпендикулярных, иначе белый;
-        ocr   → красный для рёбер без диаметра, иначе белый.
+        ocr   → нейтральный (см. ветку ниже).
+
+        ⚠ Строка «ocr → красный для рёбер без диаметра» стояла здесь и была
+        неправдой: ветка `ocr` возвращает `COLOR_EDGE` с тех пор, как красную
+        подсветку из этого состояния убрали. Вместе с ней снят и регулятор
+        «Ребро без диаметра» (вердикт по таблице 7.3, `MEASUREMENTS §MEFX7.5`).
 
         Индивидуальный цвет показывается в режиме style (там его правят) и при
         включённых скинах: скин — предпросмотр FXML, а цвет линии это тот же скин,
@@ -442,11 +447,6 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         (нейтрально), а привязка KKS отражается на текст-блоках, а не заливкой.
         """
         return super()._get_equipment_brush(node)
-
-    def set_edge_no_diameter_color(self, color: QColor):
-        """Цвет рёбер без диаметра (подсветка привязки)."""
-        self.COLOR_NO_DIAMETER = QColor(color)
-        self._redraw_all()
 
     def set_edge_bad_color(self, color: QColor):
         """Цвет неперпендикулярных (плохих) рёбер."""

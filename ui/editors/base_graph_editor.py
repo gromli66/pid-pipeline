@@ -59,7 +59,6 @@ class BaseGraphEditor(QGraphicsView):
     COLOR_CONNECTOR_PREVIEW = QColor("#f1c40f")
     COLOR_KKS_BOUND = QColor(46, 204, 113, 120)   # semi-transparent green for KKS-bound nodes
     COLOR_NO_KKS = QColor(231, 76, 60, 140)        # vivid red for equipment without KKS
-    COLOR_NO_DIAMETER = QColor(255, 60, 40, 180)    # bright red for edges without diameter
     COLOR_KKS_LABEL_BG = QColor(0, 0, 0, 160)      # label background
 
     # ── Размеры (в единицах СЦЕНЫ; подобраны под сцену=пиксели оригинала) ──
