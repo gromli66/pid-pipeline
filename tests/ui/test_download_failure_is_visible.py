@@ -167,6 +167,14 @@ class FakeAPI:
         dest_path.write_bytes(data)
         return dest_path
 
+    def get_stages(self, uid):
+        """Стадий нет: задача раскладки этой схеме не заводилась.
+
+        Экран блока 8 спрашивает их, чтобы отличить «пересчитывается» от
+        «задачи нет и не будет»; пустой список — вторая ветка, дверь.
+        """
+        return []
+
     def upload_canvas_graph(self, uid, path):
         self.uploads.append(("graph_canvas", Path(path).name))
 
@@ -349,6 +357,14 @@ def _nodes_in_editor(tab):
     return len(tab._editor.nodes)
 
 
+def _gate_text(tab):
+    """(заголовок, тело) экрана блока 8 — то, что оператор ЧИТАЕТ на месте
+    редактора. Берётся с живого виджета, а не из словаря текстов."""
+    assert tab._canvas_gate is not None, "экрана отказа нет вовсе"
+    title, _, body = tab._canvas_gate_label.text().partition("\n\n")
+    return title, body
+
+
 def test_saved_graph_present_opens_silently(open_tab, dialogs, raster):
     """Всё на месте: оператор видит СВОЙ граф и ни одной модалки."""
     tab = open_tab(_simple(), _server(raster))
@@ -447,19 +463,52 @@ def test_read_source_still_imports_its_text_into_the_canvas(
     assert _canvas_text(tab) == 0
 
 
-def test_canvas_404_rebuilds_silently(open_tab, dialogs, raster):
-    """Холста нет — пересборка законна, модалок нет."""
-    open_tab(_advanced(), _server(raster))
+def test_canvas_404_opens_the_door_without_a_modal(open_tab, dialogs, raster):
+    """Холста нет — модалок по-прежнему нет, но и пересборки больше нет.
+
+    ⚠ Пересъём mefx-8 (блок 8, 8.1). Прежняя редакция называлась «пересборка
+    законна»: 404 = холста законно нет, вкладка молча собирала его
+    `pretransform`-ом БЕЗ раскладки, и оператор правил недосчитанное. Теперь
+    тот же 404 даёт честный отказ с дверью, а инвариант 1.23 (404 — молча,
+    без модалки) остаётся в силе: экран — не диалог.
+    """
+    tab = open_tab(_advanced(), _server(raster))
     assert _titles(dialogs) == []
+    assert tab._editor is None, "редактор собран на несуществующем холсте"
+    assert not (tab.temp_dir / "graph_1920.json").exists(), (
+        "аварийный холст всё-таки собран")
+    title, body = _gate_text(tab)
+    assert "не готов" in title, title
+    assert "Контуры" in body and "Подтвердить" in body, body
 
 
-def test_canvas_5xx_warns_the_operator(open_tab, dialogs, raster, canvas_of):
-    """Ядро половины 2: холст пересобран вслепую, и оператор об этом предупреждён."""
-    open_tab(_advanced(), _server(
+def test_canvas_5xx_is_an_outcome_of_its_own_with_a_retry(open_tab, dialogs,
+                                                          raster, canvas_of):
+    """Ядро половины 2 после блока 8: «не скачался» — НЕ «холста нет».
+
+    ⚠ Пересъём mefx-8 (дыра C редтима). Прежде вкладка предупреждала модалкой
+    и всё равно пересобирала холст вслепую — первый Ctrl+S затирал серверную
+    раскладку. Теперь пересборки нет вовсе, а исход обязан ОТЛИЧАТЬСЯ от 404:
+    сетевой чих не имеет права запирать вкладку словами «холста нет».
+    """
+    tab = open_tab(_advanced(), _server(
         raster, canvas=canvas_of["fresh"],
         failures={"graph_canvas": APIError("bad gateway", 502)}))
-    assert _titles(dialogs) == [TITLE_CANVAS]
-    assert "затрёт" in dialogs[0][1], "не сказано главное — сохранение затрёт"
+
+    assert tab._editor is None
+    assert not (tab.temp_dir / "graph_1920.json").exists(), (
+        "холст пересобран вслепую — первый же save затрёт серверный")
+    title, body = _gate_text(tab)
+    assert title == TITLE_CANVAS, title
+    assert "НЕ значит, что холста нет" in body, body
+    assert "Контуры" not in body, (
+        "сетевому отказу подсунута дверь пересчёта — оператор пересоберёт зря")
+    assert tab._canvas_gate_retry.isEnabled(), "ретрая нет"
+
+    # И отличие от 404 — измеренное, а не заявленное.
+    other = open_tab(_advanced(), _server(raster))
+    assert _gate_text(other)[0] != title, (
+        "«не скачался» и «холста нет» показаны одним экраном")
 
 
 def test_fresh_canvas_opens_silently(open_tab, dialogs, raster, canvas_of):
@@ -470,7 +519,7 @@ def test_fresh_canvas_opens_silently(open_tab, dialogs, raster, canvas_of):
 
 @pytest.mark.parametrize("cls_of,failing,said", [
     (_simple, "graph_validated", "открыт исходный граф"),
-    (_advanced, "graph_canvas", "холст пересобран заново"),
+    (_advanced, "graph_canvas", "холст не открыт"),
 ])
 def test_failure_leaves_a_warning_in_the_client_log(cls_of, failing, said,
                                                     open_tab, dialogs, raster,
@@ -493,12 +542,23 @@ def test_failure_leaves_a_warning_in_the_client_log(cls_of, failing, said,
     assert [m for m in warnings if failing in m and said in m], warnings
 
 
-def test_stale_canvas_still_shows_its_own_modal(open_tab, dialogs, raster,
-                                                canvas_of):
-    """Сторож старой ветки: «Схема изменилась» осталась ровно одна и та же."""
-    open_tab(_advanced(), _server(raster, canvas=canvas_of["stale"]))
-    assert _titles(dialogs) == [TITLE_STALE]
-    assert TITLE_CANVAS not in _titles(dialogs)
+def test_stale_canvas_gets_the_door_instead_of_a_rebuild(open_tab, dialogs,
+                                                         raster, canvas_of):
+    """Сторож старой ветки, переснятый: модалки «Схема изменилась» больше нет.
+
+    ⚠ mefx-8, 8.2. Модалка обещала «холст будет пересобран заново» и обещание
+    выполняла — pretransform-ом, без раскладки, поверх идущего серверного
+    пересчёта. Теперь вкладка не пересобирает, а ждёт настоящий; задачи нет
+    (стадий у стенда нет) — значит дверь, а не вечное «пересчитывается».
+    """
+    tab = open_tab(_advanced(), _server(raster, canvas=canvas_of["stale"]))
+    assert _titles(dialogs) == [], "старая модалка пережила блок 8"
+    assert tab._editor is None
+    assert not (tab.temp_dir / "graph_1920.json").exists()
+    title, body = _gate_text(tab)
+    assert "не готов" in title, title
+    assert "правилась" in body, body
+    assert "Контуры" in body and "Подтвердить" in body, body
 
 
 # =========================================================================
@@ -526,47 +586,82 @@ def test_clean_open_saves_without_a_question(open_tab, dialogs, raster,
     assert _titles(dialogs) == []
 
 
-def test_canvas_404_saves_without_a_question(open_tab, dialogs, raster):
-    """404 = холста законно нет (первый заход): затирать нечего, вопроса нет."""
+def test_canvas_404_has_nothing_to_save_at_all(open_tab, dialogs, raster):
+    """404 = холста законно нет: теперь и записывать нечего — вкладки нет.
+
+    ⚠ Пересъём mefx-8. Прежде вкладка открывалась на аварийном холсте и её
+    первый save клал этот холст на сервер молча (затирать было нечего — 404).
+    Блок 8 закрыл сам вход, поэтому и запись исчезла: сервер не получает
+    НИЧЕГО, и это сильнее прежнего «получает, но без вопроса».
+    """
     api = _server(raster)
     tab = open_tab(_advanced(), api)
-    assert tab._save_graph() is True
-    assert api.uploads == [("graph_canvas", "graph_canvas.json")]
-    assert _titles(dialogs) == []
-
-
-def test_canvas_5xx_does_not_let_the_first_save_through(open_tab, dialogs,
-                                                        raster, canvas_of):
-    """Ядро 1.x9: холст собран вслепую — первая запись на сервер НЕ уходит."""
-    api = _server(raster, canvas=canvas_of["fresh"],
-                  failures={"graph_canvas": APIError("bad gateway", 502)})
-    tab = open_tab(_advanced(), api)
-    assert _titles(dialogs) == [TITLE_CANVAS]      # предупреждение при открытии
-    dialogs.clear()
-
+    assert tab._editor is None
     assert tab._save_graph() is False
-    assert api.uploads == [], "серверный холст затёрт при отказе оператора"
-    assert len(dialogs) == 1, "запись отменена молча — оператор не понял, почему"
-    assert "затрёт" in dialogs[0][1]
+    assert api.uploads == [], "на сервер ушёл холст, которого оператор не видел"
+    assert _titles(dialogs) == []
 
 
-def test_canvas_5xx_save_goes_through_after_an_explicit_yes(open_tab, dialogs,
-                                                            raster, canvas_of):
-    """Запрет снимается только явным «да» — и спрашивается ровно один раз."""
+def test_canvas_5xx_lets_no_save_through_at_all(open_tab, dialogs,
+                                                raster, canvas_of):
+    """Ядро 1.x9, усиленное блоком 8: запись невозможна ни с «да», ни без.
+
+    ⚠ Пересъём mefx-8. Прежде дверь `_confirm_blind_overwrite` спрашивала
+    «сохранение затрёт непрочитанное — всё равно?», и «да» пропускало запись.
+    Теперь до вопроса не доходит: непрочитанный холст вкладку не открывает,
+    сохранять нечего. Утверждаются ОБЕ полярности ответа оператора — иначе
+    зелёное сошло бы за «просто никто не нажимал».
+    """
     api = _server(raster, canvas=canvas_of["fresh"],
                   failures={"graph_canvas": APIError("bad gateway", 502)})
     tab = open_tab(_advanced(), api)
     dialogs.clear()
-    dialogs.answer = QMessageBox.StandardButton.Yes
 
+    for answer in (QMessageBox.StandardButton.Cancel,
+                   QMessageBox.StandardButton.Yes):
+        dialogs.answer = answer
+        assert tab._save_graph() is False, answer
+    assert api.uploads == [], "серверный холст затёрт непрочитанным"
+    assert _titles(dialogs) == [], "вопрос задан там, где писать нечем"
+
+
+def test_retry_after_the_network_heals_opens_the_canvas_and_saves(
+        open_tab, dialogs, raster, canvas_of, monkeypatch):
+    """Кнопка «Повторить» — не украшение: связь вернулась, холст открылся.
+
+    И вторая половина: запрет слепой перезаписи снят вместе с причиной. Пока
+    он висел бы с первой попытки, первый же save спрашивал бы «сохранение
+    затрёт непрочитанное» про холст, который к тому моменту ПРОЧИТАН, —
+    ровно тот класс лжи, ради которого 1.x9 и делался.
+    """
+    from ui.tabs.base_graph_tab import BaseGraphTab
+
+    api = _server(raster, canvas=canvas_of["fresh"],
+                  failures={"graph_canvas": APIError("bad gateway", 502)})
+    tab = open_tab(_advanced(), api)
+    assert tab._editor is None
+
+    # Повтор ходит на сервер САМ (`_download_artifacts`), а в этом наборе
+    # поток снят — подменяем его синхронным прогоном того же загрузчика, тем
+    # же швом `_on_downloaded`, что и первый заход.
+    def _sync(self):
+        self._download_thread = QThread(self)
+        artifacts, error = _download(api, self.temp_dir, self.USE_CANVAS)
+        assert error is None, error
+        self._on_downloaded(artifacts)
+
+    monkeypatch.setattr(BaseGraphTab, "_download_artifacts", _sync)
+
+    api.failures.pop("graph_canvas")               # связь восстановилась
+    tab._canvas_gate_retry.click()
+
+    assert tab._editor is not None, "повтор не открыл холст"
+    assert _nodes_in_editor(tab) == N_SAVED, "открыт не серверный холст"
+    dialogs.clear()
     assert tab._save_graph() is True
     assert api.uploads == [("graph_canvas", "graph_canvas.json")]
-    assert len(dialogs) == 1
-
-    dialogs.clear()
-    assert tab._save_graph() is True               # второй save — уже без вопроса
-    assert len(api.uploads) == 2
-    assert _titles(dialogs) == []
+    assert _titles(dialogs) == [], (
+        "вопрос о непрочитанном пережил успешное перечитывание")
 
 
 def test_saved_graph_5xx_does_not_let_the_first_save_through(open_tab, dialogs,

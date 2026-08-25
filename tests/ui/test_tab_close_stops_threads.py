@@ -338,10 +338,25 @@ def blobs(qapp, tmp_path_factory) -> dict:
     points = {"junctions": [{"x": 120, "y": 200, "size": SQ}],
               "bridges": [{"x": 80, "y": 80, "size": SQ}]}
 
+    # Холст «Ручной правки» — тем же кодом, каким его собирал сам клиент.
+    # ⚠ mefx-8: вкладка в холстовом режиме больше не пересобирает холст сама
+    # (`canvas_verdict` → экран «холст не готов»), а этому набору нужен ЖИВОЙ
+    # редактор: он проверяет судьбу потоков распознавания при закрытии вкладки.
+    # Содержимое редактора то же, что видели прежние редакции, — прежде его
+    # собирал фолбэк, теперь фикстура.
+    from ui.tabs.base_graph_tab import _pretransform_to_canvas
+
+    gsrc = root / "graph_source.json"
+    gsrc.write_bytes(graph)
+    gcanvas = root / "graph_canvas.json"
+    assert _pretransform_to_canvas(gsrc, root / "original.png", gcanvas), \
+        "холст не собрался"
+
     return {
         "original_image": _png(big, root / "original.png"),
         "graph_validated": graph,
         "graph_json": graph,
+        "graph_canvas": gcanvas.read_bytes(),
         "coco_validated": json.dumps({"annotations": []}).encode(),
         "junction_mask_validated": _png(squares([(120, 200)]),
                                         root / "junction.png"),

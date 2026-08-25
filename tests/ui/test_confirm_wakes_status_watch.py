@@ -22,6 +22,17 @@
 До блока 2 дыры не было видно, потому что следующее звено двигал сам клиент —
 `_run_detection`/`_start_segmentation` звали `watch` в своём теле.
 
+⭐ **Третья дверь добавлена mefx-8 (блок 8, 8.2): «Контуры».** Механизм тот же,
+цена выше. `POST /contours/{uid}/complete` — единственное подтверждение фазы B,
+которое ставит раскладку ВСЕГДА (`app/api/contours.py` → `dispatch_layout`),
+и ровно оно же было единственным обработчиком, который слежение не будил:
+статус после него часто не меняется вовсе (`_accept_contours` оставляет его как
+есть, если фаза B пройдена дальше), а раскладка при этом считается 2–5 минут.
+Без слежения о её готовности не узнавали ни кнопка «Ручной правки» (гейт живёт
+СТАДИЕЙ, а стадии приезжают только опросом), ни экран ожидания самой вкладки —
+дверь «вернитесь в „Контуры“ и подтвердите» не отпиралась бы без перезахода
+в диаграмму.
+
 Что проверяется — ДАННЫЕ, а не внутренние поля (принцип набора 0.4): факт
 слежения за диаграммой у `StatusProvider`. Ни одного утверждения про
 `_was_status_watching`, `_active_tab_key` и прочую механику — тест обязан пережить
@@ -62,6 +73,11 @@ DOORS = {
     # в диалог отката, а не во вкладку, — это другой жест и другой пункт).
     "frame": (DiagramStatus.UPLOADED, DiagramStatus.DETECTING),
     "cvat": (DiagramStatus.VALIDATING_BBOX, DiagramStatus.SEGMENTING),
+    # Вход в контуры — `contours_extracted`: SAM2 посчитал, ждёт оператора.
+    # Сервер на подтверждении ставит `contours_validated` И раскладку; статус
+    # здесь двигает сам обработчик клиента через `complete_contour_validation`.
+    "contours": (DiagramStatus.CONTOURS_EXTRACTED,
+                 DiagramStatus.CONTOURS_VALIDATED),
 }
 
 
@@ -112,6 +128,16 @@ class FakeAPI:
 
     def get_cvat_url(self, uid):
         return "http://cvat.local/tasks/777/jobs/42"
+
+    def complete_contour_validation(self, uid):
+        """`app/api/contours.py`: статус + ДИСПАТЧ РАСКЛАДКИ (8.2).
+
+        Ответ повторяет боевой (`{"status": "ok", "layout": {...}}`) — клиент
+        его не читает, но подделка не должна быть удобнее правды.
+        """
+        self.server.confirm(DiagramStatus.CONTOURS_VALIDATED)
+        return {"status": "ok", "nodes_accepted": 3,
+                "layout": {"status": "dispatched", "task_id": "task-layout-1"}}
 
     def fetch_cvat_annotations(self, uid):
         """`app/api/cvat.py`: аннотации + СЕРВЕРНЫЙ автозапуск сегментации (Б8)."""
@@ -206,6 +232,7 @@ def bench(qapp, monkeypatch):
     monkeypatch.setattr(dw, "QMessageBox", FakeMsgBox)
     monkeypatch.setattr("ui.tabs.frame_tab.FrameTab", StubTab)
     monkeypatch.setattr("ui.tabs.cvat_tab.CvatTab", StubTab)
+    monkeypatch.setattr("ui.tabs.contour_tab.ContourTab", StubTab)
 
     made = []
 
@@ -259,6 +286,8 @@ def test_final_statuses_really_drop_the_watch():
     final = {s.value for s in StatusProvider._FINAL_STATUSES}
     assert "detected" in final, "вход в разметку недостижим после снятия слежения"
     assert "validated_bbox" in final
+    assert "contours_extracted" in final, (
+        "вход в контуры недостижим после снятия слежения — сценарий не тот")
     assert "detecting" not in final, "детекция объявлена финальной — опрос бы не шёл"
     assert "segmenting" not in final
 

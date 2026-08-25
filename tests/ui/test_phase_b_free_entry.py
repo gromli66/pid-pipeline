@@ -634,17 +634,34 @@ def test_gate_closes_for_the_recompute_and_reopens_by_itself(gate_bench):
     )
 
 
-def test_failed_recompute_still_lets_the_operator_in(gate_bench):
-    """Пересчёт упал — дверь открыта с предупреждением, а не заперта.
+def test_failed_recompute_locks_the_door_and_names_the_retry(gate_bench):
+    """Пересчёт упал — дверь ЗАПЕРТА, а причина и повтор названы (решение №9).
 
-    Замок здесь был бы хуже отсутствия раскладки: оператор остался бы без
-    единого способа войти в собственную схему.
+    ⚠ Пересъём mefx-8 с обратной полярностью. Прежняя редакция утверждала
+    «дверь открыта с предупреждением», и это было верно ровно до блока 8:
+    вкладка тогда собирала аварийный холст `pretransform`-ом, и вход хоть
+    что-то давал. Теперь аварийного холста нет — открытая дверь вела бы на
+    пустой экран, поэтому Максим выбрал замок с повтором (плата названа: у
+    схемы, где раскладка падает всегда, «Ручной правки» не будет).
+
+    Утверждается РАЗНИЦА, а не совпадение с «до»: та же вкладка на готовой
+    раскладке открыта (первая половина), и заперла её именно упавшая стадия.
     """
     ws, _api = gate_bench()
 
+    ws._on_stages_updated(UID, [_layout_row(5, "completed")])
+    assert ws._layout_gate.allow is True, "дверь заперта на готовой раскладке"
+    assert ws._action_buttons["edit_graph"].isEnabled()
+
     failed = _layout_row(6, "failed")
     failed["error_message"] = "libavoid упал"
-    ws._on_stages_updated(UID, [failed])
+    ws._on_stages_updated(UID, [_layout_row(5, "completed"), failed])
 
-    assert ws._layout_gate.allow is True
-    assert ws._layout_gate.warn and "не удалась" in ws._layout_gate.warn
+    assert ws._layout_gate.allow is False, "упавшая раскладка снова пускает"
+    assert ws._layout_gate.waiting is False, "замок выдаёт себя за ожидание"
+    assert not ws._action_buttons["edit_graph"].isEnabled(), (
+        "кнопка осталась кликабельной — оператор войдёт в пустую вкладку")
+    reason = ws._action_buttons["edit_graph"].toolTip()
+    assert "libavoid упал" in reason, f"причина не названа: {reason!r}"
+    assert "Контуры" in reason and "Подтвердить" in reason, (
+        f"дверь повтора не названа: {reason!r}")

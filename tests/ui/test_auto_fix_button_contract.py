@@ -10,14 +10,18 @@
 редтимом 2026-08-25 двумя путями, и оба закрываются здесь:
 
 * **(а) холст, СОХРАНЁННЫЙ на сервер с `layout_applied=False`.** Такой холст
-  проходит ветку «актуален» (`base_graph_tab.py:963-977`) и грузится как есть —
-  то есть кнопка попадает в опасный движок не на свежесобранном фолбэке, а на
-  обычном рабочем холсте. Именно поэтому сценарный тест ниже поднимает вкладку
-  БОЕВЫМ путём (`ArtifactDownloader` + `_on_downloaded`), а не подкладывает
-  редактор руками: тест на свежесобранном объекте этого пути не проверяет
-  (PROTOCOL §5).
-* **(б) except-хвост загрузки** (`base_graph_tab.py:1022-1024`): любой сбой —
-  и в редакторе граф вообще без метки холста.
+  проходит ветку «актуален» (`base_graph_tab.canvas_verdict` → `CANVAS_READY`)
+  и грузится как есть — то есть кнопка попадает в опасный движок не на
+  свежесобранном фолбэке, а на обычном рабочем холсте. Именно поэтому
+  сценарный тест ниже поднимает вкладку БОЕВЫМ путём (`ArtifactDownloader` +
+  `_on_downloaded`), а не подкладывает редактор руками: тест на свежесобранном
+  объекте этого пути не проверяет (PROTOCOL §5). **Этот путь жив и после
+  блока 8** — потому 4.1 и остаётся обязательным.
+* **(б) ~~except-хвост загрузки: любой сбой — и в редакторе граф вообще без
+  метки холста~~** — ⛔ путь СНЯТ блоком 8 (mefx-8, 2026-08-26): вкладка в
+  холстовом режиме больше не собирает аварийный холст и не грузит сырой граф
+  «как есть» — сбой подготовки и отсутствие холста дают экран отказа, а
+  редактор не создаётся вовсе. Тест ниже переснят под новый контракт.
 
 **4.4 (С8).** Сглаживание блокирующее (по 20 холстам корпуса медиана 2.8 с,
 худший 6.6 с — замер `MEASUREMENTS §MEFX4Bб`), в фоновый поток не выносится (движок мутирует живую
@@ -101,6 +105,14 @@ class _API:
     def __init__(self, blobs):
         self.blobs = dict(blobs)
 
+    def get_stages(self, uid):
+        """Стадий нет: у этой схемы задача раскладки не заводилась.
+
+        Экран отказа блока 8 спрашивает их, чтобы отличить «пересчитывается»
+        от «задачи нет и не будет»; пустой список = вторая ветка (дверь).
+        """
+        return []
+
     def download_artifact(self, uid, artifact_type, dest_path):
         from ui.services.api_client import APIError
         data = self.blobs.get(artifact_type)
@@ -133,7 +145,7 @@ def open_tab(qapp, monkeypatch, tmp_path):
 
     opened = []
 
-    def _open(canvas):
+    def _open(canvas, *, expect_editor=True):
         monkeypatch.setattr(
             BaseGraphTab, "_download_artifacts",
             lambda self: setattr(self, "_download_thread", QThread(self)))
@@ -149,7 +161,11 @@ def open_tab(qapp, monkeypatch, tmp_path):
         dl.run()
         assert out.get("error") is None, f"загрузчик увёл вкладку в ошибку: {out}"
         tab._on_downloaded(out["artifacts"])
-        assert tab._editor is not None, "редактор не собрался"
+        if expect_editor:
+            assert tab._editor is not None, "редактор не собрался"
+        else:
+            assert tab._editor is None, (
+                "холста нет, а редактор собрался — блок 8 обещал отказ")
         return tab
 
     yield _open
@@ -244,18 +260,28 @@ def test_saved_canvas_with_layout_keeps_the_button(open_tab, monkeypatch):
     assert called == ["smooth"], f"ожидалось сглаживание: {called}"
 
 
-# ── 4.1, путь (б): холст не доехал / графа-холста нет вовсе ──────────────
+# ── 4.1, путь (б): холста нет вовсе ──────────────────────────────────────
 
 
-def test_canvas_absent_locks_the_button(open_tab, monkeypatch):
-    """`graph_canvas` на сервере нет (404) — холст собран pretransform-ом."""
-    tab = open_tab(None)
+def test_canvas_absent_gives_no_editor_at_all(open_tab):
+    """`graph_canvas` на сервере нет (404) — вкладка НЕ открывается.
 
-    assert not tab.btn_auto_fix.isEnabled(), \
-        "фолбэк-холст тоже без раскладки — кнопка обязана быть заперта"
-    called = _engines(monkeypatch, tab)
+    ⚠ Пересъём mefx-8. Прежняя редакция называлась «фолбэк-холст тоже без
+    раскладки — кнопка заперта» и проверяла замок ПОВЕРХ аварийного холста,
+    который вкладка собирала сама. Блок 8 эту сборку убрал: холста нет —
+    редактора нет, и опасный движок недостижим не замком, а отсутствием
+    объекта, на котором он работает. Замок 4.1 от этого не лишний: путь (а)
+    (сохранённый холст с `layout_applied=False`) остался, и его половина
+    набора зелёная.
+    """
+    tab = open_tab(None, expect_editor=False)
+
+    # Движки перехватить не на чем — их носитель не создан; это и есть
+    # утверждение. Вызов обязан быть тихим no-op, а не падением.
     tab._auto_fix()
-    assert called == [], f"прежний auto_fix запущен на фолбэке: {called}"
+    assert tab._editor is None
+    assert not tab.btn_save.isEnabled() and not tab.btn_confirm.isEnabled(), (
+        "на экране отказа кнопки записи живы — жест соврёт оператору")
 
 
 # ── 4.4: курсор, строка и три ведра отказа ──────────────────────────────
