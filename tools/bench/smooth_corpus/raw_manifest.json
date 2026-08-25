@@ -1,0 +1,97 @@
+{
+ "snapshot_date": "2026-08-25",
+ "source": "storage/diagrams (main tree, live)",
+ "note": "срез для стенда Э4 (блок 0 pains-auto-align); отпечатки = corpus.data_fingerprint",
+ "files": {
+  "06b938ec": {
+   "validated": "81c9f56b6d5522de386f2d1e3608b8132f8e4868672abe605b88820dae823031",
+   "canvas": "ee4db4918494b9630af8411cbdb83117a36d025391a76c34ae20e5a6e0eba8ef"
+  },
+  "089feca2": {
+   "validated": "d169738e6426deda5032a1d8f7ba1acb74d221b6a56aedb807b40f6bd79ef5b4",
+   "canvas": "561896fdff019630820f8b4354b4703cd1a06f494dfb0f1edf41c707801e064f"
+  },
+  "0aea61c0": {
+   "validated": "e491f40e4d0fe3147594caf795e4835789cf89f4d62681ad11583343c5ec699d",
+   "canvas": "e2d1652f3e8ea82116941810bcf6043f0d592b7687b0ccc5e7a07fa1ff426600"
+  },
+  "0fc9d04c": {
+   "validated": "4dd9442e3a25e445c4f2cc4d7730378e3dd4af27ce551f872537a571871e461c",
+   "canvas": "e2c69b0775a957129717b93b281883efd99224bbedc374ca4fce7328e6a0536f"
+  },
+  "13d1ef5f": {
+   "validated": "e01a927656f97e8116a2a80fa38a3b32ac26ce4723b6357f2c42e5fd8af65f44",
+   "canvas": "4ab10c0d1119aa4baaa2e6e9edc17a294065014d8e822171c161b86b18b08af2"
+  },
+  "26747a10": {
+   "validated": "1ea49481e1244fca11de86bc15122dc030650ea23f5c81dc061675f11bb8d952"
+  },
+  "302171b3": {
+   "validated": "72dcefb372036594cfe1b368cd347c8baba0ad0046fd6d50d56d9e71805627eb",
+   "canvas": "655328235ef698fd4b0846c04ff565fecde1fa45378d94d3df2cc4d9ef4227d4"
+  },
+  "3263039b": {
+   "validated": "eeab329306dcdeea5f1de55db001fffac13a003597f0a9559e50ca0c1c43efde",
+   "canvas": "f995760d0da353ba223757cfa7b1fd5adc1f4aeac85ab24d50766107cd751477"
+  },
+  "51b339ab": {
+   "validated": "d2e798f49619a38775a5ebd28c3255ed67736acaa810e9cb71cf97a5fc7ea680",
+   "canvas": "fab006f0f04ccb462fa403191c0416937d74e3e1c8d6845b3edc13041f7271ff"
+  },
+  "54a60fd1": {
+   "validated": "252e70b7378b428b368c7c07fc3e437c84d3f236ca37dcbae70360bb726f1e65",
+   "canvas": "5984740640dd51ad87380ef14ade6b0507d3e23ae605eef1894ec9178a559729"
+  },
+  "5df8dea9": {
+   "validated": "4a88cde084780d21c4eaa04ee627386f1e9b1758c3cb4caf9d084a5d4fdea841"
+  },
+  "620cc50d": {
+   "validated": "7132992e8e94710666b620bb8b306eb23907b98c7e7bea28673d6308cd843b54",
+   "canvas": "46b58735d39c8b70d5a84ca1545e7b16280a4191f2e139fe321d81ce51dc3078"
+  },
+  "6e7144d5": {
+   "validated": "b51772e5983cfc46f76f481d2d4e61c20d36c4824fb45a9a03c1e33f289fcdf8"
+  },
+  "70701271": {
+   "validated": "b3bc13699f48a9646c266b7f0987d84643510839be894e9abbbea8be1bfc5e56",
+   "canvas": "4a049fb7e2b08c64d2d57a380b1e3b466eb7ce6a549105049ad1ada6753d0898"
+  },
+  "751116c9": {
+   "validated": "3ce647466cd871aba94643b5e063fcec5920dfd1785a58784bb963832080eda8",
+   "canvas": "fbcd5d4af909acf69eebd843e1461a0d34c1c173e7bad9b29eb63a9f11a66cbb"
+  },
+  "7d46ff96": {
+   "validated": "48d37798175be7e6abf34cac8ba3675878b97c3971d3202d13f360538986a78c",
+   "canvas": "ab558a156493beaaf2dd43254b5560b1d3537f47a3b55f8bd7b5f60d6f5e0692"
+  },
+  "89ca7583": {
+   "validated": "033a019746e2f12a7c72f532b53f73d3c2eb7c8159611eff9b33bd95cf3caca4",
+   "canvas": "6bc25d939ba38b1905f8585f14e61e07f15e53b444798544822d82089a61dd80"
+  },
+  "8d14cf73": {
+   "validated": "65e3876b27d435662f4011b15af3801e2f9ca3bf1ba42e3d3043a21676025378"
+  },
+  "8d517a35": {
+   "validated": "279f49997ed2a7e78ab7f4bcadd58a172c5bf13e249ee7be2a4402a62331f358",
+   "canvas": "63b2e898150ee0604a4d92525e1ea4a28cf7a1da5601930044e278ff083f4f08"
+  },
+  "a5264536": {
+   "validated": "f7993bd0c13454a07583019e8ddd38c8f17b37391cde64d72be86af1fd33d356",
+   "canvas": "ee46cd86fbbfad7a82693fe27296a96ae457b9c2b00a7cab51e33efea408768e"
+  },
+  "a6d28736": {
+   "validated": "21544882e758523f33bc8f4db480422f7640ddb6440669fc8021dbcb89920e91",
+   "canvas": "c97894d313e7f4a60d90656b39b833673b446da4171d3b59cc84b9800c27337f"
+  },
+  "c2f79462": {
+   "validated": "767e367d9401775159ca0d62abe18cafa10ac24b699826d2f98ce1095e1af1b1",
+   "canvas": "35e073c46b93272112d97906c0d18876e855046626b68c034b0bc10f729cec05"
+  },
+  "ca1f6ea2": {
+   "validated": "732b884fadab5276dbc3523803d7e04d9ceff4b1d29360c1e9eb5956f0108fad"
+  },
+  "d74eb9f1": {
+   "validated": "2d0a5f48b1c1607f708ae61f3173fa4c7f968e8cb6dfafe52955a33918297b29"
+  }
+ }
+}

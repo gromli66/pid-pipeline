@@ -1,0 +1,5205 @@
+{
+  "directed": false,
+  "multigraph": false,
+  "graph": {
+    "source": "P&ID Graph Builder",
+    "version": "1.0",
+    "image_size": [
+      3509,
+      4964
+    ],
+    "num_nodes": 123,
+    "num_edges": 118,
+    "num_valid_bridges": 2,
+    "num_invalid_bridges": 0,
+    "num_isolated_nodes": 5
+  },
+  "nodes": [
+    {
+      "id": "node_0",
+      "type": "equipment",
+      "centroid": [
+        262,
+        1531
+      ],
+      "area": 4410,
+      "bbox": [
+        1479,
+        241,
+        1584,
+        283
+      ],
+      "degree": 1,
+      "class_id": 35,
+      "class_name": "output",
+      "ann_idx": 91
+    },
+    {
+      "id": "node_1",
+      "type": "equipment",
+      "centroid": [
+        263,
+        1747
+      ],
+      "area": 2926,
+      "bbox": [
+        1709,
+        244,
+        1786,
+        282
+      ],
+      "degree": 2,
+      "class_id": 1,
+      "class_name": "klapan_obratn",
+      "ann_idx": 33
+    },
+    {
+      "id": "node_2",
+      "type": "connector",
+      "centroid": [
+        264,
+        1879
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_3",
+      "type": "connector",
+      "centroid": [
+        263,
+        2129
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_4",
+      "type": "connector",
+      "centroid": [
+        264,
+        2429
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_5",
+      "type": "connector",
+      "centroid": [
+        265,
+        2742
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_6",
+      "type": "equipment",
+      "centroid": [
+        409,
+        2130
+      ],
+      "area": 2888,
+      "bbox": [
+        2111,
+        371,
+        2149,
+        447
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 6
+    },
+    {
+      "id": "node_7",
+      "type": "equipment",
+      "centroid": [
+        446,
+        1879
+      ],
+      "area": 2700,
+      "bbox": [
+        1861,
+        409,
+        1897,
+        484
+      ],
+      "degree": 2,
+      "class_id": 1,
+      "class_name": "klapan_obratn",
+      "ann_idx": 83
+    },
+    {
+      "id": "node_8",
+      "type": "connector",
+      "centroid": [
+        324,
+        2429
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_9",
+      "type": "equipment",
+      "centroid": [
+        409,
+        2720
+      ],
+      "area": 6160,
+      "bbox": [
+        2680,
+        371,
+        2760,
+        448
+      ],
+      "degree": 2,
+      "class_id": 3,
+      "class_name": "armatura_electro",
+      "ann_idx": 69
+    },
+    {
+      "id": "node_10",
+      "type": "connector",
+      "centroid": [
+        325,
+        2594
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_11",
+      "type": "equipment",
+      "centroid": [
+        409,
+        2406
+      ],
+      "area": 6232,
+      "bbox": [
+        2365,
+        371,
+        2447,
+        447
+      ],
+      "degree": 2,
+      "class_id": 3,
+      "class_name": "armatura_electro",
+      "ann_idx": 58
+    },
+    {
+      "id": "node_12",
+      "type": "equipment",
+      "centroid": [
+        509,
+        2595
+      ],
+      "area": 1860,
+      "bbox": [
+        2580,
+        479,
+        2611,
+        539
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 51
+    },
+    {
+      "id": "node_13",
+      "type": "equipment",
+      "centroid": [
+        360,
+        3973
+      ],
+      "area": 4326,
+      "bbox": [
+        3922,
+        339,
+        4025,
+        381
+      ],
+      "degree": 1,
+      "class_id": 35,
+      "class_name": "output",
+      "ann_idx": 71
+    },
+    {
+      "id": "node_14",
+      "type": "connector",
+      "centroid": [
+        361,
+        4203
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_15",
+      "type": "equipment",
+      "centroid": [
+        339,
+        4338
+      ],
+      "area": 6156,
+      "bbox": [
+        4300,
+        299,
+        4376,
+        380
+      ],
+      "degree": 2,
+      "class_id": 3,
+      "class_name": "armatura_electro",
+      "ann_idx": 46
+    },
+    {
+      "id": "node_16",
+      "type": "equipment",
+      "centroid": [
+        359,
+        4700
+      ],
+      "area": 4680,
+      "bbox": [
+        4648,
+        337,
+        4752,
+        382
+      ],
+      "degree": 1,
+      "class_id": 35,
+      "class_name": "output",
+      "ann_idx": 70
+    },
+    {
+      "id": "node_17",
+      "type": "equipment",
+      "centroid": [
+        493,
+        4204
+      ],
+      "area": 945,
+      "bbox": [
+        4191,
+        476,
+        4218,
+        511
+      ],
+      "degree": 1,
+      "class_id": 6,
+      "class_name": "perehod",
+      "ann_idx": 41
+    },
+    {
+      "id": "node_18",
+      "type": "connector",
+      "centroid": [
+        507,
+        2132
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_19",
+      "type": "equipment",
+      "centroid": [
+        589,
+        2429
+      ],
+      "area": 4141,
+      "bbox": [
+        2409,
+        539,
+        2450,
+        640
+      ],
+      "degree": 1,
+      "class_id": 35,
+      "class_name": "output",
+      "ann_idx": 97
+    },
+    {
+      "id": "node_20",
+      "type": "equipment",
+      "centroid": [
+        892,
+        2742
+      ],
+      "area": 1036,
+      "bbox": [
+        2728,
+        874,
+        2756,
+        911
+      ],
+      "degree": 2,
+      "class_id": 6,
+      "class_name": "perehod",
+      "ann_idx": 13
+    },
+    {
+      "id": "node_21",
+      "type": "equipment",
+      "centroid": [
+        465,
+        1187
+      ],
+      "area": 4576,
+      "bbox": [
+        1135,
+        443,
+        1239,
+        487
+      ],
+      "degree": 1,
+      "class_id": 35,
+      "class_name": "output",
+      "ann_idx": 4
+    },
+    {
+      "id": "node_22",
+      "type": "connector",
+      "centroid": [
+        467,
+        823
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_23",
+      "type": "connector",
+      "centroid": [
+        467,
+        677
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_24",
+      "type": "equipment",
+      "centroid": [
+        576,
+        678
+      ],
+      "area": 1368,
+      "bbox": [
+        659,
+        558,
+        697,
+        594
+      ],
+      "degree": 2,
+      "class_id": 5,
+      "class_name": "drossel",
+      "ann_idx": 67
+    },
+    {
+      "id": "node_25",
+      "type": "connector",
+      "centroid": [
+        657,
+        825
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_26",
+      "type": "equipment",
+      "centroid": [
+        574,
+        1857
+      ],
+      "area": 6237,
+      "bbox": [
+        1817,
+        536,
+        1898,
+        613
+      ],
+      "degree": 2,
+      "class_id": 4,
+      "class_name": "regulator_electro",
+      "ann_idx": 27
+    },
+    {
+      "id": "node_27",
+      "type": "connector",
+      "centroid": [
+        509,
+        2263
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_28",
+      "type": "equipment",
+      "centroid": [
+        609,
+        2132
+      ],
+      "area": 3948,
+      "bbox": [
+        2111,
+        562,
+        2153,
+        656
+      ],
+      "degree": 1,
+      "class_id": 35,
+      "class_name": "output",
+      "ann_idx": 63
+    },
+    {
+      "id": "node_29",
+      "type": "equipment",
+      "centroid": [
+        687,
+        2264
+      ],
+      "area": 1015,
+      "bbox": [
+        2250,
+        670,
+        2279,
+        705
+      ],
+      "degree": 2,
+      "class_id": 6,
+      "class_name": "perehod",
+      "ann_idx": 37
+    },
+    {
+      "id": "node_30",
+      "type": "equipment",
+      "centroid": [
+        571,
+        2595
+      ],
+      "area": 868,
+      "bbox": [
+        2580,
+        557,
+        2611,
+        585
+      ],
+      "degree": 1,
+      "class_id": 40,
+      "class_name": "napravlenie",
+      "ann_idx": 39,
+      "direction": "down",
+      "direction_node": true,
+      "flow_axis": "v",
+      "flow_direction": "down",
+      "pass_through": false,
+      "ann_id": 39
+    },
+    {
+      "id": "node_31",
+      "type": "equipment",
+      "centroid": [
+        529,
+        4204
+      ],
+      "area": 1008,
+      "bbox": [
+        4190,
+        511,
+        4218,
+        547
+      ],
+      "degree": 1,
+      "class_id": 6,
+      "class_name": "perehod",
+      "ann_idx": 8
+    },
+    {
+      "id": "node_32",
+      "type": "equipment",
+      "centroid": [
+        738,
+        4204
+      ],
+      "area": 1406,
+      "bbox": [
+        4185,
+        720,
+        4223,
+        757
+      ],
+      "degree": 2,
+      "class_id": 5,
+      "class_name": "drossel",
+      "ann_idx": 15
+    },
+    {
+      "id": "node_33",
+      "type": "connector",
+      "centroid": [
+        781,
+        676
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_34",
+      "type": "equipment",
+      "centroid": [
+        695,
+        1857
+      ],
+      "area": 6318,
+      "bbox": [
+        1817,
+        656,
+        1898,
+        734
+      ],
+      "degree": 2,
+      "class_id": 3,
+      "class_name": "armatura_electro",
+      "ann_idx": 94
+    },
+    {
+      "id": "node_35",
+      "type": "equipment",
+      "centroid": [
+        636,
+        1444
+      ],
+      "area": 6237,
+      "bbox": [
+        1406,
+        596,
+        1483,
+        677
+      ],
+      "degree": 2,
+      "class_id": 4,
+      "class_name": "regulator_electro",
+      "ann_idx": 32
+    },
+    {
+      "id": "node_36",
+      "type": "equipment",
+      "centroid": [
+        658,
+        1234
+      ],
+      "area": 1155,
+      "bbox": [
+        1218,
+        641,
+        1251,
+        676
+      ],
+      "degree": 2,
+      "class_id": 5,
+      "class_name": "drossel",
+      "ann_idx": 86
+    },
+    {
+      "id": "node_37",
+      "type": "equipment",
+      "centroid": [
+        658,
+        1014
+      ],
+      "area": 2964,
+      "bbox": [
+        976,
+        639,
+        1052,
+        678
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 52
+    },
+    {
+      "id": "node_38",
+      "type": "connector",
+      "centroid": [
+        659,
+        1652
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_39",
+      "type": "equipment",
+      "centroid": [
+        644,
+        3244
+      ],
+      "area": 6314,
+      "bbox": [
+        3206,
+        603,
+        3283,
+        685
+      ],
+      "degree": 2,
+      "class_id": 3,
+      "class_name": "armatura_electro",
+      "ann_idx": 85
+    },
+    {
+      "id": "node_40",
+      "type": "equipment",
+      "centroid": [
+        664,
+        2955
+      ],
+      "area": 4182,
+      "bbox": [
+        2904,
+        644,
+        3006,
+        685
+      ],
+      "degree": 1,
+      "class_id": 35,
+      "class_name": "output",
+      "ann_idx": 11
+    },
+    {
+      "id": "node_41",
+      "type": "equipment",
+      "centroid": [
+        666,
+        3369
+      ],
+      "area": 1260,
+      "bbox": [
+        3352,
+        648,
+        3387,
+        684
+      ],
+      "degree": 2,
+      "class_id": 5,
+      "class_name": "drossel",
+      "ann_idx": 40
+    },
+    {
+      "id": "node_42",
+      "type": "equipment",
+      "centroid": [
+        665,
+        3789
+      ],
+      "area": 4620,
+      "bbox": [
+        3737,
+        643,
+        3842,
+        687
+      ],
+      "degree": 1,
+      "class_id": 35,
+      "class_name": "output",
+      "ann_idx": 59
+    },
+    {
+      "id": "node_43",
+      "type": "connector",
+      "centroid": [
+        665,
+        3530
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_44",
+      "type": "connector",
+      "centroid": [
+        665,
+        3423
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_45",
+      "type": "connector",
+      "centroid": [
+        1271,
+        1653
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_46",
+      "type": "equipment",
+      "centroid": [
+        761,
+        3424
+      ],
+      "area": 1830,
+      "bbox": [
+        3409,
+        731,
+        3439,
+        792
+      ],
+      "degree": 1,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 20
+    },
+    {
+      "id": "node_47",
+      "type": "connector",
+      "centroid": [
+        1024,
+        3531
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_48",
+      "type": "equipment",
+      "centroid": [
+        870,
+        2264
+      ],
+      "area": 2849,
+      "bbox": [
+        2246,
+        832,
+        2283,
+        909
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 29
+    },
+    {
+      "id": "node_49",
+      "type": "equipment",
+      "centroid": [
+        840,
+        1879
+      ],
+      "area": 4515,
+      "bbox": [
+        1858,
+        788,
+        1901,
+        893
+      ],
+      "degree": 1,
+      "class_id": 35,
+      "class_name": "output",
+      "ann_idx": 89
+    },
+    {
+      "id": "node_50",
+      "type": "equipment",
+      "centroid": [
+        888,
+        4183
+      ],
+      "area": 6080,
+      "bbox": [
+        4143,
+        850,
+        4223,
+        926
+      ],
+      "degree": 2,
+      "class_id": 3,
+      "class_name": "armatura_electro",
+      "ann_idx": 87
+    },
+    {
+      "id": "node_51",
+      "type": "connector",
+      "centroid": [
+        783,
+        549
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_52",
+      "type": "connector",
+      "centroid": [
+        784,
+        805
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_53",
+      "type": "equipment",
+      "centroid": [
+        1124,
+        678
+      ],
+      "area": 120512,
+      "bbox": [
+        544,
+        900,
+        813,
+        1348
+      ],
+      "degree": 3,
+      "class_id": 37,
+      "class_name": "unknow",
+      "ann_idx": 56
+    },
+    {
+      "id": "node_54",
+      "type": "equipment",
+      "centroid": [
+        843,
+        3423
+      ],
+      "area": 1922,
+      "bbox": [
+        3408,
+        812,
+        3439,
+        874
+      ],
+      "degree": 1,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 79
+    },
+    {
+      "id": "node_55",
+      "type": "equipment",
+      "centroid": [
+        904,
+        3423
+      ],
+      "area": 868,
+      "bbox": [
+        3408,
+        890,
+        3439,
+        918
+      ],
+      "degree": 1,
+      "class_id": 40,
+      "class_name": "napravlenie",
+      "ann_idx": 92,
+      "direction": "down",
+      "direction_node": true,
+      "flow_axis": "v",
+      "flow_direction": "down",
+      "pass_through": false,
+      "ann_id": 92
+    },
+    {
+      "id": "node_56",
+      "type": "equipment",
+      "centroid": [
+        983,
+        2265
+      ],
+      "area": 1122,
+      "bbox": [
+        2248,
+        967,
+        2282,
+        1000
+      ],
+      "degree": 2,
+      "class_id": 5,
+      "class_name": "drossel",
+      "ann_idx": 48
+    },
+    {
+      "id": "node_57",
+      "type": "connector",
+      "centroid": [
+        1853,
+        2742
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_58",
+      "type": "connector",
+      "centroid": [
+        1023,
+        4202
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_59",
+      "type": "equipment",
+      "centroid": [
+        1166,
+        2264
+      ],
+      "area": 1036,
+      "bbox": [
+        2250,
+        1148,
+        2278,
+        1185
+      ],
+      "degree": 2,
+      "class_id": 6,
+      "class_name": "perehod",
+      "ann_idx": 47
+    },
+    {
+      "id": "node_60",
+      "type": "equipment",
+      "centroid": [
+        1026,
+        3863
+      ],
+      "area": 972,
+      "bbox": [
+        3845,
+        1013,
+        3881,
+        1040
+      ],
+      "degree": 2,
+      "class_id": 6,
+      "class_name": "perehod",
+      "ann_idx": 22
+    },
+    {
+      "id": "node_61",
+      "type": "connector",
+      "centroid": [
+        1270,
+        3529
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_62",
+      "type": "connector",
+      "centroid": [
+        1271,
+        2263
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_63",
+      "type": "equipment",
+      "centroid": [
+        1271,
+        2895
+      ],
+      "area": 1770,
+      "bbox": [
+        2866,
+        1256,
+        2925,
+        1286
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 78
+    },
+    {
+      "id": "node_64",
+      "type": "connector",
+      "centroid": [
+        1273,
+        2507
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_65",
+      "type": "connector",
+      "centroid": [
+        1273,
+        1576
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_66",
+      "type": "connector",
+      "centroid": [
+        1853,
+        1576
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_67",
+      "type": "connector",
+      "centroid": [
+        1546,
+        2505
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_68",
+      "type": "equipment",
+      "centroid": [
+        1393,
+        678
+      ],
+      "area": 1368,
+      "bbox": [
+        659,
+        1375,
+        697,
+        1411
+      ],
+      "degree": 2,
+      "class_id": 5,
+      "class_name": "drossel",
+      "ann_idx": 65
+    },
+    {
+      "id": "node_69",
+      "type": "connector",
+      "centroid": [
+        1442,
+        677
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_70",
+      "type": "equipment",
+      "centroid": [
+        1442,
+        1304
+      ],
+      "area": 4488,
+      "bbox": [
+        1253,
+        1420,
+        1355,
+        1464
+      ],
+      "degree": 1,
+      "class_id": 35,
+      "class_name": "output",
+      "ann_idx": 31
+    },
+    {
+      "id": "node_71",
+      "type": "connector",
+      "centroid": [
+        1444,
+        1150
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_72",
+      "type": "connector",
+      "centroid": [
+        1443,
+        934
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_73",
+      "type": "equipment",
+      "centroid": [
+        1532,
+        934
+      ],
+      "area": 2775,
+      "bbox": [
+        916,
+        1495,
+        953,
+        1570
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 76
+    },
+    {
+      "id": "node_74",
+      "type": "connector",
+      "centroid": [
+        1546,
+        1151
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_75",
+      "type": "equipment",
+      "centroid": [
+        1548,
+        1775
+      ],
+      "area": 1188,
+      "bbox": [
+        1759,
+        1530,
+        1792,
+        1566
+      ],
+      "degree": 2,
+      "class_id": 5,
+      "class_name": "drossel",
+      "ann_idx": 3
+    },
+    {
+      "id": "node_76",
+      "type": "equipment",
+      "centroid": [
+        1547,
+        2138
+      ],
+      "area": 1682,
+      "bbox": [
+        2109,
+        1533,
+        2167,
+        1562
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 82
+    },
+    {
+      "id": "node_77",
+      "type": "equipment",
+      "centroid": [
+        1547,
+        2322
+      ],
+      "area": 1740,
+      "bbox": [
+        2292,
+        1533,
+        2352,
+        1562
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 5
+    },
+    {
+      "id": "node_78",
+      "type": "equipment",
+      "centroid": [
+        1682,
+        935
+      ],
+      "area": 4368,
+      "bbox": [
+        914,
+        1630,
+        956,
+        1734
+      ],
+      "degree": 1,
+      "class_id": 35,
+      "class_name": "output",
+      "ann_idx": 24
+    },
+    {
+      "id": "node_79",
+      "type": "equipment",
+      "centroid": [
+        1854,
+        1784
+      ],
+      "area": 952,
+      "bbox": [
+        1767,
+        1840,
+        1801,
+        1868
+      ],
+      "degree": 2,
+      "class_id": 6,
+      "class_name": "perehod",
+      "ann_idx": 35
+    },
+    {
+      "id": "node_80",
+      "type": "equipment",
+      "centroid": [
+        1853,
+        2163
+      ],
+      "area": 3003,
+      "bbox": [
+        2125,
+        1834,
+        2202,
+        1873
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 17
+    },
+    {
+      "id": "node_81",
+      "type": "connector",
+      "centroid": [
+        1854,
+        1862
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_82",
+      "type": "equipment",
+      "centroid": [
+        1854,
+        2517
+      ],
+      "area": 858,
+      "bbox": [
+        2501,
+        1841,
+        2534,
+        1867
+      ],
+      "degree": 2,
+      "class_id": 6,
+      "class_name": "perehod",
+      "ann_idx": 38
+    },
+    {
+      "id": "node_83",
+      "type": "equipment",
+      "centroid": [
+        1854,
+        3169
+      ],
+      "area": 46438,
+      "bbox": [
+        3062,
+        1746,
+        3276,
+        1963
+      ],
+      "degree": 1,
+      "class_id": 17,
+      "class_name": "teploobmen",
+      "ann_idx": 10
+    },
+    {
+      "id": "node_84",
+      "type": "equipment",
+      "centroid": [
+        1902,
+        1575
+      ],
+      "area": 1188,
+      "bbox": [
+        1557,
+        1886,
+        1593,
+        1919
+      ],
+      "degree": 2,
+      "class_id": 5,
+      "class_name": "drossel",
+      "ann_idx": 34
+    },
+    {
+      "id": "node_85",
+      "type": "equipment",
+      "centroid": [
+        1971,
+        1862
+      ],
+      "area": 1984,
+      "bbox": [
+        1846,
+        1940,
+        1878,
+        2002
+      ],
+      "degree": 1,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 30
+    },
+    {
+      "id": "node_86",
+      "type": "equipment",
+      "centroid": [
+        2010,
+        1575
+      ],
+      "area": 2964,
+      "bbox": [
+        1556,
+        1972,
+        1595,
+        2048
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 84
+    },
+    {
+      "id": "node_87",
+      "type": "equipment",
+      "centroid": [
+        1945,
+        4050
+      ],
+      "area": 6240,
+      "bbox": [
+        4011,
+        1905,
+        4089,
+        1985
+      ],
+      "degree": 2,
+      "class_id": 4,
+      "class_name": "regulator_electro",
+      "ann_idx": 90
+    },
+    {
+      "id": "node_88",
+      "type": "equipment",
+      "centroid": [
+        1965,
+        3780
+      ],
+      "area": 4784,
+      "bbox": [
+        3728,
+        1942,
+        3832,
+        1988
+      ],
+      "degree": 1,
+      "class_id": 35,
+      "class_name": "output",
+      "ann_idx": 12
+    },
+    {
+      "id": "node_89",
+      "type": "connector",
+      "centroid": [
+        1966,
+        4232
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_90",
+      "type": "equipment",
+      "centroid": [
+        1965,
+        4731
+      ],
+      "area": 4876,
+      "bbox": [
+        4678,
+        1942,
+        4784,
+        1988
+      ],
+      "degree": 1,
+      "class_id": 35,
+      "class_name": "output",
+      "ann_idx": 75
+    },
+    {
+      "id": "node_91",
+      "type": "equipment",
+      "centroid": [
+        1947,
+        4468
+      ],
+      "area": 5700,
+      "bbox": [
+        4431,
+        1909,
+        4506,
+        1985
+      ],
+      "degree": 2,
+      "class_id": 3,
+      "class_name": "armatura_electro",
+      "ann_idx": 96
+    },
+    {
+      "id": "node_92",
+      "type": "connector",
+      "centroid": [
+        2235,
+        4231
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_93",
+      "type": "equipment",
+      "centroid": [
+        2129,
+        1575
+      ],
+      "area": 1073,
+      "bbox": [
+        1561,
+        2111,
+        1590,
+        2148
+      ],
+      "degree": 2,
+      "class_id": 6,
+      "class_name": "perehod",
+      "ann_idx": 26
+    },
+    {
+      "id": "node_94",
+      "type": "equipment",
+      "centroid": [
+        2050,
+        1862
+      ],
+      "area": 1860,
+      "bbox": [
+        1847,
+        2020,
+        1878,
+        2080
+      ],
+      "degree": 1,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 19
+    },
+    {
+      "id": "node_95",
+      "type": "equipment",
+      "centroid": [
+        2110,
+        1862
+      ],
+      "area": 870,
+      "bbox": [
+        1847,
+        2096,
+        1877,
+        2125
+      ],
+      "degree": 1,
+      "class_id": 40,
+      "class_name": "napravlenie",
+      "ann_idx": 25,
+      "direction": "down",
+      "direction_node": true,
+      "flow_axis": "v",
+      "flow_direction": "down",
+      "pass_through": false,
+      "ann_id": 25
+    },
+    {
+      "id": "node_96",
+      "type": "connector",
+      "centroid": [
+        2237,
+        1576
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_97",
+      "type": "equipment",
+      "centroid": [
+        2237,
+        3322
+      ],
+      "area": 1221,
+      "bbox": [
+        3306,
+        2219,
+        3339,
+        2256
+      ],
+      "degree": 2,
+      "class_id": 5,
+      "class_name": "drossel",
+      "ann_idx": 60
+    },
+    {
+      "id": "node_98",
+      "type": "equipment",
+      "centroid": [
+        2238,
+        3517
+      ],
+      "area": 2926,
+      "bbox": [
+        3479,
+        2219,
+        3556,
+        2257
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 14
+    },
+    {
+      "id": "node_99",
+      "type": "equipment",
+      "centroid": [
+        2237,
+        3868
+      ],
+      "area": 2964,
+      "bbox": [
+        3830,
+        2218,
+        3906,
+        2257
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 57
+    },
+    {
+      "id": "node_100",
+      "type": "connector",
+      "centroid": [
+        2237,
+        3747
+      ],
+      "area": 240,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_101",
+      "type": "connector",
+      "centroid": [
+        2923,
+        1577
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_102",
+      "type": "equipment",
+      "centroid": [
+        2366,
+        3748
+      ],
+      "area": 1800,
+      "bbox": [
+        3733,
+        2336,
+        3763,
+        2396
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 68
+    },
+    {
+      "id": "node_103",
+      "type": "equipment",
+      "centroid": [
+        2458,
+        3747
+      ],
+      "area": 1891,
+      "bbox": [
+        3732,
+        2428,
+        3763,
+        2489
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 18
+    },
+    {
+      "id": "node_104",
+      "type": "equipment",
+      "centroid": [
+        2519,
+        3748
+      ],
+      "area": 841,
+      "bbox": [
+        3734,
+        2505,
+        3763,
+        2534
+      ],
+      "degree": 1,
+      "class_id": 40,
+      "class_name": "napravlenie",
+      "ann_idx": 42,
+      "direction": "down",
+      "direction_node": true,
+      "flow_axis": "v",
+      "flow_direction": "down",
+      "pass_through": false,
+      "ann_id": 42
+    },
+    {
+      "id": "node_105",
+      "type": "equipment",
+      "centroid": [
+        2554,
+        2694
+      ],
+      "area": 212251,
+      "bbox": [
+        2413,
+        2366,
+        2976,
+        2743
+      ],
+      "degree": 2,
+      "class_id": 37,
+      "class_name": "unknow",
+      "ann_idx": 2
+    },
+    {
+      "id": "node_106",
+      "type": "equipment",
+      "centroid": [
+        2773,
+        2593
+      ],
+      "area": 992,
+      "bbox": [
+        2577,
+        2758,
+        2609,
+        2789
+      ],
+      "degree": 2,
+      "class_id": 5,
+      "class_name": "drossel",
+      "ann_idx": 43
+    },
+    {
+      "id": "node_107",
+      "type": "equipment",
+      "centroid": [
+        2773,
+        2788
+      ],
+      "area": 1056,
+      "bbox": [
+        2772,
+        2757,
+        2805,
+        2789
+      ],
+      "degree": 2,
+      "class_id": 5,
+      "class_name": "drossel",
+      "ann_idx": 36
+    },
+    {
+      "id": "node_108",
+      "type": "connector",
+      "centroid": [
+        2818,
+        2594
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_109",
+      "type": "connector",
+      "centroid": [
+        2819,
+        2786
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_110",
+      "type": "equipment",
+      "centroid": [
+        2820,
+        2655
+      ],
+      "area": 884,
+      "bbox": [
+        2638,
+        2807,
+        2672,
+        2833
+      ],
+      "degree": 2,
+      "class_id": 6,
+      "class_name": "perehod",
+      "ann_idx": 55
+    },
+    {
+      "id": "node_111",
+      "type": "equipment",
+      "centroid": [
+        2820,
+        2727
+      ],
+      "area": 980,
+      "bbox": [
+        2710,
+        2806,
+        2745,
+        2834
+      ],
+      "degree": 2,
+      "class_id": 6,
+      "class_name": "perehod",
+      "ann_idx": 88
+    },
+    {
+      "id": "node_112",
+      "type": "connector",
+      "centroid": [
+        2821,
+        2691
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_113",
+      "type": "connector",
+      "centroid": [
+        2923,
+        2690
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_114",
+      "type": "connector",
+      "centroid": [
+        2926,
+        2132
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_115",
+      "type": "equipment",
+      "centroid": [
+        3055,
+        2133
+      ],
+      "area": 1920,
+      "bbox": [
+        2117,
+        3025,
+        2149,
+        3085
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 61
+    },
+    {
+      "id": "node_116",
+      "type": "equipment",
+      "centroid": [
+        3147,
+        2133
+      ],
+      "area": 1891,
+      "bbox": [
+        2118,
+        3117,
+        2149,
+        3178
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 74
+    },
+    {
+      "id": "node_117",
+      "type": "equipment",
+      "centroid": [
+        3209,
+        2134
+      ],
+      "area": 840,
+      "bbox": [
+        2119,
+        3195,
+        2149,
+        3223
+      ],
+      "degree": 1,
+      "class_id": 40,
+      "class_name": "napravlenie",
+      "ann_idx": 23,
+      "direction": "down",
+      "direction_node": true,
+      "flow_axis": "v",
+      "flow_direction": "down",
+      "pass_through": false,
+      "ann_id": 23
+    },
+    {
+      "id": "node_118",
+      "type": "equipment",
+      "centroid": [
+        3233,
+        2133
+      ],
+      "area": 3408,
+      "bbox": [
+        2109,
+        3198,
+        2157,
+        3269
+      ],
+      "degree": 0,
+      "class_id": 21,
+      "class_name": "voronka",
+      "ann_idx": 9
+    },
+    {
+      "id": "node_119",
+      "type": "equipment",
+      "centroid": [
+        2135,
+        1861
+      ],
+      "area": 3384,
+      "bbox": [
+        1838,
+        2099,
+        1885,
+        2171
+      ],
+      "degree": 0,
+      "class_id": 21,
+      "class_name": "voronka",
+      "ann_idx": 50
+    },
+    {
+      "id": "node_120",
+      "type": "equipment",
+      "centroid": [
+        2544,
+        3747
+      ],
+      "area": 3408,
+      "bbox": [
+        3723,
+        2509,
+        3771,
+        2580
+      ],
+      "degree": 0,
+      "class_id": 21,
+      "class_name": "voronka",
+      "ann_idx": 66
+    },
+    {
+      "id": "node_121",
+      "type": "equipment",
+      "centroid": [
+        594,
+        2595
+      ],
+      "area": 3408,
+      "bbox": [
+        2571,
+        559,
+        2619,
+        630
+      ],
+      "degree": 0,
+      "class_id": 21,
+      "class_name": "voronka",
+      "ann_idx": 73
+    },
+    {
+      "id": "node_122",
+      "type": "equipment",
+      "centroid": [
+        928,
+        3423
+      ],
+      "area": 3243,
+      "bbox": [
+        3400,
+        894,
+        3447,
+        963
+      ],
+      "degree": 0,
+      "class_id": 21,
+      "class_name": "voronka",
+      "ann_idx": 95
+    }
+  ],
+  "links": [
+    {
+      "id": "edge_0",
+      "source": "node_0",
+      "target": "node_1",
+      "source_point": [
+        263,
+        1582
+      ],
+      "target_point": [
+        263,
+        1709
+      ],
+      "length": 129,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 127.0
+    },
+    {
+      "id": "edge_2",
+      "source": "node_1",
+      "target": "node_2",
+      "source_point": [
+        264,
+        1785
+      ],
+      "target_point": [
+        264,
+        1872
+      ],
+      "length": 88,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 87.0
+    },
+    {
+      "id": "edge_3",
+      "source": "node_2",
+      "target": "node_3",
+      "source_point": [
+        264,
+        1886
+      ],
+      "target_point": [
+        264,
+        2122
+      ],
+      "length": 237,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 236.0
+    },
+    {
+      "id": "edge_4",
+      "source": "node_3",
+      "target": "node_4",
+      "source_point": [
+        264,
+        2136
+      ],
+      "target_point": [
+        264,
+        2422
+      ],
+      "length": 287,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 286.0
+    },
+    {
+      "id": "edge_5",
+      "source": "node_4",
+      "target": "node_5",
+      "source_point": [
+        264,
+        2436
+      ],
+      "target_point": [
+        264,
+        2735
+      ],
+      "length": 300,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 299.0
+    },
+    {
+      "id": "edge_6",
+      "source": "node_3",
+      "target": "node_6",
+      "source_point": [
+        270,
+        2128
+      ],
+      "target_point": [
+        371,
+        2128
+      ],
+      "length": 102,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 101.0
+    },
+    {
+      "id": "edge_7",
+      "source": "node_2",
+      "target": "node_7",
+      "source_point": [
+        271,
+        1879
+      ],
+      "target_point": [
+        409,
+        1879
+      ],
+      "length": 139,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 138.0
+    },
+    {
+      "id": "edge_8",
+      "source": "node_4",
+      "target": "node_8",
+      "source_point": [
+        271,
+        2428
+      ],
+      "target_point": [
+        317,
+        2428
+      ],
+      "length": 47,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 46.0
+    },
+    {
+      "id": "edge_9",
+      "source": "node_5",
+      "target": "node_9",
+      "source_point": [
+        272,
+        2742
+      ],
+      "target_point": [
+        371,
+        2742
+      ],
+      "length": 100,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 99.0
+    },
+    {
+      "id": "edge_10",
+      "source": "node_8",
+      "target": "node_10",
+      "source_point": [
+        324,
+        2436
+      ],
+      "target_point": [
+        324,
+        2587
+      ],
+      "length": 152,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 151.0
+    },
+    {
+      "id": "edge_11",
+      "source": "node_8",
+      "target": "node_11",
+      "source_point": [
+        331,
+        2428
+      ],
+      "target_point": [
+        371,
+        2428
+      ],
+      "length": 41,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 40.0
+    },
+    {
+      "id": "edge_12",
+      "source": "node_10",
+      "target": "node_12",
+      "source_point": [
+        332,
+        2595
+      ],
+      "target_point": [
+        479,
+        2595
+      ],
+      "length": 148,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 147.0
+    },
+    {
+      "id": "edge_13",
+      "source": "node_13",
+      "target": "node_14",
+      "source_point": [
+        359,
+        4024
+      ],
+      "target_point": [
+        360,
+        4196
+      ],
+      "length": 174,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 172.00290695217916
+    },
+    {
+      "id": "edge_14",
+      "source": "node_15",
+      "target": "node_14",
+      "source_point": [
+        359,
+        4300
+      ],
+      "target_point": [
+        360,
+        4210
+      ],
+      "length": 91,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 90.00555538409837
+    },
+    {
+      "id": "edge_15",
+      "source": "node_15",
+      "target": "node_16",
+      "source_point": [
+        359,
+        4375
+      ],
+      "target_point": [
+        359,
+        4648
+      ],
+      "length": 275,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 273.0
+    },
+    {
+      "id": "edge_18",
+      "source": "node_14",
+      "target": "node_17",
+      "source_point": [
+        368,
+        4203
+      ],
+      "target_point": [
+        476,
+        4201
+      ],
+      "length": 109,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 108.01851693112621
+    },
+    {
+      "id": "edge_23",
+      "source": "node_6",
+      "target": "node_18",
+      "source_point": [
+        445,
+        2130
+      ],
+      "target_point": [
+        500,
+        2131
+      ],
+      "length": 57,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 55.00909015790027
+    },
+    {
+      "id": "edge_24",
+      "source": "node_11",
+      "target": "node_19",
+      "source_point": [
+        446,
+        2428
+      ],
+      "target_point": [
+        539,
+        2428
+      ],
+      "length": 95,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 93.0
+    },
+    {
+      "id": "edge_25",
+      "source": "node_9",
+      "target": "node_20",
+      "source_point": [
+        446,
+        2742
+      ],
+      "target_point": [
+        874,
+        2741
+      ],
+      "length": 430,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 428.00116822270473
+    },
+    {
+      "id": "edge_26",
+      "source": "node_21",
+      "target": "node_22",
+      "source_point": [
+        465,
+        1135
+      ],
+      "target_point": [
+        466,
+        830
+      ],
+      "length": 306,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 305.00163933985664
+    },
+    {
+      "id": "edge_27",
+      "source": "node_23",
+      "target": "node_22",
+      "source_point": [
+        466,
+        684
+      ],
+      "target_point": [
+        466,
+        816
+      ],
+      "length": 133,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 132.0
+    },
+    {
+      "id": "edge_29",
+      "source": "node_23",
+      "target": "node_24",
+      "source_point": [
+        474,
+        676
+      ],
+      "target_point": [
+        558,
+        676
+      ],
+      "length": 85,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 84.0
+    },
+    {
+      "id": "edge_30",
+      "source": "node_22",
+      "target": "node_25",
+      "source_point": [
+        474,
+        823
+      ],
+      "target_point": [
+        650,
+        823
+      ],
+      "length": 177,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 176.0
+    },
+    {
+      "id": "edge_33",
+      "source": "node_7",
+      "target": "node_26",
+      "source_point": [
+        483,
+        1879
+      ],
+      "target_point": [
+        536,
+        1879
+      ],
+      "length": 55,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 53.0
+    },
+    {
+      "id": "edge_34",
+      "source": "node_18",
+      "target": "node_27",
+      "source_point": [
+        507,
+        2139
+      ],
+      "target_point": [
+        507,
+        2256
+      ],
+      "length": 118,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 117.0
+    },
+    {
+      "id": "edge_35",
+      "source": "node_18",
+      "target": "node_28",
+      "source_point": [
+        514,
+        2131
+      ],
+      "target_point": [
+        562,
+        2131
+      ],
+      "length": 49,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 48.0
+    },
+    {
+      "id": "edge_36",
+      "source": "node_27",
+      "target": "node_29",
+      "source_point": [
+        516,
+        2263
+      ],
+      "target_point": [
+        670,
+        2262
+      ],
+      "length": 155,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 154.00324671902212
+    },
+    {
+      "id": "edge_38",
+      "source": "node_12",
+      "target": "node_30",
+      "source_point": [
+        538,
+        2594
+      ],
+      "target_point": [
+        557,
+        2595
+      ],
+      "length": 21,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 19.026297590440446
+    },
+    {
+      "id": "edge_40",
+      "source": "node_31",
+      "target": "node_32",
+      "source_point": [
+        545,
+        4203
+      ],
+      "target_point": [
+        720,
+        4201
+      ],
+      "length": 177,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 175.0114281982751
+    },
+    {
+      "id": "edge_43",
+      "source": "node_24",
+      "target": "node_33",
+      "source_point": [
+        592,
+        676
+      ],
+      "target_point": [
+        774,
+        676
+      ],
+      "length": 184,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 182.0
+    },
+    {
+      "id": "edge_44",
+      "source": "node_26",
+      "target": "node_34",
+      "source_point": [
+        611,
+        1879
+      ],
+      "target_point": [
+        656,
+        1879
+      ],
+      "length": 47,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 45.0
+    },
+    {
+      "id": "edge_45",
+      "source": "node_35",
+      "target": "node_36",
+      "source_point": [
+        655,
+        1406
+      ],
+      "target_point": [
+        656,
+        1250
+      ],
+      "length": 157,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 156.00320509528
+    },
+    {
+      "id": "edge_46",
+      "source": "node_37",
+      "target": "node_25",
+      "source_point": [
+        656,
+        976
+      ],
+      "target_point": [
+        658,
+        832
+      ],
+      "length": 145,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 144.01388821915754
+    },
+    {
+      "id": "edge_47",
+      "source": "node_36",
+      "target": "node_37",
+      "source_point": [
+        656,
+        1218
+      ],
+      "target_point": [
+        657,
+        1050
+      ],
+      "length": 169,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 168.00297616411441
+    },
+    {
+      "id": "edge_49",
+      "source": "node_35",
+      "target": "node_38",
+      "source_point": [
+        656,
+        1481
+      ],
+      "target_point": [
+        657,
+        1645
+      ],
+      "length": 166,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 164.00304875214974
+    },
+    {
+      "id": "edge_55",
+      "source": "node_39",
+      "target": "node_40",
+      "source_point": [
+        663,
+        3206
+      ],
+      "target_point": [
+        664,
+        3004
+      ],
+      "length": 203,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 202.00247523235947
+    },
+    {
+      "id": "edge_56",
+      "source": "node_41",
+      "target": "node_39",
+      "source_point": [
+        663,
+        3352
+      ],
+      "target_point": [
+        664,
+        3281
+      ],
+      "length": 72,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 71.00704190430693
+    },
+    {
+      "id": "edge_57",
+      "source": "node_42",
+      "target": "node_43",
+      "source_point": [
+        663,
+        3737
+      ],
+      "target_point": [
+        664,
+        3537
+      ],
+      "length": 201,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 200.0024999843752
+    },
+    {
+      "id": "edge_60",
+      "source": "node_41",
+      "target": "node_44",
+      "source_point": [
+        664,
+        3385
+      ],
+      "target_point": [
+        664,
+        3416
+      ],
+      "length": 32,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 31.0
+    },
+    {
+      "id": "edge_61",
+      "source": "node_44",
+      "target": "node_43",
+      "source_point": [
+        664,
+        3430
+      ],
+      "target_point": [
+        664,
+        3523
+      ],
+      "length": 94,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 93.0
+    },
+    {
+      "id": "edge_66",
+      "source": "node_38",
+      "target": "node_45",
+      "source_point": [
+        666,
+        1653
+      ],
+      "target_point": [
+        1264,
+        1653
+      ],
+      "length": 599,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 598.0
+    },
+    {
+      "id": "edge_68",
+      "source": "node_44",
+      "target": "node_46",
+      "source_point": [
+        672,
+        3423
+      ],
+      "target_point": [
+        731,
+        3423
+      ],
+      "length": 60,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 59.0
+    },
+    {
+      "id": "edge_69",
+      "source": "node_43",
+      "target": "node_47",
+      "source_point": [
+        672,
+        3530
+      ],
+      "target_point": [
+        1017,
+        3530
+      ],
+      "length": 346,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 345.0
+    },
+    {
+      "id": "edge_70",
+      "source": "node_29",
+      "target": "node_48",
+      "source_point": [
+        703,
+        2268
+      ],
+      "target_point": [
+        832,
+        2262
+      ],
+      "length": 130,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 129.1394595001853
+    },
+    {
+      "id": "edge_73",
+      "source": "node_34",
+      "target": "node_49",
+      "source_point": [
+        733,
+        1879
+      ],
+      "target_point": [
+        788,
+        1879
+      ],
+      "length": 57,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 55.0
+    },
+    {
+      "id": "edge_74",
+      "source": "node_32",
+      "target": "node_50",
+      "source_point": [
+        756,
+        4203
+      ],
+      "target_point": [
+        850,
+        4201
+      ],
+      "length": 96,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 94.02127418834527
+    },
+    {
+      "id": "edge_75",
+      "source": "node_51",
+      "target": "node_33",
+      "source_point": [
+        782,
+        556
+      ],
+      "target_point": [
+        782,
+        669
+      ],
+      "length": 114,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 113.0
+    },
+    {
+      "id": "edge_76",
+      "source": "node_33",
+      "target": "node_52",
+      "source_point": [
+        782,
+        683
+      ],
+      "target_point": [
+        782,
+        798
+      ],
+      "length": 116,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 115.0
+    },
+    {
+      "id": "edge_78",
+      "source": "node_51",
+      "target": "node_53",
+      "source_point": [
+        790,
+        548
+      ],
+      "target_point": [
+        900,
+        546
+      ],
+      "length": 111,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 110.01818031580054
+    },
+    {
+      "id": "edge_79",
+      "source": "node_52",
+      "target": "node_53",
+      "source_point": [
+        791,
+        806
+      ],
+      "target_point": [
+        900,
+        805
+      ],
+      "length": 110,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 109.00458705944443
+    },
+    {
+      "id": "edge_82",
+      "source": "node_54",
+      "target": "node_55",
+      "source_point": [
+        872,
+        3423
+      ],
+      "target_point": [
+        890,
+        3423
+      ],
+      "length": 20,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 18.0
+    },
+    {
+      "id": "edge_86",
+      "source": "node_48",
+      "target": "node_56",
+      "source_point": [
+        908,
+        2264
+      ],
+      "target_point": [
+        967,
+        2261
+      ],
+      "length": 61,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 59.07622195096772
+    },
+    {
+      "id": "edge_87",
+      "source": "node_20",
+      "target": "node_57",
+      "source_point": [
+        910,
+        2741
+      ],
+      "target_point": [
+        1846,
+        2742
+      ],
+      "length": 935,
+      "is_terminal": false,
+      "color": "BLUE",
+      "straight_line_distance": 936.0005341878817
+    },
+    {
+      "id": "edge_88",
+      "source": "node_50",
+      "target": "node_58",
+      "source_point": [
+        925,
+        4203
+      ],
+      "target_point": [
+        1016,
+        4203
+      ],
+      "length": 93,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 91.0
+    },
+    {
+      "id": "edge_90",
+      "source": "node_56",
+      "target": "node_59",
+      "source_point": [
+        998,
+        2263
+      ],
+      "target_point": [
+        1148,
+        2263
+      ],
+      "length": 152,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 150.0
+    },
+    {
+      "id": "edge_91",
+      "source": "node_60",
+      "target": "node_47",
+      "source_point": [
+        1022,
+        3845
+      ],
+      "target_point": [
+        1024,
+        3538
+      ],
+      "length": 308,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 307.00651458886017
+    },
+    {
+      "id": "edge_93",
+      "source": "node_60",
+      "target": "node_58",
+      "source_point": [
+        1023,
+        3879
+      ],
+      "target_point": [
+        1024,
+        4195
+      ],
+      "length": 318,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 316.00158227451965
+    },
+    {
+      "id": "edge_94",
+      "source": "node_47",
+      "target": "node_61",
+      "source_point": [
+        1031,
+        3530
+      ],
+      "target_point": [
+        1263,
+        3530
+      ],
+      "length": 233,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 232.0
+    },
+    {
+      "id": "edge_96",
+      "source": "node_59",
+      "target": "node_62",
+      "source_point": [
+        1183,
+        2264
+      ],
+      "target_point": [
+        1264,
+        2263
+      ],
+      "length": 83,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 81.00617260431454
+    },
+    {
+      "id": "edge_97",
+      "source": "node_63",
+      "target": "node_64",
+      "source_point": [
+        1270,
+        2866
+      ],
+      "target_point": [
+        1272,
+        2514
+      ],
+      "length": 340,
+      "is_terminal": false,
+      "color": "YELLOW",
+      "straight_line_distance": 352.00568177232594
+    },
+    {
+      "id": "edge_99",
+      "source": "node_63",
+      "target": "node_61",
+      "source_point": [
+        1271,
+        2923
+      ],
+      "target_point": [
+        1271,
+        3522
+      ],
+      "length": 601,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 599.0
+    },
+    {
+      "id": "edge_100",
+      "source": "node_65",
+      "target": "node_45",
+      "source_point": [
+        1272,
+        1583
+      ],
+      "target_point": [
+        1272,
+        1646
+      ],
+      "length": 64,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 63.0
+    },
+    {
+      "id": "edge_101",
+      "source": "node_45",
+      "target": "node_62",
+      "source_point": [
+        1272,
+        1660
+      ],
+      "target_point": [
+        1272,
+        2256
+      ],
+      "length": 597,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 596.0
+    },
+    {
+      "id": "edge_102",
+      "source": "node_62",
+      "target": "node_64",
+      "source_point": [
+        1272,
+        2270
+      ],
+      "target_point": [
+        1272,
+        2500
+      ],
+      "length": 231,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 230.0
+    },
+    {
+      "id": "edge_103",
+      "source": "node_65",
+      "target": "node_66",
+      "source_point": [
+        1280,
+        1575
+      ],
+      "target_point": [
+        1846,
+        1575
+      ],
+      "length": 554,
+      "is_terminal": false,
+      "color": "BLUE",
+      "straight_line_distance": 566.0
+    },
+    {
+      "id": "edge_104",
+      "source": "node_64",
+      "target": "node_67",
+      "source_point": [
+        1280,
+        2507
+      ],
+      "target_point": [
+        1539,
+        2506
+      ],
+      "length": 260,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 259.0019304947359
+    },
+    {
+      "id": "edge_105",
+      "source": "node_53",
+      "target": "node_68",
+      "source_point": [
+        1346,
+        676
+      ],
+      "target_point": [
+        1375,
+        676
+      ],
+      "length": 31,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 29.0
+    },
+    {
+      "id": "edge_107",
+      "source": "node_68",
+      "target": "node_69",
+      "source_point": [
+        1410,
+        676
+      ],
+      "target_point": [
+        1435,
+        676
+      ],
+      "length": 27,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 25.0
+    },
+    {
+      "id": "edge_108",
+      "source": "node_70",
+      "target": "node_71",
+      "source_point": [
+        1442,
+        1253
+      ],
+      "target_point": [
+        1443,
+        1157
+      ],
+      "length": 97,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 96.00520819205592
+    },
+    {
+      "id": "edge_109",
+      "source": "node_69",
+      "target": "node_72",
+      "source_point": [
+        1443,
+        684
+      ],
+      "target_point": [
+        1443,
+        927
+      ],
+      "length": 244,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 243.0
+    },
+    {
+      "id": "edge_110",
+      "source": "node_72",
+      "target": "node_71",
+      "source_point": [
+        1443,
+        941
+      ],
+      "target_point": [
+        1443,
+        1143
+      ],
+      "length": 203,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 202.0
+    },
+    {
+      "id": "edge_112",
+      "source": "node_72",
+      "target": "node_73",
+      "source_point": [
+        1450,
+        934
+      ],
+      "target_point": [
+        1495,
+        934
+      ],
+      "length": 46,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 45.0
+    },
+    {
+      "id": "edge_113",
+      "source": "node_71",
+      "target": "node_74",
+      "source_point": [
+        1451,
+        1150
+      ],
+      "target_point": [
+        1539,
+        1150
+      ],
+      "length": 89,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 88.0
+    },
+    {
+      "id": "edge_115",
+      "source": "node_75",
+      "target": "node_74",
+      "source_point": [
+        1546,
+        1759
+      ],
+      "target_point": [
+        1547,
+        1158
+      ],
+      "length": 596,
+      "is_terminal": false,
+      "color": "YELLOW",
+      "straight_line_distance": 601.0008319461796
+    },
+    {
+      "id": "edge_116",
+      "source": "node_76",
+      "target": "node_75",
+      "source_point": [
+        1546,
+        2109
+      ],
+      "target_point": [
+        1547,
+        1791
+      ],
+      "length": 319,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 318.0015723231569
+    },
+    {
+      "id": "edge_117",
+      "source": "node_77",
+      "target": "node_76",
+      "source_point": [
+        1546,
+        2292
+      ],
+      "target_point": [
+        1547,
+        2165
+      ],
+      "length": 128,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 127.00393694685216
+    },
+    {
+      "id": "edge_121",
+      "source": "node_77",
+      "target": "node_67",
+      "source_point": [
+        1547,
+        2351
+      ],
+      "target_point": [
+        1547,
+        2498
+      ],
+      "length": 149,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 147.0
+    },
+    {
+      "id": "edge_124",
+      "source": "node_73",
+      "target": "node_78",
+      "source_point": [
+        1569,
+        934
+      ],
+      "target_point": [
+        1630,
+        934
+      ],
+      "length": 63,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 61.0
+    },
+    {
+      "id": "edge_126",
+      "source": "node_79",
+      "target": "node_66",
+      "source_point": [
+        1851,
+        1767
+      ],
+      "target_point": [
+        1853,
+        1583
+      ],
+      "length": 185,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 184.0108692441835
+    },
+    {
+      "id": "edge_127",
+      "source": "node_80",
+      "target": "node_81",
+      "source_point": [
+        1851,
+        2125
+      ],
+      "target_point": [
+        1853,
+        1869
+      ],
+      "length": 257,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 256.00781238079435
+    },
+    {
+      "id": "edge_128",
+      "source": "node_82",
+      "target": "node_80",
+      "source_point": [
+        1851,
+        2501
+      ],
+      "target_point": [
+        1852,
+        2200
+      ],
+      "length": 302,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 301.0016611249845
+    },
+    {
+      "id": "edge_129",
+      "source": "node_83",
+      "target": "node_57",
+      "source_point": [
+        1851,
+        3062
+      ],
+      "target_point": [
+        1853,
+        2749
+      ],
+      "length": 314,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 313.0063897111367
+    },
+    {
+      "id": "edge_131",
+      "source": "node_79",
+      "target": "node_81",
+      "source_point": [
+        1852,
+        1800
+      ],
+      "target_point": [
+        1853,
+        1855
+      ],
+      "length": 57,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 55.00909015790027
+    },
+    {
+      "id": "edge_134",
+      "source": "node_82",
+      "target": "node_57",
+      "source_point": [
+        1852,
+        2532
+      ],
+      "target_point": [
+        1853,
+        2735
+      ],
+      "length": 205,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 203.00246303924493
+    },
+    {
+      "id": "edge_137",
+      "source": "node_66",
+      "target": "node_84",
+      "source_point": [
+        1860,
+        1575
+      ],
+      "target_point": [
+        1886,
+        1573
+      ],
+      "length": 27,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 26.076809620810597
+    },
+    {
+      "id": "edge_138",
+      "source": "node_81",
+      "target": "node_85",
+      "source_point": [
+        1861,
+        1861
+      ],
+      "target_point": [
+        1940,
+        1861
+      ],
+      "length": 80,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 79.0
+    },
+    {
+      "id": "edge_140",
+      "source": "node_84",
+      "target": "node_86",
+      "source_point": [
+        1917,
+        1575
+      ],
+      "target_point": [
+        1972,
+        1573
+      ],
+      "length": 57,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 55.036351623268054
+    },
+    {
+      "id": "edge_142",
+      "source": "node_87",
+      "target": "node_88",
+      "source_point": [
+        1964,
+        4011
+      ],
+      "target_point": [
+        1965,
+        3831
+      ],
+      "length": 181,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 180.00277775634464
+    },
+    {
+      "id": "edge_143",
+      "source": "node_87",
+      "target": "node_89",
+      "source_point": [
+        1964,
+        4087
+      ],
+      "target_point": [
+        1965,
+        4225
+      ],
+      "length": 140,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 138.00362314084367
+    },
+    {
+      "id": "edge_144",
+      "source": "node_90",
+      "target": "node_91",
+      "source_point": [
+        1964,
+        4678
+      ],
+      "target_point": [
+        1965,
+        4505
+      ],
+      "length": 174,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 173.0028901492689
+    },
+    {
+      "id": "edge_146",
+      "source": "node_89",
+      "target": "node_91",
+      "source_point": [
+        1965,
+        4239
+      ],
+      "target_point": [
+        1965,
+        4431
+      ],
+      "length": 193,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 192.0
+    },
+    {
+      "id": "edge_152",
+      "source": "node_89",
+      "target": "node_92",
+      "source_point": [
+        1973,
+        4232
+      ],
+      "target_point": [
+        2228,
+        4232
+      ],
+      "length": 256,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 255.0
+    },
+    {
+      "id": "edge_153",
+      "source": "node_86",
+      "target": "node_93",
+      "source_point": [
+        2047,
+        1575
+      ],
+      "target_point": [
+        2111,
+        1573
+      ],
+      "length": 66,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 64.03124237432849
+    },
+    {
+      "id": "edge_154",
+      "source": "node_94",
+      "target": "node_95",
+      "source_point": [
+        2079,
+        1861
+      ],
+      "target_point": [
+        2096,
+        1861
+      ],
+      "length": 19,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 17.0
+    },
+    {
+      "id": "edge_156",
+      "source": "node_93",
+      "target": "node_96",
+      "source_point": [
+        2147,
+        1575
+      ],
+      "target_point": [
+        2230,
+        1575
+      ],
+      "length": 85,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 83.0
+    },
+    {
+      "id": "edge_157",
+      "source": "node_97",
+      "target": "node_96",
+      "source_point": [
+        2234,
+        3306
+      ],
+      "target_point": [
+        2237,
+        1583
+      ],
+      "length": 1724,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 1723.0026117217583
+    },
+    {
+      "id": "edge_159",
+      "source": "node_97",
+      "target": "node_98",
+      "source_point": [
+        2235,
+        3338
+      ],
+      "target_point": [
+        2235,
+        3479
+      ],
+      "length": 143,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 141.0
+    },
+    {
+      "id": "edge_160",
+      "source": "node_99",
+      "target": "node_100",
+      "source_point": [
+        2235,
+        3830
+      ],
+      "target_point": [
+        2236,
+        3755
+      ],
+      "length": 76,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 75.0066663703967
+    },
+    {
+      "id": "edge_162",
+      "source": "node_98",
+      "target": "node_100",
+      "source_point": [
+        2236,
+        3554
+      ],
+      "target_point": [
+        2236,
+        3740
+      ],
+      "length": 188,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 186.0
+    },
+    {
+      "id": "edge_164",
+      "source": "node_99",
+      "target": "node_92",
+      "source_point": [
+        2236,
+        3905
+      ],
+      "target_point": [
+        2236,
+        4224
+      ],
+      "length": 321,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 319.0
+    },
+    {
+      "id": "edge_165",
+      "source": "node_96",
+      "target": "node_101",
+      "source_point": [
+        2244,
+        1575
+      ],
+      "target_point": [
+        2916,
+        1575
+      ],
+      "length": 673,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 672.0
+    },
+    {
+      "id": "edge_166",
+      "source": "node_100",
+      "target": "node_102",
+      "source_point": [
+        2244,
+        3747
+      ],
+      "target_point": [
+        2336,
+        3747
+      ],
+      "length": 93,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 92.0
+    },
+    {
+      "id": "edge_168",
+      "source": "node_102",
+      "target": "node_103",
+      "source_point": [
+        2394,
+        3746
+      ],
+      "target_point": [
+        2428,
+        3747
+      ],
+      "length": 36,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 34.0147027033899
+    },
+    {
+      "id": "edge_170",
+      "source": "node_103",
+      "target": "node_104",
+      "source_point": [
+        2487,
+        3746
+      ],
+      "target_point": [
+        2505,
+        3747
+      ],
+      "length": 20,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 18.027756377319946
+    },
+    {
+      "id": "edge_171",
+      "source": "node_105",
+      "target": "node_106",
+      "source_point": [
+        2741,
+        2592
+      ],
+      "target_point": [
+        2758,
+        2590
+      ],
+      "length": 19,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 17.11724276862369
+    },
+    {
+      "id": "edge_172",
+      "source": "node_105",
+      "target": "node_107",
+      "source_point": [
+        2741,
+        2787
+      ],
+      "target_point": [
+        2757,
+        2785
+      ],
+      "length": 18,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 16.1245154965971
+    },
+    {
+      "id": "edge_175",
+      "source": "node_106",
+      "target": "node_108",
+      "source_point": [
+        2788,
+        2592
+      ],
+      "target_point": [
+        2811,
+        2592
+      ],
+      "length": 25,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 23.0
+    },
+    {
+      "id": "edge_176",
+      "source": "node_107",
+      "target": "node_109",
+      "source_point": [
+        2788,
+        2787
+      ],
+      "target_point": [
+        2812,
+        2787
+      ],
+      "length": 26,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 24.0
+    },
+    {
+      "id": "edge_177",
+      "source": "node_110",
+      "target": "node_108",
+      "source_point": [
+        2818,
+        2638
+      ],
+      "target_point": [
+        2819,
+        2601
+      ],
+      "length": 38,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 37.013511046643494
+    },
+    {
+      "id": "edge_178",
+      "source": "node_111",
+      "target": "node_112",
+      "source_point": [
+        2818,
+        2710
+      ],
+      "target_point": [
+        2820,
+        2698
+      ],
+      "length": 13,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 12.165525060596439
+    },
+    {
+      "id": "edge_180",
+      "source": "node_110",
+      "target": "node_112",
+      "source_point": [
+        2819,
+        2671
+      ],
+      "target_point": [
+        2820,
+        2684
+      ],
+      "length": 15,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 13.038404810405298
+    },
+    {
+      "id": "edge_182",
+      "source": "node_111",
+      "target": "node_109",
+      "source_point": [
+        2819,
+        2744
+      ],
+      "target_point": [
+        2819,
+        2779
+      ],
+      "length": 37,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 35.0
+    },
+    {
+      "id": "edge_183",
+      "source": "node_112",
+      "target": "node_113",
+      "source_point": [
+        2828,
+        2691
+      ],
+      "target_point": [
+        2916,
+        2690
+      ],
+      "length": 89,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 88.0056816347672
+    },
+    {
+      "id": "edge_184",
+      "source": "node_113",
+      "target": "node_114",
+      "source_point": [
+        2924,
+        2683
+      ],
+      "target_point": [
+        2925,
+        2139
+      ],
+      "length": 545,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 544.0009191168706
+    },
+    {
+      "id": "edge_185",
+      "source": "node_101",
+      "target": "node_114",
+      "source_point": [
+        2925,
+        1584
+      ],
+      "target_point": [
+        2925,
+        2125
+      ],
+      "length": 542,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 541.0
+    },
+    {
+      "id": "edge_186",
+      "source": "node_114",
+      "target": "node_115",
+      "source_point": [
+        2933,
+        2131
+      ],
+      "target_point": [
+        3025,
+        2131
+      ],
+      "length": 93,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 92.0
+    },
+    {
+      "id": "edge_188",
+      "source": "node_115",
+      "target": "node_116",
+      "source_point": [
+        3084,
+        2133
+      ],
+      "target_point": [
+        3117,
+        2132
+      ],
+      "length": 35,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 33.015148038438355
+    },
+    {
+      "id": "edge_190",
+      "source": "node_116",
+      "target": "node_117",
+      "source_point": [
+        3176,
+        2133
+      ],
+      "target_point": [
+        3195,
+        2133
+      ],
+      "length": 21,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 19.0
+    }
+  ],
+  "text_blocks": [
+    {
+      "id": "block_1",
+      "bbox": [
+        2885.0,
+        537.0,
+        3028.0,
+        642.0
+      ],
+      "text": "Вход ПВ в байпас ПВД 1гр.",
+      "confidence": 0.865,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_2",
+      "bbox": [
+        4289.0,
+        229.0,
+        4352.0,
+        292.0
+      ],
+      "text": "10LA¥ AAOC",
+      "confidence": 0.909,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_3",
+      "bbox": [
+        1178.0,
+        573.0,
+        1285.0,
+        636.0
+      ],
+      "text": "10LCA94 BP001",
+      "confidence": 0.974,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_4",
+      "bbox": [
+        1692.0,
+        179.0,
+        1798.0,
+        242.0
+      ],
+      "text": "10LCM40 AA601",
+      "confidence": 0.988,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_5",
+      "bbox": [
+        1439.0,
+        142.0,
+        1612.0,
+        241.0
+      ],
+      "text": "С напора дренажных насосов",
+      "confidence": 0.99,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_6",
+      "bbox": [
+        1390.0,
+        527.0,
+        1498.0,
+        591.0
+      ],
+      "text": "10LCA94 BP201",
+      "confidence": 0.981,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_7",
+      "bbox": [
+        959.0,
+        573.0,
+        1066.0,
+        637.0
+      ],
+      "text": "10LCA94 AA101",
+      "confidence": 0.978,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_8",
+      "bbox": [
+        2327.0,
+        646.0,
+        2536.0,
+        752.0
+      ],
+      "text": "Подпидка брызгальных бассеинов",
+      "confidence": 0.986,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_9",
+      "bbox": [
+        2136.0,
+        836.0,
+        2242.0,
+        901.0
+      ],
+      "text": "10LCA93 AA101",
+      "confidence": 0.981,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_10",
+      "bbox": [
+        3312.0,
+        581.0,
+        3414.0,
+        643.0
+      ],
+      "text": "10LAB13 BP001",
+      "confidence": 0.986,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_11",
+      "bbox": [
+        2469.0,
+        473.0,
+        2574.0,
+        538.0
+      ],
+      "text": "10LCM48 AA401",
+      "confidence": 0.987,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_12",
+      "bbox": [
+        3300.0,
+        808.0,
+        3401.0,
+        872.0
+      ],
+      "text": "10LAB13 AA402",
+      "confidence": 0.989,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_13",
+      "bbox": [
+        3195.0,
+        533.0,
+        3297.0,
+        597.0
+      ],
+      "text": "10LAB13 AA001",
+      "confidence": 0.977,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_14",
+      "bbox": [
+        3300.0,
+        726.0,
+        3401.0,
+        789.0
+      ],
+      "text": "10LAB13 AA401",
+      "confidence": 0.988,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_15",
+      "bbox": [
+        4071.0,
+        708.0,
+        4178.0,
+        774.0
+      ],
+      "text": "10LCA95 BP001",
+      "confidence": 0.942,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_16",
+      "bbox": [
+        2008.0,
+        3112.0,
+        2113.0,
+        3176.0
+      ],
+      "text": "1DLCA90 AA402",
+      "confidence": 0.964,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_17",
+      "bbox": [
+        1736.0,
+        2017.0,
+        1836.0,
+        2080.0
+      ],
+      "text": "10LCA91 AA402",
+      "confidence": 0.983,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_18",
+      "bbox": [
+        1972.0,
+        225.0,
+        2047.0,
+        261.0
+      ],
+      "text": "ly150",
+      "confidence": 0.644,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_19",
+      "bbox": [
+        2063.0,
+        662.0,
+        2205.0,
+        732.0
+      ],
+      "text": "В здание 10ИGE",
+      "confidence": 0.841,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_20",
+      "bbox": [
+        2766.0,
+        377.0,
+        2869.0,
+        440.0
+      ],
+      "text": "10LCM40 AA002",
+      "confidence": 0.985,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_21",
+      "bbox": [
+        4030.0,
+        856.0,
+        4137.0,
+        920.0
+      ],
+      "text": "10LCA95 AA001",
+      "confidence": 0.988,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_22",
+      "bbox": [
+        2842.0,
+        1191.0,
+        2947.0,
+        1254.0
+      ],
+      "text": "1DLCA90 AA1D1",
+      "confidence": 0.934,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_23",
+      "bbox": [
+        3589.0,
+        628.0,
+        3669.0,
+        662.0
+      ],
+      "text": "Dy350",
+      "confidence": 0.99,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_24",
+      "bbox": [
+        1702.0,
+        664.0,
+        1809.0,
+        728.0
+      ],
+      "text": "10LCM42 AA001",
+      "confidence": 0.986,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_25",
+      "bbox": [
+        2026.0,
+        1229.0,
+        2101.0,
+        1264.0
+      ],
+      "text": "Dy300",
+      "confidence": 0.926,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_26",
+      "bbox": [
+        4615.0,
+        1840.0,
+        4822.0,
+        1939.0
+      ],
+      "text": "Подача селарата за ПНД-4",
+      "confidence": 0.97,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_27",
+      "bbox": [
+        546.0,
+        544.0,
+        649.0,
+        610.0
+      ],
+      "text": "10LCM50 BP002",
+      "confidence": 0.978,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_28",
+      "bbox": [
+        1636.0,
+        1815.0,
+        1711.0,
+        1849.0
+      ],
+      "text": "Dy300",
+      "confidence": 0.91,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_29",
+      "bbox": [
+        2264.0,
+        1813.0,
+        2341.0,
+        1847.0
+      ],
+      "text": "Dy250",
+      "confidence": 0.982,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_30",
+      "bbox": [
+        808.0,
+        1499.0,
+        911.0,
+        1563.0
+      ],
+      "text": "10LCN20 AA101",
+      "confidence": 0.981,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_31",
+      "bbox": [
+        2112.0,
+        1768.0,
+        2210.0,
+        1831.0
+      ],
+      "text": "10LCA91 AA101",
+      "confidence": 0.988,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_32",
+      "bbox": [
+        2257.0,
+        377.0,
+        2364.0,
+        441.0
+      ],
+      "text": "10LCM48 AA001",
+      "confidence": 0.951,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_33",
+      "bbox": [
+        1702.0,
+        542.0,
+        1809.0,
+        607.0
+      ],
+      "text": "10LCM42 AA201",
+      "confidence": 0.978,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_34",
+      "bbox": [
+        2167.0,
+        466.0,
+        2242.0,
+        501.0
+      ],
+      "text": "Dy150",
+      "confidence": 0.972,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_35",
+      "bbox": [
+        1999.0,
+        376.0,
+        2106.0,
+        440.0
+      ],
+      "text": "10LCM44 AA101",
+      "confidence": 0.986,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_36",
+      "bbox": [
+        1740.0,
+        1938.0,
+        1840.0,
+        2000.0
+      ],
+      "text": "10LCA91 AA401",
+      "confidence": 0.986,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_37",
+      "bbox": [
+        2084.0,
+        1466.0,
+        2190.0,
+        1530.0
+      ],
+      "text": "10LCA92 AA102",
+      "confidence": 0.973,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_38",
+      "bbox": [
+        1721.0,
+        1462.0,
+        1827.0,
+        1525.0
+      ],
+      "text": "10LCA92 BP001",
+      "confidence": 0.972,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_39",
+      "bbox": [
+        1742.0,
+        410.0,
+        1850.0,
+        474.0
+      ],
+      "text": "10LCM42 AA601",
+      "confidence": 0.964,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_40",
+      "bbox": [
+        4417.0,
+        1832.0,
+        4523.0,
+        1898.0
+      ],
+      "text": "10LCT50 AA002",
+      "confidence": 0.983,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_41",
+      "bbox": [
+        1443.0,
+        1873.0,
+        1546.0,
+        1937.0
+      ],
+      "text": "10LCA90 BP001",
+      "confidence": 0.964,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_42",
+      "bbox": [
+        3999.0,
+        1833.0,
+        4105.0,
+        1898.0
+      ],
+      "text": "10LCT50 AA202",
+      "confidence": 0.984,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_43",
+      "bbox": [
+        1449.0,
+        1977.0,
+        1552.0,
+        2041.0
+      ],
+      "text": "10LCA90 AA102",
+      "confidence": 0.961,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_44",
+      "bbox": [
+        3714.0,
+        2252.0,
+        3746.0,
+        2315.0
+      ],
+      "text": "Dy25",
+      "confidence": 0.768,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_45",
+      "bbox": [
+        1024.0,
+        1404.0,
+        1093.0,
+        1438.0
+      ],
+      "text": "Dy200",
+      "confidence": 0.95,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_46",
+      "bbox": [
+        3463.0,
+        2153.0,
+        3570.0,
+        2216.0
+      ],
+      "text": "10LCA95 AA102",
+      "confidence": 0.98,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_47",
+      "bbox": [
+        546.0,
+        1363.0,
+        649.0,
+        1426.0
+      ],
+      "text": "10LCM50 BP001",
+      "confidence": 0.963,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_48",
+      "bbox": [
+        2008.0,
+        3020.0,
+        2112.0,
+        3083.0
+      ],
+      "text": "1DLCA90 AA401",
+      "confidence": 0.963,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_49",
+      "bbox": [
+        2634.0,
+        2201.0,
+        2703.0,
+        2233.0
+      ],
+      "text": "Dy100",
+      "confidence": 0.934,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_50",
+      "bbox": [
+        1826.0,
+        1870.0,
+        1860.0,
+        1933.0
+      ],
+      "text": "Dy25",
+      "confidence": 0.889,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_51",
+      "bbox": [
+        3489.0,
+        1110.0,
+        3524.0,
+        1185.0
+      ],
+      "text": "Dy300",
+      "confidence": 0.66,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_52",
+      "bbox": [
+        722.0,
+        427.0,
+        797.0,
+        460.0
+      ],
+      "text": "Dy200",
+      "confidence": 0.981,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_53",
+      "bbox": [
+        2227.0,
+        1030.0,
+        2259.0,
+        1104.0
+      ],
+      "text": "Dy180",
+      "confidence": 0.985,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_54",
+      "bbox": [
+        4016.0,
+        993.0,
+        4078.0,
+        1022.0
+      ],
+      "text": "Dv80",
+      "confidence": 0.819,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_55",
+      "bbox": [
+        3623.0,
+        2423.0,
+        3727.0,
+        2484.0
+      ],
+      "text": "10LCA95 AA104",
+      "confidence": 0.984,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_56",
+      "bbox": [
+        4275.0,
+        1926.0,
+        4349.0,
+        1962.0
+      ],
+      "text": "11y120",
+      "confidence": 0.672,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_57",
+      "bbox": [
+        2389.0,
+        286.0,
+        2424.0,
+        357.0
+      ],
+      "text": "Dy150",
+      "confidence": 0.934,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_58",
+      "bbox": [
+        1112.0,
+        341.0,
+        1285.0,
+        443.0
+      ],
+      "text": "Коллектор \"горячих дренажей\"",
+      "confidence": 0.989,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_59",
+      "bbox": [
+        2101.0,
+        2943.0,
+        2130.0,
+        3005.0
+      ],
+      "text": "Dy32",
+      "confidence": 0.767,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_60",
+      "bbox": [
+        3815.0,
+        2152.0,
+        3923.0,
+        2215.0
+      ],
+      "text": "10LCA95 AA101",
+      "confidence": 0.98,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_61",
+      "bbox": [
+        3649.0,
+        993.0,
+        3722.0,
+        1023.0
+      ],
+      "text": "Dv100",
+      "confidence": 0.936,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_62",
+      "bbox": [
+        1350.0,
+        1507.0,
+        1413.0,
+        1541.0
+      ],
+      "text": "Dy50",
+      "confidence": 0.917,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_63",
+      "bbox": [
+        4069.0,
+        329.0,
+        4145.0,
+        359.0
+      ],
+      "text": "Dy200",
+      "confidence": 0.896,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_64",
+      "bbox": [
+        3845.0,
+        263.0,
+        4073.0,
+        333.0
+      ],
+      "text": "Рециркуляция 10LAC10AP001",
+      "confidence": 0.953,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_65",
+      "bbox": [
+        3623.0,
+        2330.0,
+        3726.0,
+        2393.0
+      ],
+      "text": "10LCA95 AA103",
+      "confidence": 0.981,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_66",
+      "bbox": [
+        1779.0,
+        898.0,
+        1986.0,
+        997.0
+      ],
+      "text": "Вывод дебалансных вод",
+      "confidence": 0.974,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_67",
+      "bbox": [
+        3665.0,
+        1842.0,
+        3874.0,
+        1943.0
+      ],
+      "text": "С байласа арматуры на напоре НСС",
+      "confidence": 0.964,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_68",
+      "bbox": [
+        3267.0,
+        2151.0,
+        3375.0,
+        2216.0
+      ],
+      "text": "10LCA95 BP002",
+      "confidence": 0.936,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_69",
+      "bbox": [
+        2843.0,
+        1820.0,
+        2917.0,
+        1850.0
+      ],
+      "text": "Dy200",
+      "confidence": 0.937,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_70",
+      "bbox": [
+        1613.0,
+        1034.0,
+        1648.0,
+        1104.0
+      ],
+      "text": "Dy100",
+      "confidence": 0.961,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_71",
+      "bbox": [
+        2379.0,
+        2893.0,
+        2455.0,
+        2923.0
+      ],
+      "text": "Dy500",
+      "confidence": 0.981,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_72",
+      "bbox": [
+        3072.0,
+        1659.0,
+        3293.0,
+        1744.0
+      ],
+      "text": "2 0LCM51AC002",
+      "confidence": 0.916,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_73",
+      "bbox": [
+        1231.0,
+        1318.0,
+        1403.0,
+        1419.0
+      ],
+      "text": "Коллектор \"горячих дренажей\"",
+      "confidence": 0.96,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_74",
+      "bbox": [
+        847.0,
+        1739.0,
+        1054.0,
+        1810.0
+      ],
+      "text": "От системы дренажей ВД",
+      "confidence": 0.986,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_75",
+      "bbox": [
+        574.0,
+        997.0,
+        789.0,
+        1081.0
+      ],
+      "text": "1 10LCM50BB001",
+      "confidence": 0.956,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_76",
+      "bbox": [
+        4594.0,
+        263.0,
+        4824.0,
+        330.0
+      ],
+      "text": "Рециркуляция 10LAC10AP001",
+      "confidence": 0.976,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_77",
+      "bbox": [
+        2580.0,
+        2409.0,
+        2816.0,
+        2491.0
+      ],
+      "text": "3 10MAG10AC001",
+      "confidence": 0.96,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_78",
+      "bbox": [
+        2272.0,
+        1464.0,
+        2377.0,
+        1557.0
+      ],
+      "text": "10LCA92 AA101",
+      "confidence": 0.956,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_79",
+      "bbox": [
+        2768.0,
+        2754.0,
+        2911.0,
+        2785.0
+      ],
+      "text": "★10LCA90",
+      "confidence": 0.811,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_80",
+      "bbox": [
+        2462.0,
+        2759.0,
+        2568.0,
+        2789.0
+      ],
+      "text": "10LCA90",
+      "confidence": 0.975,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_81",
+      "bbox": [
+        2817.0,
+        2786.0,
+        2898.0,
+        2816.0
+      ],
+      "text": "BP003",
+      "confidence": 0.891,
+      "source": "yolo_surya",
+      "merged_into": null
+    },
+    {
+      "id": "block_82",
+      "bbox": [
+        2475.0,
+        2792.0,
+        2556.0,
+        2821.0
+      ],
+      "text": "BP002",
+      "confidence": 0.956,
+      "source": "yolo_surya",
+      "merged_into": null
+    }
+  ],
+  "bindings": []
+}
