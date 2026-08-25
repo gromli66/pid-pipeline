@@ -1072,6 +1072,14 @@ class DiagramWorkspace(QWidget):
             # гейт §3.2 — сначала привязка, потом готовая раскладка
             # (ui/services/layout_gate.py, применяется в _on_stages_updated).
 
+        # Решение Максима 2026-08-25 (возврат ревизии связки, дефект 2):
+        # во время сборки графа перезапуск распознавания заведомо откажет
+        # (гейт пересборки блока 5) — кнопку гасим, а не предлагаем тупиковый
+        # вопрос. Обе красящие ветки выше уже отработали — гашение последним.
+        if status is DiagramStatus.BUILDING_GRAPH and "ocr" in self._action_buttons:
+            self._action_buttons["ocr"].setEnabled(False)
+            self._action_buttons["ocr"].setStyleSheet(_BTN_STYLE_GRAY)
+
     # =================================================================
     # OCR artifact polling (independent of DiagramStatus changes)
     # =================================================================

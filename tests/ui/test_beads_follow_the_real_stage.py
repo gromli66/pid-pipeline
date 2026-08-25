@@ -434,6 +434,17 @@ def test_green_ocr_button_survives_the_shut_binding_door(bench):
     assert b.bead(dw.BEAD_OCR) is BeadState.COMPLETED
 
 
+def test_ocr_button_is_grey_while_the_graph_is_building(bench):
+    """Решение Максима 2026-08-25 (возврат ревизии связки, дефект 2): во время
+    сборки графа перезапуск распознавания заведомо откажет гейтом пересборки —
+    кнопка гаснет, а не предлагает тупиковый вопрос. Второй берег — сосед выше:
+    в `built` та же кнопка с тем же артефактом живая.
+    """
+    b = bench(status=DiagramStatus.BUILDING_GRAPH, has_ocr_result=True)
+
+    assert b.ws._action_buttons["ocr"].isEnabled() is False
+
+
 def test_poll_tick_before_the_graph_check_keeps_binding_shut(bench):
     """Второй путь той же двери — тик OCR-поллера, у него своего статуса нет.
 
