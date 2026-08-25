@@ -226,6 +226,61 @@ def test_pin_lands_on_port_not_corner():
 
 # ───────────────────────── apply_routing ─────────────────────────
 
+def _amnesty_graph():
+    """Класс К-10: смена стороны, порождённая угловой амнистией `_side_set`.
+
+    `a` — бокс 40x40 (bbox [80, 80, 120, 120]); канон сажает конец `e1`
+    в УГОЛ рамки (120, 120), то есть в стороны {R, B}. Пин роутинга — порт
+    в центре ПРАВОЙ грани (120, 100), то есть {R}. В базах (orig/v16) тот же
+    конец лежит на середине НИЖНЕЙ грани, поэтому допустимое множество судьи
+    `_gate._side_changed` — только {B}: судья считает уход на {R} сменой
+    стороны, а пер-рёберный сторож `apply_routing` пропускает ход через
+    угловую амнистию ({R} пересекается с {R, B}).
+
+    `e2` — независимый транзит q -> r сквозь бокс `w` в другом углу листа:
+    его обход законен и к сторонам отношения не имеет. Он и показывает цену
+    полного отката.
+
+    -> (graph, orig, v16)
+    """
+    a = _block("a", 100, 100)                       # bbox [80, 80, 120, 120]
+    poly = {"id": "p", "type": "block", "class_name": "testpoly",
+            "centroid": [300.0, 400.0],             # [y, x]
+            "bbox": [300.0, 200.0, 500.0, 400.0],
+            "segmentation": [300.0, 200.0, 500.0, 200.0,
+                             500.0, 400.0, 300.0, 400.0]}
+    g = _graph([a, poly, _block("q", 100, 800), _block("r", 500, 800),
+                _block("w", 300, 800, w=40, h=120)],
+               [_edge("e1", "a", "p"), _edge("e2", "q", "r")])
+    e1 = next(e for e in edges(g) if e["id"] == "e1")
+    assert e1["source_point"] == [120.0, 120.0], "фикстура не воспроизводит угол"
+    orig = deepcopy(g)
+    b1 = next(e for e in edges(orig) if e["id"] == "e1")
+    b1["source_point"] = [120.0, 100.0]     # [y, x]: середина НИЖНЕЙ грани
+    return g, orig, deepcopy(orig)
+
+
+def test_corner_amnesty_side_change_reverts_whole_run():
+    """К-10 (поведение ДО правки): одна смена стороны валит ВЕСЬ роутинг.
+
+    Оба маршрута приняты пер-рёберным сторожем, но судья прогона видит рост
+    `side_changed` — и полный откат забирает вместе с виновным `e1` законный
+    обход `e2`, возвращая бокс `w` на магистраль.
+    """
+    g, orig, v16 = _amnesty_graph()
+    e1 = next(e for e in edges(g) if e["id"] == "e1")
+    e2 = next(e for e in edges(g) if e["id"] == "e2")
+    assert spread.box_on_magi_drawn(g, nodes_by_id(g)) == {"w"}
+
+    stats = apply_routing(g, orig, v16, LayoutParams())
+    assert stats == {"routed": 2, "reverted": True,
+                     "reasons": ["side_changed"]}
+    assert e1["waypoints"] == [] and e2["waypoints"] == []
+    assert e1["source_point"] == [120.0, 120.0], "конец e1 не вернулся на канон"
+    assert spread.box_on_magi_drawn(g, nodes_by_id(g)) == {"w"}, (
+        "транзит e2 обязан вернуться вместе с полным откатом")
+
+
 def test_apply_routing_clears_transit_and_keeps_nodes():
     """Гейт-обёртка: magi падает, координаты узлов не тронуты вообще."""
     g = _transit_graph()
