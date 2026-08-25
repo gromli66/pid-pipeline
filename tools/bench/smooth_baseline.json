@@ -1,0 +1,4312 @@
+{
+ "version": 2,
+ "runs": 5,
+ "populations": {
+  "raw": {
+   "files": {
+    "06b938ec_canvas.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 10,
+      "lo": 10,
+      "hi": 10
+     },
+     "along_own": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "bends": {
+      "med": 13,
+      "lo": 13,
+      "hi": 13
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1033.3,
+      "lo": 1033.3,
+      "hi": 1033.3
+     },
+     "moves": {
+      "med": 5,
+      "lo": 5,
+      "hi": 5
+     },
+     "ms": {
+      "med": 11246.3,
+      "lo": 9919.0,
+      "hi": 11917.8
+     },
+     "near": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 6,
+      "lo": 6,
+      "hi": 6
+     },
+     "reseat_blind": {
+      "med": 20,
+      "lo": 20,
+      "hi": 20
+     },
+     "reseat_calls": {
+      "med": 29,
+      "lo": 29,
+      "hi": 29
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "steps": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "through": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "w": {
+      "med": 1833.1,
+      "lo": 1833.1,
+      "hi": 1833.1
+     }
+    },
+    "089feca2_canvas.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "along_own": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "bends": {
+      "med": 6,
+      "lo": 6,
+      "hi": 6
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 6,
+      "lo": 6,
+      "hi": 6
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1027.0,
+      "lo": 1027.0,
+      "hi": 1027.0
+     },
+     "moves": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "ms": {
+      "med": 175.9,
+      "lo": 170.0,
+      "hi": 301.6
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "reseat_blind": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "reseat_calls": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "steps": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "through": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "w": {
+      "med": 1796.5,
+      "lo": 1796.5,
+      "hi": 1796.5
+     }
+    },
+    "0aea61c0_canvas.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 138,
+      "lo": 138,
+      "hi": 138
+     },
+     "along_own": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "bends": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 47,
+      "lo": 47,
+      "hi": 47
+     },
+     "dev": {
+      "med": 199.0,
+      "lo": 199.0,
+      "hi": 199.0
+     },
+     "diag": {
+      "med": 19,
+      "lo": 19,
+      "hi": 19
+     },
+     "h": {
+      "med": 1125.8,
+      "lo": 1125.8,
+      "hi": 1125.8
+     },
+     "moves": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "ms": {
+      "med": 35664.6,
+      "lo": 33412.7,
+      "hi": 45147.2
+     },
+     "near": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "offsheet": {
+      "med": 28,
+      "lo": 28,
+      "hi": 28
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 20,
+      "lo": 20,
+      "hi": 20
+     },
+     "reseat_blind": {
+      "med": 40,
+      "lo": 40,
+      "hi": 40
+     },
+     "reseat_calls": {
+      "med": 80,
+      "lo": 80,
+      "hi": 80
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "steps": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "through": {
+      "med": 99,
+      "lo": 99,
+      "hi": 99
+     },
+     "w": {
+      "med": 1872.0,
+      "lo": 1872.0,
+      "hi": 1872.0
+     }
+    },
+    "0fc9d04c_canvas.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 12,
+      "lo": 12,
+      "hi": 12
+     },
+     "along_own": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "bends": {
+      "med": 12,
+      "lo": 12,
+      "hi": 12
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 9,
+      "lo": 9,
+      "hi": 9
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1027.6,
+      "lo": 1027.6,
+      "hi": 1027.6
+     },
+     "moves": {
+      "med": 16,
+      "lo": 16,
+      "hi": 16
+     },
+     "ms": {
+      "med": 3818.1,
+      "lo": 2986.9,
+      "hi": 4059.2
+     },
+     "near": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "reseat_blind": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "reseat_calls": {
+      "med": 5,
+      "lo": 5,
+      "hi": 5
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "steps": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "through": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "w": {
+      "med": 1844.4,
+      "lo": 1844.4,
+      "hi": 1844.4
+     }
+    },
+    "13d1ef5f_canvas.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_own": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "bends": {
+      "med": 22,
+      "lo": 22,
+      "hi": 22
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1017.4,
+      "lo": 1017.4,
+      "hi": 1017.4
+     },
+     "moves": {
+      "med": 13,
+      "lo": 13,
+      "hi": 13
+     },
+     "ms": {
+      "med": 10383.7,
+      "lo": 9691.1,
+      "hi": 11328.5
+     },
+     "near": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 6,
+      "lo": 6,
+      "hi": 6
+     },
+     "reseat_blind": {
+      "med": 14,
+      "lo": 14,
+      "hi": 14
+     },
+     "reseat_calls": {
+      "med": 38,
+      "lo": 38,
+      "hi": 38
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "steps": {
+      "med": 5,
+      "lo": 5,
+      "hi": 5
+     },
+     "through": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "w": {
+      "med": 1813.9,
+      "lo": 1813.9,
+      "hi": 1813.9
+     }
+    },
+    "302171b3_canvas.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_own": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "bends": {
+      "med": 20,
+      "lo": 20,
+      "hi": 20
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 8,
+      "lo": 8,
+      "hi": 8
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 896.7,
+      "lo": 896.7,
+      "hi": 896.7
+     },
+     "moves": {
+      "med": 6,
+      "lo": 6,
+      "hi": 6
+     },
+     "ms": {
+      "med": 2989.7,
+      "lo": 2527.5,
+      "hi": 3274.2
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "reseat_blind": {
+      "med": 6,
+      "lo": 6,
+      "hi": 6
+     },
+     "reseat_calls": {
+      "med": 12,
+      "lo": 12,
+      "hi": 12
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "steps": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "through": {
+      "med": 8,
+      "lo": 8,
+      "hi": 8
+     },
+     "w": {
+      "med": 1863.1,
+      "lo": 1863.1,
+      "hi": 1863.1
+     }
+    },
+    "3263039b_canvas.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_own": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "bends": {
+      "med": 5,
+      "lo": 5,
+      "hi": 5
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1028.7,
+      "lo": 1028.7,
+      "hi": 1028.7
+     },
+     "moves": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "ms": {
+      "med": 7.9,
+      "lo": 7.2,
+      "hi": 14.0
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "reseat_blind": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "reseat_calls": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "steps": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "through": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "w": {
+      "med": 1790.5,
+      "lo": 1790.5,
+      "hi": 1790.5
+     }
+    },
+    "51b339ab_canvas.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 29,
+      "lo": 29,
+      "hi": 29
+     },
+     "along_own": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "bends": {
+      "med": 78,
+      "lo": 78,
+      "hi": 78
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1031.3,
+      "lo": 1031.3,
+      "hi": 1031.3
+     },
+     "moves": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "ms": {
+      "med": 56545.5,
+      "lo": 48621.4,
+      "hi": 62999.9
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 18,
+      "lo": 18,
+      "hi": 18
+     },
+     "reseat_blind": {
+      "med": 64,
+      "lo": 64,
+      "hi": 64
+     },
+     "reseat_calls": {
+      "med": 72,
+      "lo": 72,
+      "hi": 72
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "steps": {
+      "med": 9,
+      "lo": 9,
+      "hi": 9
+     },
+     "through": {
+      "med": 23,
+      "lo": 23,
+      "hi": 23
+     },
+     "w": {
+      "med": 1824.7,
+      "lo": 1824.7,
+      "hi": 1824.7
+     }
+    },
+    "54a60fd1_canvas.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 6,
+      "lo": 6,
+      "hi": 6
+     },
+     "along_own": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "bends": {
+      "med": 38,
+      "lo": 38,
+      "hi": 38
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 10,
+      "lo": 10,
+      "hi": 10
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1025.5,
+      "lo": 1025.5,
+      "hi": 1025.5
+     },
+     "moves": {
+      "med": 8,
+      "lo": 8,
+      "hi": 8
+     },
+     "ms": {
+      "med": 8027.6,
+      "lo": 7511.8,
+      "hi": 9024.7
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "reseat_blind": {
+      "med": 8,
+      "lo": 8,
+      "hi": 8
+     },
+     "reseat_calls": {
+      "med": 12,
+      "lo": 12,
+      "hi": 12
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "steps": {
+      "med": 6,
+      "lo": 6,
+      "hi": 6
+     },
+     "through": {
+      "med": 11,
+      "lo": 11,
+      "hi": 11
+     },
+     "w": {
+      "med": 1794.3,
+      "lo": 1794.3,
+      "hi": 1794.3
+     }
+    },
+    "620cc50d_canvas.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 8,
+      "lo": 8,
+      "hi": 8
+     },
+     "along_own": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "bends": {
+      "med": 24,
+      "lo": 24,
+      "hi": 24
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 16,
+      "lo": 16,
+      "hi": 16
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1015.9,
+      "lo": 1015.9,
+      "hi": 1015.9
+     },
+     "moves": {
+      "med": 7,
+      "lo": 7,
+      "hi": 7
+     },
+     "ms": {
+      "med": 5502.8,
+      "lo": 5310.8,
+      "hi": 5693.5
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "reseat_blind": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "reseat_calls": {
+      "med": 14,
+      "lo": 14,
+      "hi": 14
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "steps": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "through": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "w": {
+      "med": 1865.5,
+      "lo": 1865.5,
+      "hi": 1865.5
+     }
+    },
+    "70701271_canvas.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 30,
+      "lo": 30,
+      "hi": 30
+     },
+     "along_own": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "bends": {
+      "med": 89,
+      "lo": 89,
+      "hi": 89
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 9,
+      "lo": 9,
+      "hi": 9
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1032.0,
+      "lo": 1032.0,
+      "hi": 1032.0
+     },
+     "moves": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "ms": {
+      "med": 13813.4,
+      "lo": 12876.9,
+      "hi": 14353.2
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 10,
+      "lo": 10,
+      "hi": 10
+     },
+     "reseat_blind": {
+      "med": 30,
+      "lo": 30,
+      "hi": 30
+     },
+     "reseat_calls": {
+      "med": 48,
+      "lo": 48,
+      "hi": 48
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "steps": {
+      "med": 11,
+      "lo": 11,
+      "hi": 11
+     },
+     "through": {
+      "med": 14,
+      "lo": 14,
+      "hi": 14
+     },
+     "w": {
+      "med": 1675.2,
+      "lo": 1675.2,
+      "hi": 1675.2
+     }
+    },
+    "751116c9_canvas.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_own": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "bends": {
+      "med": 20,
+      "lo": 20,
+      "hi": 20
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 997.8,
+      "lo": 997.8,
+      "hi": 997.8
+     },
+     "moves": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "ms": {
+      "med": 26.3,
+      "lo": 24.9,
+      "hi": 27.7
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "reseat_blind": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "reseat_calls": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "steps": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "through": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "w": {
+      "med": 1641.7,
+      "lo": 1641.7,
+      "hi": 1641.7
+     }
+    },
+    "7d46ff96_canvas.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 28,
+      "lo": 28,
+      "hi": 28
+     },
+     "along_own": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "bends": {
+      "med": 110,
+      "lo": 110,
+      "hi": 110
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 6,
+      "lo": 6,
+      "hi": 6
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1032.0,
+      "lo": 1032.0,
+      "hi": 1032.0
+     },
+     "moves": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "ms": {
+      "med": 3639.3,
+      "lo": 3215.9,
+      "hi": 3809.0
+     },
+     "near": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "reseat_blind": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "reseat_calls": {
+      "med": 12,
+      "lo": 12,
+      "hi": 12
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "steps": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "through": {
+      "med": 23,
+      "lo": 23,
+      "hi": 23
+     },
+     "w": {
+      "med": 1856.2,
+      "lo": 1856.2,
+      "hi": 1856.2
+     }
+    },
+    "89ca7583_canvas.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "along_own": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "bends": {
+      "med": 33,
+      "lo": 33,
+      "hi": 33
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 9,
+      "lo": 9,
+      "hi": 9
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1020.0,
+      "lo": 1020.0,
+      "hi": 1020.0
+     },
+     "moves": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "ms": {
+      "med": 6032.9,
+      "lo": 5443.1,
+      "hi": 6224.4
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 6,
+      "lo": 6,
+      "hi": 6
+     },
+     "reseat_blind": {
+      "med": 10,
+      "lo": 10,
+      "hi": 10
+     },
+     "reseat_calls": {
+      "med": 24,
+      "lo": 24,
+      "hi": 24
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "steps": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "through": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "w": {
+      "med": 1860.4,
+      "lo": 1860.4,
+      "hi": 1860.4
+     }
+    },
+    "8d517a35_canvas.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 32,
+      "lo": 32,
+      "hi": 32
+     },
+     "along_own": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "bends": {
+      "med": 97,
+      "lo": 97,
+      "hi": 97
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1030.1,
+      "lo": 1030.1,
+      "hi": 1030.1
+     },
+     "moves": {
+      "med": 49,
+      "lo": 49,
+      "hi": 49
+     },
+     "ms": {
+      "med": 39772.6,
+      "lo": 38298.3,
+      "hi": 44079.8
+     },
+     "near": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 14,
+      "lo": 14,
+      "hi": 14
+     },
+     "reseat_blind": {
+      "med": 34,
+      "lo": 34,
+      "hi": 34
+     },
+     "reseat_calls": {
+      "med": 83,
+      "lo": 83,
+      "hi": 83
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "steps": {
+      "med": 9,
+      "lo": 9,
+      "hi": 9
+     },
+     "through": {
+      "med": 6,
+      "lo": 6,
+      "hi": 6
+     },
+     "w": {
+      "med": 1753.2,
+      "lo": 1753.2,
+      "hi": 1753.2
+     }
+    },
+    "a5264536_canvas.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "along_own": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "bends": {
+      "med": 100,
+      "lo": 100,
+      "hi": 100
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1029.8,
+      "lo": 1029.8,
+      "hi": 1029.8
+     },
+     "moves": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "ms": {
+      "med": 8598.6,
+      "lo": 8335.0,
+      "hi": 8980.9
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 7,
+      "lo": 7,
+      "hi": 7
+     },
+     "reseat_blind": {
+      "med": 16,
+      "lo": 16,
+      "hi": 16
+     },
+     "reseat_calls": {
+      "med": 28,
+      "lo": 28,
+      "hi": 28
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "steps": {
+      "med": 7,
+      "lo": 7,
+      "hi": 7
+     },
+     "through": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "w": {
+      "med": 1791.7,
+      "lo": 1791.7,
+      "hi": 1791.7
+     }
+    },
+    "a6d28736_canvas.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 33,
+      "lo": 33,
+      "hi": 33
+     },
+     "along_own": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "bends": {
+      "med": 45,
+      "lo": 45,
+      "hi": 45
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 9,
+      "lo": 9,
+      "hi": 9
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1032.0,
+      "lo": 1032.0,
+      "hi": 1032.0
+     },
+     "moves": {
+      "med": 6,
+      "lo": 6,
+      "hi": 6
+     },
+     "ms": {
+      "med": 20309.6,
+      "lo": 19859.8,
+      "hi": 20877.0
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 17,
+      "lo": 17,
+      "hi": 17
+     },
+     "reseat_blind": {
+      "med": 50,
+      "lo": 50,
+      "hi": 50
+     },
+     "reseat_calls": {
+      "med": 60,
+      "lo": 60,
+      "hi": 60
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "steps": {
+      "med": 6,
+      "lo": 6,
+      "hi": 6
+     },
+     "through": {
+      "med": 32,
+      "lo": 32,
+      "hi": 32
+     },
+     "w": {
+      "med": 1864.8,
+      "lo": 1864.8,
+      "hi": 1864.8
+     }
+    },
+    "c2f79462_canvas.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "along_own": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "bends": {
+      "med": 19,
+      "lo": 19,
+      "hi": 19
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 8,
+      "lo": 8,
+      "hi": 8
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1027.8,
+      "lo": 1027.8,
+      "hi": 1027.8
+     },
+     "moves": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "ms": {
+      "med": 2448.7,
+      "lo": 2385.7,
+      "hi": 2891.5
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "reseat_blind": {
+      "med": 8,
+      "lo": 8,
+      "hi": 8
+     },
+     "reseat_calls": {
+      "med": 8,
+      "lo": 8,
+      "hi": 8
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "steps": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "through": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "w": {
+      "med": 1812.9,
+      "lo": 1812.9,
+      "hi": 1812.9
+     }
+    }
+   },
+   "inputs": {
+    "06b938ec_canvas.json": "ee4db4918494b9630af8411cbdb83117a36d025391a76c34ae20e5a6e0eba8ef",
+    "089feca2_canvas.json": "561896fdff019630820f8b4354b4703cd1a06f494dfb0f1edf41c707801e064f",
+    "0aea61c0_canvas.json": "e2d1652f3e8ea82116941810bcf6043f0d592b7687b0ccc5e7a07fa1ff426600",
+    "0fc9d04c_canvas.json": "e2c69b0775a957129717b93b281883efd99224bbedc374ca4fce7328e6a0536f",
+    "13d1ef5f_canvas.json": "4ab10c0d1119aa4baaa2e6e9edc17a294065014d8e822171c161b86b18b08af2",
+    "302171b3_canvas.json": "655328235ef698fd4b0846c04ff565fecde1fa45378d94d3df2cc4d9ef4227d4",
+    "3263039b_canvas.json": "f995760d0da353ba223757cfa7b1fd5adc1f4aeac85ab24d50766107cd751477",
+    "51b339ab_canvas.json": "fab006f0f04ccb462fa403191c0416937d74e3e1c8d6845b3edc13041f7271ff",
+    "54a60fd1_canvas.json": "5984740640dd51ad87380ef14ade6b0507d3e23ae605eef1894ec9178a559729",
+    "620cc50d_canvas.json": "46b58735d39c8b70d5a84ca1545e7b16280a4191f2e139fe321d81ce51dc3078",
+    "70701271_canvas.json": "4a049fb7e2b08c64d2d57a380b1e3b466eb7ce6a549105049ad1ada6753d0898",
+    "751116c9_canvas.json": "fbcd5d4af909acf69eebd843e1461a0d34c1c173e7bad9b29eb63a9f11a66cbb",
+    "7d46ff96_canvas.json": "ab558a156493beaaf2dd43254b5560b1d3537f47a3b55f8bd7b5f60d6f5e0692",
+    "89ca7583_canvas.json": "6bc25d939ba38b1905f8585f14e61e07f15e53b444798544822d82089a61dd80",
+    "8d517a35_canvas.json": "63b2e898150ee0604a4d92525e1ea4a28cf7a1da5601930044e278ff083f4f08",
+    "a5264536_canvas.json": "ee46cd86fbbfad7a82693fe27296a96ae457b9c2b00a7cab51e33efea408768e",
+    "a6d28736_canvas.json": "c97894d313e7f4a60d90656b39b833673b446da4171d3b59cc84b9800c27337f",
+    "c2f79462_canvas.json": "35e073c46b93272112d97906c0d18876e855046626b68c034b0bc10f729cec05"
+   }
+  },
+  "edited": {
+   "files": {
+    "graph_edited.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "along_own": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "bends": {
+      "med": 5,
+      "lo": 5,
+      "hi": 5
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 6,
+      "lo": 6,
+      "hi": 6
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1027.8,
+      "lo": 1027.8,
+      "hi": 1027.8
+     },
+     "moves": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "ms": {
+      "med": 270.1,
+      "lo": 243.9,
+      "hi": 433.9
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "reseat_blind": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "reseat_calls": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "steps": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "through": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "w": {
+      "med": 1855.3,
+      "lo": 1855.3,
+      "hi": 1855.3
+     }
+    },
+    "graph_edited0598.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "along_own": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "bends": {
+      "med": 21,
+      "lo": 21,
+      "hi": 21
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1027.8,
+      "lo": 1027.8,
+      "hi": 1027.8
+     },
+     "moves": {
+      "med": 7,
+      "lo": 7,
+      "hi": 7
+     },
+     "ms": {
+      "med": 3449.4,
+      "lo": 3181.6,
+      "hi": 4239.5
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "reseat_blind": {
+      "med": 11,
+      "lo": 11,
+      "hi": 11
+     },
+     "reseat_calls": {
+      "med": 12,
+      "lo": 12,
+      "hi": 12
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "steps": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "through": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "w": {
+      "med": 1855.3,
+      "lo": 1855.3,
+      "hi": 1855.3
+     }
+    },
+    "graph_edited70827.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "along_own": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "bends": {
+      "med": 13,
+      "lo": 13,
+      "hi": 13
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1027.8,
+      "lo": 1027.8,
+      "hi": 1027.8
+     },
+     "moves": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "ms": {
+      "med": 2965.3,
+      "lo": 2877.0,
+      "hi": 3047.9
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "reseat_blind": {
+      "med": 11,
+      "lo": 11,
+      "hi": 11
+     },
+     "reseat_calls": {
+      "med": 12,
+      "lo": 12,
+      "hi": 12
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "steps": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "through": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "w": {
+      "med": 1855.3,
+      "lo": 1855.3,
+      "hi": 1855.3
+     }
+    },
+    "graph_edited87537.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "along_own": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "bends": {
+      "med": 15,
+      "lo": 15,
+      "hi": 15
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1027.8,
+      "lo": 1027.8,
+      "hi": 1027.8
+     },
+     "moves": {
+      "med": 5,
+      "lo": 5,
+      "hi": 5
+     },
+     "ms": {
+      "med": 2863.4,
+      "lo": 2445.4,
+      "hi": 3019.2
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "reseat_blind": {
+      "med": 11,
+      "lo": 11,
+      "hi": 11
+     },
+     "reseat_calls": {
+      "med": 12,
+      "lo": 12,
+      "hi": 12
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "steps": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "through": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "w": {
+      "med": 1855.3,
+      "lo": 1855.3,
+      "hi": 1855.3
+     }
+    },
+    "graph_edited87537_2.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "along_own": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "bends": {
+      "med": 16,
+      "lo": 16,
+      "hi": 16
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1027.8,
+      "lo": 1027.8,
+      "hi": 1027.8
+     },
+     "moves": {
+      "med": 5,
+      "lo": 5,
+      "hi": 5
+     },
+     "ms": {
+      "med": 2943.0,
+      "lo": 2580.9,
+      "hi": 3097.7
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "reseat_blind": {
+      "med": 11,
+      "lo": 11,
+      "hi": 11
+     },
+     "reseat_calls": {
+      "med": 12,
+      "lo": 12,
+      "hi": 12
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "steps": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "through": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "w": {
+      "med": 1855.3,
+      "lo": 1855.3,
+      "hi": 1855.3
+     }
+    },
+    "graph_edited971.json": {
+     "adrift": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "along_foreign": {
+      "med": 17,
+      "lo": 17,
+      "hi": 17
+     },
+     "along_own": {
+      "med": 5,
+      "lo": 5,
+      "hi": 5
+     },
+     "bends": {
+      "med": 42,
+      "lo": 42,
+      "hi": 42
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "dev": {
+      "med": 261.7,
+      "lo": 261.7,
+      "hi": 261.7
+     },
+     "diag": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "h": {
+      "med": 1061.0,
+      "lo": 1061.0,
+      "hi": 1061.0
+     },
+     "moves": {
+      "med": 10,
+      "lo": 10,
+      "hi": 10
+     },
+     "ms": {
+      "med": 3526.7,
+      "lo": 3341.4,
+      "hi": 3625.9
+     },
+     "near": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "offsheet": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 6,
+      "lo": 6,
+      "hi": 6
+     },
+     "reseat_blind": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "reseat_calls": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "steps": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "through": {
+      "med": 14,
+      "lo": 14,
+      "hi": 14
+     },
+     "w": {
+      "med": 1737.8,
+      "lo": 1737.8,
+      "hi": 1737.8
+     }
+    },
+    "graph_edited_222222.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 18,
+      "lo": 18,
+      "hi": 18
+     },
+     "along_own": {
+      "med": 8,
+      "lo": 8,
+      "hi": 8
+     },
+     "bends": {
+      "med": 44,
+      "lo": 44,
+      "hi": 44
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "dev": {
+      "med": 61.9,
+      "lo": 61.9,
+      "hi": 61.9
+     },
+     "diag": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "h": {
+      "med": 1061.0,
+      "lo": 1061.0,
+      "hi": 1061.0
+     },
+     "moves": {
+      "med": 10,
+      "lo": 10,
+      "hi": 10
+     },
+     "ms": {
+      "med": 3467.2,
+      "lo": 3373.1,
+      "hi": 3532.2
+     },
+     "near": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "offsheet": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "reseat_blind": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "reseat_calls": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "steps": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "through": {
+      "med": 16,
+      "lo": 16,
+      "hi": 16
+     },
+     "w": {
+      "med": 1786.3,
+      "lo": 1786.3,
+      "hi": 1786.3
+     }
+    },
+    "graph_edited_33.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "along_own": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "bends": {
+      "med": 16,
+      "lo": 16,
+      "hi": 16
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 5,
+      "lo": 5,
+      "hi": 5
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1027.8,
+      "lo": 1027.8,
+      "hi": 1027.8
+     },
+     "moves": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "ms": {
+      "med": 2226.0,
+      "lo": 2129.1,
+      "hi": 2242.2
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "reseat_blind": {
+      "med": 6,
+      "lo": 6,
+      "hi": 6
+     },
+     "reseat_calls": {
+      "med": 8,
+      "lo": 8,
+      "hi": 8
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "steps": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "through": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "w": {
+      "med": 1855.3,
+      "lo": 1855.3,
+      "hi": 1855.3
+     }
+    },
+    "graph_edited_3edge.json": {
+     "adrift": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "along_foreign": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "along_own": {
+      "med": 5,
+      "lo": 5,
+      "hi": 5
+     },
+     "bends": {
+      "med": 29,
+      "lo": 29,
+      "hi": 29
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "dev": {
+      "med": 330.0,
+      "lo": 330.0,
+      "hi": 330.0
+     },
+     "diag": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "h": {
+      "med": 1027.8,
+      "lo": 1027.8,
+      "hi": 1027.8
+     },
+     "moves": {
+      "med": 7,
+      "lo": 7,
+      "hi": 7
+     },
+     "ms": {
+      "med": 6450.0,
+      "lo": 6362.7,
+      "hi": 7257.2
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 20,
+      "lo": 20,
+      "hi": 20
+     },
+     "reseat_blind": {
+      "med": 21,
+      "lo": 21,
+      "hi": 21
+     },
+     "reseat_calls": {
+      "med": 28,
+      "lo": 28,
+      "hi": 28
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "steps": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "through": {
+      "med": 5,
+      "lo": 5,
+      "hi": 5
+     },
+     "w": {
+      "med": 1855.3,
+      "lo": 1855.3,
+      "hi": 1855.3
+     }
+    },
+    "graph_edited_after.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "along_own": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "bends": {
+      "med": 14,
+      "lo": 14,
+      "hi": 14
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 5,
+      "lo": 5,
+      "hi": 5
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1027.8,
+      "lo": 1027.8,
+      "hi": 1027.8
+     },
+     "moves": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "ms": {
+      "med": 651.0,
+      "lo": 530.8,
+      "hi": 724.8
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "reseat_blind": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "reseat_calls": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "steps": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "through": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "w": {
+      "med": 1862.6,
+      "lo": 1862.6,
+      "hi": 1862.6
+     }
+    },
+    "graph_edited_av.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "along_own": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "bends": {
+      "med": 22,
+      "lo": 22,
+      "hi": 22
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1027.8,
+      "lo": 1027.8,
+      "hi": 1027.8
+     },
+     "moves": {
+      "med": 7,
+      "lo": 7,
+      "hi": 7
+     },
+     "ms": {
+      "med": 3439.5,
+      "lo": 3388.4,
+      "hi": 3976.8
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "reseat_blind": {
+      "med": 5,
+      "lo": 5,
+      "hi": 5
+     },
+     "reseat_calls": {
+      "med": 11,
+      "lo": 11,
+      "hi": 11
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "steps": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "through": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "w": {
+      "med": 1855.3,
+      "lo": 1855.3,
+      "hi": 1855.3
+     }
+    },
+    "graph_edited_bag.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "along_own": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "bends": {
+      "med": 22,
+      "lo": 22,
+      "hi": 22
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 8,
+      "lo": 8,
+      "hi": 8
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1027.8,
+      "lo": 1027.8,
+      "hi": 1027.8
+     },
+     "moves": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "ms": {
+      "med": 2498.5,
+      "lo": 2356.8,
+      "hi": 2708.0
+     },
+     "near": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "reseat_blind": {
+      "med": 9,
+      "lo": 9,
+      "hi": 9
+     },
+     "reseat_calls": {
+      "med": 10,
+      "lo": 10,
+      "hi": 10
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "steps": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "through": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "w": {
+      "med": 1855.3,
+      "lo": 1855.3,
+      "hi": 1855.3
+     }
+    },
+    "graph_edited_fix.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_own": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "bends": {
+      "med": 23,
+      "lo": 23,
+      "hi": 23
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "dev": {
+      "med": 24.0,
+      "lo": 24.0,
+      "hi": 24.0
+     },
+     "diag": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "h": {
+      "med": 1017.4,
+      "lo": 1017.4,
+      "hi": 1017.4
+     },
+     "moves": {
+      "med": 7,
+      "lo": 7,
+      "hi": 7
+     },
+     "ms": {
+      "med": 8505.6,
+      "lo": 7119.0,
+      "hi": 9489.9
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 10,
+      "lo": 10,
+      "hi": 10
+     },
+     "reseat_blind": {
+      "med": 9,
+      "lo": 9,
+      "hi": 9
+     },
+     "reseat_calls": {
+      "med": 30,
+      "lo": 30,
+      "hi": 30
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "steps": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "through": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "w": {
+      "med": 1810.9,
+      "lo": 1810.9,
+      "hi": 1810.9
+     }
+    },
+    "graph_edited_fix2.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "along_own": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "bends": {
+      "med": 22,
+      "lo": 22,
+      "hi": 22
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1017.4,
+      "lo": 1017.4,
+      "hi": 1017.4
+     },
+     "moves": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "ms": {
+      "med": 3781.1,
+      "lo": 3629.0,
+      "hi": 4064.8
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 6,
+      "lo": 6,
+      "hi": 6
+     },
+     "reseat_blind": {
+      "med": 9,
+      "lo": 9,
+      "hi": 9
+     },
+     "reseat_calls": {
+      "med": 17,
+      "lo": 17,
+      "hi": 17
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "steps": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "through": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "w": {
+      "med": 1810.9,
+      "lo": 1810.9,
+      "hi": 1810.9
+     }
+    },
+    "graph_edited_fix3.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "along_own": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "bends": {
+      "med": 23,
+      "lo": 23,
+      "hi": 23
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1017.4,
+      "lo": 1017.4,
+      "hi": 1017.4
+     },
+     "moves": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "ms": {
+      "med": 3736.9,
+      "lo": 3526.2,
+      "hi": 3820.0
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 6,
+      "lo": 6,
+      "hi": 6
+     },
+     "reseat_blind": {
+      "med": 9,
+      "lo": 9,
+      "hi": 9
+     },
+     "reseat_calls": {
+      "med": 17,
+      "lo": 17,
+      "hi": 17
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "steps": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "through": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "w": {
+      "med": 1810.9,
+      "lo": 1810.9,
+      "hi": 1810.9
+     }
+    },
+    "graph_edited_line.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 15,
+      "lo": 15,
+      "hi": 15
+     },
+     "along_own": {
+      "med": 5,
+      "lo": 5,
+      "hi": 5
+     },
+     "bends": {
+      "med": 44,
+      "lo": 44,
+      "hi": 44
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "dev": {
+      "med": 261.7,
+      "lo": 261.7,
+      "hi": 261.7
+     },
+     "diag": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "h": {
+      "med": 1061.0,
+      "lo": 1061.0,
+      "hi": 1061.0
+     },
+     "moves": {
+      "med": 12,
+      "lo": 12,
+      "hi": 12
+     },
+     "ms": {
+      "med": 3703.1,
+      "lo": 2942.5,
+      "hi": 4178.7
+     },
+     "near": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "offsheet": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 6,
+      "lo": 6,
+      "hi": 6
+     },
+     "reseat_blind": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "reseat_calls": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "steps": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "through": {
+      "med": 14,
+      "lo": 14,
+      "hi": 14
+     },
+     "w": {
+      "med": 1737.8,
+      "lo": 1737.8,
+      "hi": 1737.8
+     }
+    },
+    "graph_edited_ngle.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "along_own": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "bends": {
+      "med": 14,
+      "lo": 14,
+      "hi": 14
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 6,
+      "lo": 6,
+      "hi": 6
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1027.8,
+      "lo": 1027.8,
+      "hi": 1027.8
+     },
+     "moves": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "ms": {
+      "med": 585.0,
+      "lo": 490.7,
+      "hi": 681.6
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "reseat_blind": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "reseat_calls": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "steps": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "through": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "w": {
+      "med": 1855.3,
+      "lo": 1855.3,
+      "hi": 1855.3
+     }
+    },
+    "graph_edited_size.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "along_own": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "bends": {
+      "med": 6,
+      "lo": 6,
+      "hi": 6
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1027.8,
+      "lo": 1027.8,
+      "hi": 1027.8
+     },
+     "moves": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "ms": {
+      "med": 978.1,
+      "lo": 906.5,
+      "hi": 1196.6
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "refused": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "reseat_blind": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "reseat_calls": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "steps": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "through": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "w": {
+      "med": 1855.3,
+      "lo": 1855.3,
+      "hi": 1855.3
+     }
+    },
+    "graph_edited_star.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "along_own": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "bends": {
+      "med": 30,
+      "lo": 30,
+      "hi": 30
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 9,
+      "lo": 9,
+      "hi": 9
+     },
+     "dev": {
+      "med": 154.1,
+      "lo": 154.1,
+      "hi": 154.1
+     },
+     "diag": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "h": {
+      "med": 1027.8,
+      "lo": 1027.8,
+      "hi": 1027.8
+     },
+     "moves": {
+      "med": 9,
+      "lo": 9,
+      "hi": 9
+     },
+     "ms": {
+      "med": 3868.7,
+      "lo": 3448.2,
+      "hi": 4670.7
+     },
+     "near": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 6,
+      "lo": 6,
+      "hi": 6
+     },
+     "reseat_blind": {
+      "med": 6,
+      "lo": 6,
+      "hi": 6
+     },
+     "reseat_calls": {
+      "med": 7,
+      "lo": 7,
+      "hi": 7
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "steps": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "through": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "w": {
+      "med": 1862.6,
+      "lo": 1862.6,
+      "hi": 1862.6
+     }
+    },
+    "graph_edited_vdol.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "along_own": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "bends": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 5,
+      "lo": 5,
+      "hi": 5
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1027.8,
+      "lo": 1027.8,
+      "hi": 1027.8
+     },
+     "moves": {
+      "med": 1,
+      "lo": 1,
+      "hi": 1
+     },
+     "ms": {
+      "med": 120.4,
+      "lo": 117.7,
+      "hi": 139.9
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "reseat_blind": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "reseat_calls": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "steps": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "through": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "w": {
+      "med": 1867.6,
+      "lo": 1867.6,
+      "hi": 1867.6
+     }
+    }
+   },
+   "inputs": {
+    "graph_edited.json": "4f9db43f4c376b4196f95812077af2f6c8c5ab3c07ee48f68264fb725d09353d",
+    "graph_edited0598.json": "a62ba0ab201f78f9fdfc5f12b78e3b2b1e2b24f71174f47b6bd2a401092aaa20",
+    "graph_edited70827.json": "0b60682a40e55e380c9f3954c85789abe47232af5d7638a087283f67169caa7f",
+    "graph_edited87537.json": "6cd9c69fe0e6c8c119a92f5e70a7dc00962107ae7ea79a2d79fdeae4225cc3d1",
+    "graph_edited87537_2.json": "9fbb554980ec89e8a7827116f55edc741c2f6b328cdf31ebc1917670781a470f",
+    "graph_edited971.json": "0b380dd74658a775f81c02c73e5521c7f3af4ad31101e13e42c0fa64969187c8",
+    "graph_edited_222222.json": "86d5672c89fd2a7bc30fd918134b796b7bbac03a64fa5ac00d2246b2f3c01db8",
+    "graph_edited_33.json": "7f7bb6a74d465cf9473e67470bd90d01fc6a13b3a817a8fe605294a297d736d0",
+    "graph_edited_3edge.json": "b771631f040320e384d20730b1a570060072a74c39c6e5237379f1a82f7067f2",
+    "graph_edited_after.json": "b816e36d5d9da819867f71c1dbcac9ba47a2a60475dfb22ef01ed53672a2d8ad",
+    "graph_edited_av.json": "9e290cc5ed6349b37ae51bacc506b4b06b1a8299335eb63ce7a78bad7fd851c2",
+    "graph_edited_bag.json": "773f1550d84fd2ae3f6f6b075bcf58dec694d3c0e4b10df965859ad0bcc95d9d",
+    "graph_edited_fix.json": "90e12969f28a7f5e4b8f46f7677d598bcb95522bf371ae380d0bb44830fc661f",
+    "graph_edited_fix2.json": "0a72737e219f92b2fcd8930b99f4f36153f561c3b7ec90fd5dff788da7b67774",
+    "graph_edited_fix3.json": "e8226f33714adbca420bccdef514fd72a0c2dbee8edaca185b8c7cd6c8419192",
+    "graph_edited_line.json": "022fbeab00bc519c84e39a72ea618a70d9605c39267a373eafb542b2fffbb43f",
+    "graph_edited_ngle.json": "0f150f34e53d1091e65290ddef800fedf7ea0cef34ab157e195f95dc1056e457",
+    "graph_edited_size.json": "fbaa2bea02ba5201525aa5019d55e97283235130d361982ef2c630d2698fbca0",
+    "graph_edited_star.json": "42c5f11f650584cbf63dbb880494fc9f9ee7471dcb38927e85cb4ca6f6478516",
+    "graph_edited_vdol.json": "19679d5a4cc7215dcebf2911dedc3ca895152caebfe69730080d66844faf4d73"
+   }
+  }
+ }
+}

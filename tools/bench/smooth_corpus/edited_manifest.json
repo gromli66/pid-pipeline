@@ -1,0 +1,27 @@
+{
+ "snapshot_date": "2026-08-25",
+ "source": "tools/bench/edit_corpus (main tree, вне git — .gitignore:37)",
+ "note": "правленые холсты для стенда Э4 (блок 0 pains-auto-align); отпечатки = corpus.data_fingerprint",
+ "files": {
+  "graph_edited.json": "4f9db43f4c376b4196f95812077af2f6c8c5ab3c07ee48f68264fb725d09353d",
+  "graph_edited0598.json": "a62ba0ab201f78f9fdfc5f12b78e3b2b1e2b24f71174f47b6bd2a401092aaa20",
+  "graph_edited70827.json": "0b60682a40e55e380c9f3954c85789abe47232af5d7638a087283f67169caa7f",
+  "graph_edited87537.json": "6cd9c69fe0e6c8c119a92f5e70a7dc00962107ae7ea79a2d79fdeae4225cc3d1",
+  "graph_edited87537_2.json": "9fbb554980ec89e8a7827116f55edc741c2f6b328cdf31ebc1917670781a470f",
+  "graph_edited971.json": "0b380dd74658a775f81c02c73e5521c7f3af4ad31101e13e42c0fa64969187c8",
+  "graph_edited_222222.json": "86d5672c89fd2a7bc30fd918134b796b7bbac03a64fa5ac00d2246b2f3c01db8",
+  "graph_edited_33.json": "7f7bb6a74d465cf9473e67470bd90d01fc6a13b3a817a8fe605294a297d736d0",
+  "graph_edited_3edge.json": "b771631f040320e384d20730b1a570060072a74c39c6e5237379f1a82f7067f2",
+  "graph_edited_after.json": "b816e36d5d9da819867f71c1dbcac9ba47a2a60475dfb22ef01ed53672a2d8ad",
+  "graph_edited_av.json": "9e290cc5ed6349b37ae51bacc506b4b06b1a8299335eb63ce7a78bad7fd851c2",
+  "graph_edited_bag.json": "773f1550d84fd2ae3f6f6b075bcf58dec694d3c0e4b10df965859ad0bcc95d9d",
+  "graph_edited_fix.json": "90e12969f28a7f5e4b8f46f7677d598bcb95522bf371ae380d0bb44830fc661f",
+  "graph_edited_fix2.json": "0a72737e219f92b2fcd8930b99f4f36153f561c3b7ec90fd5dff788da7b67774",
+  "graph_edited_fix3.json": "e8226f33714adbca420bccdef514fd72a0c2dbee8edaca185b8c7cd6c8419192",
+  "graph_edited_line.json": "022fbeab00bc519c84e39a72ea618a70d9605c39267a373eafb542b2fffbb43f",
+  "graph_edited_ngle.json": "0f150f34e53d1091e65290ddef800fedf7ea0cef34ab157e195f95dc1056e457",
+  "graph_edited_size.json": "fbaa2bea02ba5201525aa5019d55e97283235130d361982ef2c630d2698fbca0",
+  "graph_edited_star.json": "42c5f11f650584cbf63dbb880494fc9f9ee7471dcb38927e85cb4ca6f6478516",
+  "graph_edited_vdol.json": "19679d5a4cc7215dcebf2911dedc3ca895152caebfe69730080d66844faf4d73"
+ }
+}

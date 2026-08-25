@@ -1,0 +1,2115 @@
+{
+  "directed": false,
+  "multigraph": false,
+  "graph": {
+    "source": "P&ID Graph Builder",
+    "version": "1.0",
+    "image_size": [
+      1247,
+      1978
+    ],
+    "num_nodes": 65,
+    "num_edges": 62,
+    "num_valid_bridges": 0,
+    "num_invalid_bridges": 0,
+    "num_isolated_nodes": 3
+  },
+  "nodes": [
+    {
+      "id": "node_0",
+      "type": "connector",
+      "centroid": [
+        5,
+        583
+      ],
+      "area": 165,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_1",
+      "type": "connector",
+      "centroid": [
+        14,
+        1768
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_2",
+      "type": "equipment",
+      "centroid": [
+        156,
+        145
+      ],
+      "area": 11880,
+      "bbox": [
+        91,
+        101,
+        199,
+        211
+      ],
+      "degree": 2,
+      "class_id": 22,
+      "class_name": "filtr_meh",
+      "ann_idx": 10
+    },
+    {
+      "id": "node_3",
+      "type": "equipment",
+      "centroid": [
+        17,
+        1502
+      ],
+      "area": 3162,
+      "bbox": [
+        1456,
+        0,
+        1549,
+        34
+      ],
+      "degree": 1,
+      "class_id": 35,
+      "class_name": "output",
+      "ann_idx": 13
+    },
+    {
+      "id": "node_4",
+      "type": "equipment",
+      "centroid": [
+        14,
+        1690
+      ],
+      "area": 1350,
+      "bbox": [
+        1665,
+        1,
+        1715,
+        28
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 21
+    },
+    {
+      "id": "node_5",
+      "type": "equipment",
+      "centroid": [
+        265,
+        1516
+      ],
+      "area": 11988,
+      "bbox": [
+        1462,
+        210,
+        1570,
+        321
+      ],
+      "degree": 2,
+      "class_id": 22,
+      "class_name": "filtr_meh",
+      "ann_idx": 35
+    },
+    {
+      "id": "node_6",
+      "type": "connector",
+      "centroid": [
+        155,
+        34
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_7",
+      "type": "equipment",
+      "centroid": [
+        162,
+        936
+      ],
+      "area": 4588,
+      "bbox": [
+        899,
+        131,
+        973,
+        193
+      ],
+      "degree": 1,
+      "class_id": 33,
+      "class_name": "datchik",
+      "ann_idx": 30
+    },
+    {
+      "id": "node_8",
+      "type": "connector",
+      "centroid": [
+        293,
+        801
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_9",
+      "type": "equipment",
+      "centroid": [
+        233,
+        35
+      ],
+      "area": 720,
+      "bbox": [
+        25,
+        215,
+        45,
+        251
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 8
+    },
+    {
+      "id": "node_10",
+      "type": "equipment",
+      "centroid": [
+        340,
+        35
+      ],
+      "area": 3220,
+      "bbox": [
+        18,
+        294,
+        53,
+        386
+      ],
+      "degree": 1,
+      "class_id": 35,
+      "class_name": "output",
+      "ann_idx": 26
+    },
+    {
+      "id": "node_11",
+      "type": "equipment",
+      "centroid": [
+        265,
+        1283
+      ],
+      "area": 1428,
+      "bbox": [
+        1258,
+        251,
+        1309,
+        279
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 7
+    },
+    {
+      "id": "node_12",
+      "type": "connector",
+      "centroid": [
+        265,
+        1205
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_13",
+      "type": "connector",
+      "centroid": [
+        265,
+        1386
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_14",
+      "type": "connector",
+      "centroid": [
+        697,
+        1205
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_15",
+      "type": "equipment",
+      "centroid": [
+        349,
+        1385
+      ],
+      "area": 720,
+      "bbox": [
+        1375,
+        331,
+        1395,
+        367
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 3
+    },
+    {
+      "id": "node_16",
+      "type": "equipment",
+      "centroid": [
+        280,
+        346
+      ],
+      "area": 2750,
+      "bbox": [
+        321,
+        253,
+        371,
+        308
+      ],
+      "degree": 2,
+      "class_id": 3,
+      "class_name": "armatura_electro",
+      "ann_idx": 18
+    },
+    {
+      "id": "node_17",
+      "type": "connector",
+      "centroid": [
+        294,
+        286
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_18",
+      "type": "equipment",
+      "centroid": [
+        293,
+        570
+      ],
+      "area": 1323,
+      "bbox": [
+        546,
+        280,
+        595,
+        307
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 2
+    },
+    {
+      "id": "node_19",
+      "type": "connector",
+      "centroid": [
+        294,
+        473
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_20",
+      "type": "connector",
+      "centroid": [
+        294,
+        654
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_21",
+      "type": "equipment",
+      "centroid": [
+        294,
+        140
+      ],
+      "area": 3478,
+      "bbox": [
+        93,
+        276,
+        187,
+        313
+      ],
+      "degree": 1,
+      "class_id": 35,
+      "class_name": "output",
+      "ann_idx": 1
+    },
+    {
+      "id": "node_22",
+      "type": "connector",
+      "centroid": [
+        294,
+        429
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_23",
+      "type": "equipment",
+      "centroid": [
+        367,
+        802
+      ],
+      "area": 1323,
+      "bbox": [
+        789,
+        343,
+        816,
+        392
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 28
+    },
+    {
+      "id": "node_24",
+      "type": "equipment",
+      "centroid": [
+        328,
+        285
+      ],
+      "area": 336,
+      "bbox": [
+        278,
+        316,
+        292,
+        340
+      ],
+      "degree": 1,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 20
+    },
+    {
+      "id": "node_25",
+      "type": "connector",
+      "centroid": [
+        355,
+        431
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_26",
+      "type": "connector",
+      "centroid": [
+        355,
+        472
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_27",
+      "type": "equipment",
+      "centroid": [
+        361,
+        654
+      ],
+      "area": 1200,
+      "bbox": [
+        642,
+        337,
+        667,
+        385
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 4
+    },
+    {
+      "id": "node_28",
+      "type": "connector",
+      "centroid": [
+        357,
+        451
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_29",
+      "type": "equipment",
+      "centroid": [
+        392,
+        451
+      ],
+      "area": 390,
+      "bbox": [
+        444,
+        379,
+        459,
+        405
+      ],
+      "degree": 1,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 5
+    },
+    {
+      "id": "node_30",
+      "type": "equipment",
+      "centroid": [
+        462,
+        1385
+      ],
+      "area": 3255,
+      "bbox": [
+        1368,
+        416,
+        1403,
+        509
+      ],
+      "degree": 1,
+      "class_id": 35,
+      "class_name": "output",
+      "ann_idx": 15
+    },
+    {
+      "id": "node_31",
+      "type": "equipment",
+      "centroid": [
+        452,
+        654
+      ],
+      "area": 2738,
+      "bbox": [
+        636,
+        415,
+        673,
+        489
+      ],
+      "degree": 1,
+      "class_id": 35,
+      "class_name": "output",
+      "ann_idx": 34
+    },
+    {
+      "id": "node_32",
+      "type": "equipment",
+      "centroid": [
+        464,
+        802
+      ],
+      "area": 8930,
+      "bbox": [
+        755,
+        417,
+        849,
+        512
+      ],
+      "degree": 2,
+      "class_id": 11,
+      "class_name": "nasos",
+      "ann_idx": 24,
+      "direction": "down"
+    },
+    {
+      "id": "node_33",
+      "type": "connector",
+      "centroid": [
+        539,
+        803
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_34",
+      "type": "equipment",
+      "centroid": [
+        540,
+        839
+      ],
+      "area": 2200,
+      "bbox": [
+        814,
+        518,
+        864,
+        562
+      ],
+      "degree": 1,
+      "class_id": 33,
+      "class_name": "datchik",
+      "ann_idx": 33
+    },
+    {
+      "id": "node_35",
+      "type": "connector",
+      "centroid": [
+        558,
+        801
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_36",
+      "type": "equipment",
+      "centroid": [
+        560,
+        243
+      ],
+      "area": 1274,
+      "bbox": [
+        219,
+        547,
+        268,
+        573
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 6
+    },
+    {
+      "id": "node_37",
+      "type": "connector",
+      "centroid": [
+        559,
+        638
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_38",
+      "type": "connector",
+      "centroid": [
+        559,
+        88
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_39",
+      "type": "equipment",
+      "centroid": [
+        665,
+        88
+      ],
+      "area": 1350,
+      "bbox": [
+        75,
+        640,
+        102,
+        690
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 22
+    },
+    {
+      "id": "node_40",
+      "type": "equipment",
+      "centroid": [
+        664,
+        638
+      ],
+      "area": 1274,
+      "bbox": [
+        625,
+        640,
+        651,
+        689
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 12
+    },
+    {
+      "id": "node_41",
+      "type": "connector",
+      "centroid": [
+        844,
+        638
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_42",
+      "type": "connector",
+      "centroid": [
+        844,
+        88
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_43",
+      "type": "equipment",
+      "centroid": [
+        698,
+        1511
+      ],
+      "area": 1350,
+      "bbox": [
+        1486,
+        685,
+        1536,
+        712
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 16
+    },
+    {
+      "id": "node_44",
+      "type": "connector",
+      "centroid": [
+        699,
+        1380
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_45",
+      "type": "connector",
+      "centroid": [
+        699,
+        1900
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_46",
+      "type": "equipment",
+      "centroid": [
+        762,
+        1381
+      ],
+      "area": 1300,
+      "bbox": [
+        1368,
+        737,
+        1394,
+        787
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 23
+    },
+    {
+      "id": "node_47",
+      "type": "equipment",
+      "centroid": [
+        757,
+        1901
+      ],
+      "area": 1323,
+      "bbox": [
+        1888,
+        733,
+        1915,
+        782
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 17
+    },
+    {
+      "id": "node_48",
+      "type": "connector",
+      "centroid": [
+        843,
+        1899
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_49",
+      "type": "connector",
+      "centroid": [
+        844,
+        1380
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_50",
+      "type": "connector",
+      "centroid": [
+        844,
+        1587
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_51",
+      "type": "connector",
+      "centroid": [
+        845,
+        1245
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 3,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_52",
+      "type": "equipment",
+      "centroid": [
+        911,
+        1588
+      ],
+      "area": 1326,
+      "bbox": [
+        1575,
+        886,
+        1601,
+        937
+      ],
+      "degree": 2,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 14
+    },
+    {
+      "id": "node_53",
+      "type": "equipment",
+      "centroid": [
+        911,
+        1245
+      ],
+      "area": 1377,
+      "bbox": [
+        1232,
+        886,
+        1259,
+        937
+      ],
+      "degree": 1,
+      "class_id": 0,
+      "class_name": "armatura_ruchn",
+      "ann_idx": 19
+    },
+    {
+      "id": "node_54",
+      "type": "connector",
+      "centroid": [
+        963,
+        1587
+      ],
+      "area": 225,
+      "bbox": null,
+      "degree": 2,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "node_55",
+      "type": "equipment",
+      "centroid": [
+        964,
+        1777
+      ],
+      "area": 3729,
+      "bbox": [
+        1721,
+        948,
+        1834,
+        981
+      ],
+      "degree": 1,
+      "class_id": 35,
+      "class_name": "output",
+      "ann_idx": 27
+    },
+    {
+      "id": "node_65",
+      "type": "equipment",
+      "centroid": [
+        459,
+        452
+      ],
+      "area": 2108,
+      "bbox": [
+        435,
+        428,
+        469,
+        490
+      ],
+      "degree": 0,
+      "class_id": 35,
+      "class_name": "output",
+      "ann_idx": 9
+    },
+    {
+      "id": "node_66",
+      "type": "equipment",
+      "centroid": [
+        1010,
+        1246
+      ],
+      "area": 3404,
+      "bbox": [
+        1228,
+        964,
+        1265,
+        1056
+      ],
+      "degree": 0,
+      "class_id": 35,
+      "class_name": "output",
+      "ann_idx": 31
+    },
+    {
+      "id": "node_67",
+      "type": "equipment",
+      "centroid": [
+        395,
+        286
+      ],
+      "area": 2232,
+      "bbox": [
+        268,
+        364,
+        304,
+        426
+      ],
+      "degree": 0,
+      "class_id": 35,
+      "class_name": "output",
+      "ann_idx": 36
+    },
+    {
+      "id": "capconn_0",
+      "type": "connector",
+      "centroid": [
+        2,
+        270
+      ],
+      "area": 0,
+      "bbox": null,
+      "degree": 1,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "capconn_1",
+      "type": "connector",
+      "centroid": [
+        2,
+        1769
+      ],
+      "area": 0,
+      "bbox": null,
+      "degree": 1,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "capconn_2",
+      "type": "connector",
+      "centroid": [
+        155,
+        2
+      ],
+      "area": 0,
+      "bbox": null,
+      "degree": 1,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "capconn_3",
+      "type": "connector",
+      "centroid": [
+        559,
+        1
+      ],
+      "area": 0,
+      "bbox": null,
+      "degree": 1,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "capconn_4",
+      "type": "connector",
+      "centroid": [
+        698,
+        1975
+      ],
+      "area": 0,
+      "bbox": null,
+      "degree": 1,
+      "class_id": -1,
+      "class_name": "connector"
+    },
+    {
+      "id": "capconn_5",
+      "type": "connector",
+      "centroid": [
+        845,
+        2
+      ],
+      "area": 0,
+      "bbox": null,
+      "degree": 1,
+      "class_id": -1,
+      "class_name": "connector"
+    }
+  ],
+  "links": [
+    {
+      "id": "edge_0",
+      "source": "node_0",
+      "target": "capconn_0",
+      "source_point": [
+        2,
+        576
+      ],
+      "target_point": [
+        2,
+        270
+      ],
+      "length": 307,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 306.0
+    },
+    {
+      "id": "edge_1",
+      "source": "node_1",
+      "target": "capconn_1",
+      "source_point": [
+        7,
+        1768
+      ],
+      "target_point": [
+        2,
+        1769
+      ],
+      "length": 6,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 5.0990195135927845
+    },
+    {
+      "id": "edge_2",
+      "source": "node_0",
+      "target": "node_2",
+      "source_point": [
+        10,
+        583
+      ],
+      "target_point": [
+        154,
+        197
+      ],
+      "length": 528,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 411.9854366358112
+    },
+    {
+      "id": "edge_3",
+      "source": "node_3",
+      "target": "node_4",
+      "source_point": [
+        13,
+        1547
+      ],
+      "target_point": [
+        13,
+        1665
+      ],
+      "length": 120,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 118.0
+    },
+    {
+      "id": "edge_4",
+      "source": "node_4",
+      "target": "node_1",
+      "source_point": [
+        13,
+        1714
+      ],
+      "target_point": [
+        14,
+        1761
+      ],
+      "length": 49,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 47.01063709417264
+    },
+    {
+      "id": "edge_6",
+      "source": "node_1",
+      "target": "node_5",
+      "source_point": [
+        21,
+        1768
+      ],
+      "target_point": [
+        264,
+        1568
+      ],
+      "length": 441,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 314.72051092993604
+    },
+    {
+      "id": "edge_7",
+      "source": "node_2",
+      "target": "node_6",
+      "source_point": [
+        153,
+        91
+      ],
+      "target_point": [
+        155,
+        41
+      ],
+      "length": 51,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 50.039984012787215
+    },
+    {
+      "id": "edge_9",
+      "source": "node_6",
+      "target": "capconn_2",
+      "source_point": [
+        155,
+        27
+      ],
+      "target_point": [
+        155,
+        2
+      ],
+      "length": 26,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 25.0
+    },
+    {
+      "id": "edge_11",
+      "source": "node_7",
+      "target": "node_8",
+      "source_point": [
+        160,
+        899
+      ],
+      "target_point": [
+        286,
+        802
+      ],
+      "length": 221,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 159.0125781188394
+    },
+    {
+      "id": "edge_13",
+      "source": "node_6",
+      "target": "node_9",
+      "source_point": [
+        162,
+        34
+      ],
+      "target_point": [
+        215,
+        33
+      ],
+      "length": 54,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 53.009433122794285
+    },
+    {
+      "id": "edge_15",
+      "source": "node_9",
+      "target": "node_10",
+      "source_point": [
+        249,
+        34
+      ],
+      "target_point": [
+        294,
+        33
+      ],
+      "length": 47,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 45.0111097397076
+    },
+    {
+      "id": "edge_16",
+      "source": "node_11",
+      "target": "node_12",
+      "source_point": [
+        263,
+        1258
+      ],
+      "target_point": [
+        264,
+        1212
+      ],
+      "length": 47,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 46.010868281309364
+    },
+    {
+      "id": "edge_17",
+      "source": "node_5",
+      "target": "node_13",
+      "source_point": [
+        263,
+        1462
+      ],
+      "target_point": [
+        264,
+        1393
+      ],
+      "length": 70,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 69.00724599634447
+    },
+    {
+      "id": "edge_19",
+      "source": "node_11",
+      "target": "node_13",
+      "source_point": [
+        264,
+        1307
+      ],
+      "target_point": [
+        264,
+        1379
+      ],
+      "length": 74,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 72.0
+    },
+    {
+      "id": "edge_22",
+      "source": "node_12",
+      "target": "node_14",
+      "source_point": [
+        272,
+        1204
+      ],
+      "target_point": [
+        690,
+        1204
+      ],
+      "length": 419,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 418.0
+    },
+    {
+      "id": "edge_23",
+      "source": "node_13",
+      "target": "node_15",
+      "source_point": [
+        272,
+        1385
+      ],
+      "target_point": [
+        331,
+        1385
+      ],
+      "length": 60,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 59.0
+    },
+    {
+      "id": "edge_24",
+      "source": "node_16",
+      "target": "node_17",
+      "source_point": [
+        292,
+        321
+      ],
+      "target_point": [
+        293,
+        293
+      ],
+      "length": 29,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 28.0178514522438
+    },
+    {
+      "id": "edge_25",
+      "source": "node_18",
+      "target": "node_19",
+      "source_point": [
+        292,
+        546
+      ],
+      "target_point": [
+        293,
+        480
+      ],
+      "length": 67,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 66.007575322837
+    },
+    {
+      "id": "edge_26",
+      "source": "node_18",
+      "target": "node_20",
+      "source_point": [
+        292,
+        593
+      ],
+      "target_point": [
+        293,
+        647
+      ],
+      "length": 56,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 54.00925846556311
+    },
+    {
+      "id": "edge_27",
+      "source": "node_21",
+      "target": "node_17",
+      "source_point": [
+        293,
+        186
+      ],
+      "target_point": [
+        293,
+        279
+      ],
+      "length": 95,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 93.0
+    },
+    {
+      "id": "edge_29",
+      "source": "node_16",
+      "target": "node_22",
+      "source_point": [
+        293,
+        370
+      ],
+      "target_point": [
+        293,
+        422
+      ],
+      "length": 54,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 52.0
+    },
+    {
+      "id": "edge_31",
+      "source": "node_20",
+      "target": "node_8",
+      "source_point": [
+        293,
+        661
+      ],
+      "target_point": [
+        293,
+        794
+      ],
+      "length": 134,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 133.0
+    },
+    {
+      "id": "edge_33",
+      "source": "node_8",
+      "target": "node_23",
+      "source_point": [
+        300,
+        802
+      ],
+      "target_point": [
+        343,
+        800
+      ],
+      "length": 44,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 43.04648650006177
+    },
+    {
+      "id": "edge_34",
+      "source": "node_17",
+      "target": "node_24",
+      "source_point": [
+        301,
+        286
+      ],
+      "target_point": [
+        316,
+        285
+      ],
+      "length": 16,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 15.033296378372908
+    },
+    {
+      "id": "edge_35",
+      "source": "node_22",
+      "target": "node_25",
+      "source_point": [
+        301,
+        430
+      ],
+      "target_point": [
+        348,
+        430
+      ],
+      "length": 48,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 47.0
+    },
+    {
+      "id": "edge_36",
+      "source": "node_19",
+      "target": "node_26",
+      "source_point": [
+        301,
+        472
+      ],
+      "target_point": [
+        348,
+        472
+      ],
+      "length": 48,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 47.0
+    },
+    {
+      "id": "edge_37",
+      "source": "node_20",
+      "target": "node_27",
+      "source_point": [
+        301,
+        653
+      ],
+      "target_point": [
+        337,
+        653
+      ],
+      "length": 37,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 36.0
+    },
+    {
+      "id": "edge_42",
+      "source": "node_25",
+      "target": "node_28",
+      "source_point": [
+        356,
+        438
+      ],
+      "target_point": [
+        356,
+        444
+      ],
+      "length": 7,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 6.0
+    },
+    {
+      "id": "edge_43",
+      "source": "node_28",
+      "target": "node_26",
+      "source_point": [
+        356,
+        458
+      ],
+      "target_point": [
+        356,
+        465
+      ],
+      "length": 8,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 7.0
+    },
+    {
+      "id": "edge_44",
+      "source": "node_28",
+      "target": "node_29",
+      "source_point": [
+        364,
+        451
+      ],
+      "target_point": [
+        379,
+        450
+      ],
+      "length": 16,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 15.033296378372908
+    },
+    {
+      "id": "edge_45",
+      "source": "node_15",
+      "target": "node_30",
+      "source_point": [
+        366,
+        1384
+      ],
+      "target_point": [
+        416,
+        1385
+      ],
+      "length": 52,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 50.00999900019995
+    },
+    {
+      "id": "edge_47",
+      "source": "node_27",
+      "target": "node_31",
+      "source_point": [
+        384,
+        653
+      ],
+      "target_point": [
+        415,
+        653
+      ],
+      "length": 33,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 31.0
+    },
+    {
+      "id": "edge_48",
+      "source": "node_23",
+      "target": "node_32",
+      "source_point": [
+        391,
+        802
+      ],
+      "target_point": [
+        417,
+        800
+      ],
+      "length": 28,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 26.076809620810597
+    },
+    {
+      "id": "edge_52",
+      "source": "node_32",
+      "target": "node_33",
+      "source_point": [
+        510,
+        802
+      ],
+      "target_point": [
+        532,
+        802
+      ],
+      "length": 24,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 22.0
+    },
+    {
+      "id": "edge_53",
+      "source": "node_34",
+      "target": "node_33",
+      "source_point": [
+        538,
+        814
+      ],
+      "target_point": [
+        539,
+        810
+      ],
+      "length": 5,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 4.123105625617661
+    },
+    {
+      "id": "edge_55",
+      "source": "node_33",
+      "target": "node_35",
+      "source_point": [
+        546,
+        802
+      ],
+      "target_point": [
+        551,
+        802
+      ],
+      "length": 6,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 5.0
+    },
+    {
+      "id": "edge_56",
+      "source": "node_36",
+      "target": "node_37",
+      "source_point": [
+        557,
+        267
+      ],
+      "target_point": [
+        558,
+        631
+      ],
+      "length": 366,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 364.00137362378183
+    },
+    {
+      "id": "edge_57",
+      "source": "node_36",
+      "target": "node_38",
+      "source_point": [
+        558,
+        219
+      ],
+      "target_point": [
+        559,
+        95
+      ],
+      "length": 125,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 124.00403219250575
+    },
+    {
+      "id": "edge_58",
+      "source": "node_38",
+      "target": "capconn_3",
+      "source_point": [
+        559,
+        81
+      ],
+      "target_point": [
+        559,
+        1
+      ],
+      "length": 81,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 80.0
+    },
+    {
+      "id": "edge_60",
+      "source": "node_37",
+      "target": "node_35",
+      "source_point": [
+        559,
+        645
+      ],
+      "target_point": [
+        559,
+        794
+      ],
+      "length": 150,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 149.0
+    },
+    {
+      "id": "edge_61",
+      "source": "node_38",
+      "target": "node_39",
+      "source_point": [
+        566,
+        88
+      ],
+      "target_point": [
+        640,
+        86
+      ],
+      "length": 75,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 74.02702209328699
+    },
+    {
+      "id": "edge_62",
+      "source": "node_37",
+      "target": "node_40",
+      "source_point": [
+        566,
+        638
+      ],
+      "target_point": [
+        640,
+        637
+      ],
+      "length": 75,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 74.00675644831355
+    },
+    {
+      "id": "edge_65",
+      "source": "node_40",
+      "target": "node_41",
+      "source_point": [
+        688,
+        639
+      ],
+      "target_point": [
+        837,
+        638
+      ],
+      "length": 151,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 149.00335566691106
+    },
+    {
+      "id": "edge_66",
+      "source": "node_39",
+      "target": "node_42",
+      "source_point": [
+        689,
+        88
+      ],
+      "target_point": [
+        837,
+        88
+      ],
+      "length": 150,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 148.0
+    },
+    {
+      "id": "edge_67",
+      "source": "node_43",
+      "target": "node_44",
+      "source_point": [
+        696,
+        1486
+      ],
+      "target_point": [
+        698,
+        1387
+      ],
+      "length": 100,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 99.02019995940222
+    },
+    {
+      "id": "edge_69",
+      "source": "node_43",
+      "target": "node_45",
+      "source_point": [
+        697,
+        1535
+      ],
+      "target_point": [
+        698,
+        1893
+      ],
+      "length": 360,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 358.00139664532037
+    },
+    {
+      "id": "edge_70",
+      "source": "node_14",
+      "target": "node_44",
+      "source_point": [
+        698,
+        1212
+      ],
+      "target_point": [
+        698,
+        1373
+      ],
+      "length": 162,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 161.0
+    },
+    {
+      "id": "edge_71",
+      "source": "node_45",
+      "target": "capconn_4",
+      "source_point": [
+        698,
+        1907
+      ],
+      "target_point": [
+        698,
+        1975
+      ],
+      "length": 69,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 68.0
+    },
+    {
+      "id": "edge_72",
+      "source": "node_44",
+      "target": "node_46",
+      "source_point": [
+        706,
+        1380
+      ],
+      "target_point": [
+        737,
+        1378
+      ],
+      "length": 32,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 31.064449134018133
+    },
+    {
+      "id": "edge_73",
+      "source": "node_45",
+      "target": "node_47",
+      "source_point": [
+        706,
+        1900
+      ],
+      "target_point": [
+        733,
+        1898
+      ],
+      "length": 28,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 27.073972741361768
+    },
+    {
+      "id": "edge_76",
+      "source": "node_47",
+      "target": "node_48",
+      "source_point": [
+        781,
+        1899
+      ],
+      "target_point": [
+        836,
+        1900
+      ],
+      "length": 57,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 55.00909015790027
+    },
+    {
+      "id": "edge_77",
+      "source": "node_46",
+      "target": "node_49",
+      "source_point": [
+        786,
+        1380
+      ],
+      "target_point": [
+        837,
+        1379
+      ],
+      "length": 53,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 51.0098029794274
+    },
+    {
+      "id": "edge_78",
+      "source": "node_50",
+      "target": "node_49",
+      "source_point": [
+        843,
+        1580
+      ],
+      "target_point": [
+        844,
+        1387
+      ],
+      "length": 194,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 193.00259065618783
+    },
+    {
+      "id": "edge_79",
+      "source": "node_50",
+      "target": "node_48",
+      "source_point": [
+        844,
+        1594
+      ],
+      "target_point": [
+        844,
+        1892
+      ],
+      "length": 299,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 298.0
+    },
+    {
+      "id": "edge_80",
+      "source": "node_42",
+      "target": "capconn_5",
+      "source_point": [
+        845,
+        81
+      ],
+      "target_point": [
+        845,
+        2
+      ],
+      "length": 80,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 79.0
+    },
+    {
+      "id": "edge_81",
+      "source": "node_42",
+      "target": "node_41",
+      "source_point": [
+        845,
+        95
+      ],
+      "target_point": [
+        845,
+        631
+      ],
+      "length": 537,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 536.0
+    },
+    {
+      "id": "edge_82",
+      "source": "node_41",
+      "target": "node_51",
+      "source_point": [
+        845,
+        645
+      ],
+      "target_point": [
+        845,
+        1238
+      ],
+      "length": 594,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 593.0
+    },
+    {
+      "id": "edge_83",
+      "source": "node_51",
+      "target": "node_49",
+      "source_point": [
+        845,
+        1252
+      ],
+      "target_point": [
+        845,
+        1373
+      ],
+      "length": 122,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 121.0
+    },
+    {
+      "id": "edge_84",
+      "source": "node_50",
+      "target": "node_52",
+      "source_point": [
+        851,
+        1586
+      ],
+      "target_point": [
+        886,
+        1586
+      ],
+      "length": 36,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 35.0
+    },
+    {
+      "id": "edge_85",
+      "source": "node_51",
+      "target": "node_53",
+      "source_point": [
+        852,
+        1244
+      ],
+      "target_point": [
+        886,
+        1244
+      ],
+      "length": 35,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 34.0
+    },
+    {
+      "id": "edge_88",
+      "source": "node_52",
+      "target": "node_54",
+      "source_point": [
+        936,
+        1586
+      ],
+      "target_point": [
+        956,
+        1586
+      ],
+      "length": 22,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 20.0
+    },
+    {
+      "id": "edge_89",
+      "source": "node_54",
+      "target": "node_55",
+      "source_point": [
+        963,
+        1594
+      ],
+      "target_point": [
+        963,
+        1721
+      ],
+      "length": 128,
+      "is_terminal": false,
+      "color": null,
+      "straight_line_distance": 127.0
+    }
+  ],
+  "text_blocks": [],
+  "bindings": []
+}
