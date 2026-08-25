@@ -21,7 +21,12 @@ ALLOWLIST, и для них тест УТВЕРЖДАЕТ расхождение
   6. graph_to_fxml.get_line_endpoints      — экспорт FXML (try-import: модуль
      чужой, при неимпортируемости — skip с пометкой);
   7. AdvancedGraphEditor.add_edge          — СОЗДАНИЕ нового ребра (хвост Э1:
-     рёбер в графе ещё нет, инструмент сажает концы с нуля).
+     рёбер в графе ещё нет, инструмент сажает концы с нуля);
+  8. SimpleGraphEditor.add_edge           — то же во вкладке «Проверка схемы»,
+     где с 2026-08-25 посадка идёт диспетчером «Контуров»
+     (`graph_geometry.dispatch_connect`), а не каноном: строгая ось важнее
+     центра. Ряд добавлен ВМЕСТЕ со сменой контракта — без него сторож T-B
+     слепнет ровно там, где контракт и поменялся.
 
 Почему фикстура рукописная, а не подмножество tests/fixtures/layout/synth_med.json
 (предпочтение §4 T-B): в synth_med НИ ОДНОГО узла с segmentation (0 из 208) и
@@ -85,6 +90,7 @@ IMPLS = (
     "get_connection_point",
     "fxml_endpoints",
     "add_edge",
+    "simple_add_edge",
 )
 
 # ── ALLOWLIST известных расхождений ──────────────────────────────────────
@@ -135,6 +141,18 @@ ALLOWLIST = {
         "скин на рамке bbox vs letterbox, 8.50px",
     ("get_connection_point", "skin_poly"):
         "скин на рамке bbox vs letterbox, 8.50px",
+    #
+    # 2026-08-25 (блок 4 «точечных болей», решение Максима «да, как в
+    # Контурах»): «Проверка схемы» сажает новое ребро диспетчером
+    # `graph_geometry.dispatch_connect` — строгая ось важнее центра. Канон
+    # seating не меняется (сервер, бит-эталон). Два расхождения, оба —
+    # заявленный контракт вкладки, а не баг:
+    ("simple_add_edge", "skin"): "скин на рамке bbox vs letterbox, 8.50px",
+    # skin_poly расходится ИНАЧЕ, чем у Advanced (там тоже 8.50): ветвление
+    # диспетчера смотрит СЫРОЙ segmentation, поэтому у скина С контуром конец
+    # садится на КОНТУР, а не на рамку. Канон в этом случае предпочитает скин.
+    ("simple_add_edge", "skin_poly"):
+        "конец на контуре (сырой seg-чек диспетчера) vs letterbox скина, 4.50px",
 }
 
 
@@ -260,6 +278,25 @@ def _editor(tmp_dir, graph):
     return ed
 
 
+def _simple_editor(tmp_dir, graph):
+    """«Проверка схемы» — тот же харнесс, но БЕЗ режима холста.
+
+    Вкладка растровая: CONNECTOR_MARKER_RADIUS = 8 (legacy), CLICK_THRESHOLD = 20.
+    """
+    from ui.editors.simple_graph_editor import SimpleGraphEditor
+
+    img = QImage(1920, 1080, QImage.Format.Format_ARGB32)
+    img.fill(QColor("white"))
+    ip = tmp_dir / "raster.png"
+    img.save(str(ip))
+    gp = tmp_dir / "graph.json"
+    gp.write_text(json.dumps(graph), encoding="utf-8")
+
+    ed = SimpleGraphEditor()
+    assert ed.load_data(str(ip), str(gp))
+    return ed
+
+
 # ── Прогон всех реализаций (один раз на модуль) ──────────────────────────
 
 @pytest.fixture(scope="module")
@@ -342,6 +379,17 @@ def results(qapp, tmp_path_factory):
         e["id"] = eid_by_pair[(e["source"], e["target"])]
     out["add_edge"] = _diverge(st)
 
+    # 8. SimpleGraphEditor.add_edge — «Проверка схемы»: посадка диспетчером
+    #    «Контуров» (2026-08-25). Расхождения с каноном тут ОЖИДАЕМЫ и лежат
+    #    в ALLOWLIST — это и есть новый контракт вкладки.
+    ed = _simple_editor(tmp_path_factory.mktemp("simple_addedge"), empty)
+    for e in fixture["links"]:
+        assert ed.add_edge(e["source"], e["target"])
+    st = _state_from_editor(ed)
+    for e in st["links"]:
+        e["id"] = eid_by_pair[(e["source"], e["target"])]
+    out["simple_add_edge"] = _diverge(st)
+
     return out
 
 
@@ -369,6 +417,31 @@ def test_fixture_preconditions():
     assert baked["e_skin"]["source_point"] == pytest.approx([260.5, 821.0])
     assert baked["e_skinpoly"]["source_point"] == pytest.approx([260.5, 1121.0])
     assert baked["e_poly"]["source_point"] == pytest.approx([225.0, 1495.0])
+
+
+def test_simple_add_edge_divergences_are_the_declared_ones(results):
+    """Новый контракт «Проверки схемы» заперт ЧИСЛАМИ, а не фактом расхождения.
+
+    ⚠ Зачем отдельный тест: ALLOWLIST утверждает лишь `dist > TOL`, и на этом
+    он слеп к подмене пути. Замерено зондом 2026-08-25 — возврат `add_edge`
+    на канонную посадку оставил всю матрицу ЗЕЛЁНОЙ: у канона скин тоже
+    расходится на 8.50px, и «расхождение есть» выполняется в обоих мирах.
+    Отличает миры только величина у `skin_poly`: диспетчер смотрит СЫРОЙ
+    segmentation и сажает конец на КОНТУР (4.50px), канон предпочитает скин
+    и уводит на letterbox (8.50px).
+
+    Числа абсолютные: тест, вычисляющий ожидание из проверяемого пути,
+    остался бы зелёным при любом его поведении.
+    """
+    r = results["simple_add_edge"]
+    assert r["skin"][0] == pytest.approx(8.50, abs=0.01), \
+        "скиновый конец ушёл не на рамку bbox"
+    assert r["skin_poly"][0] == pytest.approx(4.50, abs=0.01), \
+        ("у скина С контуром конец обязан сесть на КОНТУР (сырой seg-чек "
+         "диспетчера); 8.50px здесь означает возврат на канон")
+    for case in ("connector", "polygon", "bbox"):
+        assert r[case][0] <= TOL, \
+            f"{case}: новый путь разошёлся с каноном вне заявленного"
 
 
 def test_allowlist_keys_are_in_matrix():
