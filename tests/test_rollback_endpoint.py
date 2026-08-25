@@ -76,7 +76,8 @@ STABLE_STAGES = [
 ]
 
 # Артефакты «Ручной правки». Своей стадии в `_STAGE_ORDER` у холста нет
-# (его `done_status` — `generating_fxml`), поэтому он числится за `COMPLETED`.
+# (его `done_status` — `generating_fxml`); до Н1 он числился за `COMPLETED`
+# вместе с FXML и потому погибал при ЛЮБОЙ цели отката.
 CANVAS_ARTIFACTS = {ArtifactType.GRAPH_CANVAS, ArtifactType.RESIDUAL_DEFECTS}
 CANVAS_FILES = ("graph_canvas.json", "residual_defects.json")
 
@@ -113,6 +114,7 @@ class FakeDB:
         self.present = set(present)
         self.deleted = []
         self.commits = 0
+        self.added = []
 
     async def execute(self, stmt):
         if isinstance(stmt, type(sa_delete(Artifact))):
@@ -121,10 +123,24 @@ class FakeDB:
             hit = [t for t in types if t in self.present]
             self.present -= set(hit)
             return _FakeResult(rowcount=len(hit))
-        return _FakeResult(self.diagram)
+        # SELECT: диаграмма или артефакт. Различать обязательно — иначе на
+        # запрос артефакта приезжает диаграмма, и upsert идёт не той веткой.
+        entity = stmt.column_descriptions[0]["entity"]
+        if entity is Diagram:
+            return _FakeResult(self.diagram)
+        return _FakeResult(None)
 
     async def commit(self):
         self.commits += 1
+
+    async def flush(self):
+        pass
+
+    def add(self, obj):
+        self.added.append(obj)
+
+    async def delete(self, obj):
+        pass
 
 
 def _requested_types(stmt):
@@ -233,11 +249,26 @@ def test_bench_passes_the_flags_fastapi_would_pass(storage, layout):
     )
 
 
-def test_canvas_artifacts_are_owned_by_completed():
-    """Холст числится за `COMPLETED` — там же, где FXML."""
+def test_canvas_artifacts_are_no_longer_owned_by_completed():
+    """Холст выехал из `COMPLETED` в собственный список (Н1).
+
+    Пока он лежал рядом с FXML, «удалить всё после цели» означало «удалить
+    холст при любой цели» — своей стадии у него нет. Теперь у него своя
+    граница, и `_STAGE_ARTIFACTS` про него не знает вовсе.
+    """
     owned = set(_STAGE_ARTIFACTS[DiagramStatus.COMPLETED])
-    assert CANVAS_ARTIFACTS <= owned
-    assert ArtifactType.FXML in owned
+    assert owned == {ArtifactType.FXML}
+    assert not (CANVAS_ARTIFACTS & owned)
+
+
+def test_canvas_border_is_the_binding_stage():
+    """Граница названа в коде тем же этапом, что и в решении Максима №5."""
+    from app.api.rollback import _CANVAS_SURVIVES_FROM, canvas_dies
+
+    assert _CANVAS_SURVIVES_FROM is DiagramStatus.OCR_BOUND
+    assert canvas_dies(DiagramStatus.OCR_COMPLETED) is True
+    assert canvas_dies(DiagramStatus.OCR_BOUND) is False
+    assert canvas_dies(DiagramStatus.COMPLETED) is False
 
 
 # ── 1. гейт цели: полная решётка 31 × 16 ─────────────────────────────────
@@ -248,16 +279,16 @@ def _rank(value):
 
 
 def _gate_allows(current, target):
-    """Пускает ли гейт цели сегодня (редакция ДО Н1).
+    """Пускает ли гейт цели: цель СТРОГО РАНЬШЕ текущего статуса.
 
-    Условие эндпоинта смотрит только в `_STAGE_ORDER`: у статуса, которого там
-    нет (любой `*ING`, включая штатный `generating_fxml`, и `error`),
-    `current_idx = -1`, и проверка `target_idx >= current_idx and
-    current_idx >= 0` ложна — проходит ЛЮБАЯ цель, в том числе движение ВПЕРЁД.
+    Позиция берётся из порядка объявления `DiagramStatus` — у промежуточных
+    `*ING` позиции в `_STAGE_ORDER` нет, и раньше проверка на них не
+    срабатывала вовсе. `error` позиции в конвейере не означает: из него откат
+    разрешён куда угодно, это штатный выход из тупика.
     """
-    if current not in STABLE_STAGES:
+    if current in RANKLESS:
         return True
-    return STABLE_STAGES.index(target) < STABLE_STAGES.index(current)
+    return _rank(target) < _rank(current)
 
 
 @pytest.mark.parametrize("status", list(DiagramStatus), ids=lambda s: s.value)
@@ -281,16 +312,34 @@ def test_target_gate_over_every_status(status, storage, layout):
         assert db.commits == 1, cell
 
 
-def test_forward_rollback_from_generating_fxml_is_allowed_today(storage, layout):
-    """Дыра гейта, названная адресно: из `generating_fxml` проходит ВПЕРЁД.
+def test_forward_rollback_from_generating_fxml_is_refused(storage, layout):
+    """Закрытая дыра гейта: из `generating_fxml` вперёд больше не пройти.
 
     Клетка выписана отдельно от решётки, потому что это дефект, а не свойство:
     штатный статус «идёт экспорт» в `_STAGE_ORDER` не значится, поэтому «откат»
-    в `completed` принимается — со сносом артефактов и статусом готовой схемы.
+    в `completed` принимался — со сносом артефактов и статусом готовой схемы,
+    пока задача экспорта ещё считала.
     """
     diagram = _diagram("generating_fxml")
-    result, _db = _rollback(diagram, "completed")
-    assert result["status"] == "completed"
+    with pytest.raises(HTTPException) as exc:
+        _rollback(diagram, "completed")
+    assert exc.value.status_code == 400
+    assert diagram.status is DiagramStatus.GENERATING_FXML
+
+    # Порог заперт с другой стороны: НАЗАД из того же статуса — можно.
+    back = _diagram("generating_fxml")
+    _result, _db = _rollback(back, "ocr_bound")
+    assert back.status is DiagramStatus.OCR_BOUND
+
+
+def test_error_still_rolls_back_anywhere(storage, layout):
+    """`error` остаётся без позиции: выход из тупика не заперт.
+
+    Сужать его этот пункт не берётся — цена ошибки несимметрична: запертый
+    `error` оставляет оператора без единой кнопки.
+    """
+    diagram = _diagram("error")
+    _result, _db = _rollback(diagram, "completed")
     assert diagram.status is DiagramStatus.COMPLETED
 
 
@@ -328,8 +377,8 @@ def test_missing_diagram_is_404(storage, layout):
 # Ожидание СНЯТО ЧТЕНИЕМ `_STAGE_ARTIFACTS`, а не вычислено из него: таблица
 # ниже — независимый литерал, и правка кода без правки таблицы краснеет здесь.
 DOOMED_BY_TARGET = {
-    "ocr_bound": {ArtifactType.FXML,
-                  ArtifactType.GRAPH_CANVAS, ArtifactType.RESIDUAL_DEFECTS},
+    # Н1: возврат НА привязку холст не трогает — только FXML.
+    "ocr_bound": {ArtifactType.FXML},
     "ocr_completed": {ArtifactType.OCR_VALIDATION, ArtifactType.FXML,
                       ArtifactType.GRAPH_CANVAS, ArtifactType.RESIDUAL_DEFECTS},
     "contours_validated": {ArtifactType.OCR_CLEANED, ArtifactType.OCR_RESULT,
@@ -353,36 +402,63 @@ def test_deleted_types_for_target(target, doomed, storage, layout):
     assert set(db.deleted[0]) == doomed, target
 
 
-def test_canvas_dies_on_every_target_today(storage, layout):
-    """ДО Н1 холст сносится при ЛЮБОЙ цели — включая возврат на привязку.
+def test_canvas_survives_only_the_binding_target(storage, layout):
+    """Оба берега границы Н1 в одном тесте — иначе она не граница, а слово.
 
-    Это и есть жалоба фронта 2: оператор вернулся на бусину «Привязка подписей»,
-    чтобы поправить одну подпись, и потерял часы ручной раскладки.
+    До правки холст сносился при ЛЮБОЙ цели: оператор возвращался на бусину
+    «Привязка подписей», чтобы поправить одну подпись, и терял часы ручной
+    раскладки (жалоба фронта 2).
     """
-    for target in ("ocr_bound", "ocr_completed", "contours_validated",
-                   "validated_graph", "built", "uploaded"):
-        diagram = _diagram("completed")
-        _result, db = _rollback(diagram, target)
+    survives = ("ocr_bound",)
+    dies = ("ocr_completed", "contours_validated", "validated_graph",
+            "built", "uploaded")
+
+    for target in survives:
+        _result, db = _rollback(_diagram("completed"), target)
+        assert not (CANVAS_ARTIFACTS & set(db.deleted[0])), target
+    for target in dies:
+        _result, db = _rollback(_diagram("completed"), target)
         assert CANVAS_ARTIFACTS <= set(db.deleted[0]), target
 
 
-@pytest.mark.parametrize("target", ["ocr_bound", "validated_graph"])
-def test_canvas_files_are_unlinked(target, storage, layout):
-    """Файлы холста сносятся с диска вместе со строками — обе цели, ДО Н1."""
+def test_canvas_files_survive_the_binding_target(storage, layout):
+    """Файл на диске идёт за строкой БД — и остаётся, и сносится ВМЕСТЕ с ней.
+
+    Разъедься эти два решения — получился бы «файл без строки»: клиент холста
+    не покажет (он ходит по БД), а раскладка его прочитает с диска и увидит
+    чужой `operator_saved`.
+    """
     for name in CANVAS_FILES:
         assert (storage / name).exists(), "фикстура не разложила файлы"
 
-    _result, _db = _rollback(_diagram("completed"), target)
-
+    _result, _db = _rollback(_diagram("completed"), "ocr_bound")
     for name in CANVAS_FILES:
-        assert not (storage / name).exists(), (target, name)
+        assert (storage / name).exists(), f"{name} снесён при возврате на привязку"
+
+    _result, _db = _rollback(_diagram("completed"), "validated_graph")
+    for name in CANVAS_FILES:
+        assert not (storage / name).exists(), f"{name} пережил глубокий откат"
+
+
+def test_operator_saved_survives_the_binding_target(storage, layout):
+    """Главное наблюдение Н1: правки оператора переживают возврат на привязку.
+
+    Утверждается РАЗНИЦА, а не совпадение: тот же откат на шаг глубже метку
+    уносит вместе с файлом.
+    """
+    import json
+
+    kept = _diagram("completed")
+    _rollback(kept, "ocr_bound")
+    saved = json.loads((storage / "graph_canvas.json").read_text(encoding="utf-8"))
+    assert saved["operator_saved"] is True
 
 
 def test_deleted_count_is_the_number_of_rows_really_hit(storage, layout):
     """`deleted_artifacts` считает реально лежавшие строки, а не размер списка."""
     diagram = _diagram("completed")
     db = FakeDB(diagram, present={ArtifactType.FXML, ArtifactType.GRAPH_CANVAS})
-    result, _db = _rollback(diagram, "ocr_bound", db=db)
+    result, _db = _rollback(diagram, "validated_graph", db=db)
     assert result["deleted_artifacts"] == 2
 
 
@@ -408,9 +484,10 @@ def test_error_fields_are_cleared(storage, layout):
 # ── 3. раскладка: зовётся ли и с каким force ─────────────────────────────
 
 # Литеральная таблица: цель → (позвали ли раскладку, значение `force`).
-# ДО Н1 условие эндпоинта — «цель >= contours_validated», флаг всегда `True`.
-LAYOUT_BY_TARGET_BEFORE = {
-    "ocr_bound": (True, True),
+# Условие ВЫЗОВА не менялось — «цель >= contours_validated». Менялся ФЛАГ:
+# ДО Н1 он был `True` всегда, теперь совпадает с гибелью холста.
+LAYOUT_BY_TARGET = {
+    "ocr_bound": (True, False),
     "ocr_completed": (True, True),
     "contours_validated": (True, True),
     "contours_extracted": (False, None),
@@ -420,7 +497,7 @@ LAYOUT_BY_TARGET_BEFORE = {
 }
 
 
-@pytest.mark.parametrize("target, expected", sorted(LAYOUT_BY_TARGET_BEFORE.items()))
+@pytest.mark.parametrize("target, expected", sorted(LAYOUT_BY_TARGET.items()))
 def test_layout_dispatch_per_target(target, expected, storage, layout):
     """Кого зовёт откат и с каким флагом — по таблице, а не по знанию редакции."""
     called, force = expected
@@ -431,40 +508,135 @@ def test_layout_dispatch_per_target(target, expected, storage, layout):
         assert layout == [(str(UID), force)], target
 
 
-def test_force_is_what_erases_operator_saved(storage, layout):
+def test_force_follows_the_canvas_and_nothing_else(storage, layout):
     """Почему флаг вообще важен: `force=True` снимает метку ручных правок.
 
-    Утверждение о НАШЕМ решении, а не о свойствах чужого модуля: здесь
-    проверяется, что откат передаёт `force` дальше, а что с ним делает
-    раскладка, судит `tests/test_layout_dispatch_policy.py`.
+    Если бы Н1 сберёг строку и файл, но оставил `force=True`, пункт
+    аннулировал бы сам себя: раскладка сняла бы `operator_saved`, и воркер
+    через 1-2 минуты переписал бы сохранённый холст. Поэтому предикат один
+    на оба решения, и это утверждается прямо.
+
+    Первая половина — про НАШЕ решение (что передаёт откат), вторая
+    показывает, ЧЕМ отличаются два значения флага в политике раскладки;
+    исход самой раскладки судит `tests/test_layout_dispatch_policy.py`.
     """
+    from app.api.rollback import canvas_dies
     from app.services.layout_policy import plan_dispatch, ALREADY_FRESH, DISPATCH
 
     fresh = {"layout_applied": True, "stale": False}
     assert plan_dispatch("sha", fresh, [], force=False)[0] == ALREADY_FRESH
     assert plan_dispatch("sha", fresh, [], force=True)[0] == DISPATCH
 
-    _rollback(_diagram("completed"), "ocr_bound")
-    assert layout == [(str(UID), True)], "откат зовёт пересчёт поверх свежего холста"
+    for target, (called, force) in LAYOUT_BY_TARGET.items():
+        if not called:
+            continue
+        assert force == canvas_dies(DiagramStatus(target)), target
+
+
+def test_dirty_tab_resurrects_the_canvas_after_a_deep_rollback(storage, layout,
+                                                              monkeypatch):
+    """Зафиксировано КАК ЕСТЬ: грязная вкладка возвращает холст после отката.
+
+    Откат глубже привязки сносит холст и строку. Но открытая «Ручная правка»
+    об этом не знает — канала «узнать о смене статуса» у вкладки нет — и её
+    автосейв через 120 с шлёт `/graph/canvas/save`, гейт которого пускает
+    `ocr_completed`. Холст возвращается вместе с меткой `operator_saved`.
+
+    Пункт Н1 этот гейт НЕ трогает (граница блока): клетка названа тестом,
+    чтобы правка отката не выглядела полнее, чем она есть. Настоящее лечение —
+    заморозка буфера вкладки на 400 (кандидат блока 5).
+    """
+    import json
+
+    from app.api.validation import save_canvas_graph
+
+    class _Upload:
+        async def read(self):
+            return b'{"nodes": [{"id": "n1", "x": 1, "y": 2}], "edges": []}'
+
+    diagram = _diagram("completed")
+    _result, db = _rollback(diagram, "ocr_completed")
+    assert diagram.status is DiagramStatus.OCR_COMPLETED
+    assert not (storage / "graph_canvas.json").exists(), "откат холст не снёс"
+
+    asyncio.run(save_canvas_graph(UID, file=_Upload(), db=db))
+
+    revived = storage / "graph_canvas.json"
+    assert revived.exists(), "поведение изменилось — пересверить границу пункта"
+    state = json.loads(revived.read_text(encoding="utf-8"))
+    assert state["graph"]["canvas_transform"]["operator_saved"] is True
 
 
 # ── 4. четвёртый путь удаления: переоткрытие валидации CVAT ──────────────
 
-def test_cvat_reopen_asks_for_the_canvas_too():
-    """`reopen-validation` зовёт ту же таблицу и просит снести холст.
+def test_cvat_reopen_deletes_the_canvas_file_too(storage, monkeypatch):
+    """`reopen-validation` сносит строку и файл ВМЕСТЕ — через общую функцию.
 
-    Файлы при этом остаются на диске: своей ветки удаления у этого пути нет
-    (замер блока 3 — `app/api/cvat.py:562-572`). Осиротевший `graph_canvas.json`
-    несёт `operator_saved`, который читают `worker/tasks/layout.py`
-    и `app/services/layout_dispatch.py`.
+    Раньше у этого пути своей ветки удаления файлов не было: он звал ту же
+    `_artifacts_to_delete` (а холст в её списке при цели `detected` есть) и
+    удалял только строки. Осиротевший `graph_canvas.json` нёс `operator_saved`,
+    который читают `worker/tasks/layout.py` и `app/services/layout_dispatch.py`.
+
+    Тест судит НАСТОЯЩУЮ `purge_artifacts`, а не текст исходника: сторож по
+    исходнику проверял бы форму, а не решение.
     """
-    doomed = set(_artifacts_to_delete(DiagramStatus.DETECTED))
-    assert CANVAS_ARTIFACTS <= doomed
+    from app.api.rollback import purge_artifacts
 
-    import inspect
+    doomed = _artifacts_to_delete(DiagramStatus.DETECTED)
+    assert CANVAS_ARTIFACTS <= set(doomed), "цель `detected` холст не сносит"
+    for name in CANVAS_FILES:
+        assert (storage / name).exists()
 
+    db = FakeDB(_diagram("validating_bbox"),
+                present={ArtifactType.GRAPH_CANVAS})
+    deleted = asyncio.run(purge_artifacts(UID, doomed, db))
+
+    assert deleted == 1
+    for name in CANVAS_FILES:
+        assert not (storage / name).exists(), f"{name} остался сиротой"
+
+
+class _StagesResult:
+    """`select(ProcessingStage)` → `.scalars().all()`; бегущих стадий нет."""
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        return []
+
+
+class CvatDB(FakeDB):
+    """FakeDB, умеющая ещё и запрос стадий — его делает переоткрытие CVAT."""
+
+    async def execute(self, stmt):
+        if not isinstance(stmt, type(sa_delete(Artifact))):
+            entity = stmt.column_descriptions[0]["entity"]
+            if entity is not Diagram and entity is not Artifact:
+                return _StagesResult()
+        return await super().execute(stmt)
+
+
+def test_cvat_reopen_endpoint_takes_the_canvas_file_with_it(storage, monkeypatch):
+    """Настоящий эндпоинт переоткрытия — файл холста уходит вместе со строкой.
+
+    Тест судит корутину `reopen_bbox_validation`, а не текст её исходника:
+    сторож по исходнику проверял бы форму («вызывается ли функция с таким
+    именем»), а не решение. Бегущих стадий нет — брокер не нужен.
+    """
     import app.api.cvat as cvat_api
 
-    source = inspect.getsource(cvat_api.reopen_bbox_validation)
-    assert "_artifacts_to_delete" in source
-    assert "unlink" not in source, "ветка удаления файлов появилась — обновить пункт"
+    diagram = _diagram("skeletonized")
+    diagram.cvat_task_id = 42
+    diagram.cvat_job_id = 43
+    db = CvatDB(diagram, present={ArtifactType.GRAPH_CANVAS})
+
+    for name in CANVAS_FILES:
+        assert (storage / name).exists()
+
+    asyncio.run(cvat_api.reopen_bbox_validation(UID, db=db))
+
+    assert diagram.status is DiagramStatus.VALIDATING_BBOX
+    assert CANVAS_ARTIFACTS <= set(db.deleted[0]), "холст не попал в удаление"
+    for name in CANVAS_FILES:
+        assert not (storage / name).exists(), f"{name} остался сиротой"
