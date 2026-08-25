@@ -134,6 +134,19 @@ UPLOAD
 
 - `segmentation` → `skeleton` (автоматически: `task_skeletonize.delay()`)
 
+**Auto-dispatch после ручного этапа** (звено ставит СЕРВЕР в том же запросе, которым
+оператор закрыл этап, — не десктоп; до этого закрытая вкладка останавливала схему):
+
+- подтверждение рамки → `task_detect_yolo` (`app/api/frame.py`: `/complete` и `/skip`
+  → `app/api/detection.py: dispatch_detection`, `model_id=None` → `default_model`)
+- подтверждение разметки CVAT → цепочка `task_classify_direction → task_segment_pipes`
+  (`app/api/cvat.py`: `fetch_cvat_annotations` → `app/api/segmentation.py:
+  dispatch_segmentation`)
+
+Обе отправки **best-effort**: отказ брокера не валит подтверждение этапа — состояние
+возвращается, ответ 200, кнопка своего этапа остаётся рабочей. Подробности и границы —
+[STATUS_MACHINE.md §2](STATUS_MACHINE.md).
+
 **Manual stops** (UI confirmation через API endpoint):
 
 - `SKELETONIZED` → UI валидация масок → API `complete_mask_validation` → `task_skeletonize_simple`
