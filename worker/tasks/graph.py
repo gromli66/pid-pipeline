@@ -738,8 +738,19 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None, bridge_gap
 
         # ===== 6. Save FXML =====
         with obs.step("persist_artifacts", logger):
-            with open(output_fxml_path, 'w', encoding='utf-8') as f:
+            # tmp + replace: повторное подтверждение «Проверки схемы» из готовой
+            # схемы ставит вторую задачу экспорта, и при concurrency=2 два
+            # писателя открывают ОДИН файл. `open('w')` обрезает его сразу —
+            # оператор успевал скачать пустой или обрезанный FXML. Замена
+            # атомарна в пределах одной ФС, а tmp лежит рядом с целью.
+            # ⚠ Суффикс PID обязателен: общий tmp просто перенёс бы гонку на
+            # шаг раньше — второй писатель обрезал бы черновик первого, и
+            # `os.replace` положил бы поверх цели уже испорченный файл.
+            tmp_fxml_path = output_fxml_path.with_suffix(
+                f"{output_fxml_path.suffix}.{os.getpid()}.tmp")
+            with open(tmp_fxml_path, 'w', encoding='utf-8') as f:
                 f.write(fxml_content)
+            os.replace(tmp_fxml_path, output_fxml_path)
 
             fxml_size = output_fxml_path.stat().st_size
             logger.info(

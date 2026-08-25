@@ -50,14 +50,29 @@ ENDPOINTS = ("graph_start", "graph_save", "binding_save", "contours_complete")
 #
 # Литералы, снятые ЧТЕНИЕМ кода. Всё, чего в множестве нет, — 400.
 ACCEPTS = {
-    "graph_start": {"built", "validating_graph"},
+    # Н8+: единственный в семействе, кто не пускал после `validated_graph`.
+    # Набор сведён с `/graph/save` — это симметрия семейства, а не догадка.
+    "graph_start": {"built", "validating_graph", "validated_graph",
+                    "contours_validated", "ocr_completed", "ocr_bound",
+                    "generating_fxml", "completed"},
+    # 3.1в: +generating_fxml/completed — вкладка открывается и из готовой схемы.
     "graph_save": {"built", "validating_graph", "validated_graph",
-                   "contours_validated", "ocr_completed", "ocr_bound"},
-    "binding_save": {"validated_graph", "contours_validated",
-                     "ocr_completed", "ocr_bound"},
+                   "contours_validated", "ocr_completed", "ocr_bound",
+                   "generating_fxml", "completed"},
+    # 3.1в + Н8+: весь «хвост» начиная с `validated_graph` — ровно то, что
+    # пускает клиентский порог `_binding_reachable`.
+    "binding_save": {"validated_graph", "extracting_contours",
+                     "contours_extracted", "contours_validated",
+                     "ocr_processing", "ocr_completed", "ocr_bound",
+                     "generating_fxml", "completed"},
     # У подтверждения контуров статусного гейта нет вовсе — принимается любой.
+    # Гейты сборки (BUILDING_GRAPH → 400) — предмет блока 5, не этого.
     "contours_complete": {s.value for s in DiagramStatus},
 }
+
+# Статусы ПОСЛЕ контуров: подтверждение принимается, статус НЕ двигается.
+CONTOURS_ALREADY_PAST = {"ocr_processing", "ocr_completed", "ocr_bound",
+                         "generating_fxml", "completed"}
 
 # ── что эндпоинт делает со статусом ──────────────────────────────────────
 #
@@ -70,8 +85,10 @@ MOVES_TO = {
     "graph_start": {"built": "validating_graph"},
     "graph_save": {"built": "validating_graph"},
     "binding_save": {},
-    # ДО пункта 3.1в статус ставится БЕЗУСЛОВНО — из любого пропущенного.
-    "contours_complete": {s.value: "contours_validated" for s in DiagramStatus},
+    # 3.1в: вперёд — только с тех статусов, что раньше контуров. Из «хвоста»
+    # подтверждение принимается, но статус остаётся на месте.
+    "contours_complete": {s.value: "contours_validated" for s in DiagramStatus
+                          if s.value not in CONTOURS_ALREADY_PAST},
 }
 
 # Кого зовёт подтверждение контуров: раскладку — всегда, когда гейт пустил.
@@ -242,18 +259,49 @@ def test_gate_over_every_status(endpoint, status, layout):
     assert diagram.status.value == expected, cell
 
 
-def test_contours_complete_downgrades_from_the_ocr_stages(layout):
-    """Названный адресно дефект 3.1в: подтверждение контуров тянет статус НАЗАД.
+def test_contours_complete_does_not_downgrade_from_the_ocr_stages(layout):
+    """3.1в: подтверждение контуров из «хвоста» фазы B статус НЕ трогает.
 
-    Оператор вернулся в «Контуры» из уже пройденной привязки, нажал
-    «Подтвердить» — и конвейер молча уехал на два шага назад, к
-    `contours_validated`. Ветка «→ OCR_BOUND» рядом (`contours.py:375-378`)
-    от этого не спасает: она про ВЫКЛЮЧЕННЫЙ OCR, а на бою он включён.
+    До правки оператор, вернувшийся в «Контуры» из уже пройденной привязки,
+    нажимал «Подтвердить» — и конвейер молча уезжал на два шага назад, к
+    `contours_validated`. Ветка «→ OCR_BOUND» рядом от этого не спасала:
+    она про ВЫКЛЮЧЕННЫЙ OCR, а на бою он включён.
     """
     for entry in ("ocr_completed", "ocr_bound", "generating_fxml", "completed"):
         diagram = _diagram(entry)
-        _run("contours_complete", diagram)
-        assert diagram.status is DiagramStatus.CONTOURS_VALIDATED, entry
+        result, _db = _run("contours_complete", diagram)
+        assert diagram.status is DiagramStatus(entry), entry
+        assert result["status"] == "ok", entry
+
+
+def test_contours_complete_still_moves_forward_from_before(layout):
+    """Порог заперт с другой стороны: с ранних статусов переход остался.
+
+    Без этой клетки правка «не двигать статус» могла бы отменить сам переход,
+    и тест выше остался бы зелёным.
+    """
+    diagram = _diagram("contours_extracted")
+    _run("contours_complete", diagram)
+    assert diagram.status is DiagramStatus.CONTOURS_VALIDATED
+
+
+def test_contours_complete_delegates_and_still_guards(layout, storage):
+    """Ветка авто-приёмки (валидированных контуров ещё нет) — та же граница.
+
+    `/complete` при отсутствии `CONTOURS_VALIDATED` делегирует
+    `/auto-accept`, и тот пишет статус СВОИМ кодом. Без общей точки повторный
+    проход чинился бы наполовину: делегированная ветка так и тянула бы назад.
+    """
+    auto = storage / str(UID) / "contours"
+    auto.mkdir(parents=True)
+    (auto / "contours_auto.json").write_text('{"nodes": []}', encoding="utf-8")
+
+    diagram = _diagram("ocr_bound")
+    _run("contours_complete", diagram, artifacts={
+        ArtifactType.CONTOURS_AUTO: _artifact(
+            f"{UID}/contours/contours_auto.json"),
+    })
+    assert diagram.status is DiagramStatus.OCR_BOUND
 
 
 def test_contours_complete_dispatches_layout(layout):
@@ -289,7 +337,9 @@ def test_client_binding_threshold_matches_the_server_gate():
     белым списком `/binding/save`. Докстрока клиентской функции ссылается на
     ЭТОТ список как на основание порога, поэтому расхождение здесь — обещание,
     данное наследнику и не выполненное: кнопка горит, вкладка открывается,
-    сохранение отвечает 400.
+    сохранение отвечает 400. До блока 3 расходились ПЯТЬ клеток:
+    `extracting_contours`, `contours_extracted`, `ocr_processing`,
+    `generating_fxml`, `completed`.
 
     Перебор ведётся ПОЛНЫМ списком статусов, а не выборкой (`PROTOCOL §3`).
     """
@@ -305,7 +355,132 @@ def test_client_binding_threshold_matches_the_server_gate():
         if client_ok != server_ok:
             mismatch.add(status.value)
 
-    assert mismatch == {"extracting_contours", "contours_extracted",
-                        "ocr_processing", "generating_fxml", "completed"}, (
-        "состав расхождения изменился — пересверить обе стороны"
+    assert mismatch == set(), (
+        f"клиент и сервер разошлись на {sorted(mismatch)}"
     )
+
+
+# ── Н2: пара «сохранить холст из готовой схемы → подтвердить» ────────────
+
+def test_canvas_save_then_graph_complete_keeps_the_operator_flag(storage, monkeypatch):
+    """Сценарий уровня дефекта: правка из COMPLETED переживает подтверждение.
+
+    Оператор из готовой схемы правит холст (автосейв шлёт `/graph/canvas/save`,
+    сервер ставит `operator_saved`), потом подтверждает «Проверку схемы».
+    До Н2 подтверждение отвечало 400. После Н2 оно уходит по ветке «возврат
+    после контуров» — а она зовёт раскладку БЕЗ `force`, то есть метка ручных
+    правок не снимается и воркер не перезапишет холст своим результатом.
+
+    Проверяется РАЗНИЦА, а не совпадение с «до»: флага на входе нет, после
+    сохранения он есть, и подтверждение его не снимает.
+    """
+    import json
+
+    import app.api.validation as validation_api
+    from app.api.validation import complete_graph_validation, save_canvas_graph
+    from worker.celery_app import celery_app
+
+    dispatched = []
+
+    async def _layout(uid, db, force=False):
+        dispatched.append(("layout", force))
+        return {"status": "stub"}
+
+    monkeypatch.setattr(validation_api, "dispatch_layout", _layout)
+
+    class _AsyncResult:
+        id = "task-0001"
+
+    monkeypatch.setattr(celery_app, "send_task",
+                        lambda name, **kw: dispatched.append(("task", name))
+                        or _AsyncResult())
+
+    graph_dir = storage / str(UID) / "graph"
+    graph_dir.mkdir(parents=True)
+    canvas_path = graph_dir / "graph_canvas.json"
+    canvas_path.write_text('{"nodes": [], "edges": []}', encoding="utf-8")
+
+    from modules.graph.core import canvas_state
+
+    before = json.loads(canvas_path.read_text(encoding="utf-8"))
+    assert not canvas_state.read_state(before)["operator_saved"], "флаг уже стоял"
+
+    diagram = _diagram("completed")
+    db = FakeDB(diagram, {ArtifactType.GRAPH_VALIDATED:
+                          _artifact(f"{UID}/graph/graph_validated.json")})
+    edited = b'{"nodes": [{"id": "n1", "x": 10, "y": 20}], "edges": []}'
+    asyncio.run(save_canvas_graph(UID, file=FakeUpload(edited), db=db))
+
+    saved = json.loads(canvas_path.read_text(encoding="utf-8"))
+    assert canvas_state.read_state(saved)["operator_saved"], "сервер не отметил правку"
+
+    asyncio.run(complete_graph_validation(UID, db=db))
+
+    assert diagram.status is DiagramStatus.GENERATING_FXML
+    assert ("layout", False) in dispatched, "раскладка позвана с force — флаг погибнет"
+    still = json.loads(canvas_path.read_text(encoding="utf-8"))
+    assert canvas_state.read_state(still)["operator_saved"], "флаг ручной правки снят"
+
+
+# ── угол Н2с: оператор удалил ВСЕ текстовые блоки ────────────────────────
+
+def test_empty_text_blocks_are_refilled_by_the_safety_net(storage, monkeypatch):
+    """Известный угол, зафиксированный как есть: пустой список — не «есть блоки».
+
+    Safety-net слияния в `complete-simple` пропускает работу, когда в графе уже
+    ЕСТЬ `text_blocks` (`app/services/ocr_graph_merge.py`), а проверка — на
+    ИСТИННОСТЬ. Оператор, удаливший все блоки до единого, оставляет `[]`, и
+    повторное подтверждение фазы B воскрешает сырые OCR-блоки.
+
+    Клетка не чинится этим пунктом — она НАЗЫВАЕТСЯ: повторный проход фазы B
+    делает её достижимой чаще, чем раньше, и наследник должен знать о ней из
+    красного теста, а не из боя. Починка — отдельным решением Максима.
+    """
+    import app.services.project_loader as project_loader
+    from app.api.validation import complete_simple_graph_validation
+
+    class _Loader:
+        def load(self, code):
+            return type("_C", (), {"ocr": type("_O", (), {"enabled": True})()})()
+
+    monkeypatch.setattr(project_loader, "get_project_loader", lambda: _Loader())
+
+    graph_dir = storage / str(UID) / "graph"
+    graph_dir.mkdir(parents=True)
+    graph_path = graph_dir / "graph_validated.json"
+    graph_path.write_text(
+        '{"nodes": [], "edges": [], "text_blocks": [], "bindings": []}',
+        encoding="utf-8")
+
+    ocr_dir = storage / str(UID) / "ocr"
+    ocr_dir.mkdir(parents=True)
+    ocr_path = ocr_dir / "ocr_result.json"
+    ocr_path.write_text(
+        '{"target": [{"bbox": [1, 2, 3, 4], "text": "10PAB10", '
+        '"confidence": 0.9}]}', encoding="utf-8")
+
+    diagram = _diagram("ocr_bound")
+    db = FakeDB(diagram, {
+        ArtifactType.GRAPH_VALIDATED: _artifact(f"{UID}/graph/graph_validated.json"),
+        ArtifactType.OCR_RESULT: _artifact(f"{UID}/ocr/ocr_result.json"),
+    })
+    asyncio.run(complete_simple_graph_validation(UID, db=db))
+
+    import json
+
+    after = json.loads(graph_path.read_text(encoding="utf-8"))
+    assert [b["text"] for b in after["text_blocks"]] == ["10PAB10"], (
+        "поведение угла изменилось — пересверить пункт Н2с"
+    )
+    assert diagram.status is DiagramStatus.OCR_BOUND, "статус всё же сдвинулся"
+
+
+def test_binding_gate_table_is_the_one_the_endpoint_uses():
+    """Таблица набора — та же, что стоит в коде, а не её копия рядом.
+
+    Иначе решётка выше судила бы собственное представление о гейте
+    (`tests/ui/test_no_silent_rollback.py` — образец того же требования).
+    """
+    from app.api.ocr import _BINDING_SAVE_STATUSES
+
+    assert {s.value for s in _BINDING_SAVE_STATUSES} == ACCEPTS["binding_save"]

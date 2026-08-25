@@ -42,6 +42,41 @@ def _ocr_enabled(project_code: str) -> bool:
         return True
 
 
+# Статусы ПОСЛЕ контуров. Повторное подтверждение из них принимается, но
+# статус не двигается: иначе свободный круг по фазе B (решения Максима №7/№8)
+# оказывается скрытым откатом на два шага назад — оператор зашёл в «Контуры»
+# из уже пройденной привязки, нажал «Подтвердить» и уехал в `contours_validated`.
+#
+# ⛔ Опора «Контуры уже умеют повторный проход» ЛОЖНА: ветка «→ OCR_BOUND» ниже
+# срабатывает только при ВЫКЛЮЧЕННОМ OCR, а на бою он включён
+# (`configs/projects/thermohydraulics/thermohydraulics.yaml: ocr.enabled: true`).
+_CONTOURS_ALREADY_PAST = (
+    DiagramStatus.OCR_PROCESSING,
+    DiagramStatus.OCR_COMPLETED,
+    DiagramStatus.OCR_BOUND,
+    DiagramStatus.GENERATING_FXML,
+    DiagramStatus.COMPLETED,
+)
+
+
+def _accept_contours(diagram) -> None:
+    """Подтвердить контуры: перевести статус вперёд либо оставить как есть.
+
+    Общая точка для `/auto-accept` и `/complete` — второй делегирует первому,
+    когда валидированных контуров ещё нет, и без общей ветки повторный проход
+    чинился бы ровно наполовину.
+    """
+    if diagram.status in _CONTOURS_ALREADY_PAST:
+        return
+    diagram.status = DiagramStatus.CONTOURS_VALIDATED
+    if not _ocr_enabled(diagram.project_code):
+        # OCR off: jump to OCR_BOUND so OCR + binding beads show completed
+        # and edit_graph / export unlock without running OCR.
+        diagram.status = DiagramStatus.OCR_BOUND
+    diagram.error_message = None
+    diagram.error_stage = None
+
+
 @router.post("/{uid}/extract")
 async def extract_contours(
     uid: UUID,
@@ -327,14 +362,9 @@ async def auto_accept_contours(
         )
         db.add(artifact)
 
-    # Status -> CONTOURS_VALIDATED (auto-skip OCR if disabled)
-    diagram.status = DiagramStatus.CONTOURS_VALIDATED
-    if not _ocr_enabled(diagram.project_code):
-        # OCR off: jump to OCR_BOUND so OCR + binding beads show completed
-        # and edit_graph / export unlock without running OCR.
-        diagram.status = DiagramStatus.OCR_BOUND
-    diagram.error_message = None
-    diagram.error_stage = None
+    # Status -> CONTOURS_VALIDATED (auto-skip OCR if disabled), либо статус
+    # остаётся как есть, если фаза B уже пройдена дальше.
+    _accept_contours(diagram)
     await db.commit()
 
     # Контуры закрыты — геометрия финальная, можно раскладывать. Диспетчер
@@ -370,14 +400,9 @@ async def complete_contour_validation(
         # Auto-accept if no validated contours
         return await auto_accept_contours(uid, db)
 
-    # Status -> CONTOURS_VALIDATED (auto-skip OCR if disabled)
-    diagram.status = DiagramStatus.CONTOURS_VALIDATED
-    if not _ocr_enabled(diagram.project_code):
-        # OCR off: jump to OCR_BOUND so OCR + binding beads show completed
-        # and edit_graph / export unlock without running OCR.
-        diagram.status = DiagramStatus.OCR_BOUND
-    diagram.error_message = None
-    diagram.error_stage = None
+    # Status -> CONTOURS_VALIDATED (auto-skip OCR if disabled), либо статус
+    # остаётся как есть, если фаза B уже пройдена дальше.
+    _accept_contours(diagram)
     await db.commit()
 
     layout = await dispatch_layout(uid, db)

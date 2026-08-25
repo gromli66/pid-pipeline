@@ -112,10 +112,20 @@ ACCEPTS = {
         "detected_junctions", "validating_junctions", "validated_junctions",
         "building_graph", "built",
     },
-    "simple": {"validating_graph", "built", "validated_graph"},
+    # Блок 3 «точечных болей» (Н2с): повторный проход фазы B принимается —
+    # свободный вход в пройденный этап откатом не является.
+    "simple": {
+        "validating_graph", "built", "validated_graph",
+        "extracting_contours", "contours_extracted", "contours_validated",
+        "ocr_processing", "ocr_completed", "ocr_bound",
+        "generating_fxml", "completed",
+    },
+    # Н2: те же два «хвостовых» статуса, но БЕЗ contours_* — подтверждение
+    # отсюда уходит прямо в FXML и перепрыгнуло бы OCR с привязкой.
     "complete": {
         "validating_graph", "built", "validated_graph",
         "ocr_completed", "ocr_bound",
+        "generating_fxml", "completed",
     },
 }
 
@@ -130,7 +140,14 @@ ALREADY_PAST = {
         "validated_graph", "ocr_completed",
     },
     "junctions": {"validated_junctions", "building_graph", "built"},
-    "simple": set(),
+    # Н2с: подтверждение принимается, но статус НЕ двигается и OCR НЕ уходит.
+    # Тупое расширение гейта было бы ХУЖЕ 400: обработчик увёл бы готовую схему
+    # назад в `validated_graph` и заново запустил распознавание, стерев привязку.
+    "simple": {
+        "extracting_contours", "contours_extracted", "contours_validated",
+        "ocr_processing", "ocr_completed", "ocr_bound",
+        "generating_fxml", "completed",
+    },
     "complete": set(),
 }
 
@@ -144,7 +161,10 @@ TARGET = {
 
 # `graph/complete` — единственный, у кого цель зависит от входа: возврат в «Проверку
 # схемы» ПОСЛЕ контуров ведёт сразу в генерацию (плюс зовётся `dispatch_layout`).
-RETURNED_AFTER_CONTOURS = {"ocr_bound", "ocr_completed"}
+# Н2 добавил сюда `generating_fxml`/`completed` ОБЯЗАТЕЛЬНО вместе с гейтом: без
+# них else-ветка эндпоинта молча уводила готовую схему назад в `validated_graph`.
+RETURNED_AFTER_CONTOURS = {"ocr_bound", "ocr_completed",
+                           "generating_fxml", "completed"}
 TARGET_AFTER_CONTOURS = "generating_fxml"
 
 TASKS = {
@@ -164,6 +184,12 @@ RESPONSE_STATUS = {
     "simple": "validated_graph",
     "complete": "validated_graph",
 }
+
+# `complete-simple` — единственный, кто отдаёт НАСТОЯЩИЙ статус диаграммы
+# (`diagram.status.value`), поэтому на ветке «ушли вперёд» его ответ — это
+# статус входа, а не литерал таблицы. Правило названо отдельно, чтобы разница
+# между «ответ врёт» и «ответ честен» не растворилась в общем литерале.
+RESPONSE_IS_THE_LIVE_STATUS = {"simple"}
 
 # ── таблица отказа отправки ──────────────────────────────────────────────
 #
@@ -345,6 +371,14 @@ def _target(endpoint, status_value):
     if endpoint == "complete" and status_value in RETURNED_AFTER_CONTOURS:
         return TARGET_AFTER_CONTOURS
     return TARGET[endpoint]
+
+
+def _response_status(endpoint, status_value):
+    """Что эндпоинт положит в поле `status` ответа на этой клетке."""
+    if endpoint in RESPONSE_IS_THE_LIVE_STATUS \
+            and status_value in ALREADY_PAST[endpoint]:
+        return status_value
+    return RESPONSE_STATUS[endpoint]
 
 
 def _dispatches(endpoint, status_value):
@@ -545,7 +579,7 @@ def test_completion_over_every_status(endpoint, status, dispatched,
             continue
 
         result = asyncio.run(CALL[endpoint](db))
-        assert result["status"] == RESPONSE_STATUS[endpoint], cell
+        assert result["status"] == _response_status(endpoint, status.value), cell
         assert result["uid"] == str(UID), cell
         assert [c["name"] for c in dispatched] == tasks, cell
 
@@ -602,7 +636,7 @@ def test_dispatch_failure_over_every_status(endpoint, status, broker_down,
         if outcome == OK:
             result = asyncio.run(CALL[endpoint](db))
             assert result["task_id"] is None, cell
-            assert result["status"] == RESPONSE_STATUS[endpoint], cell
+            assert result["status"] == _response_status(endpoint, status.value), cell
         else:
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(CALL[endpoint](db))
