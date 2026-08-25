@@ -31,7 +31,7 @@ if not avoid_available():
 from modules.graph.core.layout import LayoutParams  # noqa: E402
 from modules.graph.core.layout.avoid_router import (  # noqa: E402
     apply_routing, route_graph)
-from modules.graph.core.layout import spread  # noqa: E402
+from modules.graph.core.layout import _gate, spread  # noqa: E402
 from modules.graph.core.graph_access import (  # noqa: E402
     edge_polyline, edges, nodes_by_id)
 from modules.graph.core.seating import reseat_all_endpoints  # noqa: E402
@@ -260,12 +260,12 @@ def _amnesty_graph():
     return g, orig, deepcopy(orig)
 
 
-def test_corner_amnesty_side_change_reverts_whole_run():
-    """К-10 (поведение ДО правки): одна смена стороны валит ВЕСЬ роутинг.
+def test_corner_amnesty_side_change_reverts_only_guilty_edge():
+    """К-10: смена стороны снимает ВИНОВНОЕ ребро, а не весь роутинг.
 
-    Оба маршрута приняты пер-рёберным сторожем, но судья прогона видит рост
-    `side_changed` — и полный откат забирает вместе с виновным `e1` законный
-    обход `e2`, возвращая бокс `w` на магистраль.
+    До правки оба маршрута принимал пер-рёберный сторож, судья прогона видел
+    рост `side_changed`, и полный откат забирал вместе с виновным `e1`
+    законный обход `e2` (бокс `w` возвращался на магистраль).
     """
     g, orig, v16 = _amnesty_graph()
     e1 = next(e for e in edges(g) if e["id"] == "e1")
@@ -273,12 +273,39 @@ def test_corner_amnesty_side_change_reverts_whole_run():
     assert spread.box_on_magi_drawn(g, nodes_by_id(g)) == {"w"}
 
     stats = apply_routing(g, orig, v16, LayoutParams())
-    assert stats == {"routed": 2, "reverted": True,
-                     "reasons": ["side_changed"]}
-    assert e1["waypoints"] == [] and e2["waypoints"] == []
-    assert e1["source_point"] == [120.0, 120.0], "конец e1 не вернулся на канон"
-    assert spread.box_on_magi_drawn(g, nodes_by_id(g)) == {"w"}, (
-        "транзит e2 обязан вернуться вместе с полным откатом")
+    assert stats == {"routed": 1, "reverted": False, "reasons": [],
+                     "magi_before": 1, "magi_after": 0}
+    # виновное ребро снято адресно: конец вернулся на канон, обхода нет
+    assert e1["source_point"] == [120.0, 120.0] and e1["waypoints"] == []
+    # соседний законный обход пережил гейт — ради него правка и делалась
+    assert e2["waypoints"], "обход e2 убит вместе с чужой сменой стороны"
+    assert spread.box_on_magi_drawn(g, nodes_by_id(g)) == set()
+    assert _gate.verify(g, orig, v16, None)["side_changed"] == 0
+
+
+def test_other_gate_reason_still_reverts_whole_run(monkeypatch):
+    """Остальные причины отката живы: адресным стал ТОЛЬКО класс сторон.
+
+    Инъекция: судья дефектов после роутинга насчитывает на один больше, чем
+    до. Гейт прогона обязан снять ВЕСЬ роутинг, включая законный обход `e2`.
+    """
+    g, orig, v16 = _amnesty_graph()
+    e2 = next(e for e in edges(g) if e["id"] == "e2")
+    real = spread.defects
+    calls = {"n": 0}
+
+    def fake(graph, byid, floor):
+        calls["n"] += 1
+        out = dict(real(graph, byid, floor))
+        if calls["n"] > 1:                     # второй вызов — замер «после»
+            out["_injected"] = 0.0
+        return out
+
+    monkeypatch.setattr(spread, "defects", fake)
+    stats = apply_routing(g, orig, v16, LayoutParams())
+    assert calls["n"] == 2, "гейт перестал мерить дефекты до и после"
+    assert stats == {"routed": 1, "reverted": True, "reasons": ["defects"]}
+    assert e2["waypoints"] == [], "полный откат не вернул обход e2"
 
 
 def test_apply_routing_clears_transit_and_keeps_nodes():
