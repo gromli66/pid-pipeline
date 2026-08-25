@@ -58,8 +58,7 @@ class ResizableNodeOverlay:
                  min_size: int = 15,
                  on_resize: Optional[Callable] = None,
                  on_commit: Optional[Callable] = None,
-                 handle_offset: float = 0.0,
-                 grab_radius: Optional[float] = None):
+                 handle_offset: float = 0.0):
         """
         Args:
             scene: QGraphicsScene для добавления handles
@@ -72,10 +71,10 @@ class ResizableNodeOverlay:
                 из-под порога клика по узлу (`CLICK_THRESHOLD`), который в
                 растровой сцене втрое шире, чем на холсте; drag_to сдвиг
                 компенсирует, поэтому угол по-прежнему идёт за курсором.
-            grab_radius: радиус захвата, px сцены. None — `HANDLE_SIZE + 4`.
 
-        ⚠ Оверлей ОБЩИЙ с «Ручной правкой»: оба параметра — инстансные и по
-        умолчанию дают ровно прежнее поведение, класс-константы не трогаются.
+        ⚠ Оверлей ОБЩИЙ с «Ручной правкой»: параметр инстансный и по умолчанию
+        даёт ровно прежнее поведение, класс-константы не трогаются. Радиус
+        захвата параметром НЕ вынесен — план 4.5 прямо просил его не трогать.
         """
         self._scene = scene
         self._bbox = bbox.copy()
@@ -83,8 +82,6 @@ class ResizableNodeOverlay:
         self._on_resize = on_resize
         self._on_commit = on_commit
         self._handle_offset = float(handle_offset)
-        self._grab_radius = float(grab_radius) if grab_radius is not None \
-            else float(self.HANDLE_SIZE + 4)
 
         # Handle items
         self._handles: dict[str, QGraphicsRectItem] = {}
@@ -179,7 +176,7 @@ class ResizableNodeOverlay:
         Returns:
             'tl' | 'tr' | 'bl' | 'br' | None
         """
-        threshold = self._grab_radius   # по умолчанию HANDLE_SIZE + 4
+        threshold = self.HANDLE_SIZE + 4   # немного больше визуального размера
 
         corners = self.handle_centres()
 

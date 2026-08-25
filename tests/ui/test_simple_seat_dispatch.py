@@ -258,19 +258,30 @@ def test_contour_end_is_not_lifted_off_the_drawn_shape(qapp, tmp_path):
     Лифт скиновых узлов вытолкнул бы его «мимо нарисованного» — поэтому
     он применяется только концам из bbox-веток. Класс узла НАРОЧНО скиновый
     (FIXED_SIZES): именно на нём лифт и сработал бы.
+
+    ⚠ Контур ВПИСАН в рамку с зазором (правая вершина x=180 при x2=200).
+    Первая редакция брала ромб по серединам граней — его правая вершина
+    лежала РОВНО на рамке, поэтому `_lift_to_seat_rect` уходил по ветке
+    «уже на рамке или снаружи» и тест был зелен ДАЖЕ БЕЗ сторожа (поймано
+    ревизией, инъекция И6). Зазор возвращает сторожу смысл: без него лифт
+    двигает конец с контура на рамку, и утверждение ниже краснеет.
     """
-    seg = [150.0, 100.0, 200.0, 200.0, 150.0, 300.0, 100.0, 200.0]   # ромб
+    seg = [150.0, 120.0, 180.0, 200.0, 150.0, 280.0, 120.0, 200.0]   # ромб В рамке
     a = _box("a", 100, 100, 200, 300, cls=SKIN_CLASS, seg=seg)
     b = _conn("b", 600.0, 200.0)
     ed = _editor(qapp, tmp_path, [a, b])
 
+    # замок фикстуры: контур обязан лежать СТРОГО внутри рамки, иначе лифт
+    # не сработал бы и без сторожа — тест снова стал бы декоративным
+    x1, y1, x2, y2 = a["bbox"]
+    assert min(seg[0::2]) > x1 and max(seg[0::2]) < x2, "контур касается рамки по X"
+    assert min(seg[1::2]) > y1 and max(seg[1::2]) < y2, "контур касается рамки по Y"
+
     assert ed.add_edge("a", "b")
     sp, _tp = _ends(ed, "a", "b")
 
-    # правая вершина ромба, а не правая грань рамки (x=200 против x=200 —
-    # различаем по Y: на рамке конец сел бы на створ партнёра y=200 тоже,
-    # поэтому берём точку строго на контуре и проверяем принадлежность)
     assert _on_polygon(sp, seg), f"конец ушёл с контура: {sp}"
+    assert sp[1] < x2, "конец вытолкнут на рамку — лифт применён к контурной ветке"
 
 
 def _on_polygon(pt_yx, seg, tol=0.5):
@@ -379,3 +390,187 @@ def test_broken_geometry_falls_back_to_the_canon_not_to_zero(qapp, tmp_path,
     # канон сажает конец на правую грань рамки, конец коннектора — в центроид
     assert sp == [200.0, 200.0]
     assert tp == [200.0, 600.0]
+
+
+# ── 9. Ближняя стенка — сторож на КАЖДУЮ из пяти connect_* (возврат В1) ──
+#
+# Прежний сторож (§8 выше) бил в одну функцию из пяти, а зонд патчил ОБЩИЙ
+# `axis_deviation` — поэтому краснел и создавал впечатление покрытия. Ревизия
+# откатила судью ПОФУНКЦИОНАЛЬНО и показала: `connect_bbox_bbox` (через который
+# идёт основная масса дрейфа) и три полигонные функции не покрыты ничем.
+# Список функций снят КОМАНДОЙ, а не выбран на глаз:
+#     grep "^def connect_" ui/editors/graph_geometry.py
+#
+# Одна геометрия закрывает все пять. Рамка A и партнёр B разнесены так, что ни
+# один приоритет 1-3 не срабатывает (нет створов, нет перекрытий), и обе пары
+# стенок-кандидатов дают ОДНО осевое отклонение 60 px, но разное расстояние:
+#   ближняя пара: правая стенка A (x=250) — левая стенка B (x=500), 257.1 px
+#   дальняя пара: левая  стенка A (x=150) — правая стенка B (x=600), 454.0 px
+# Старый нормированный балл (1 - |dy|/len) у дальней ВЫШЕ (0.868 против 0.767)
+# — ровно поэтому она и выигрывала.
+
+FALLBACK_A = [150.0, 150.0, 250.0, 250.0]     # рамка A, центр (200, 200)
+FALLBACK_B = [500.0, 10.0, 600.0, 90.0]       # партнёр справа-ВЫШЕ, без створа
+FALLBACK_POINT = (200.0, 200.0)               # центр A как коннектор
+
+
+def _square(x1, y1, x2, y2):
+    """Контур, повторяющий рамку: полигонные ветки идут по тем же стенкам."""
+    return [x1, y1, x2, y1, x2, y2, x1, y2]
+
+
+def _near_far_walls():
+    """((ближняя A, ближняя B), (дальняя A, дальняя B)) для этой геометрии."""
+    ax1, ay1, ax2, _ay2 = FALLBACK_A
+    bx1, by1, bx2, by2 = FALLBACK_B
+    near = ((ax2, ay1), (bx1, by2))            # (250,150) — (500,90)
+    far = ((ax1, ay1), (bx2, by2))             # (150,150) — (600,90)
+    return near, far
+
+
+def test_fallback_fixture_is_locked_on_both_sides():
+    """Фикстура таблицы ниже: отклонения РАВНЫ, расстояния РАЗНЫЕ.
+
+    Без этого замка таблица проверяла бы не тот механизм: при разных
+    отклонениях ближнюю выбрал бы и старый судья.
+    """
+    (na, nb), (fa, fb) = _near_far_walls()
+    dev_near = min(abs(nb[0] - na[0]), abs(nb[1] - na[1]))
+    dev_far = min(abs(fb[0] - fa[0]), abs(fb[1] - fa[1]))
+    assert dev_near == dev_far == 60.0, "отклонения стенок разошлись"
+
+    d_near = ((nb[0] - na[0]) ** 2 + (nb[1] - na[1]) ** 2) ** 0.5
+    d_far = ((fb[0] - fa[0]) ** 2 + (fb[1] - fa[1]) ** 2) ** 0.5
+    assert d_far - d_near > 190.0, "стенки слишком близки — таблица декоративна"
+
+    # приоритеты 1-3 обязаны промахнуться, иначе фолбэк не исполнится вовсе
+    ax1, ay1, ax2, ay2 = FALLBACK_A
+    bx1, by1, bx2, by2 = FALLBACK_B
+    assert not (bx1 <= (ax1 + ax2) / 2 <= bx2), "центр A попал в створ B по X"
+    assert not (by1 <= (ay1 + ay2) / 2 <= by2), "центр A попал в створ B по Y"
+    assert not (ax1 <= (bx1 + bx2) / 2 <= ax2), "центр B попал в створ A по X"
+    assert not (ay1 <= (by1 + by2) / 2 <= ay2), "центр B попал в створ A по Y"
+    assert max(ax1, bx1) > min(ax2, bx2), "рамки перекрылись по X"
+    assert max(ay1, by1) > min(ay2, by2), "рамки перекрылись по Y"
+
+
+def _fallback_cases():
+    """[(имя функции, аргументы, ожидаемая пара точек)] — по строке на функцию."""
+    from ui.editors.graph_geometry import (
+        connect_bbox_bbox, connect_bbox_polygon, connect_point_bbox,
+        connect_point_polygon, connect_polygon_polygon,
+    )
+    near, _far = _near_far_walls()
+    a_poly, b_poly = _square(*FALLBACK_A), _square(*FALLBACK_B)
+    return [
+        ("connect_bbox_bbox", connect_bbox_bbox,
+         (FALLBACK_A, FALLBACK_B), near),
+        ("connect_bbox_polygon", connect_bbox_polygon,
+         (FALLBACK_A, b_poly), near),
+        ("connect_polygon_polygon", connect_polygon_polygon,
+         (a_poly, b_poly), near),
+        ("connect_point_bbox", connect_point_bbox,
+         (FALLBACK_POINT, FALLBACK_B), (FALLBACK_POINT, near[1])),
+        ("connect_point_polygon", connect_point_polygon,
+         (FALLBACK_POINT, b_poly), (FALLBACK_POINT, near[1])),
+    ]
+
+
+@pytest.mark.parametrize("name", [c[0] for c in _fallback_cases()])
+def test_every_connect_function_prefers_the_near_wall(name):
+    """Откат судьи В ЭТОЙ функции обязан покраснить ИМЕННО эту строку.
+
+    Числа абсолютные: ожидание берётся из геометрии фикстуры (стенка, которая
+    ближе), а не из вызова проверяемой функции.
+    """
+    case = next(c for c in _fallback_cases() if c[0] == name)
+    _name, fn, args, expected = case
+    pa, pb, _kind = fn(*args)
+    assert (pa, pb) == expected, (
+        f"{name}: выбрана дальняя стенка {(pa, pb)}, ожидалась ближняя {expected}")
+
+
+def test_fallback_table_covers_every_connect_function():
+    """Таблица обязана покрывать ВЕСЬ список `connect_*`, снятый с модуля.
+
+    Список берётся из самого модуля, а не переписывается сюда руками: новая
+    `connect_*` без строки в таблице роняет тест, а не проходит незамеченной.
+    """
+    import re
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[2] / "ui" / "editors" / "graph_geometry.py"
+    declared = set(re.findall(r"^def (connect_\w+)",
+                              src.read_text(encoding="utf-8"), re.M))
+    covered = {c[0] for c in _fallback_cases()}
+    assert declared == covered, (
+        f"не покрыты: {sorted(declared - covered)}; "
+        f"лишние в таблице: {sorted(covered - declared)}")
+
+
+# ── 10. Вырожденная пара не клампит конец в УГОЛ (возврат В4) ────────────
+
+def test_degenerate_pair_keeps_the_face_instead_of_the_corner(qapp, tmp_path):
+    """Фолбэк вырожденной пары садит конец на ГРАНЬ, а не в угол.
+
+    Прежний `add_edge` считал второй конец от РЕАЛЬНОЙ точки партнёра
+    (цепочка), а первая редакция фолбэка — симметрично, оба конца от
+    центроидов. Симметрия читалась аккуратнее, но клампила конец в угол чаще:
+    на корпусе 7 против 3 (замер §P4-rev-fix.2). Клампить в угол — ровно тот
+    дефект, который лечит пункт 4.4.1, поэтому фолбэк держит цепочку.
+
+    Числа абсолютные: [200,300] — правая грань `a`, [300,300] — её угол.
+    """
+    a = _box("a", 100, 100, 300, 300)
+    b = _box("b", 200, 200, 400, 400)          # перекрытие по обеим осям
+    ed = _editor(qapp, tmp_path, [a, b])
+    assert ed._pair_is_degenerate("a", "b", ed.nodes["a"], ed.nodes["b"]), \
+        "фикстура не вырожденная — тест проверял бы не ту ветку"
+
+    assert ed.add_edge("a", "b")
+    sp, _tp = _ends(ed, "a", "b")
+
+    assert sp == [200.0, 300.0], f"конец не на грани: {sp}"
+    assert sp != [300.0, 300.0], "конец склампился в УГОЛ рамки"
+
+
+# ── 11. Контур мимо своей рамки не даёт тихий [0,0] (возврат В3) ─────────
+
+def test_contour_placed_away_from_its_bbox_seats_on_the_frame(qapp, tmp_path):
+    """Шесть нулей в `segmentation` проходят мерку диспетчера — и садили
+    конец в [0, 0], левый верхний угол листа.
+
+    Исключения при этом НЕТ, поэтому `except` не срабатывал, а докстрока
+    обещала «канонную пару, а не тихий [0, 0]». Вход закрыт до вызова
+    диспетчера (`_pair_is_degenerate`), обещание стало правдой.
+    На корпусе таких узлов 0 из 47 с контуром — правка бесплатна.
+    """
+    a = _box("a", 500, 500, 600, 600, seg=[0.0] * 6)
+    b = _box("b", 100, 540, 200, 560)
+    ed = _editor(qapp, tmp_path, [a, b])
+    assert ed._contour_misses_own_bbox(ed.nodes["a"]), \
+        "фикстура не та: контур пересекается со своей рамкой"
+
+    assert ed.add_edge("a", "b")
+    sp, _tp = _ends(ed, "a", "b")
+
+    assert sp != [0.0, 0.0], "конец сел в левый верхний угол листа"
+    x1, y1, x2, y2 = ed.nodes["a"]["bbox"]
+    assert x1 - 0.5 <= sp[1] <= x2 + 0.5 and y1 - 0.5 <= sp[0] <= y2 + 0.5, \
+        f"конец вне собственной рамки узла: {sp}"
+
+
+def test_a_normal_contour_slightly_outside_its_bbox_is_not_degenerate(qapp, tmp_path):
+    """Замок с другой стороны: контур, чьи вершины выходят за рамку на доли
+    пикселя, вырожденным НЕ считается.
+
+    Такой узел на корпусе реален (`ca1f6ea2/node_337`: контур до 1312.9 при
+    рамке до 1312) — сторож, ловящий шум в пиксель, отправил бы на канон
+    здоровые пары и тихо съел бы всю правку.
+    """
+    seg = [500.0, 500.0, 600.9, 500.0, 600.9, 600.0, 500.0, 600.0]
+    a = _box("a", 500, 500, 600, 600, seg=seg)
+    ed = _editor(qapp, tmp_path, [a, _box("b", 100, 540, 200, 560)])
+
+    assert not ed._contour_misses_own_bbox(ed.nodes["a"]), \
+        "контур с выходом на доли пикселя объявлен вырожденным"

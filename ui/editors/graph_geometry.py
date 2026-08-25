@@ -1287,7 +1287,8 @@ def boundary_mark_points(outline: List[Tuple[float, float]],
 # =====================================================================
 #
 # Выбор нужной `connect_*` по форме пары узлов жил внутри
-# `ContourEditor._recalculate_edges_for_node` (contour_editor.py:306-355).
+# `ContourEditor._recalculate_edges_for_node` (после выноса — contour_editor.py:282,
+# вызов диспетчера :308).
 # «Проверка схемы» повторить его не могла и сажала концы каноном
 # `modules/graph/core/seating`, из-за чего строгая ось терялась. Решение
 # Максима 2026-08-25 («да, как в Контурах», досрочное исполнение Г5/Г5а/Г5в
@@ -1354,7 +1355,7 @@ def dispatch_connect(src_node: dict, tgt_node: dict,
 
     ⚠ Контракт ошибок: битую геометрию функция НЕ прячет — исключение уходит
     вызывающему. «Контуры» ловят его и оставляют старые точки
-    (`contour_editor.py:357-361`), у `add_edge` старых точек нет, поэтому там
+    (`contour_editor.py:317-321`), у `add_edge` старых точек нет, поэтому там
     фолбэк — канонная посадка пары, а не тихий [0, 0] из `create_edge_data`.
     """
     src_seg = src_node.get("segmentation")

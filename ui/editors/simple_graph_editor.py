@@ -146,7 +146,11 @@ class SimpleGraphEditor(BaseGraphEditor):
 
         Контракт ошибок: диспетчер битую геометрию не прячет, а у нового
         ребра старых точек нет — поэтому отказ ловится здесь и пара садится
-        каноном, а не тихим [0, 0] из `create_edge_data`.
+        каноном, а не тихим [0, 0] из `create_edge_data`. ⚠ Одного `except`
+        для этого мало: битые данные умеют не бросать вовсе, а тихо вернуть
+        бессмысленную точку (контур из шести нулей проходит мерку
+        `node_shape_is_polygon` и сажает конец в [0, 0]). Такие пары ловит
+        `_pair_is_degenerate` ДО вызова диспетчера — вход, а не исход.
         """
         first, second = self.model.edge_key(node_a, node_b)
         n1, n2 = self.nodes[first], self.nodes[second]
@@ -179,26 +183,65 @@ class SimpleGraphEditor(BaseGraphEditor):
 
     def _pair_is_degenerate(self, id_a: str, id_b: str,
                             node_a: dict, node_b: dict) -> bool:
-        """Г5а: пара, на которой `connect_bbox_bbox` вернёт центроиды.
+        """Пара, которой диспетчер не может дать осмысленный ответ.
 
-        Условие ветки повторено буквально: обе рамки (ни коннектора, ни
-        контура) и перекрытие по ОБЕИМ осям.
+        Два случая, оба ведут на канонную посадку:
+
+        1. **Г5а** — обе рамки (ни коннектора, ни контура) и перекрытие по
+           ОБЕИМ осям: условие вырожденной ветки `connect_bbox_bbox`
+           повторено буквально, там она отдаёт пару ЦЕНТРОИДОВ.
+        2. **Контур мимо своей рамки** — у узла есть `segmentation` по мерке
+           диспетчера, но лежит он ВНЕ собственного bbox. Тогда полигонная
+           ветка честно вернёт точку на этом контуре, исключения не будет, и
+           `except` ниже не сработает: ребро получило бы тихий [0, 0] (мерка
+           `node_shape_is_polygon` — шесть значений, а `[0,0,0,0,0,0]` их
+           даёт). Замер: на корпусе таких узлов 0 из 47 с контуром, то есть
+           вход закрыт бесплатно; без этой ветки докстрока `_seat_pair_dispatch`
+           обещала бы то, чего код не делает.
         """
+        for n in (node_a, node_b):
+            if self._contour_misses_own_bbox(n):
+                return True
         for n in (node_a, node_b):
             if n.get('type', 'connector') == 'connector' or node_shape_is_polygon(n):
                 return False
         return bboxes_overlap(self._get_node_bbox(id_a),
                               self._get_node_bbox(id_b))
 
-    def _seat_pair_canonical(self, id_a: str, id_b: str) -> tuple[list, list]:
-        """Канонная посадка пары — оба конца от центроидов партнёра.
+    @staticmethod
+    def _contour_misses_own_bbox(node: dict) -> bool:
+        """Контур узла не пересекается с его собственной рамкой?
 
-        Симметрична по порядку узлов (в отличие от прежней цепочки
-        `add_edge`), поэтому годится фолбэком для нормализованной пары.
+        Допуск не нужен: речь не о шуме в пиксель (у корпусных контуров
+        вершины выходят за рамку на доли пикселя — это законно), а о контуре
+        в совершенно другом месте листа.
         """
-        ca, cb = self.nodes[id_a]['centroid'], self.nodes[id_b]['centroid']
-        ax, ay = self.get_connection_point(id_a, cb[1], cb[0])
+        if not node_shape_is_polygon(node):
+            return False
+        bb = node.get('bbox')
+        if not bb or len(bb) != 4:
+            return False
+        seg = node['segmentation']
+        xs, ys = seg[0::2], seg[1::2]
+        return not bboxes_overlap([min(xs), min(ys), max(xs), max(ys)], bb)
+
+    def _seat_pair_canonical(self, id_a: str, id_b: str) -> tuple[list, list]:
+        """Канонная посадка пары — ЦЕПОЧКОЙ, как прежний `add_edge`.
+
+        Точка на втором узле считается от центроида первого, а точка на
+        первом — от УЖЕ ПОСЧИТАННОЙ точки на втором. От порядка кликов
+        результат не зависит: пара сюда приходит уже нормализованной
+        (`_seat_pair_dispatch`), поэтому «первый» определён детерминированно.
+
+        ⚠ Была симметричная редакция (оба конца от центроидов) — она читалась
+        аккуратнее, но КЛАМПИЛА конец в угол чаще прежнего кода: на корпусе
+        концов в углу 7 против 3 у цепочки (замер §P4-rev-fix.2, 33 вырожденные
+        пары). Клампить в угол — ровно тот дефект, который пункт 4.4.1 и
+        лечит, поэтому фолбэк держит качество прежнего пути, а не красоту.
+        """
+        ca = self.nodes[id_a]['centroid']
         bx, by = self.get_connection_point(id_b, ca[1], ca[0])
+        ax, ay = self.get_connection_point(id_a, bx, by)
         return ([ay, ax], [by, bx])
 
     def remove_edge(self, node_a: str, node_b: str) -> bool:
