@@ -246,9 +246,14 @@ def test_confirm_during_live_preview_uploads_original(armed, monkeypatch):
     from PySide6.QtWidgets import QMessageBox
 
     asked = []
+    from ui.tabs.blind_overwrite import BlindOverwriteGuard
     monkeypatch.setattr(
         QMessageBox, "question",
         lambda *a, **kw: asked.append(a) or QMessageBox.StandardButton.Yes)
+    # С пункта 5.3 «Подтвердить» спрашивает своими русскими кнопками.
+    monkeypatch.setattr(
+        BlindOverwriteGuard, "_ask_yes_cancel",
+        lambda self, title, text: asked.append((self, title, text)) or True)
 
     ed = armed._editor
     ed.preview_resize(width=SIDE, height=SIDE)

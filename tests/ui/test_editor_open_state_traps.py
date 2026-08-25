@@ -84,6 +84,7 @@ SIDE = 90                                     # цель превью: квад�
 BOX_PREVIEW = [-10.0, 188.0, 80.0, 278.0]
 BOX_PREVIEW_AREA = 8100.0
 BOX_MOVED_PREVIEW = [-3.0, 188.0, 87.0, 278.0]   # то же превью после переноса +7
+OUTSIDE_NID = "node_35"       # `nasos`, единственный — ВНЕ набора «Размеров»
 NEIGHBOUR = "node_14"         # ВТОРОЙ узел набора — половина, которой откат не касался
 NEIGHBOUR_BBOX = [1258, 251, 1309, 279]
 NEIGHBOUR_PREVIEW = [1238.0, 220.0, 1328.0, 310.0]
@@ -166,6 +167,11 @@ def dialogs(monkeypatch):
         monkeypatch.setattr(
             QMessageBox, name,
             staticmethod(lambda *a, _n=name, **kw: calls.append((_n, a[1:3]))))
+    # Вопрос «да / отмена» с пункта 5.3 идёт мимо статической двери.
+    from ui.tabs.blind_overwrite import BlindOverwriteGuard
+    monkeypatch.setattr(
+        BlindOverwriteGuard, "_ask_yes_cancel",
+        lambda self, title, text: bool(calls.append(("question", (title, text)))))
     return calls
 
 
@@ -285,6 +291,18 @@ def _foreign_move(editor, nid, dx=7.0):
     editor.drag_node_to(cx + dx, cy)
     editor.end_drag_node()
     assert editor.undo_mgr.can_undo, "перенос не встал в стек — тест бессмыслен"
+
+
+def _committed_work_to_save(editor):
+    """Зафиксированная работа ВНЕ набора — чтобы фоновому тику было что писать.
+
+    С пункта 5.2 дёрти-флаг вкладки честен: он гаснет, когда отмены вернули
+    дерево к точке сохранения, и такую вкладку тик не трогает вовсе
+    (`autosave.py:87`). Сценарии, которые отменяют СВОЁ единственное
+    действие, работу оператора обязаны завести отдельно — узлом, которого
+    не касаются ни превью набора, ни утверждения теста.
+    """
+    _foreign_move(editor, OUTSIDE_NID)
 
 
 def _foreign_auto_fix(editor):
@@ -647,6 +665,7 @@ def test_the_tick_does_not_revive_the_preview_a_foreign_undo_took_off(
     действия оператора и без следа в стеке.
     """
     ed = box_tab._editor
+    _committed_work_to_save(ed)                   # тику есть что сохранять
     _foreign_move(ed, BOX_NID)                    # чужое действие ВНУТРИ набора
     _open_resize(ed)
     ed.preview_resize(width=SIDE, height=SIDE)
@@ -682,6 +701,7 @@ def test_the_tick_does_not_revive_a_preview_a_snapshot_undo_wiped(
     17 узлов). Через ≤120 с фоновый тик отменял отмену оператора.
     """
     ed = box_tab._editor
+    _committed_work_to_save(ed)                   # тику есть что сохранять
     _foreign_auto_fix(ed)                         # снимочная команда в стеке
     _open_resize(ed)
     _box_preview(ed)
@@ -699,7 +719,8 @@ def test_the_tick_does_not_revive_a_preview_a_snapshot_undo_wiped(
     assert ed.nodes[NEIGHBOUR]["bbox"] == pytest.approx(NEIGHBOUR_BBOX, abs=TOL), \
         "тик воскресил превью, стёртое откатом"
     assert _sent_node(box_tab, BOX_NID)["bbox"] == pytest.approx(BOX_BBOX, abs=TOL)
-    assert not ed.undo_mgr.can_undo, "стек уехал — тест смотрит не на то состояние"
+    # Один — работа ВНЕ набора; снимочную команду откат снял, тик не добавил.
+    assert ed.undo_mgr.stack_depth == 1, "стек уехал — тест смотрит не на то состояние"
     assert dialogs == []
 
 
@@ -713,6 +734,7 @@ def test_the_tick_keeps_the_frame_and_the_pin_a_foreign_undo_returned(
     возвращённое откатом: 60×60 и пин 30.0 при откатных 20×36 и 10.0.
     """
     ed = box_tab._editor
+    _committed_work_to_save(ed)                   # тику есть что сохранять
     _set_pin(ed)
     _corner_resize(ed)                            # чужой угловой ресайз 90×90
     assert _pin(ed) == {"dx": PIN_SCALED, "dy": PIN_DY}, \

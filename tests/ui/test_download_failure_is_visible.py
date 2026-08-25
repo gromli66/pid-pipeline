@@ -226,6 +226,13 @@ def dialogs(monkeypatch):
 
     for name in ("warning", "critical", "information", "question"):
         monkeypatch.setattr(QMessageBox, name, staticmethod(_rec))
+    # Вопрос «да / отмена» с пункта 5.3 собирается своими кнопками (русскими),
+    # мимо статической двери `QMessageBox.question`, — подменяется отдельно.
+    from ui.tabs.blind_overwrite import BlindOverwriteGuard
+    monkeypatch.setattr(
+        BlindOverwriteGuard, "_ask_yes_cancel",
+        lambda self, title, text:
+            _rec(self, title, text) == QMessageBox.StandardButton.Yes)
     return seen
 
 
@@ -596,3 +603,48 @@ def test_the_lock_is_addressed_to_its_own_artifact(open_tab, dialogs, raster,
     assert tab._save_graph() is True
     assert api.uploads == [("graph_canvas", "graph_canvas.json")]
     assert _titles(dialogs) == []
+
+
+# =========================================================================
+# Блок 5, пункт 5.1 — предупреждение называет ТОТ артефакт, который затрёт
+# =========================================================================
+
+def _text_of(dialogs, title):
+    return next(text for t, text in dialogs if t == title)
+
+
+def test_the_warning_names_the_canvas_in_the_manual_edit_tab(open_tab, dialogs,
+                                                             raster, canvas_of):
+    """«Ручная правка» пишет в холст — о нём предупреждение и говорит.
+
+    Прежний текст был один на обе вкладки и здесь врал дважды: обещал затереть
+    сохранённый граф (а `_save_graph` при `_canvas_mode` шлёт `upload_canvas_
+    graph`) и объявлял открытым ИСХОДНЫЙ граф — при том что источник не
+    прочитан, холст оператора остаётся ему как есть, и соседний
+    `test_saved_graph_5xx_keeps_the_fresh_canvas` меряет ровно это (N_SAVED
+    узлов на экране).
+    """
+    tab = open_tab(_advanced(), _server(
+        raster, canvas=canvas_of["fresh"],
+        failures={"graph_validated": APIError("bad gateway", 502)}))
+    assert _titles(dialogs) == [TITLE_GRAPH]
+    text = _text_of(dialogs, TITLE_GRAPH)
+
+    assert "холст" in text, f"адресат записи не назван: {text}"
+    assert "затрёт сохранённый граф" not in text, (
+        f"обещано затереть не тот артефакт: {text}")
+    assert _nodes_in_editor(tab) == N_SAVED, "холст оператора не открыт — текст врёт"
+
+
+def test_the_warning_still_names_the_saved_graph_in_the_original_tab(
+        open_tab, dialogs, raster):
+    """Вкладка в оригинальных координатах пишет в graph_validated — и текст тот же.
+
+    Замок с другой стороны: развилка не должна утащить обе вкладки в холст.
+    """
+    open_tab(_simple(), _server(
+        raster, failures={"graph_validated": APIError("bad gateway", 502)}))
+    text = _text_of(dialogs, TITLE_GRAPH)
+
+    assert "затрёт сохранённый граф" in text, f"адресат записи потерян: {text}"
+    assert "холст" not in text, f"вкладке без холста обещан холст: {text}"
