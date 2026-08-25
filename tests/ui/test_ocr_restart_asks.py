@@ -40,7 +40,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox    # noqa: E402
 
 import ui.widgets.error_report_dialog as erd               # noqa: E402
 import ui.widgets.diagram_workspace as dw                  # noqa: E402
-from ui.services.api_client import DiagramStatus           # noqa: E402
+from ui.services.api_client import APIError, DiagramStatus  # noqa: E402
 from ui.widgets.progress_beads import BeadState            # noqa: E402
 
 UID = str(uuid.UUID("0c111111-2222-3333-4444-555566667777"))
@@ -64,6 +64,19 @@ GREEN_BY_ARTIFACT = [
 GREEN_BY_STATUS = ["ocr_completed", "ocr_bound", "generating_fxml", "completed"]
 
 ALL_GREEN = GREEN_BY_ARTIFACT + GREEN_BY_STATUS
+
+# ⛔ ОСОЗНАННЫЙ ПЕРЕСЪЁМ (возврат ревизии связки 3+5, 2026-08-25). Кнопка
+# зелёная — ещё не значит «перезапуск пройдёт»: во время сборки графа сервер
+# отвечает 400, потому что `/ocr/start` первым же делом сносит `OCR_RESULT`,
+# а сборка в эту минуту ждёт текстовые блоки, чтобы слить их в свежий граф.
+#
+# Прежняя редакция утверждала успешный перезапуск на ВСЕХ одиннадцати
+# «зелёных» — и была зелёной только потому, что заглушка `start_ocr` всегда
+# отвечала `dispatched` и белого списка сервера не знала. Теперь заглушка
+# отвечает гейтом, и множества разведены явно: где перезапуск проходит, а где
+# оператор получает честный отказ по-русски.
+RESTART_REFUSED = ["building_graph"]
+RESTART_OK = [s for s in ALL_GREEN if s not in RESTART_REFUSED]
 
 
 # ── харнесс ──────────────────────────────────────────────────────────────
@@ -133,6 +146,18 @@ class FakeAPI:
         return {}
 
     def start_ocr(self, uid):
+        # ⛔ Стенд отвечает ГЕЙТОМ СЕРВЕРА, а не всегда `dispatched` (возврат
+        # ревизии связки 3+5). Прежняя заглушка не знала белого списка
+        # `/ocr/start`, поэтому решётка этого файла утверждала успешный
+        # перезапуск на ТРЁХ статусах, где боевой сервер отвечал 400 — уже
+        # после вопроса «Перезапустить?» и ответа «Да». Обе решётки при этом
+        # были зелены, а противоречили друг другу.
+        from app.api.ocr import _OCR_START_STATUSES
+        allowed = {st.value for st in _OCR_START_STATUSES}
+        if self.status.value not in allowed:
+            raise APIError(
+                f"Распознавание сейчас не запустить: схема в состоянии "
+                f"'{self.status.value}'.", 400)
         self.started.append(uid)
         # Сервер удаляет `OCR_RESULT` в самом начале `/ocr/start`
         # (`app/api/ocr.py`) — без этого стенд судил бы состояние, которого
@@ -284,7 +309,7 @@ def test_button_is_green_while_the_stage_is_not_completed(status, bench):
 
 # ── гейт пункта: повторный запуск спрашивает ─────────────────────────────
 
-@pytest.mark.parametrize("status", ALL_GREEN)
+@pytest.mark.parametrize("status", RESTART_OK)
 def test_repeat_click_asks_before_restarting(status, bench):
     """Повторный клик при готовом результате — вопрос, потом запуск.
 
@@ -302,7 +327,7 @@ def test_repeat_click_asks_before_restarting(status, bench):
     assert api.started == [UID], status
 
 
-@pytest.mark.parametrize("status", ALL_GREEN)
+@pytest.mark.parametrize("status", RESTART_OK)
 def test_refusal_starts_nothing(status, bench):
     """Порог заперт с другой стороны: «Нет» — и ни одного запроса к серверу."""
     ws, api = bench(status, stages=[])
@@ -450,7 +475,7 @@ def test_restart_resets_the_artifact_flag_and_starts_the_poll(bench):
     assert ws._ocr_poll_timer.isActive(), "поллер артефакта не поднят"
 
 
-@pytest.mark.parametrize("status", ALL_GREEN)
+@pytest.mark.parametrize("status", RESTART_OK)
 def test_binding_stays_closed_until_a_new_result(status, bench):
     """Гейт замечания: пока идёт перезапуск, привязки нет — при ЛЮБОМ статусе.
 
@@ -491,7 +516,7 @@ def test_binding_returns_when_the_new_result_arrives(status, bench):
     )
 
 
-@pytest.mark.parametrize("status", ALL_GREEN)
+@pytest.mark.parametrize("status", RESTART_OK)
 def test_ocr_bead_spins_during_the_rerun(status, bench):
     """Бусина распознавания крутится по-настоящему, а не показывает «готово».
 
@@ -727,3 +752,45 @@ def test_manual_edit_closed_only_by_the_rerun_not_by_a_fresh_load(bench):
     assert ws._ocr_rerun_in_flight() is False
     assert ws._action_buttons["edit_graph"].isEnabled()
     assert ws.beads.get_state(dw.BEAD_EDIT_GRAPH) == BeadState.COMPLETED
+
+
+# ── второй берег пересъёма: отказ во время сборки ────────────────────────
+
+@pytest.mark.parametrize("status", RESTART_REFUSED)
+def test_restart_during_the_rebuild_is_refused_honestly(status, bench):
+    """Кнопка зелёная, а перезапуск во время сборки не проходит — и это видно.
+
+    Утверждается РАЗНИЦА с `RESTART_OK`: там после «Да» задача уходит и бусина
+    крутится, здесь оператор получает отказ и конвейер не трогается. Без этой
+    клетки разведение множеств выглядело бы как «просто выкинули статус».
+
+    Отказ обязан быть по-русски: он прилетает в модалку клиента ПОСЛЕ того,
+    как оператор согласился потерять готовый результат.
+    """
+    ws, api = bench(status, stages=[])
+
+    _click_ocr(ws)
+
+    kinds = [c[0] for c in FakeMsgBox.calls]
+    assert kinds == ["question", "warning"], (
+        f"{status}: об отказе не сказали вслух — {FakeMsgBox.calls}")
+    assert api.started == [], f"{status}: задача всё-таки ушла в очередь"
+
+    text = FakeMsgBox.calls[-1][-1] if FakeMsgBox.calls[-1][-1:] else ""
+    text = " ".join(str(part) for part in FakeMsgBox.calls[-1])
+    assert "Cannot start OCR" not in text, text
+    assert "Распознавание" in text, text
+
+
+@pytest.mark.parametrize("status", RESTART_REFUSED)
+def test_a_refused_restart_does_not_mark_the_tab_as_rerunning(status, bench):
+    """Отказ не взводит метку перезапуска — иначе «Ручная правка» гасла бы зря.
+
+    Метку ставят доработки №3/№4 pains-3; она обязана следовать за реальным
+    запуском, а не за намерением.
+    """
+    ws, _api = bench(status, stages=[])
+
+    _click_ocr(ws)
+
+    assert ws._ocr_rerunning is False, status

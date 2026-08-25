@@ -12,6 +12,7 @@ Endpoints:
 
 import asyncio
 import json
+import os
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Body
@@ -33,6 +34,39 @@ router = APIRouter()
 # (`ui/widgets/diagram_workspace.py`), а сведение обеих сторон поэлементно
 # держит `tests/test_phase_b_reentry.py`. Раньше список был уже клиентского
 # на пять клеток — кнопка горела, вкладка открывалась, сохранение отвечало 400.
+# Статусы, при которых перезапуск распознавания имеет смысл.
+#
+# ⛔ Список СВЕДЁН ПОЭЛЕМЕНТНО с клиентским множеством «кнопка Распознавание
+# зелёная» (`ALL_GREEN` в `tests/ui/test_ocr_restart_asks.py`, снятое чтением
+# обеих веток `_apply_status`), и сведение заперто тестом — тем же приёмом,
+# которым пункт 3.1в свёл `/binding/save` с `_binding_reachable`. Возврат
+# ревизии связки 3+5: из ОДИННАДЦАТИ «зелёных» статусов ТРИ отвечали 400 уже
+# ПОСЛЕ вопроса «Перезапустить распознавание?» и ответа «Да» —
+# `generating_fxml` и `completed` (блок 3 расширил под них семь списков и не
+# тронул восьмой) плюс `building_graph`.
+#
+# ⚠ `BUILDING_GRAPH` — ЕДИНСТВЕННОЕ намеренное расхождение, и оно в силе:
+# эндпоинт первым же делом СНОСИТ `OCR_RESULT` (ниже), а сборка графа в этот
+# момент как раз ждёт текстовые блоки, чтобы слить их в свежий граф
+# (`worker/tasks/ocr.py`). Пока кнопка на этом статусе не погашена (решение
+# Максима ещё не принято), оператор обязан получить отказ ПО-РУССКИ, а не
+# английскую строку про 'validated_junctions'.
+_OCR_START_STATUSES = (
+    DiagramStatus.VALIDATED_JUNCTIONS,
+    DiagramStatus.BUILT,
+    DiagramStatus.VALIDATING_GRAPH,
+    DiagramStatus.VALIDATED_GRAPH,
+    DiagramStatus.EXTRACTING_CONTOURS,
+    DiagramStatus.CONTOURS_EXTRACTED,
+    DiagramStatus.CONTOURS_VALIDATED,
+    DiagramStatus.OCR_COMPLETED,
+    DiagramStatus.OCR_BOUND,
+    # Свободный вход обещает перезапуск и из готовой схемы (возврат ревизии).
+    DiagramStatus.GENERATING_FXML,
+    DiagramStatus.COMPLETED,
+    DiagramStatus.ERROR,
+)
+
 _BINDING_SAVE_STATUSES = (
     DiagramStatus.VALIDATED_GRAPH,
     DiagramStatus.EXTRACTING_CONTOURS,
@@ -64,25 +98,18 @@ async def start_ocr(
     if not diagram:
         raise HTTPException(status_code=404, detail="Diagram not found")
 
-    # ⛔ `BUILDING_GRAPH` здесь БЫЛ и убран блоком 5: эндпоинт первым же делом
-    # СНОСИТ `OCR_RESULT` (ниже), а сборка графа в этот момент как раз ждёт
-    # текстовые блоки, чтобы слить их в свежий граф (`worker/tasks/ocr.py`).
-    if diagram.status not in (
-        DiagramStatus.VALIDATED_JUNCTIONS,
-        DiagramStatus.BUILT,
-        DiagramStatus.VALIDATING_GRAPH,
-        DiagramStatus.VALIDATED_GRAPH,
-        DiagramStatus.EXTRACTING_CONTOURS,
-        DiagramStatus.CONTOURS_EXTRACTED,
-        DiagramStatus.CONTOURS_VALIDATED,
-        DiagramStatus.OCR_COMPLETED,
-        DiagramStatus.OCR_BOUND,
-        DiagramStatus.ERROR,
-    ):
+    if diagram.status not in _OCR_START_STATUSES:
+        # ⛔ Отказ ПО-РУССКИ: его читает оператор в модалке клиента («Не удалось
+        # запустить OCR: …»), а не разработчик в логе. Прежний английский текст
+        # прилетал ПОСЛЕ вопроса «Перезапустить распознавание?» и ответа «Да» —
+        # то есть после того, как оператор согласился потерять результат.
         raise HTTPException(
             status_code=400,
-            detail=f"Cannot start OCR: status is '{diagram.status.value}', "
-            f"expected 'validated_junctions' or later",
+            detail=(
+                f"Распознавание сейчас не запустить: схема в состоянии "
+                f"'{diagram.status.value}'. Дождитесь конца сборки графа "
+                f"и повторите."
+            ),
         )
 
     # Удалить существующий OCR результат (retry case),
@@ -519,7 +546,12 @@ async def apply_ocr_binding(
     # этом пути существует ВСЕГДА (без него выше 404). То есть на Windows
     # эндпоинт не работал вовсе. `Path.replace` == `os.replace`: атомарен на
     # POSIX и перезаписывает на Windows.
-    tmp_path = graph_path.with_suffix(".tmp")
+    # ⚠ Суффикс PID обязателен (правило записано у третьего писателя,
+    # `worker/tasks/graph.py`): общий tmp просто перенёс бы гонку на шаг
+    # раньше — второй писатель обрезал бы черновик первого, и `replace`
+    # положил бы поверх цели уже испорченный файл. Обстановка для гонки есть:
+    # `acks_late` и `worker_concurrency=2` (`worker/celery_app.py`).
+    tmp_path = graph_path.with_suffix(f".{os.getpid()}.tmp")
     graph_json = json.dumps(graph, ensure_ascii=False, indent=2)
     await asyncio.to_thread(tmp_path.write_text, graph_json, "utf-8")
     await asyncio.to_thread(tmp_path.replace, graph_path)
