@@ -1278,6 +1278,17 @@ def node_shape_is_polygon(node: dict) -> bool:
             and bool(seg) and isinstance(seg, list) and len(seg) >= 6)
 
 
+def bboxes_overlap(bbox_a: List[float], bbox_b: List[float]) -> bool:
+    """Рамки перекрываются по ОБЕИМ осям?
+
+    Ровно условие вырожденной ветки `connect_bbox_bbox` (:225): на ней она
+    отдаёт пару центроидов, тип "overlapping". Живёт здесь, а не у
+    вызывающего, чтобы у условия и у ветки была ОДНА правда.
+    """
+    return (_segments_overlap_1d(bbox_a[0], bbox_a[2], bbox_b[0], bbox_b[2])[0]
+            and _segments_overlap_1d(bbox_a[1], bbox_a[3], bbox_b[1], bbox_b[3])[0])
+
+
 def _dispatch_bbox(node: dict, connector_radius: float) -> List[float]:
     """Виртуальный bbox узла — копия `BaseGraphEditor._get_node_bbox`.
 
