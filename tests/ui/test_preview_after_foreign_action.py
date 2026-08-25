@@ -337,7 +337,13 @@ def test_save_after_foreign_undo_sends_bbox_from_before_the_preview(
 
 def test_auto_fix_after_foreign_undo_undo_returns_to_state_before_preview(
         box_tab, dialogs):
-    """Кнопка «Авто-выравнивание», ветка цепочек, поверх протухшего базлайна."""
+    """Движок цепочек (`auto_fix`) поверх протухшего базлайна.
+
+    ⚠ НОСИТЕЛЬ ПЕРЕНЕСЁН (пункт 4.1, 2026-08-25): кнопка «Авто-выравнивание»
+    на холсте без раскладки заперта, и в движок цепочек она больше не ведёт;
+    сам инвариант живёт внутри `auto_fix()`, поэтому зовётся он. Ветку кнопки
+    держит близнец `test_smooth_after_foreign_undo_...` ниже.
+    """
     ed = box_tab._editor
     geom0 = _geom(ed)                            # схема как её загрузили
     _foreign_move(ed, FOREIGN)
@@ -346,7 +352,7 @@ def test_auto_fix_after_foreign_undo_undo_returns_to_state_before_preview(
     _box_preview(ed)
 
     ed.undo()                                    # базлайн объявляется мёртвым
-    box_tab._auto_fix()
+    ed.auto_fix()
 
     assert dialogs == []
     assert _last_step(ed) == "Auto-Fix (chains)", "ушли не в ту ветку кнопки"
@@ -922,7 +928,10 @@ def test_the_node_the_undo_touched_keeps_what_its_own_undo_left(
 
 
 _MIXED_COMMANDS = {
-    "auto_fix": lambda tab: tab._auto_fix(),
+    # ⚠ единственный, кто зовётся МИМО вкладки: кнопка «Авто-выравнивание» на
+    # холсте без раскладки заперта пунктом 4.1 (2026-08-25), а инвариант
+    # проверяемого движка от этого никуда не делся — носитель перенесён.
+    "auto_fix": lambda tab: tab._editor.auto_fix(),
     "optimize_all": lambda tab: tab._optimize_all_edges(),
     "batch_delete": lambda tab: tab._batch_delete(),
     "ocr_funnel": lambda tab: tab._editor._ocr_commit(

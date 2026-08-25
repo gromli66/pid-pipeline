@@ -12,7 +12,7 @@ waypoints, batch delete, auto-fix, perp stats.
 import logging
 
 from PySide6.QtWidgets import (
-    QHBoxLayout, QVBoxLayout, QWidget, QPushButton, QLabel,
+    QApplication, QHBoxLayout, QVBoxLayout, QWidget, QPushButton, QLabel,
     QSpinBox, QMenu, QButtonGroup,
 )
 from PySide6.QtCore import Slot, Qt, QThread
@@ -694,6 +694,35 @@ class AdvancedGraphTab(SimpleGraphTab):
         "Инструмент доступен только на холстах без раскладки."
     )
 
+    # 4.1 (К-1 / «НД5»): у «Авто-выравнивания» замок ОБРАТНЫЙ. За одной
+    # кнопкой стояли два движка, и на холсте БЕЗ раскладки это прежний
+    # `auto_fix_graph` — медианное выравнивание цепочек без единой проверки
+    # коллизий (замер §1.1 EDITOR_AFTER_LAYOUT: регрессия на 5 листах корпуса
+    # из 7, ±120 px дрейфа). Ветка достижима не в экзотике, а в обычном цикле:
+    # холст с `layout_applied=False` мог быть СОХРАНЁН на сервер прошлой
+    # сессией и грузится как актуальный (`base_graph_tab.py:963-977`), а любой
+    # сбой загрузки уводит в except-хвост (`:1022`) — там граф вообще без метки.
+    _NO_LAYOUT_LOCK_REASON = (
+        "Доступно только на холсте после авто-раскладки.\n"
+        "Здесь холст собран без неё, а прежнее авто-выравнивание двигало\n"
+        "узлы без проверки коллизий — на 5 листах корпуса из 7 это регрессия.\n"
+        "Вернитесь в «Контуры» и нажмите «Подтвердить» — это запустит пересчёт."
+    )
+
+    @staticmethod
+    def _lock_button(btn, locked: bool, reason: str):
+        """Запереть/отпустить кнопку, вернув ей исходную подсказку."""
+        if locked:
+            if btn.isEnabled():
+                btn.setProperty("_pre_lock_tooltip", btn.toolTip())
+            btn.setEnabled(False)
+            btn.setToolTip(reason)
+        elif not btn.isEnabled():
+            btn.setEnabled(True)
+            orig = btn.property("_pre_lock_tooltip")
+            if orig is not None:
+                btn.setToolTip(orig)
+
     def _apply_layout_lock(self):
         """Э4-00: после авто-раскладки авто-инструменты выравнивания выключены.
 
@@ -707,23 +736,22 @@ class AdvancedGraphTab(SimpleGraphTab):
         с откатом каждого хода. Замер по 19 холстам заказчика: косых 51 -> 12,
         побочных ухудшений нет ни на одном файле. «Оптимизация» остаётся
         запертой — её замер не переделывался.
+
+        2026-08-25 (4.1): «Авто-выравнивание» вернулось в замок ОБРАТНОЙ
+        стороной — оно запирается там, где раскладки НЕТ, потому что фолбэк-
+        ветка кнопки вела в прежний `auto_fix` и осталась достижимой
+        (см. `_NO_LAYOUT_LOCK_REASON`). Так у кнопки остаётся один движок.
         """
         from modules.graph.core import canvas_state
 
-        locked = False
+        has_layout = False
         if self._editor is not None:
-            locked = canvas_state.has_layout(getattr(self._editor, "graph_data", None) or {})
+            has_layout = canvas_state.has_layout(
+                getattr(self._editor, "graph_data", None) or {})
         for btn in (self.btn_optimize_edge, self.btn_optimize_all):
-            if locked:
-                if btn.isEnabled():
-                    btn.setProperty("_pre_lock_tooltip", btn.toolTip())
-                btn.setEnabled(False)
-                btn.setToolTip(self._LAYOUT_LOCK_REASON)
-            elif not btn.isEnabled():
-                btn.setEnabled(True)
-                orig = btn.property("_pre_lock_tooltip")
-                if orig is not None:
-                    btn.setToolTip(orig)
+            self._lock_button(btn, has_layout, self._LAYOUT_LOCK_REASON)
+        self._lock_button(self.btn_auto_fix, not has_layout,
+                          self._NO_LAYOUT_LOCK_REASON)
 
     # =================================================================
     # Оформление: + цвета рёбер по стадиям
@@ -847,30 +875,62 @@ class AdvancedGraphTab(SimpleGraphTab):
         """Кнопка «Авто-выравнивание» = Э4, адресное СГЛАЖИВАНИЕ.
 
         Решение заказчика 2026-08-02: «это вместо автовыравнивания кнопки».
-        Прежний auto_fix_graph (медианное выравнивание цепочек по центроидам,
-        без единой проверки коллизий) остаётся только на фолбэк-холстах без
-        раскладки — там он в родной среде; на холсте после раскладки он давал
-        регрессию на 5 листах корпуса из 7 (замер §1.1 плана), из-за чего и
-        был заперт замком Э4-00. Сглаживание работает иначе: адресно по
-        дефектам судьи, лестницей от бесплатных лекарств к сдвигу узла,
-        каждый ход под гейтом с откатом (modules/graph/core/edit_smooth).
+        Сглаживание адресно по дефектам судьи, лестницей от бесплатных
+        лекарств к сдвигу узла, каждый ход под гейтом с откатом
+        (modules/graph/core/edit_smooth).
+
+        4.1 (2026-08-25): второго движка за кнопкой больше НЕТ. Прежний
+        `auto_fix_graph` уходил в фолбэк-ветку `else` и двигал узлы без единой
+        проверки коллизий и без отката хода; ветка была живой (см.
+        `_NO_LAYOUT_LOCK_REASON`). Теперь холст без раскладки просто запирает
+        кнопку. Гейт стоит И здесь, а не только на кнопке: `_auto_fix` —
+        обычный метод вкладки, а обещание «прежний auto_fix не запускается
+        никогда» обязано держаться на КАЖДОМ пути, который его потребляет
+        (PROTOCOL §110.18), иначе оно верно ровно наполовину.
         """
         if not self._editor:
             return
-        try:
-            from modules.graph.core import canvas_state
+        from modules.graph.core import canvas_state
 
-            if canvas_state.has_layout(
-                    getattr(self._editor, "graph_data", None) or {}):
-                self._editor.smooth_canvas()
-            else:
-                self._editor.auto_fix()      # фолбэк-холст: родная среда
+        if not canvas_state.has_layout(
+                getattr(self._editor, "graph_data", None) or {}):
+            self.status_label.setText(
+                "Авто-выравнивание недоступно: холст собран без раскладки — "
+                "подтвердите «Контуры», это запустит пересчёт")
+            self._editor.setFocus()
+            return
+
+        # 4.4 (С8): сглаживание блокирующее — по 20 холстам корпуса медиана
+        # 2.8 с, худший 6.6 с (замер §MEFX4Bб), и окно всё это время не
+        # отвечает.
+        # ⛔ В фоновый поток не выносится: движок мутирует ЖИВУЮ модель и зовёт
+        # Qt-колбэки (`route_fn` трогает QGraphicsItem, снапшот — `_redraw_all`).
+        # Значит оператору остаётся честная надпись. `repaint()` — синхронная
+        # перерисовка ОДНОГО ярлыка; `processEvents()` здесь не заводится (в
+        # `ui/` его нет ни разу: он крутит общую очередь и доставляет чужие
+        # отложенные удаления, PROTOCOL §5).
+        self.status_label.setText("Сглаживание…")
+        self.status_label.repaint()
+        try:
+            # Курсор снимается СВОИМ finally, вложенным: иначе отчёт об отказе
+            # (модалка ниже) открывался бы под песочными часами — то самое
+            # «выглядит зависшей», от которого пункт и заводился.
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                stats = self._editor.smooth_canvas() or {}
+            finally:
+                QApplication.restoreOverrideCursor()
+            self._show_refusals(stats)
         except Exception as exc:
             # Здесь стоял traceback.print_exc(): в собранном .exe
             # (console=False) sys.stdout и sys.stderr = None, печать уходила
             # в никуда, логгер не звался вовсе — прирост файла лога на отказе
             # был 0 байт (замер §96). Оператору оставалась одна строка модалки.
             logger.error("Авто-выравнивание: отказ", exc_info=True)
+            # Строка «Сглаживание…» пережила бы отказ и осталась висеть —
+            # то же «выглядит зависшей», ради которого пункт и заводился.
+            self.status_label.setText(
+                "Сглаживание не выполнено — см. отчёт об ошибке")
             report_exception(
                 self, "Авто-выравнивание", exc,
                 canvas=self._canvas_snapshot(),
@@ -881,6 +941,30 @@ class AdvancedGraphTab(SimpleGraphTab):
             # В finally, а не в конце try: после отказа холст уже изменён,
             # шаг отмены открыт (пункт 1.1) — и нужен оператору тем более.
             self._editor.setFocus()
+
+    def _show_refusals(self, stats: dict):
+        """4.4 (К-4): назвать оператору, ПОЧЕМУ осталось несглаженное.
+
+        В строке стояло только «осталось N» — сколько, но не почему. Движок
+        с mefx-4a считает причину сам, тремя вёдрами (`REFUSAL_KINDS`), и
+        вёдра не декоративны: на 20 холстах корпуса БОЕВОЙ путь кнопки
+        (с `route_fn`) дал {нет кандидата 4, сверх бюджета 29, лестница
+        исчерпана 60}, отказ хотя бы один на 18 холстах из 20
+        (замер `MEASUREMENTS §MEFX4Bб`).
+
+        Перечень берётся ИЗ движка, а не переписывается сюда: появится
+        четвёртое ведро — оно придёт в строку само, без правки вкладки.
+        Дописываем к строке редактора, а не заменяем её: сводку ходов
+        («колен N, изломов M… осталось K») пишет `smooth_canvas` в этот же
+        ярлык через `status_callback`, и терять её незачем.
+        """
+        from modules.graph.core.edit_smooth import REFUSAL_KINDS
+
+        named = [f"{kind} {stats[kind]}" for kind in REFUSAL_KINDS
+                 if stats.get(kind)]
+        if named:
+            self.status_label.setText(
+                f"{self.status_label.text()}; не вышло: {', '.join(named)}")
 
     def _canvas_snapshot(self):
         """Холст таким, каким его видел оператор в момент отказа.

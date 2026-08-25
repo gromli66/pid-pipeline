@@ -200,14 +200,22 @@ def _last_step(editor):
 
 def test_auto_fix_fallback_branch_undo_returns_to_state_before_preview(
         fallback_tab, dialogs):
-    """Фолбэк-холст: Ctrl+Z после кнопки возвращает схему к состоянию до превью."""
+    """Движок цепочек: Ctrl+Z после него возвращает схему к состоянию до превью.
+
+    ⚠ НОСИТЕЛЬ ПЕРЕНЕСЁН (пункт 4.1, 2026-08-25): прежде инвариант проверялся
+    кнопкой вкладки на фолбэк-холсте, но кнопка туда больше не ведёт —
+    «Авто-выравнивание» без раскладки ЗАПЕРТО, движок цепочек из UI
+    недостижим. Сам инвариант жив: `drop_uncommitted_preview()` и парность
+    `SnapshotCommand` сидят внутри `auto_fix()`, поэтому носителем стал движок
+    напрямую. Ветку кнопки держит близнец ниже (`smooth_canvas`).
+    """
     ed = fallback_tab._editor
     geom0 = _geom(ed)
 
     _preview(fallback_tab)
-    fallback_tab._auto_fix()
+    ed.auto_fix()
 
-    assert dialogs == [], "кнопка упала в диалог — судить нечем"
+    assert dialogs == [], "движок упал в диалог — судить нечем"
     assert _last_step(ed) == "Auto-Fix (chains)", "ушли не в ту ветку кнопки"
     assert _size(ed) == pytest.approx((BASE_W, BASE_H), abs=TOL)
     assert _size(ed) != pytest.approx((SIDE, SIDE), abs=TOL)
@@ -305,7 +313,7 @@ def test_command_without_live_preview_is_untouched(fallback_tab, dialogs):
     applied = _geom(ed)
     assert _size(ed) == pytest.approx((SIDE, SIDE), abs=TOL)
 
-    fallback_tab._auto_fix()
+    ed.auto_fix()          # носитель перенесён пунктом 4.1, см. тест выше
 
     assert dialogs == []
     assert _size(ed) == pytest.approx((SIDE, SIDE), abs=TOL), \
