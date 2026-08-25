@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Слои холста «Ручной правки» и пересборка сцены — что происходит СЕГОДНЯ.
+"""Слои холста «Ручной правки» переживают пересборку сцены (блок 1, mefx-1).
 
-Характеризационный набор блока 1 линии «Ручная правка + FXML» (mefx-1),
-написан ДО правки: покрытия у этой ветки нет вовсе.
+Набор написан характеризационным (коммит «до правки») и здесь перевёрнут
+на целевое поведение — те же числа, но с другой стороны равенства.
 
 Жалоба оператора 2026-08-25: включил «Скины» → нажал «Светлый лист» или
 «Показать подложку» → скины пропали, а кнопка осталась нажатой; приходится
@@ -15,15 +15,18 @@
 Всё, что добавляет `AdvancedGraphEditor`, восстанавливает единственный метод
 `_redraw_all()` (advanced:558), и `setup_scene` его не зовёт.
 
+Лечение (1.1): `AdvancedGraphEditor.setup_scene` переопределён — `super()`
+плюс общий хвост `_redraw_overlays()`, который зовут ОБА пути перерисовки;
+живые оверлеи снимаются ДО `scene.clear()`.
+
 Что этот файл запирает (числа сняты замером `MEASUREMENTS §MEFX1`):
-* шесть слоёв живут на сцене, пока их не тронули: скины 3, сетка 27,
-  OCR 6, рамки «Размеров» 2, подсветка выделенного узла 1 и ребра 1;
-* после переключения листа/подложки на сцене от них НОЛЬ, а флаги
-  (`show_skins`, `grid_visible`, набор, выделение) живы — отсюда и горящая
-  кнопка при пустом холсте;
+* шесть слоёв на сцене: скины 3, сетка 27, OCR 6, рамки «Размеров» 2,
+  подсветка выделенного узла 1 и ребра 1 — и столько же ПОСЛЕ переключения
+  листа и подложки (до правки было ноль по всем шести при живых флагах);
+* инвариант 1.2: кнопка «Скины» нажата ⟺ флаг `show_skins` ⟺ скины на сцене;
 * три живых оверлея (правка полигона, ручки текст-блока, рамка добавления
-  блока) переживают `scene.clear()` ССЫЛКАМИ на мёртвые C++-объекты, и
-  следующий жест оператора падает `RuntimeError`.
+  блока) не оставляют ссылок на разрушенные объекты C++ — до правки
+  следующий жест оператора падал `RuntimeError`.
 
 ⛔ Переключатель сверяется с ПРОТИВОПОЛОЖНЫМ значением, а не с текущим:
 `set_light_theme(light)` при `light == self._light_theme` выходит сразу
@@ -61,12 +64,10 @@ ARMED = {
     "подсв.узла": 1,
     "подсв.ребра": 1,
 }
-PUSTO = {k: 0 for k in ARMED}
 
-#: Всего предметов на сцене: со всеми слоями и без них (замер §MEFX1).
+#: Всего предметов на сцене при всех слоях (замер §MEFX1; до правки
+#: переключение листа оставляло 13 — лист, подложку, рёбра и узлы).
 SCENE_ARMED = 53
-SCENE_BARE = 13
-SCENE_BARE_NO_BG = 12        # подложка снята — на один предмет меньше, это законно
 
 RESIZE_CLASS = "nasos"
 RESIZE_SET = {"pump_a", "pump_b"}
@@ -233,24 +234,35 @@ def test_переключатель_тем_же_значением_ничего_
     assert _layers(armed) == ARMED
 
 
-# ── что происходит сегодня ───────────────────────────────────────────────
+# ── слои переживают пересборку ───────────────────────────────────────────
 
-def test_светлый_лист_сегодня_уносит_слои(armed):
+def test_светлый_лист_слои_не_уносит(armed):
     armed.set_light_theme(False)
 
-    assert _layers(armed) == PUSTO
-    assert len(armed.scene.items()) == SCENE_BARE
+    assert _layers(armed) == ARMED
+    assert len(armed.scene.items()) == SCENE_ARMED
 
 
-def test_подложка_сегодня_уносит_слои(armed):
+def test_подложка_слои_не_уносит(armed):
     armed.set_background_visible(False)
 
-    assert _layers(armed) == PUSTO
-    assert len(armed.scene.items()) == SCENE_BARE_NO_BG
+    assert _layers(armed) == ARMED
+    assert len(armed.scene.items()) == SCENE_ARMED - 1      # ушла сама подложка
+
+
+def test_переключения_подряд_слои_не_копят_и_не_теряют(armed):
+    """Идемпотентность: четыре переключения дают ту же картинку, что и одно."""
+    armed.set_light_theme(False)
+    armed.set_background_visible(False)
+    armed.set_light_theme(True)
+    armed.set_background_visible(True)
+
+    assert _layers(armed) == ARMED
+    assert len(armed.scene.items()) == SCENE_ARMED
 
 
 def test_флаги_слоёв_переключение_переживают(armed):
-    """Данные живы — гибнет только картинка. Отсюда «кнопка горит, а скинов нет»."""
+    """Данные переживали пересборку и раньше — теперь картинка им отвечает."""
     armed.set_light_theme(False)
 
     assert armed.show_skins is True
@@ -260,8 +272,8 @@ def test_флаги_слоёв_переключение_переживают(arm
     assert len(armed.selected_edges) == 1
 
 
-def test_кнопка_скинов_сегодня_врёт(qapp, data_paths, monkeypatch):
-    """Третье звено инварианта 1.2: кнопка нажата, флаг True, скинов на сцене НЕТ."""
+def test_кнопка_скинов_не_врёт(qapp, data_paths, monkeypatch):
+    """Инвариант 1.2: кнопка нажата ⟺ флаг `show_skins` ⟺ скины на сцене."""
     from ui.tabs.base_graph_tab import BaseGraphTab
     from ui.tabs.advanced_graph_tab import AdvancedGraphTab
 
@@ -279,13 +291,18 @@ def test_кнопка_скинов_сегодня_врёт(qapp, data_paths, mon
 
         assert tab.btn_show_skins.isChecked() is True
         assert ed.show_skins is True
-        assert _alive(ed, _skin_items(ed)) == 0, "третье звено инварианта уже держится"
+        assert _alive(ed, _skin_items(ed)) == ARMED["скины"]
+
+        tab.btn_show_skins.setChecked(False)         # и обратно — обе полярности
+
+        assert ed.show_skins is False
+        assert _alive(ed, _skin_items(ed)) == 0
     finally:
         tab.cleanup()
         _dispose(ed, qapp)
 
 
-# ── живые оверлеи: ссылки на мёртвые объекты C++ ─────────────────────────
+# ── живые оверлеи: ни одной ссылки на разрушенный объект C++ ────────────
 
 def _poly_editor(tmp_path):
     """Редактор, у которого у узла есть контур — иначе правка полигона не откроется."""
@@ -297,36 +314,46 @@ def _poly_editor(tmp_path):
     return _new_editor(_write_data(tmp_path, g))
 
 
-def test_правка_полигона_сегодня_ломается_после_переключения_листа(qapp, tmp_path):
+def test_правка_полигона_переключение_листа_не_ломает(qapp, tmp_path):
+    """До правки первый же жест с вершиной падал `RuntimeError` (замер §MEFX1)."""
     ed = _poly_editor(tmp_path)
     try:
         ed._enter_polygon_editing_mode("pump_a")
         assert ed._poly_overlay is not None
+        before = list(ed.nodes["pump_a"]["segmentation"])
 
         ed.set_light_theme(False)
 
-        assert ed._poly_overlay is not None, "оверлей пережил пересборку ССЫЛКОЙ"
+        assert ed._poly_overlay is None, "мёртвый оверлей остался ссылкой"
+        assert ed._poly_edit_node is None
+        assert list(ed.nodes["pump_a"]["segmentation"]) == before, "контур тронут"
+
+        # Оператор входит в правку заново — и она работает.
+        ed._enter_polygon_editing_mode("pump_a")
         idx = ed._poly_overlay.find_vertex_at(200.0, 100.0)
         assert idx == 0, "вершина под курсором не найдена — жест не тот"
-        with pytest.raises(RuntimeError):
-            ed._poly_overlay.start_drag(idx)
-            ed._poly_overlay.drag_to(210.0, 110.0)
+        ed._poly_overlay.start_drag(idx)
+        ed._poly_overlay.drag_to(210.0, 110.0)
+        assert ed._poly_overlay.is_dragging
     finally:
         _dispose(ed, qapp)
 
 
-def test_ручки_текст_блока_сегодня_ломаются_после_переключения_листа(armed):
+def test_ручки_текст_блока_переключение_листа_не_ломает(armed):
     armed._show_ocr_block_resize("b1")
     assert armed._ocr_resize_overlay is not None
 
     armed.set_light_theme(False)
 
+    assert armed._ocr_resize_overlay is None, "мёртвые ручки остались ссылкой"
+    assert armed._ocr_resize_block_id is None
+
+    armed._show_ocr_block_resize("b1")             # показать заново — работает
     assert armed._ocr_resize_overlay is not None
-    with pytest.raises(RuntimeError):
-        armed._ocr_resize_overlay.hide()
+    armed._ocr_resize_overlay.hide()
 
 
-def test_рамка_добавления_блока_сегодня_ломается_после_переключения_листа(armed):
+def test_рамка_добавления_блока_переключение_листа_не_ломает(armed):
     rect = QGraphicsRectItem(QRectF(10.0, 10.0, 20.0, 20.0))
     armed.scene.addItem(rect)
     armed._ocr_add_preview = rect
@@ -334,6 +361,5 @@ def test_рамка_добавления_блока_сегодня_ломает�
 
     armed.set_light_theme(False)
 
-    assert armed._ocr_add_preview is not None
-    with pytest.raises(RuntimeError):
-        armed._ocr_add_preview.setRect(0.0, 0.0, 5.0, 5.0)
+    assert armed._ocr_add_preview is None, "мёртвая рамка осталась ссылкой"
+    assert armed._ocr_add_start is None
