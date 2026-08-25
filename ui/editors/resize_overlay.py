@@ -65,6 +65,12 @@ class ResizableNodeOverlay:
             min_size: Минимальный размер bbox по каждой оси
             on_resize: Callback(new_bbox) при каждом движении handle
             on_commit: Callback() при завершении drag (mouseRelease)
+
+        ⚠ Оверлей ОБЩИЙ с «Ручной правкой» и слоем ОКР — геометрия ручек у
+        всех троих одна: ручка сидит НА углу рамки. Сдвиг наружу пробовали в
+        пункте 4.5 (уводил ручку из-под порога клика по узлу) и сняли: в
+        растровой сцене он задан в её единицах, поэтому на зуме разлетался, а
+        корень был не в геометрии ручки — см. `SimpleGraphEditor._node_drag_allowed`.
         """
         self._scene = scene
         self._bbox = bbox.copy()
@@ -121,21 +127,21 @@ class ResizableNodeOverlay:
     # Handle positions
     # =================================================================
 
+    def handle_centres(self) -> dict:
+        """Центры четырёх ручек в координатах сцены — это углы рамки."""
+        x1, y1, x2, y2 = self._bbox
+        return {"tl": (x1, y1), "tr": (x2, y1),
+                "bl": (x1, y2), "br": (x2, y2)}
+
     def _update_handle_positions(self):
         """Обновить позиции 4 handles по текущему bbox."""
         if not self._handles:
             return
 
-        x1, y1, x2, y2 = self._bbox
         hs = self.HANDLE_SIZE
         half = hs / 2
-
-        positions = {
-            "tl": (x1 - half, y1 - half),
-            "tr": (x2 - half, y1 - half),
-            "bl": (x1 - half, y2 - half),
-            "br": (x2 - half, y2 - half),
-        }
+        positions = {c: (cx - half, cy - half)
+                     for c, (cx, cy) in self.handle_centres().items()}
 
         for corner, (px, py) in positions.items():
             if corner in self._handles:
@@ -151,17 +157,9 @@ class ResizableNodeOverlay:
         Returns:
             'tl' | 'tr' | 'bl' | 'br' | None
         """
-        hs = self.HANDLE_SIZE
-        threshold = hs + 4  # немного больше чем визуальный размер
+        threshold = self.HANDLE_SIZE + 4   # немного больше визуального размера
 
-        x1, y1, x2, y2 = self._bbox
-
-        corners = {
-            "tl": (x1, y1),
-            "tr": (x2, y1),
-            "bl": (x1, y2),
-            "br": (x2, y2),
-        }
+        corners = self.handle_centres()
 
         best_corner = None
         best_dist = threshold

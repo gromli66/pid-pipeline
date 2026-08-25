@@ -112,7 +112,8 @@ def connect_bbox_bbox(bbox_a: List[float], bbox_b: List[float], required_axis: s
     1. Перпендикуляр из центра A попадает на стенку B
     2. Перпендикуляр из центра B попадает на стенку A
     3. Перпендикуляр через overlap (не через центр)
-    4. Наименее диагональное соединение стенка-стенка
+    4. Наименее диагональное стенка-стенка; при равном отклонении от оси —
+       БЛИЖНЯЯ стенка (решение №7 редтима 2026-08-25)
 
     Returns: (point_a, point_b, connection_type)
     """
@@ -231,7 +232,7 @@ def connect_bbox_bbox(bbox_a: List[float], bbox_b: List[float], required_axis: s
         best = candidates[0]
         return (best[0], best[1], best[4])
 
-    # === ПРИОРИТЕТ 4: Наименее диагональное стенка-стенка ===
+    # === ПРИОРИТЕТ 4: Наименее диагональное стенка-стенка (ближняя) ===
     sides_a = [
         ((ax1, ay1), (ax2, ay1), 'top'),     # верх
         ((ax1, ay2), (ax2, ay2), 'bottom'),  # низ
@@ -245,7 +246,7 @@ def connect_bbox_bbox(bbox_a: List[float], bbox_b: List[float], required_axis: s
         ((bx2, by1), (bx2, by2), 'right'),
     ]
 
-    best_score = -1.0
+    best_dev = float('inf')
     best_dist = float('inf')
     best_pa, best_pb = (acx, acy), (bcx, bcy)
     best_type = "diagonal"
@@ -254,15 +255,15 @@ def connect_bbox_bbox(bbox_a: List[float], bbox_b: List[float], required_axis: s
         for (b1, b2, b_side) in sides_b:
             pa, pb, dist = _closest_points_between_segments(a1, a2, b1, b2)
             dx, dy = pb[0] - pa[0], pb[1] - pa[1]
-            score, axis = global_axis_perpendicularity(dx, dy)
+            dev, axis = axis_deviation(dx, dy)
 
             # Если задана required_axis, учитываем только совпадающие
             if required_axis is not None and axis != required_axis:
                 continue
 
-            # Приоритет: перпендикулярность, при равной — меньшее расстояние
-            if score > best_score or (abs(score - best_score) < 1e-9 and dist < best_dist):
-                best_score = score
+            # Приоритет: меньшее отклонение от оси, при равном — ближе
+            if dev < best_dev or (abs(dev - best_dev) < 1e-9 and dist < best_dist):
+                best_dev = dev
                 best_pa, best_pb = pa, pb
                 best_dist = dist
                 best_type = f"diagonal_{axis}"
@@ -282,7 +283,8 @@ def connect_bbox_polygon(bbox: List[float], polygon: List[float], required_axis:
     Логика приоритетов:
     1. Перпендикуляр из центра bbox попадает на ребро полигона
     2. Перпендикуляр из центра полигона попадает на стенку bbox
-    3. Наименее диагональное соединение стенка-ребро
+    3. Наименее диагональное соединение стенка-ребро; при равном отклонении
+       от оси — БЛИЖНЯЯ стенка (решение №7 редтима 2026-08-25)
 
     Returns: (point_on_bbox, point_on_polygon, info)
     """
@@ -390,7 +392,7 @@ def connect_bbox_polygon(bbox: List[float], polygon: List[float], required_axis:
         ((bx2, by1), (bx2, by2)),  # право
     ]
 
-    best_score = -1.0
+    best_dev = float('inf')
     best_result = None
     best_dist = float('inf')
 
@@ -398,19 +400,19 @@ def connect_bbox_polygon(bbox: List[float], polygon: List[float], required_axis:
         for p1, p2 in edges:
             pa, pb, dist = _closest_points_between_segments(b1, b2, p1, p2)
             dx, dy = pb[0] - pa[0], pb[1] - pa[1]
-            score, axis = global_axis_perpendicularity(dx, dy)
+            dev, axis = axis_deviation(dx, dy)
 
             # Если задана required_axis, учитываем только совпадающие
             if required_axis is not None and axis != required_axis:
                 continue
 
-            if score > best_score or (abs(score - best_score) < 1e-9 and dist < best_dist):
-                best_score = score
+            if dev < best_dev or (abs(dev - best_dev) < 1e-9 and dist < best_dist):
+                best_dev = dev
                 best_dist = dist
                 best_result = {
                     'bbox_point': pa,
                     'poly_point': pb,
-                    'perpendicularity': score,
+                    'perpendicularity': global_axis_perpendicularity(dx, dy)[0],
                     'axis': axis
                 }
 
@@ -462,7 +464,8 @@ def connect_polygon_polygon(polygon_a: List[float], polygon_b: List[float], requ
     Логика приоритетов:
     1. Перпендикуляр из центра A попадает на ребро B
     2. Перпендикуляр из центра B попадает на ребро A
-    3. Наименее диагональное соединение ребро-ребро
+    3. Наименее диагональное соединение ребро-ребро; при равном отклонении
+       от оси — БЛИЖНЕЕ ребро (решение №7 редтима 2026-08-25)
 
     Returns: (point_a, point_b, info)
     """
@@ -549,7 +552,7 @@ def connect_polygon_polygon(polygon_a: List[float], polygon_b: List[float], requ
         return (best[0], best[1], best[4])
 
     # === ПРИОРИТЕТ 3: Наименее диагональное ребро-ребро ===
-    best_score = -1.0
+    best_dev = float('inf')
     best_result = None
     best_dist = float('inf')
 
@@ -560,19 +563,19 @@ def connect_polygon_polygon(polygon_a: List[float], polygon_b: List[float], requ
                 continue
 
             dx, dy = pb[0] - pa[0], pb[1] - pa[1]
-            score, axis = global_axis_perpendicularity(dx, dy)
+            dev, axis = axis_deviation(dx, dy)
 
             # Если задана required_axis, учитываем только совпадающие
             if required_axis is not None and axis != required_axis:
                 continue
 
-            if score > best_score or (abs(score - best_score) < 1e-9 and dist < best_dist):
-                best_score = score
+            if dev < best_dev or (abs(dev - best_dev) < 1e-9 and dist < best_dist):
+                best_dev = dev
                 best_dist = dist
                 best_result = {
                     'point_a': pa,
                     'point_b': pb,
-                    'perpendicularity': score,
+                    'perpendicularity': global_axis_perpendicularity(dx, dy)[0],
                     'axis': axis
                 }
 
@@ -596,7 +599,8 @@ def connect_point_bbox(point: Tuple[float, float], bbox: List[float], required_a
     Логика приоритетов:
     1. Вертикаль x = px попадает на горизонтальную стенку bbox
     2. Горизонталь y = py попадает на вертикальную стенку bbox
-    3. Наименее диагональное соединение
+    3. Наименее диагональное соединение; при равном отклонении от оси —
+       БЛИЖНЯЯ стенка (решение №7 редтима 2026-08-25)
 
     Returns: (point, point_on_bbox, connection_type)
     """
@@ -633,7 +637,7 @@ def connect_point_bbox(point: Tuple[float, float], bbox: List[float], required_a
         best = candidates[0]
         return (best[0], best[1], best[4])
 
-    # === ПРИОРИТЕТ 3: Наименее диагональное ===
+    # === ПРИОРИТЕТ 3: Наименее диагональное (ближняя стенка) ===
     sides = [
         ((x1, y1), (x2, y1), 'top'),
         ((x1, y2), (x2, y2), 'bottom'),
@@ -641,7 +645,7 @@ def connect_point_bbox(point: Tuple[float, float], bbox: List[float], required_a
         ((x2, y1), (x2, y2), 'right'),
     ]
 
-    best_score = -1.0
+    best_dev = float('inf')
     best_dist = float('inf')
     best_point = ((x1 + x2) / 2, (y1 + y2) / 2)
     best_type = "diagonal"
@@ -649,14 +653,14 @@ def connect_point_bbox(point: Tuple[float, float], bbox: List[float], required_a
     for p1, p2, side_name in sides:
         cx, cy, dist = _point_to_segment_closest(px, py, p1[0], p1[1], p2[0], p2[1])
         dx, dy = cx - px, cy - py
-        score, axis = global_axis_perpendicularity(dx, dy)
+        dev, axis = axis_deviation(dx, dy)
 
         # Если задана required_axis, учитываем только совпадающие
         if required_axis is not None and axis != required_axis:
             continue
 
-        if score > best_score or (abs(score - best_score) < 1e-9 and dist < best_dist):
-            best_score = score
+        if dev < best_dev or (abs(dev - best_dev) < 1e-9 and dist < best_dist):
+            best_dev = dev
             best_dist = dist
             best_point = (cx, cy)
             best_type = f"diagonal_{axis}_to_{side_name}"
@@ -677,7 +681,8 @@ def connect_point_polygon(point: Tuple[float, float], polygon: List[float], requ
     Логика приоритетов:
     1. Вертикаль x = px пересекает ребро полигона
     2. Горизонталь y = py пересекает ребро полигона
-    3. Наименее диагональное соединение
+    3. Наименее диагональное соединение; при равном отклонении от оси —
+       БЛИЖНЯЯ стенка (решение №7 редтима 2026-08-25)
 
     Returns: (point, point_on_polygon, info)
     """
@@ -719,8 +724,8 @@ def connect_point_polygon(point: Tuple[float, float], polygon: List[float], requ
         best = candidates[0]
         return (best[0], best[1], best[4])
 
-    # === ПРИОРИТЕТ 3: Наименее диагональное ===
-    best_score = -1.0
+    # === ПРИОРИТЕТ 3: Наименее диагональное (ближняя стенка) ===
+    best_dev = float('inf')
     best_dist = float('inf')
     best_result = None
 
@@ -730,19 +735,19 @@ def connect_point_polygon(point: Tuple[float, float], polygon: List[float], requ
             continue
 
         dx, dy = cx - px, cy - py
-        score, axis = global_axis_perpendicularity(dx, dy)
+        dev, axis = axis_deviation(dx, dy)
 
         # Если задана required_axis, учитываем только совпадающие
         if required_axis is not None and axis != required_axis:
             continue
 
-        if score > best_score or (abs(score - best_score) < 1e-9 and dist < best_dist):
-            best_score = score
+        if dev < best_dev or (abs(dev - best_dev) < 1e-9 and dist < best_dist):
+            best_dev = dev
             best_dist = dist
             best_result = {
                 'poly_point': (cx, cy),
                 'edge_idx': i,
-                'perpendicularity': score,
+                'perpendicularity': global_axis_perpendicularity(dx, dy)[0],
                 'axis': axis,
             }
 
@@ -762,6 +767,32 @@ def connect_point_polygon(point: Tuple[float, float], polygon: List[float], requ
 # Порог "хорошей" перпендикулярности: 1° от оси
 # score = 1 - sin(угол), для 1°: 1 - sin(1°) ≈ 0.983
 PERPENDICULARITY_THRESHOLD = 1.0
+
+
+def axis_deviation(dx: float, dy: float) -> Tuple[float, str]:
+    """Отклонение направления от ближайшей оси В ПИКСЕЛЯХ + сама ось.
+
+    Судья фолбэка «наименее диагональное» (приоритет 3/4 всех `connect_*`).
+    Раньше там сравнивался НОРМИРОВАННЫЙ балл `global_axis_perpendicularity`
+    (`1 - |dy|/len`), а он монотонно растёт с расстоянием: при одном и том же
+    отклонении в 100 px дальняя стенка получала балл выше ближней и выигрывала.
+    Отсев по расстоянию срабатывал только при СОВПАДЕНИИ баллов до 1e-9, то
+    есть почти никогда. В «Контурах» ветка редкая, в «Проверке схемы» (партнёр
+    вне створа после ресайза) — типовая; гейты «мимо формы = 0» и «доля H/V»
+    её не ловят: конец на форме и труба осевая, просто идёт через весь узел.
+    Решение №7 редтима 2026-08-25: при равной осевой строгости предпочитать
+    БЛИЖНЮЮ стенку.
+
+    Ось выбирается тем же правилом, что и в нормированном судье
+    (горизонталь при |dy| <= |dx|), поэтому `required_axis` и имена
+    connection_type не меняются — меняется только выбор среди кандидатов.
+    """
+    adx, ady = abs(dx), abs(dy)
+    if adx < 1e-9 and ady < 1e-9:
+        return 0.0, 'point'
+    if ady <= adx:
+        return ady, 'horizontal'
+    return adx, 'vertical'
 
 
 def global_axis_perpendicularity(dx: float, dy: float) -> Tuple[float, str]:
@@ -1249,3 +1280,115 @@ def boundary_mark_points(outline: List[Tuple[float, float]],
     back = _walk(False)
     fwd = _walk(True)
     return list(reversed(back)) + [(cx, cy)] + fwd
+
+
+# =====================================================================
+# ДИСПЕТЧЕР ПОСАДКИ (блок 4 «точечных болей», 2026-08-25)
+# =====================================================================
+#
+# Выбор нужной `connect_*` по форме пары узлов жил внутри
+# `ContourEditor._recalculate_edges_for_node` (после выноса — contour_editor.py:282,
+# вызов диспетчера :308).
+# «Проверка схемы» повторить его не могла и сажала концы каноном
+# `modules/graph/core/seating`, из-за чего строгая ось терялась. Решение
+# Максима 2026-08-25 («да, как в Контурах», досрочное исполнение Г5/Г5а/Г5в
+# пунктов 8-2…8-4 дороги) — ветвление вынесено сюда без изменений и
+# используется обеими вкладками.
+
+
+def node_shape_is_polygon(node: dict) -> bool:
+    """Форма узла для ДИСПЕТЧЕРА — контур?
+
+    Сырой seg-чек легаси-ветвления, НЕ `BaseGraphEditor._node_has_polygon`:
+    тот дополнительно смотрит `_draws_polygon` (в «Ручной правке» у скинового
+    узла контур не рисуется). В «Проверке схемы» и «Контурах» ответы
+    совпадают; сводить их в одну функцию — работа пункта 10-1 дороги, здесь
+    ветвление обязано остаться тем же, что было, иначе вынос не бит-в-бит.
+    """
+    seg = node.get("segmentation")
+    return (node.get("type", "connector") == "equipment"
+            and bool(seg) and isinstance(seg, list) and len(seg) >= 6)
+
+
+def bboxes_overlap(bbox_a: List[float], bbox_b: List[float]) -> bool:
+    """Рамки перекрываются по ОБЕИМ осям?
+
+    Ровно условие вырожденной ветки `connect_bbox_bbox` (:225): на ней она
+    отдаёт пару центроидов, тип "overlapping". Живёт здесь, а не у
+    вызывающего, чтобы у условия и у ветки была ОДНА правда.
+    """
+    return (_segments_overlap_1d(bbox_a[0], bbox_a[2], bbox_b[0], bbox_b[2])[0]
+            and _segments_overlap_1d(bbox_a[1], bbox_a[3], bbox_b[1], bbox_b[3])[0])
+
+
+def _dispatch_bbox(node: dict, connector_radius: float) -> List[float]:
+    """Виртуальный bbox узла — копия `BaseGraphEditor._get_node_bbox`.
+
+    Единственная утечка self-состояния из редактора в диспетчер: радиус
+    виртуального бокса коннектора (`CONNECTOR_MARKER_RADIUS`, у растровых
+    вкладок 8, у холста 4.0). Поэтому он — ПАРАМЕТР, а не константа.
+    """
+    node_type = node.get("type", "connector")
+    bbox = node.get("bbox")
+    if node_type == "equipment" and bbox and len(bbox) == 4:
+        return bbox
+    cx, cy = node["centroid"][1], node["centroid"][0]
+    r = connector_radius
+    return [cx - r, cy - r, cx + r, cy + r]
+
+
+def dispatch_connect(src_node: dict, tgt_node: dict,
+                     connector_radius: float = 8.0
+                     ) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+    """Посадка пары узлов «как в Контурах»: строгая ось важнее центра.
+
+    Возвращает ((sx, sy), (tx, ty)) — точку на ИСТОЧНИКЕ и точку на ЦЕЛИ,
+    обе в (x, y). Формат `source_point`/`target_point` в графе — [y, x],
+    конверсию делает вызывающий.
+
+    ⚠ Порядок узлов ЗНАЧИМ и здесь НЕ нормализуется: `dispatch(s, t)` и
+    `dispatch(t, s)` дают разный ответ примерно на 45 % рёбер, потому что
+    ветвление спрашивает про источник раньше, чем про цель. Нормализация
+    внутри сломала бы бит-в-бит совпадение с «Контурами», и ни один тест
+    этого бы не заметил; кому нужна симметрия — нормализует пару В ВЫЗОВЕ
+    (так делает «Проверка схемы», см. `SimpleGraphEditor._seat_pair_dispatch`).
+
+    ⚠ Контракт ошибок: битую геометрию функция НЕ прячет — исключение уходит
+    вызывающему. «Контуры» ловят его и оставляют старые точки
+    (`contour_editor.py:317-321`), у `add_edge` старых точек нет, поэтому там
+    фолбэк — канонная посадка пары, а не тихий [0, 0] из `create_edge_data`.
+    """
+    src_seg = src_node.get("segmentation")
+    tgt_seg = tgt_node.get("segmentation")
+    src_bbox = _dispatch_bbox(src_node, connector_radius)
+    tgt_bbox = _dispatch_bbox(tgt_node, connector_radius)
+
+    src_has_poly = node_shape_is_polygon(src_node)
+    tgt_has_poly = node_shape_is_polygon(tgt_node)
+    src_is_connector = src_node.get("type", "connector") == "connector"
+    tgt_is_connector = tgt_node.get("type", "connector") == "connector"
+
+    # ⚠ В трёх ветках распаковка ПЕРЕВЁРНУТА (`p2, p1`): туда `connect_*`
+    # отдаёт первой точку ЦЕЛИ. Это главное место ошибки при переносе.
+    if src_is_connector and tgt_has_poly:
+        pt = (src_node["centroid"][1], src_node["centroid"][0])
+        p1, p2, _ = connect_point_polygon(pt, tgt_seg)
+    elif tgt_is_connector and src_has_poly:
+        pt = (tgt_node["centroid"][1], tgt_node["centroid"][0])
+        p2, p1, _ = connect_point_polygon(pt, src_seg)
+    elif src_is_connector:
+        pt = (src_node["centroid"][1], src_node["centroid"][0])
+        p1, p2, _ = connect_point_bbox(pt, tgt_bbox)
+    elif tgt_is_connector:
+        pt = (tgt_node["centroid"][1], tgt_node["centroid"][0])
+        p2, p1, _ = connect_point_bbox(pt, src_bbox)
+    elif src_has_poly and tgt_has_poly:
+        p1, p2, _ = connect_polygon_polygon(src_seg, tgt_seg)
+    elif src_has_poly:
+        p2, p1, _ = connect_bbox_polygon(tgt_bbox, src_seg)
+    elif tgt_has_poly:
+        p1, p2, _ = connect_bbox_polygon(src_bbox, tgt_seg)
+    else:
+        p1, p2, _ = connect_bbox_bbox(src_bbox, tgt_bbox)
+
+    return (p1, p2)

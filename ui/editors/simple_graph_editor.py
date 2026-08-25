@@ -22,9 +22,7 @@ from ui.editors.commands.simple_commands import (
     AddEquipmentNodeCommand, ResizeNodeCommand,
 )
 from ui.editors.graph_geometry import (
-    connect_bbox_bbox, connect_bbox_polygon,
-    connect_polygon_polygon, connect_point_bbox,
-    connect_point_polygon,
+    bboxes_overlap, dispatch_connect, node_shape_is_polygon,
 )
 from ui.editors.resize_overlay import ResizableNodeOverlay
 
@@ -79,26 +77,19 @@ class SimpleGraphEditor(BaseGraphEditor):
             self.update_status(f"Ребро уже существует: {node_a} — {node_b}")
             return False
 
-        # Получаем данные узлов
-        src = self.nodes[node_a]
-        tgt = self.nodes[node_b]
-
-        src_cx, src_cy = src['centroid'][1], src['centroid'][0]
-        tgt_cx, tgt_cy = tgt['centroid'][1], tgt['centroid'][0]
-
-        # Вычисляем connection points:
-        # 1. Сначала точку на цели (по центроиду источника)
-        # 2. Потом точку на источнике (по РЕАЛЬНОЙ точке на цели, не центроиду)
-        tgt_x, tgt_y = self.get_connection_point(node_b, src_cx, src_cy)
-        src_x, src_y = self.get_connection_point(node_a, tgt_x, tgt_y)
+        # Посадка «как в Контурах»: строгая ось важнее центра (решение
+        # Максима 2026-08-25). Прежняя цепочка get_connection_point теряла
+        # ось — конец садился на проекцию партнёра и кламп в угол.
+        src_point, tgt_point = self._seat_pair_dispatch(node_a, node_b)
 
         edge_data = self.model.create_edge_data(
             node_a, node_b,
-            source_point=[src_y, src_x],
-            target_point=[tgt_y, tgt_x],
+            source_point=src_point,
+            target_point=tgt_point,
         )
         edge_data['straight_line_distance'] = math.sqrt(
-            (tgt_x - src_x) ** 2 + (tgt_y - src_y) ** 2
+            (tgt_point[1] - src_point[1]) ** 2
+            + (tgt_point[0] - src_point[0]) ** 2
         )
 
         cmd = AddEdgeCommand(self.model, self, node_a, node_b, edge_data)
@@ -106,6 +97,141 @@ class SimpleGraphEditor(BaseGraphEditor):
         self.update_statistics()
         self.update_status(f"Добавлено ребро: {node_a} — {node_b}")
         return True
+
+    def _seat_pair_dispatch(self, node_a: str, node_b: str) -> tuple[list, list]:
+        """Посадка пары «как в Контурах» для «Проверки схемы» (2026-08-25).
+
+        Возвращает ([y, x], [y, x]) для node_a и node_b В ТОМ ПОРЯДКЕ, в
+        котором они переданы (у ребра это source и target).
+
+        Три вещи, которых нет внутри `dispatch_connect` и быть не должно:
+
+        1. **Нормализация пары.** Ветвление диспетчера спрашивает про
+           источник раньше, чем про цель, поэтому `dispatch(s,t)` и
+           `dispatch(t,s)` расходятся примерно на 45 % рёбер. Здесь пара
+           приводится к детерминированному ключу — тому же, что у
+           `GraphDataModel.edge_key` (min, max), — и роли раскладываются
+           обратно ПО ЭТОМУ КЛЮЧУ, а не по «кого ресайзили»: в
+           `_reseat_after_resize` тянуть могут любой из двух.
+        2. **Лифт letterbox (Г5в).** Конец из нутра рамки скинового узла
+           выталкивается на неё вдоль луча посадки — то же, что делает
+           `get_connection_point`. ⚠ Только концам из BBOX-веток: у узла с
+           контуром посадка идёт на контур, и лифт вытолкнул бы конец
+           с нарисованной формы на рамку. Ориентир (`toward`) — ВТОРОЙ конец
+           пары, а не центроид партнёра: луч осевой, ось сохраняется.
+           ⚠ Замер §P4.5: на полном корпусе лифт не сдвинул НИ ОДНОГО из
+           17 430 концов bbox-веток (5 065 из них скиновые). Он и не должен: все
+           bbox-ветки `connect_*` отдают точку УЖЕ на грани, а `seat_rect`
+           у редактора — весь bbox. Дефект bc41b77 приходил от КАНОНА
+           (letterbox внутри рамки), которого на этом пути больше нет.
+           Оставлен страховкой на случай ветки, отдающей точку внутри
+           рамки, — сторожа у него нет и быть не может, пока он ничего
+           не меняет. Снимать — вместе с каноном, отдельным решением.
+        3. **Вырожденная пара (Г5а).** У пересекающихся рамок
+           `connect_bbox_bbox` отдаёт пару ЦЕНТРОИДОВ
+           (`graph_geometry.py:225`, тип "overlapping"). В «Контурах» ветка
+           недостижима, в «Проверке схемы» дала бы конец в середине узла —
+           до 89 px мимо формы. Такая пара сажается каноном.
+
+        Контракт ошибок: диспетчер битую геометрию не прячет, а у нового
+        ребра старых точек нет — поэтому отказ ловится здесь и пара садится
+        каноном, а не тихим [0, 0] из `create_edge_data`. ⚠ Одного `except`
+        для этого мало: битые данные умеют не бросать вовсе, а тихо вернуть
+        бессмысленную точку (контур из шести нулей проходит мерку
+        `node_shape_is_polygon` и сажает конец в [0, 0]). Такие пары ловит
+        `_pair_is_degenerate` ДО вызова диспетчера — вход, а не исход.
+        """
+        first, second = self.model.edge_key(node_a, node_b)
+        n1, n2 = self.nodes[first], self.nodes[second]
+
+        try:
+            if self._pair_is_degenerate(first, second, n1, n2):
+                seats = self._seat_pair_canonical(first, second)
+            else:
+                p1, p2 = dispatch_connect(
+                    n1, n2, connector_radius=self.CONNECTOR_MARKER_RADIUS)
+                # (x, y) диспетчера → [y, x] графа; лифт тоже в [y, x].
+                s1, s2 = [p1[1], p1[0]], [p2[1], p2[0]]
+                if not node_shape_is_polygon(n1):
+                    s1 = self._lift_to_seat_rect(n1, s1, p2[0], p2[1])
+                if not node_shape_is_polygon(n2):
+                    s2 = self._lift_to_seat_rect(n2, s2, p1[0], p1[1])
+                seats = (s1, s2)
+        except (TypeError, KeyError, IndexError, ValueError,
+                ZeroDivisionError) as exc:
+            # Битая геометрия узла: нет центроида, короткий контур, вырожденная
+            # рамка. Шире не ловим — «Контуры» могут себе позволить общий
+            # `except` (у них есть старые точки), у нового ребра их нет.
+            import logging
+            logging.getLogger(__name__).debug(
+                "Посадка пары %s-%s диспетчером не удалась (%s) — "
+                "садим каноном", first, second, exc)
+            seats = self._seat_pair_canonical(first, second)
+
+        return seats if node_a == first else (seats[1], seats[0])
+
+    def _pair_is_degenerate(self, id_a: str, id_b: str,
+                            node_a: dict, node_b: dict) -> bool:
+        """Пара, которой диспетчер не может дать осмысленный ответ.
+
+        Два случая, оба ведут на канонную посадку:
+
+        1. **Г5а** — обе рамки (ни коннектора, ни контура) и перекрытие по
+           ОБЕИМ осям: условие вырожденной ветки `connect_bbox_bbox`
+           повторено буквально, там она отдаёт пару ЦЕНТРОИДОВ.
+        2. **Контур мимо своей рамки** — у узла есть `segmentation` по мерке
+           диспетчера, но лежит он ВНЕ собственного bbox. Тогда полигонная
+           ветка честно вернёт точку на этом контуре, исключения не будет, и
+           `except` ниже не сработает: ребро получило бы тихий [0, 0] (мерка
+           `node_shape_is_polygon` — шесть значений, а `[0,0,0,0,0,0]` их
+           даёт). Замер: на корпусе таких узлов 0 из 47 с контуром, то есть
+           вход закрыт бесплатно; без этой ветки докстрока `_seat_pair_dispatch`
+           обещала бы то, чего код не делает.
+        """
+        for n in (node_a, node_b):
+            if self._contour_misses_own_bbox(n):
+                return True
+        for n in (node_a, node_b):
+            if n.get('type', 'connector') == 'connector' or node_shape_is_polygon(n):
+                return False
+        return bboxes_overlap(self._get_node_bbox(id_a),
+                              self._get_node_bbox(id_b))
+
+    @staticmethod
+    def _contour_misses_own_bbox(node: dict) -> bool:
+        """Контур узла не пересекается с его собственной рамкой?
+
+        Допуск не нужен: речь не о шуме в пиксель (у корпусных контуров
+        вершины выходят за рамку на доли пикселя — это законно), а о контуре
+        в совершенно другом месте листа.
+        """
+        if not node_shape_is_polygon(node):
+            return False
+        bb = node.get('bbox')
+        if not bb or len(bb) != 4:
+            return False
+        seg = node['segmentation']
+        xs, ys = seg[0::2], seg[1::2]
+        return not bboxes_overlap([min(xs), min(ys), max(xs), max(ys)], bb)
+
+    def _seat_pair_canonical(self, id_a: str, id_b: str) -> tuple[list, list]:
+        """Канонная посадка пары — ЦЕПОЧКОЙ, как прежний `add_edge`.
+
+        Точка на втором узле считается от центроида первого, а точка на
+        первом — от УЖЕ ПОСЧИТАННОЙ точки на втором. От порядка кликов
+        результат не зависит: пара сюда приходит уже нормализованной
+        (`_seat_pair_dispatch`), поэтому «первый» определён детерминированно.
+
+        ⚠ Была симметричная редакция (оба конца от центроидов) — она читалась
+        аккуратнее, но КЛАМПИЛА конец в угол чаще прежнего кода: на корпусе
+        концов в углу 7 против 3 у цепочки (замер §P4-rev-fix.2, 33 вырожденные
+        пары). Клампить в угол — ровно тот дефект, который пункт 4.4.1 и
+        лечит, поэтому фолбэк держит качество прежнего пути, а не красоту.
+        """
+        ca = self.nodes[id_a]['centroid']
+        bx, by = self.get_connection_point(id_b, ca[1], ca[0])
+        ax, ay = self.get_connection_point(id_a, bx, by)
+        return ([ay, ax], [by, bx])
 
     def remove_edge(self, node_a: str, node_b: str) -> bool:
         """Удалить ребро между узлами."""
@@ -271,6 +397,30 @@ class SimpleGraphEditor(BaseGraphEditor):
     # Resize — 4 corner handles для equipment-узлов
     # =================================================================
 
+    def _node_drag_allowed(self) -> bool:
+        """В «Проверке схемы» Ctrl+ЛКМ по узлу НИКОГДА не начинает тягу.
+
+        Перемещения узлов на этой вкладке не существует как жеста: базовые
+        `_start_ctrl_drag` / `_update_ctrl_drag` / `_end_ctrl_drag` —
+        заглушки `pass` (`base_graph_editor.py:1760-1771`), реализация только
+        в «Ручной правке». А базовый диспетчер, увидев узел под курсором и
+        разрешённую тягу, уводит нажатие в ОТЛОЖЕННОЕ решение «клик или тяга»
+        (`base_graph_editor.py:1716-1726`) и отдаёт инструменту синтетический
+        клик `event=None` уже на отпускании. Такой клик не открывает тягу за
+        ручку размера (правило 1.8) — то есть разрешённая, но не
+        реализованная тяга ВОРОВАЛА нажатия у единственного жеста, которому
+        они нужны.
+
+        Отсюда доступность ручек 90.4 % вместо потолка (замер §P4.6). Первая
+        редакция пункта 4.5 лечила следствие — уводила ручки на 22 px наружу,
+        из-под порога клика; на зуме этот сдвиг разлетался, ручки повисали
+        далеко от рамки (приёмка глазами Максима 2026-08-25). Решение Максима:
+        чинить корень — вернуть ручки на углы и закрыть тягу здесь.
+        ⚠ Это РАЗВОРОТ буквы пункта («диспетчер нажатия не переписывать»);
+        сам диспетчер не тронут, переопределён его виртуальный крючок.
+        """
+        return False
+
     def _enter_resize_mode(self, node_id: str):
         """Переключиться в resize_node и показать overlay."""
         # Вход из самого resize_node (повторный двойной клик, добавление узла
@@ -384,26 +534,27 @@ class SimpleGraphEditor(BaseGraphEditor):
     def _reseat_after_resize(self, node_id: str):
         """База: пересадка концов рёбер узла после resize (point-to-point).
 
-        ВНИМАНИЕ: переписывает ОБА конца по центроидам — легаси-контракт
-        простого редактора; вход с ПИНОМ (Э5) держится в пине. «Ручная
-        правка» (AdvancedGraphEditor) переопределяет: движок, только
-        ближний конец (Э2d)."""
+        ВНИМАНИЕ: переписывает ОБА конца — легаси-контракт простого
+        редактора; вход с ПИНОМ (Э5) держится в пине. «Ручная правка»
+        (AdvancedGraphEditor) переопределяет: движок, только ближний конец
+        (Э2d).
+
+        С 2026-08-25 пара сажается диспетчером «Контуров»
+        (`_seat_pair_dispatch`), а не парой get_connection_point по
+        центроидам: ресайз выводит партнёра из створа, и канон клампил конец
+        в угол вместо того, чтобы удержать ось."""
         from ui.editors import port_model
         for edge in self.edges_data:
             if edge['source'] == node_id or edge['target'] == node_id:
                 other_id = edge['target'] if edge['source'] == node_id else edge['source']
                 if self.nodes.get(other_id) is None:
                     continue
-                sp_x, sp_y = self.get_connection_point(edge['source'],
-                    self.nodes[edge['target']]['centroid'][1],
-                    self.nodes[edge['target']]['centroid'][0])
-                tp_x, tp_y = self.get_connection_point(edge['target'],
-                    self.nodes[edge['source']]['centroid'][1],
-                    self.nodes[edge['source']]['centroid'][0])
+                seat_s, seat_t = self._seat_pair_dispatch(edge['source'],
+                                                          edge['target'])
                 ps = port_model.pinned_port(self.nodes.get(edge['source']), edge)
                 pt = port_model.pinned_port(self.nodes.get(edge['target']), edge)
-                edge['source_point'] = [ps[1], ps[0]] if ps else [sp_y, sp_x]
-                edge['target_point'] = [pt[1], pt[0]] if pt else [tp_y, tp_x]
+                edge['source_point'] = [ps[1], ps[0]] if ps else seat_s
+                edge['target_point'] = [pt[1], pt[0]] if pt else seat_t
                 key = self.model.edge_key(edge['source'], edge['target'])
                 self._update_edge_path(key)
 
