@@ -4,8 +4,15 @@ Segmentation API — запуск цепочки: сегментация → с�
 POST /{uid}/segment — основная точка входа.
 Запускает полную цепочку обработки. При повторном вызове на ERROR
 определяет error_stage и перезапускает с нужного шага.
+
+Отправку держит `dispatch_segmentation` — ЕДИНСТВЕННАЯ точка постановки
+сегментации. Её зовут отсюда (кнопка «Выделение труб») и `app/api/cvat.py`
+(автозапуск после подтверждения разметки, Б8 плана точечных болей): конвейер
+после CVAT двигает сервер, а не десктоп, иначе закрытая вкладка останавливает
+схему навсегда.
 """
 
+import asyncio
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -40,6 +47,91 @@ _ALLOWED_STATUSES = {
 }
 
 
+def _resolve_restart(diagram: Diagram):
+    """С какого шага перезапускать: (restart_from, целевой статус, задача).
+
+    Полный запуск (и retry с шага сегментации/направления) начинается с
+    классификации направления, затем сегментация: направление пишет `direction`
+    в `coco_validated.json` ДО генерации `node_mask` — единый источник правды
+    для маски и графа. На частичных retry (skeleton/junction) цепочка не нужна,
+    диспетчится один таск.
+    """
+    if diagram.status == DiagramStatus.ERROR and diagram.error_stage:
+        stage = diagram.error_stage
+        if stage in _STAGE_DISPATCH:
+            task_name, target_status = _STAGE_DISPATCH[stage]
+            return stage, target_status, task_name
+    return "segmenting", DiagramStatus.SEGMENTING, _SEGMENT_TASK
+
+
+async def dispatch_segmentation(db: AsyncSession, diagram: Diagram) -> dict:
+    """Перевести диаграмму в целевой статус и поставить сегментацию.
+
+    Единственная точка отправки сегментации: сюда сведены и кнопка
+    «Выделение труб», и автозапуск после подтверждения разметки CVAT (Б8).
+    Новых сырых `send_task` правка не заводит — прежний вызов `/segment`
+    переехал внутрь.
+
+    Отправка идёт через `asyncio.to_thread`: `send_task`/`apply_async`
+    синхронные, а на бою мёртвый result-бэкенд держит их до ~64 с
+    (`app/services/dispatch.py`), то есть весь event loop сервера.
+
+    Возвращает `{"task_id", "error", "restart_from", "target_status"}`.
+    `task_id is None` означает, что отправка не удалась И состояние ВЕРНУТО
+    к пред-вызовному (все три поля). Что ответить оператору, решает
+    вызывающий: `/segment` отдаёт 503, `cvat.py` — 200 с warning, потому что
+    подтверждение разметки уже состоялось и валить его брокером нельзя.
+    """
+    restart_from, target_status, task_name = _resolve_restart(diagram)
+
+    # Обновляем статус ПЕРЕД запуском task (короткая транзакция).
+    # Состояние до перехода держим целиком: если отправка упадёт, вернуть надо
+    # всё, что переход записал, а не один статус — иначе диаграмма останется
+    # в ERROR с пустым error_stage, и клиент погасит ВСЕ кнопки
+    # (ui/widgets/diagram_workspace.py: _error_key).
+    previous_state = (diagram.status, diagram.error_stage, diagram.error_message)
+    diagram.status = target_status
+    diagram.error_message = None
+    diagram.error_stage = None
+    await db.commit()
+
+    from worker.celery_app import celery_app
+    from celery import chain
+
+    uid = str(diagram.uid)
+    project_code = diagram.project_code
+
+    def _send():
+        # Обе ветки отправки — под одной защитой: цепочка уходит в брокер тем же
+        # одним сообщением, что и одиночная задача, и падает так же.
+        if restart_from in ("segmenting", "direction_classification"):
+            return chain(
+                celery_app.signature(_DIRECTION_TASK, args=[uid], immutable=True),
+                celery_app.signature(_SEGMENT_TASK, args=[uid, project_code],
+                                     immutable=True),
+            ).apply_async()
+        return celery_app.send_task(task_name, args=[uid, project_code])
+
+    try:
+        async_result = await asyncio.to_thread(_send)
+    except Exception as exc:
+        # Брокер недоступен — возвращаем состояние, каким оно было до вызова:
+        # работа не начиналась, откатывать некуда, кроме исходной точки.
+        # След — ДО коммита возврата: на бою БД падает вместе с брокером, и тогда
+        # исключение коммита унесло бы наружу единственную запись об отказе ОТПРАВКИ.
+        logger.exception(
+            "Отправка сегментации не удалась (%s) — возвращаю состояние в '%s'",
+            exc, previous_state[0].value, extra={"event": "dispatch_failed"},
+        )
+        diagram.status, diagram.error_stage, diagram.error_message = previous_state
+        await db.commit()
+        return {"task_id": None, "error": exc,
+                "restart_from": restart_from, "target_status": target_status}
+
+    return {"task_id": async_result.id, "error": None,
+            "restart_from": restart_from, "target_status": target_status}
+
+
 @router.post("/{uid}/segment")
 async def start_segmentation(
     uid: UUID,
@@ -62,6 +154,22 @@ async def start_segmentation(
     if not diagram:
         raise HTTPException(status_code=404, detail="Diagram not found")
 
+    # ---- Идемпотентный выход: цепочка уже идёт (образец — app/api/graph.py:61-66)
+    # Сегментацию теперь ставит СЕРВЕР сразу после подтверждения разметки (Б8),
+    # поэтому необновлённый десктоп зовёт `/segment` из `segmenting` на КАЖДОМ
+    # счастливом пути. До этой ветки он получал 400 и показывал оператору окно
+    # ошибки (`ui/widgets/diagram_workspace.py: _start_segmentation`) там, где
+    # всё в порядке. Заодно закрывается и настоящий дубль: гард самой задачи
+    # (`worker/tasks/segmentation.py:282`) обе копии пропускает.
+    if diagram.status == DiagramStatus.SEGMENTING:
+        return {
+            "status": "segmenting",
+            "message": "Segmentation already in progress",
+            "task_id": None,
+            "diagram_uid": str(uid),
+            "restart_from": None,
+        }
+
     if diagram.status not in _ALLOWED_STATUSES:
         raise HTTPException(
             status_code=400,
@@ -71,70 +179,18 @@ async def start_segmentation(
             ),
         )
 
-    # Определяем, с какого шага запускать
-    restart_from = "segmenting"
-    target_status = DiagramStatus.SEGMENTING
-    task_name = "worker.tasks.segmentation.task_segment_pipes"
-
-    if diagram.status == DiagramStatus.ERROR and diagram.error_stage:
-        stage = diagram.error_stage
-        if stage in _STAGE_DISPATCH:
-            task_name, target_status = _STAGE_DISPATCH[stage]
-            restart_from = stage
-
-    # Обновляем статус
-    # Состояние до перехода держим целиком: если отправка упадёт, вернуть надо
-    # всё, что переход записал, а не один статус — иначе диаграмма останется
-    # в ERROR с пустым error_stage, и клиент погасит ВСЕ кнопки
-    # (ui/widgets/diagram_workspace.py: _error_key).
     obs.bind(uid=str(uid), phase="segmentation")
-    previous_state = (diagram.status, diagram.error_stage, diagram.error_message)
-    diagram.status = target_status
-    diagram.error_message = None
-    diagram.error_stage = None
-    await db.commit()
+    sent = await dispatch_segmentation(db, diagram)
 
-    # Dispatch task через send_task (без импорта worker модулей)
-    from worker.celery_app import celery_app
-    from celery import chain
-
-    # Полный запуск (и retry с шага сегментации/направления) начинается с
-    # классификации направления, затем сегментация. Направление пишет
-    # direction в coco_validated.json ДО генерации node_mask — единый источник
-    # правды для node_mask и графа. На частичных retry (skeleton/junction)
-    # цепочка не нужна — диспетчим один таск как раньше.
-    # Обе ветки отправки — под одной защитой: цепочка уходит в брокер тем же
-    # одним сообщением, что и одиночная задача, и падает так же.
-    try:
-        if restart_from in ("segmenting", "direction_classification"):
-            async_result = chain(
-                celery_app.signature(_DIRECTION_TASK, args=[str(uid)], immutable=True),
-                celery_app.signature(_SEGMENT_TASK, args=[str(uid), diagram.project_code], immutable=True),
-            ).apply_async()
-        else:
-            async_result = celery_app.send_task(
-                task_name,
-                args=[str(uid), diagram.project_code],
-            )
-    except Exception as exc:
-        # Брокер недоступен — возвращаем состояние, каким оно было до вызова:
-        # работа не начиналась, откатывать некуда, кроме исходной точки.
-        # След — ДО коммита возврата: на бою БД падает вместе с брокером, и тогда
-        # исключение коммита унесло бы наружу единственную запись об отказе ОТПРАВКИ.
-        logger.exception(
-            "Отправка сегментации не удалась (%s) — возвращаю состояние в '%s'",
-            exc, previous_state[0].value, extra={"event": "dispatch_failed"},
-        )
-        diagram.status, diagram.error_stage, diagram.error_message = previous_state
-        await db.commit()
+    if sent["task_id"] is None:
         raise HTTPException(
             status_code=503,
-            detail=f"Worker unavailable: {exc}",
+            detail=f"Worker unavailable: {sent['error']}",
         )
 
     return {
-        "status": target_status.value,
-        "task_id": async_result.id,
+        "status": sent["target_status"].value,
+        "task_id": sent["task_id"],
         "diagram_uid": str(uid),
-        "restart_from": restart_from,
+        "restart_from": sent["restart_from"],
     }

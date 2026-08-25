@@ -62,14 +62,19 @@ Enum `DiagramStatus` определён в `app/models/diagram.py`. Все зн�
 stateDiagram-v2
     [*] --> uploaded
 
-    uploaded --> detecting : API: start_detection
+    uploaded --> cleaning_frame : API: start_frame_removal
+    cleaning_frame --> frame_cleaned : API: complete / skip
+    uploaded --> frame_cleaned : API: skip («рамки нет»)
+
+    frame_cleaned --> detecting : auto-dispatch из complete/skip (Б9)
+    error --> detecting : API: start_detection (кнопка «Поиск элементов»)
     detecting --> detected : Worker: task_detect
     detecting --> error : Worker: fail
 
     detected --> validating_bbox : API: open_cvat_validation
     validating_bbox --> validated_bbox : API: fetch_cvat_annotations
 
-    validated_bbox --> segmenting : API: start_segmentation
+    validated_bbox --> segmenting : auto-dispatch из fetch_cvat_annotations (Б8)
     segmenting --> skeletonizing : Worker: auto-chain
     skeletonizing --> skeletonized : Worker: task_skeletonize
     segmenting --> error : Worker: fail
@@ -111,13 +116,32 @@ stateDiagram-v2
     ocr_processing --> error : Worker: fail
     generating_fxml --> error : Worker: fail
 
-    error --> detecting : API: start_detection (повтор, error_stage=detecting)
     error --> uploaded : Rollback
     error --> detected : Rollback
     error --> validated_bbox : Rollback
 ```
 
 **Примечание:** Три ветки после `validated_junctions` (graph, contours, OCR) запускаются параллельно. `DiagramStatus` отражает **основную ветку** (graph). OCR и SAM2 отслеживаются по наличию артефактов — см. [ARCHITECTURE.md §7](ARCHITECTURE.md#7-параллелизм).
+
+**Детекция стартует с `frame_cleaned`, а не с `uploaded`, и стартует АВТОМАТИЧЕСКИ.**
+Прежняя редакция этого раздела рисовала `uploaded → detecting` и не знала стадии очистки
+рамки вовсе. Два ручных этапа больше не ждут кнопки: подтверждение рамки
+(`app/api/frame.py`: `/complete` и `/skip`) само ставит `task_detect_yolo`, подтверждение
+разметки (`app/api/cvat.py`: `fetch_cvat_annotations`) — цепочку «направление →
+сегментация». До этого следующее звено двигал только десктоп, и закрытая вкладка или
+упавший клиент останавливали схему навсегда.
+
+Модель детекции автозапуск НЕ выбирает: `model_id=None`, дефолт разрешает сама задача
+(`project_config.detection.default_model`). Ручной выбор другой модели остался там же —
+клик по пройденному «Поиск элементов» после отката к рамке; **после отката сервер
+не автозапускает ничего**, автодиспатч живёт только в `/complete` и `/skip`.
+
+Отправка тут **best-effort и переходом не является**: отказ брокера не валит
+подтверждение этапа. Состояние возвращается в `frame_cleaned` / `validated_bbox`, ответ
+200 (а не 503, как у ручного запуска: там оператор нажал кнопку и ждёт ответа именно про
+неё), в логе — след с `uid` и `event=dispatch_failed`, кнопка своего этапа рабочая.
+Известная граница: одновременные `/complete` и `/skip` (дабл-клик оператора) успевают
+разойтись до commit и дают две детекции — принято письменно, хозяин пункт 6-9 дороги.
 
 ---
 
@@ -127,12 +151,16 @@ stateDiagram-v2
 
 | Переход | Источник | Код |
 |---------|---------|-----|
-| `frame_cleaned → detecting` | API | `app/api/detection.py`: `start_detection()` |
+| `uploaded → cleaning_frame` | API | `app/api/frame.py`: `start_frame_removal()`, а также `save_cleaned_image()` |
+| `cleaning_frame\|uploaded → frame_cleaned` | API | `app/api/frame.py`: `complete_frame_removal()` / `skip_frame_removal()` |
+| `frame_cleaned → detecting` | API | auto-dispatch из `complete_frame_removal()`/`skip_frame_removal()` → `app/api/detection.py`: `dispatch_detection()` |
+| `frame_cleaned → detecting` | API | `app/api/detection.py`: `start_detection()` — ручной запуск (кнопка «Поиск элементов») |
 | `error → detecting` | API | `app/api/detection.py`: `start_detection()` при `error_stage == "detecting"` |
 | `detecting → detected` | Worker | `worker/tasks/detection.py`: `task_detect()` |
 | `detected → validating_bbox` | API | `app/api/cvat.py`: `open_cvat_validation()` |
 | `validating_bbox → validated_bbox` | API | `app/api/cvat.py`: `fetch_cvat_annotations()` |
-| `validated_bbox → segmenting` | API | `app/api/segmentation.py`: `start_segmentation()` |
+| `validated_bbox → segmenting` | API | auto-dispatch из `fetch_cvat_annotations()` → `app/api/segmentation.py`: `dispatch_segmentation()` |
+| `validated_bbox → segmenting` | API | `app/api/segmentation.py`: `start_segmentation()` — ручной запуск (кнопка «Выделение труб») |
 | `error → segmenting` | API | `app/api/segmentation.py`: `start_segmentation()` — по `error_stage` выбирает шаг перезапуска; `direction_classification` и `segmenting` заводят цепочку `task_classify_direction → task_segment_pipes` заново |
 | `segmenting → skeletonizing` | Worker | `worker/tasks/segmentation.py`: auto-chain |
 | `skeletonizing → skeletonized` | Worker | `worker/tasks/skeleton.py`: `task_skeletonize()` |
@@ -499,6 +527,33 @@ if diagram.status not in (
 ```
 
 Если chain уже ушёл вперёд — endpoint возвращает успех без изменения статуса и без повторного dispatch (`already_past` проверка).
+
+**Ранний выход «уже идёт».** Три эндпоинта запуска отвечают 200 без перехода и без
+отправки, когда статус УЖЕ целевой: `app/api/graph.py` (`building_graph`),
+`app/api/segmentation.py` (`segmenting`) и `app/api/frame.py` (`frame_cleaned` —
+в обеих дверях, `/complete` и `/skip`). Ветка сегментации заведена вместе с Б8: конвейер
+после CVAT двигает сервер, поэтому необновлённый десктоп зовёт `/segment` из `segmenting`
+на КАЖДОМ счастливом пути и до этого получал 400 с окном ошибки там, где всё в порядке.
+
+**Заслон дубля сборки графа (Б13).** Точек диспатча `task_build_graph` ровно две —
+`app/api/graph.py: start_graph_building()` и `app/api/validation.py:
+complete_junction_validation()`, — и обе перед отправкой спрашивают
+`app/api/graph.py: running_graph_build()`: есть ли RUNNING-строка
+`ProcessingStage(graph_building)` МОЛОЖЕ `time_limit` задачи (1800 с, по `started_at`).
+Есть — задача не отправляется, ответ «уже собирается». Статуса тут мало: задача может
+бежать, когда диаграмма уже `built` или откачена оператором назад (замер 1-23: 7 пар
+одновременного `graph_building` на 3 uid, 344.5 с CPU впустую; гард самой задачи обе
+копии пропускает).
+
+Предел возраста — не украшение: воркер, убитый hard limit'ом или OOM, не исполняет
+`stage.fail()`, и RUNNING-строка живёт вечно; без предела она заперла бы пересборку
+навсегда, а снять её нечем — откат стадий не трогает (прецедент без предела —
+`app/services/layout_dispatch.py`).
+
+⚠ Заслон **частичный**: PENDING-строк при диспатче никто не создаёт — строка появляется,
+когда воркер БЕРЁТ задачу, — поэтому всё окно очереди (на CPU это десятки минут; именно
+там родились замеренные пары) он не видит. Полное закрытие (PENDING-строка при диспатче
+плюс `stage_id` в задаче, паттерн `layout_dispatch`) — за пунктом 6-9 дороги.
 
 **Примечание:** Каждый `complete_*` endpoint имеет свой набор допустимых статусов. Например, `complete_junction_validation()` помимо прямых статусов включает `VALIDATED_JUNCTIONS`, `BUILDING_GRAPH`, `BUILT`, `VALIDATED_GRAPH`, `CONTOURS_EXTRACTED`, `CONTOURS_VALIDATED`, `OCR_COMPLETED`. Полные списки — в исходном коде `app/api/validation.py`.
 

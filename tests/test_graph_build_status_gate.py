@@ -35,12 +35,14 @@
 """
 import asyncio
 import uuid
+from datetime import datetime, timedelta
 
 import pytest
 from fastapi import HTTPException
 
-from app.api.graph import start_graph_building
+from app.api.graph import GRAPH_BUILD_TIME_LIMIT_SECONDS, start_graph_building
 from app.models import Artifact, ArtifactType, Diagram, DiagramStatus
+from app.models.stage import ProcessingStage, StageStatus, StageType
 
 UID = uuid.UUID("d74eb9f1-aaaa-bbbb-cccc-ddddeeeeffff")
 BUILD_TASK = "worker.tasks.graph.task_build_graph"
@@ -49,6 +51,15 @@ SKELETON_TASK = "worker.tasks.skeleton.task_skeletonize_simple"
 # Размер машины. Абсолютное число: новый статус обязан пройти через эту таблицу,
 # а не проскочить мимо неё молча.
 STATUS_COUNT = 31
+
+# Б13 (блок 2 плана точечных болей 2026-08-25): предел возраста живой строки
+# сборки. Абсолютные числа, снятые ЧТЕНИЕМ `worker/tasks/graph.py`
+# (`time_limit=1800`), а не из проверяемой константы — вычисленный вход
+# остался бы зелёным при любом её значении (`PROTOCOL §3`). Порог заперт
+# с двух сторон: молодая строка блокирует, старая — нет.
+BUILD_TIME_LIMIT = 1800
+FRESH_AGE = 60      # строка живая: воркер считает
+STALE_AGE = 5400    # строка-сирота: воркер убит hard limit'ом, `fail()` не исполнился
 
 # Какие статусы гейт пропускает к отправке задачи.
 # Литерал — снят чтением `app/api/graph.py:54-58`, не вычислен из него.
@@ -125,13 +136,14 @@ class _FakeResult:
 class FakeDB:
     """Поверхность `AsyncSession`, которой пользуется эндпоинт: `execute` + `commit`.
 
-    Ответ выбирается по СУЩНОСТИ запроса, а не по порядку вызовов: порядок двух
+    Ответ выбирается по СУЩНОСТИ запроса, а не по порядку вызовов: порядок трёх
     `select` внутри эндпоинта — не контракт, и тест не должен за него держаться.
     """
 
-    def __init__(self, diagram, skeleton=None):
+    def __init__(self, diagram, skeleton=None, build_stage=None):
         self.diagram = diagram
         self.skeleton = skeleton
+        self.build_stage = build_stage
         self.commits = 0
 
     async def execute(self, stmt):
@@ -140,10 +152,29 @@ class FakeDB:
             return _FakeResult(self.diagram)
         if entity is Artifact:
             return _FakeResult(self.skeleton)
+        if entity is ProcessingStage:
+            return _FakeResult(self.build_stage)
         raise AssertionError(f"неожиданная сущность в запросе: {entity!r}")
 
     async def commit(self):
         self.commits += 1
+
+
+def _build_stage(age_seconds):
+    """RUNNING-строка сборки, начатая `age_seconds` секунд назад.
+
+    Возраст задаётся АБСОЛЮТНЫМ числом от `utcnow` — тем же наивным UTC, каким
+    его пишет `ProcessingStage.start`. Тест не вычисляет его из порога кода:
+    вычисленный вход остался бы зелёным при любом значении порога
+    (`PROTOCOL §3`).
+    """
+    stage = ProcessingStage()
+    stage.id = 4242
+    stage.diagram_uid = UID
+    stage.stage_type = StageType.GRAPH_BUILDING
+    stage.status = StageStatus.RUNNING
+    stage.started_at = datetime.utcnow() - timedelta(seconds=age_seconds)
+    return stage
 
 
 def _diagram(status, error_stage=None, error_message=None):
@@ -522,3 +553,115 @@ def test_missing_diagram_is_404(dispatched):
         asyncio.run(start_graph_building(UID, db=db))
     assert exc.value.status_code == 404
     assert dispatched == []
+
+
+# ── Б13: заслон дубля сборки ─────────────────────────────────────────────
+
+def test_declared_time_limit_matches_the_task():
+    """Предел возраста — `time_limit` самой задачи, и это сверяется, а не верится.
+
+    Литерал таблицы независим от проверяемой константы; здесь единственное
+    место, где они сходятся, плюс сверка с декоратором задачи — иначе подъём
+    `time_limit` у воркера молча оставил бы заслон с прежним порогом.
+    """
+    import re
+    from pathlib import Path
+
+    assert GRAPH_BUILD_TIME_LIMIT_SECONDS == BUILD_TIME_LIMIT
+    assert FRESH_AGE < BUILD_TIME_LIMIT < STALE_AGE, "порог не заперт с двух сторон"
+
+    src = (Path(__file__).resolve().parents[1] / "worker" / "tasks" / "graph.py"
+           ).read_text(encoding="utf-8")
+    head = src.split("def task_build_graph")[0]
+    limits = re.findall(r"time_limit=(\d+)", head)
+    assert str(BUILD_TIME_LIMIT) in limits, (
+        f"time_limit задачи разошёлся с заслоном: {limits}")
+
+
+@pytest.mark.parametrize("entry", sorted(ALLOWED))
+def test_running_build_blocks_the_second_dispatch(entry, dispatched):
+    """Сборка БЕЖИТ — второй задачи нет ни из одного пропускаемого статуса.
+
+    Клетка не покрывается идемпотентным выходом по статусу: `built` и `error`
+    он не знает вовсе, а именно из них оператор жмёт «Сборка схемы» повторно,
+    пока первая копия ещё считает (замер 1-23 — 7 таких пар на 3 uid).
+    """
+    value, stage, message = _pre_state(DiagramStatus(entry))
+    diagram = _diagram(DiagramStatus(entry), stage, message)
+    db = FakeDB(diagram, _skeleton(), build_stage=_build_stage(FRESH_AGE))
+
+    result = asyncio.run(start_graph_building(UID, db=db))
+
+    assert result["message"] == "Graph building already in progress"
+    assert result["status"] == value, "заслон соврал про статус диаграммы"
+    assert _state(diagram) == (value, stage, message), "заслон сдвинул состояние"
+    assert db.commits == 0, "заслон закоммитил транзакцию"
+    assert dispatched == [], "заслон всё-таки отправил вторую сборку"
+
+
+@pytest.mark.parametrize("entry", sorted(ALLOWED))
+def test_stale_running_row_does_not_block_forever(entry, dispatched):
+    """Строка старше `time_limit` — сирота, и пересборку она НЕ запирает.
+
+    Прецедент `layout_dispatch` предела возраста не знает: любая из вечных
+    RUNNING-строк (воркер убит hard limit'ом или OOM — `stage.fail()` не
+    исполнился) блокировала бы навсегда, а снять её нечем — откат стадий
+    не трогает.
+    """
+    diagram = _diagram(DiagramStatus(entry), *_pre_state(DiagramStatus(entry))[1:])
+    db = FakeDB(diagram, _skeleton(), build_stage=_build_stage(STALE_AGE))
+
+    result = asyncio.run(start_graph_building(UID, db=db))
+
+    assert result["status"] == "building_graph"
+    assert diagram.status is DiagramStatus.BUILDING_GRAPH
+    assert db.commits == 1
+    assert [c["name"] for c in dispatched] == [BUILD_TASK]
+
+
+def test_running_row_without_started_at_does_not_block(dispatched):
+    """RUNNING без `started_at` судить по возрасту нечем — и он не блокирует.
+
+    От вечной такая строка неотличима, а вечная запирать пересборку не вправе.
+    """
+    diagram = _diagram(DiagramStatus.BUILT)
+    stage = _build_stage(FRESH_AGE)
+    stage.started_at = None
+    db = FakeDB(diagram, _skeleton(), build_stage=stage)
+
+    result = asyncio.run(start_graph_building(UID, db=db))
+
+    assert result["status"] == "building_graph"
+    assert [c["name"] for c in dispatched] == [BUILD_TASK]
+
+
+def test_finished_build_does_not_block(dispatched):
+    """Строка есть, но не RUNNING — запрос её не находит, сборка ставится.
+
+    Судится САМ запрос: фильтр по статусу стоит в `where`, поэтому подделка
+    отдаёт None ровно тогда, когда его отдал бы настоящий `AsyncSession`.
+    """
+    diagram = _diagram(DiagramStatus.BUILT)
+    db = FakeDB(diagram, _skeleton(), build_stage=None)
+
+    result = asyncio.run(start_graph_building(UID, db=db))
+
+    assert result["status"] == "building_graph"
+    assert [c["name"] for c in dispatched] == [BUILD_TASK]
+
+
+def test_blocked_build_keeps_the_button_alive(dispatched):
+    """Инвариант ДАННЫХ: после заслона кнопка «Сборка схемы» не гаснет.
+
+    Состояние не сдвинуто, значит и кнопка осталась той же — иначе заслон
+    завёл бы тупик класса 1.13 на пустом месте.
+    """
+    from ui.widgets.diagram_workspace import _buttons_for_status
+
+    diagram = _diagram(DiagramStatus.BUILT)
+    db = FakeDB(diagram, _skeleton(), build_stage=_build_stage(FRESH_AGE))
+    asyncio.run(start_graph_building(UID, db=db))
+
+    available, completed, processing = _buttons_for_status(diagram.status)
+    assert "graph" not in processing
+    assert "graph" in available or "graph" in completed

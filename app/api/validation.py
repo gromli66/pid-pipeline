@@ -699,6 +699,10 @@ async def complete_junction_validation(
     # клиент уже читает `/stages`, поэтому новый этап веера доедет до своей
     # бусины без правки клиента.
     dispatch_failed: list[str] = []
+    # Что именно сделано со сборкой графа — тем же правилом, что и с OCR ниже:
+    # `task_id: null` у Б13 и у отказа брокера выглядит одинаково, поэтому исход
+    # называется словами.
+    graph_note = ""
     if not already_past:
         obs.bind(uid=str(uid), phase="validation")
         previous_state = (diagram.status, diagram.error_stage, diagram.error_message)
@@ -707,14 +711,28 @@ async def complete_junction_validation(
         diagram.error_stage = None
         await db.commit()
 
-        # Auto-dispatch graph build + OCR (parallel)
-        task_id = await async_safe_dispatch(
-            "worker.tasks.graph.task_build_graph",
-            args=[str(uid)],
-            queue="gpu",
-        )
-        if task_id is None:
-            await _restore_and_fail(db, diagram, previous_state, "сборки графа")
+        # Б13: тот же заслон, что в `app/api/graph.py`. Точек диспатча сборки
+        # ровно две, и гонка между ними дала 7 замеренных пар одновременного
+        # `graph_building` (1-23, 344.5 с CPU); гард задачи обе копии пропускает.
+        from app.api.graph import running_graph_build  # локально: app/api/__init__ тянет весь пакет
+
+        running_build = await running_graph_build(uid, db)
+        if running_build is not None:
+            logger.info(
+                "Сборка графа уже бежит (стадия %s) — вторую не ставлю",
+                running_build.id, extra={"event": "dispatch_skipped"},
+            )
+            graph_note = ", graph build already running"
+        else:
+            # Auto-dispatch graph build + OCR (parallel)
+            task_id = await async_safe_dispatch(
+                "worker.tasks.graph.task_build_graph",
+                args=[str(uid)],
+                queue="gpu",
+            )
+            if task_id is None:
+                await _restore_and_fail(db, diagram, previous_state, "сборки графа")
+            graph_note = ", graph build started"
 
         # SAM2 contours are NOT auto-run anymore -- they are triggered on
         # demand from the contours step (optionally for a selected subset of
@@ -758,7 +776,7 @@ async def complete_junction_validation(
         "message": (
             "Junction validation completed"
             if already_past
-            else f"Junction validation completed, graph build started{ocr_note}"
+            else f"Junction validation completed{graph_note}{ocr_note}"
         ),
         "task_id": task_id,
         "contour_task_id": contour_task_id,

@@ -2367,10 +2367,21 @@ class DiagramWorkspace(QWidget):
 
     @Slot()
     def _on_frame_confirmed(self):
-        """Очистка рамки завершена (save+complete или skip) — статус уже FRAME_CLEANED."""
+        """Очистка рамки завершена (save+complete или skip) — детекцию ставит сервер.
+
+        Слежение будим БЕЗУСЛОВНО. `_close_tab_and_restore_header` возвращает
+        опрос «как было», а было никак: поллер снимает его на финальном статусе
+        (`_FINAL_STATUSES`), и вход во вкладку запоминает уже мёртвое состояние.
+        До Б9 дыры не было видно — следующее звено двигал сам клиент и звал
+        `watch` в своём теле; теперь звено двигает сервер, и без этой строки
+        оператор видит неподвижную схему до ручного «Обновить».
+        `watch` идемпотентен (множество uid) и снимется сам.
+        """
         logger.info("Frame confirmed via signal")
         self._close_tab_and_restore_header()
         self._refresh_status()
+        if self._uid:
+            self.status_provider.watch(self._uid)
 
     def _open_cvat(self):
         try:
@@ -2608,17 +2619,19 @@ class DiagramWorkspace(QWidget):
 
     @Slot()
     def _on_cvat_confirmed(self):
-        """CVAT сохранил аннотации → скачать аннотации → авто-старт сегментации.
+        """CVAT сохранил аннотации → скачать аннотации.
 
-        Сегментация запускается автоматически (как junction → построение графа),
-        без отдельной кнопки.
+        Сегментацию ставит СЕРВЕР — тем же вызовом, что скачивает аннотации
+        (`app/api/cvat.py`, Б8). Прежде звено двигал этот метод, и закрытая
+        вкладка или упавший клиент останавливали схему навсегда. Свой вызов
+        `_start_segmentation` убран, иначе задача уходила бы дважды; кнопка
+        «Выделение труб» остаётся — она нужна откатам, ERROR и случаю, когда
+        у сервера не поднялся брокер.
         """
         logger.info("CVAT confirmed, fetching annotations")
-        fetched = False
         try:
             result = self.api_client.fetch_cvat_annotations(self._uid)
             count = result.get("annotation_count", 0)
-            fetched = True
             self.status_message.emit(
                 f"✅ Получено {count} валидированных аннотаций", 5000,
             )
@@ -2629,10 +2642,13 @@ class DiagramWorkspace(QWidget):
             )
 
         self._close_tab_and_restore_header()
-
-        # Авто-запуск сегментации сразу после CVAT — не по кнопке.
-        if fetched:
-            self._start_segmentation()
+        # Слежение будим БЕЗУСЛОВНО — та же дыра, что у подтверждения рамки:
+        # `_close_tab_and_restore_header` возвращает опрос «как было», а было
+        # никак (поллер снял его на финальном `detected`/`validated_bbox` ещё
+        # до входа во вкладку). Прежде это чинил сам `_start_segmentation`,
+        # который звал `watch`; он убран, а сегментацию ставит сервер.
+        if self._uid:
+            self.status_provider.watch(self._uid)
 
     def _has_saved_canvas(self) -> bool:
         """Есть ли у диаграммы сохранённый холст «Ручной правки».

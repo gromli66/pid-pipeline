@@ -9,6 +9,7 @@ Endpoints:
 - POST /{uid}/prtx/upload  — принять .prtx, собранный на машине с коробкой
 """
 
+from datetime import datetime
 from pathlib import Path
 from uuid import UUID
 from typing import Optional
@@ -22,11 +23,68 @@ from app.core import obs
 from app.core.logging import get_logger
 from app.db import get_async_db
 from app.models import Diagram, DiagramStatus, Artifact, ArtifactType
+from app.models.stage import ProcessingStage, StageStatus, StageType
 from app.services.storage import StorageService
 
 router = APIRouter()
 
 logger = get_logger(__name__)
+
+# Б13: предел возраста живой строки сборки — `time_limit` самой задачи
+# (`worker/tasks/graph.py`: 1800 с). Строка старше него — сирота от воркера,
+# убитого hard limit'ом или OOM: `stage.fail()` в этом случае не исполняется,
+# и RUNNING остаётся навсегда. Без предела ЛЮБАЯ такая строка блокировала бы
+# пересборку вечно, а снять её нечем — откат стадий не трогает. Прецедент без
+# предела — `app/services/layout_dispatch.py` (`_ACTIVE`), копировать слепо
+# нельзя.
+GRAPH_BUILD_TIME_LIMIT_SECONDS = 1800
+
+
+async def running_graph_build(uid: UUID, db: AsyncSession) -> Optional[ProcessingStage]:
+    """Живая строка сборки графа этой диаграммы, иначе None.
+
+    «Живая» = RUNNING И моложе `GRAPH_BUILD_TIME_LIMIT_SECONDS` по `started_at`
+    (сравнивается наивным UTC — ровно таким его пишет `ProcessingStage.start`).
+    Берётся САМАЯ СВЕЖАЯ строка: `worker/utils/db_helpers.start_stage` заводит
+    и стартует её одним действием, поэтому порядок по `id` совпадает с порядком
+    по `started_at`, и если новейшая просрочена — просрочены и все прежние.
+
+    Зачем это, если статус уже проверен. Статус и стадия расходятся: задача
+    может БЕЖАТЬ, когда диаграмма уже `built` (первая досчитала), или откачена
+    оператором назад. Замер 1-23: 7 пар ОДНОВРЕМЕННОГО `graph_building` на
+    3 uid, 344.5 с CPU впустую; гард самой задачи обе копии пропускает.
+
+    ⚠ Заслон ЧАСТИЧНЫЙ. PENDING-строк при диспатче никто не создаёт — строка
+    появляется, когда воркер БЕРЁТ задачу, — поэтому всё окно очереди (на CPU
+    это десятки минут; замеренные пары родились именно там) заслон не видит.
+    Полное закрытие — PENDING-строка при диспатче плюс `stage_id` в задаче,
+    паттерн `layout_dispatch` — за пунктом 6-9 дороги.
+    """
+    result = await db.execute(
+        select(ProcessingStage)
+        .where(
+            ProcessingStage.diagram_uid == uid,
+            ProcessingStage.stage_type == StageType.GRAPH_BUILDING,
+            ProcessingStage.status == StageStatus.RUNNING,
+        )
+        .order_by(ProcessingStage.id.desc())
+        .limit(1)
+    )
+    stage = result.scalar_one_or_none()
+    if stage is None or stage.started_at is None:
+        # Пустой `started_at` у RUNNING-строки судить нечем: по возрасту она
+        # неотличима от вечной, а вечная блокировать не имеет права.
+        return None
+
+    age = (datetime.utcnow() - stage.started_at).total_seconds()
+    if age >= GRAPH_BUILD_TIME_LIMIT_SECONDS:
+        logger.info(
+            "Строка сборки %s старше %s с (%.0f) — сиротой не блокирует",
+            stage.id, GRAPH_BUILD_TIME_LIMIT_SECONDS, age,
+            extra={"event": "stale_stage"},
+        )
+        return None
+    return stage
 
 
 @router.post("/{uid}/build")
@@ -122,6 +180,22 @@ async def start_graph_building(
                 "Skeleton not ready — skeletonization auto-started. "
                 "Retry graph build in a few seconds."
             ),
+            "uid": str(uid),
+        }
+
+    # Б13: сборка уже БЕЖИТ — второй задачи не ставим. Идемпотентный выход
+    # выше судит по СТАТУСУ, а он с бегущей задачей расходится (первая копия
+    # досчитала и поставила `built`; оператор откатился назад), — поэтому
+    # заслон смотрит на строку стадии, а не на статус.
+    running = await running_graph_build(uid, db)
+    if running is not None:
+        logger.info(
+            "Сборка графа уже бежит (стадия %s) — вторую не ставлю",
+            running.id, extra={"event": "dispatch_skipped"},
+        )
+        return {
+            "status": diagram.status.value,
+            "message": "Graph building already in progress",
             "uid": str(uid),
         }
 

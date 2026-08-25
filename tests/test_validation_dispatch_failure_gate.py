@@ -45,6 +45,7 @@ import inspect
 import logging
 import time
 import uuid
+from datetime import datetime, timedelta
 
 import pytest
 from fastapi import HTTPException
@@ -59,8 +60,17 @@ from app.api.validation import (
 )
 from app.core.logging import ContextFilter
 from app.models import Artifact, ArtifactType, Diagram, DiagramStatus
+from app.models.stage import ProcessingStage, StageStatus, StageType
 
 UID = uuid.UUID("c1a55e77-1111-2222-3333-444455556666")
+
+# Б13 (блок 2 плана точечных болей 2026-08-25): предел возраста живой строки
+# сборки. Числа абсолютные, снятые ЧТЕНИЕМ `worker/tasks/graph.py`
+# (`time_limit=1800`), — вычисленный из проверяемой константы вход остался бы
+# зелёным при любом её значении (`PROTOCOL §3`).
+BUILD_TIME_LIMIT = 1800
+FRESH_AGE = 60      # строка живая: воркер считает
+STALE_AGE = 5400    # строка-сирота: воркер убит hard limit'ом, `fail()` не исполнился
 
 # Размер машины. Абсолютное число: новый статус обязан пройти через эту таблицу,
 # а не проскочить мимо неё молча. Доки пишут 29 — по коду 31 (адрес починки — 0-3).
@@ -238,15 +248,18 @@ class FakeDB:
     где эндпоинт ждёт его ОТСУТСТВИЯ (safety-net слияния OCR).
     """
 
-    def __init__(self, diagram, artifacts=None):
+    def __init__(self, diagram, artifacts=None, build_stage=None):
         self.diagram = diagram
         self.artifacts = artifacts if artifacts is not None else ARTIFACTS
+        self.build_stage = build_stage
         self.commits = 0
 
     async def execute(self, stmt):
         entity = stmt.column_descriptions[0]["entity"]
         if entity is Diagram:
             return _FakeResult(self.diagram)
+        if entity is ProcessingStage:
+            return _FakeResult(self.build_stage)
         params = stmt.compile().params
         return _FakeResult(self.artifacts.get(params.get("artifact_type_1")))
 
@@ -266,6 +279,20 @@ def _artifact(path):
     art.file_size = 1
     art.mime_type = "image/png"
     return art
+
+
+def _build_stage(age_seconds):
+    """RUNNING-строка сборки графа, начатая `age_seconds` секунд назад.
+
+    Наивный UTC — ровно такой пишет `ProcessingStage.start`.
+    """
+    stage = ProcessingStage()
+    stage.id = 7171
+    stage.diagram_uid = UID
+    stage.stage_type = StageType.GRAPH_BUILDING
+    stage.status = StageStatus.RUNNING
+    stage.started_at = datetime.utcnow() - timedelta(seconds=age_seconds)
+    return stage
 
 
 # Все validated-маски и graph_validated на месте: копирования файлов не будет,
@@ -1241,3 +1268,51 @@ def test_the_stale_snapshot_is_named_in_the_log(ocr_enabled, no_layout):
     assert any("'validated_masks'" in m for m in traces), (
         "лог не назвал чужой снимок — гонку на бою будет не увидеть"
     )
+
+
+# ── Б13: второй диспетчер сборки под тем же заслоном ─────────────────────
+
+def test_running_build_blocks_the_junction_dispatch(dispatched, ocr_enabled):
+    """Сборка БЕЖИТ — подтверждение перекрёстков вторую задачу не ставит.
+
+    Точек диспатча сборки ровно две (`app/api/graph.py` и этот эндпоинт), и
+    гонка между ними дала 7 замеренных пар одновременного `graph_building`
+    на 3 uid (замер 1-23, 344.5 с CPU впустую). Заслон здесь тот же самый —
+    один предикат на обе точки, чтобы они не разошлись.
+
+    Переход при этом ПРОИСХОДИТ: подтверждение оператора — не отправка задачи,
+    и запирать его чужой бегущей сборкой нельзя. OCR тоже уходит: он к сборке
+    отношения не имеет.
+    """
+    diagram = _diagram(DiagramStatus.VALIDATING_JUNCTIONS)
+    db = FakeDB(diagram, build_stage=_build_stage(FRESH_AGE))
+
+    result = asyncio.run(complete_junction_validation(UID, db=db))
+
+    assert result["task_id"] is None, "вторая сборка всё-таки поставлена"
+    assert GRAPH_TASK not in [c["name"] for c in dispatched]
+    assert result["message"] == (
+        "Junction validation completed, graph build already running, OCR started")
+    assert result["dispatch_failed"] == [], "заслон выдал себя за отказ брокера"
+    assert _state(diagram) == ("validated_junctions", None, None)
+    assert result["ocr_task_id"] == "task-0001", "OCR заперт чужой сборкой"
+
+
+def test_stale_running_row_does_not_block_the_junction_dispatch(dispatched, ocr_enabled):
+    """Строка старше `time_limit` — сирота, и подтверждение ставит сборку.
+
+    Без предела возраста любая из вечных RUNNING-строк (воркер убит hard
+    limit'ом или OOM) запирала бы сборку НАВСЕГДА: снять её нечем, откат
+    стадий не трогает. Прецедент без предела — `app/services/layout_dispatch.py`.
+    """
+    assert FRESH_AGE < BUILD_TIME_LIMIT < STALE_AGE, "порог не заперт с двух сторон"
+
+    diagram = _diagram(DiagramStatus.VALIDATING_JUNCTIONS)
+    db = FakeDB(diagram, build_stage=_build_stage(STALE_AGE))
+
+    result = asyncio.run(complete_junction_validation(UID, db=db))
+
+    assert result["task_id"] == "task-0001"
+    assert GRAPH_TASK in [c["name"] for c in dispatched]
+    assert result["message"] == (
+        "Junction validation completed, graph build started, OCR started")

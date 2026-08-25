@@ -87,6 +87,36 @@ async def _get_cleaned_artifact(uid: UUID, db: AsyncSession):
     return res.scalar_one_or_none()
 
 
+async def _autostart_detection(db: AsyncSession, diagram: Diagram) -> None:
+    """Б9: после подтверждения рамки конвейер двигает СЕРВЕР, а не десктоп.
+
+    Модель выбирает сама задача (`model_id=None` → `default_model` из конфига
+    проекта), поэтому ручной выбор другой модели остаётся там же, где был:
+    клик по пройденному «Поиск элементов» после отката к рамке. Оттуда
+    диспетчит `/detect`, а не этот путь — сервер после отката не автозапускает
+    ничего.
+
+    Best-effort: отказ отправки НЕ валит подтверждение рамки. Этап завершён,
+    статус остаётся `frame_cleaned`, кнопка «Поиск элементов» рабочая (её гейт —
+    ровно этот статус), а об отказе говорит след с `uid`.
+    """
+    from app.api.detection import dispatch_detection  # локально: app/api/__init__ тянет весь пакет
+
+    sent = await dispatch_detection(db, diagram)
+    if sent["task_id"] is None:
+        logger.warning(
+            "Автозапуск детекции не удался (%s) — диаграмма осталась в '%s', "
+            "оператор запускает кнопкой «Поиск элементов»",
+            sent["error"], diagram.status.value,
+            extra={"event": "dispatch_failed"},
+        )
+    else:
+        logger.info(
+            "Детекция запущена автоматически после очистки рамки (%s)",
+            sent["task_id"], extra={"event": "auto_dispatch"},
+        )
+
+
 @router.post("/{uid}/start")
 async def start_frame_removal(uid: UUID, db: AsyncSession = Depends(get_async_db)):
     """Начать очистку рамки: UPLOADED → CLEANING_FRAME."""
@@ -205,7 +235,8 @@ async def complete_frame_removal(uid: UUID, db: AsyncSession = Depends(get_async
     await db.commit()
 
     logger.info("Frame removal completed for %s", uid)
-    return {"status": "frame_cleaned", "message": "Frame removal completed", "uid": str(uid)}
+    await _autostart_detection(db, diagram)
+    return {"status": diagram.status.value, "message": "Frame removal completed", "uid": str(uid)}
 
 
 @router.post("/{uid}/skip")
@@ -218,6 +249,13 @@ async def skip_frame_removal(uid: UUID, db: AsyncSession = Depends(get_async_db)
             status_code=400,
             detail=f"Cannot skip frame removal: status is '{diagram.status.value}'",
         )
+
+    # Ранний выход, симметричный `/complete` выше. Без него повторный вызов
+    # из уже завершённого этапа не только переигрывал работу (сносил
+    # сохранённую очистку мимо `POST /diagrams/{uid}/rollback`), но с Б9
+    # ещё и ПЕРЕДИСПАТЧИЛ бы детекцию — вторую задачу на тот же переход.
+    if diagram.status == DiagramStatus.FRAME_CLEANED:
+        return {"status": "frame_cleaned", "message": "Already completed", "uid": str(uid)}
 
     obs.bind(uid=str(uid), phase="frame_removal")
     stage = await get_running_frame_stage(db, uid) or await start_frame_stage(db, uid)
@@ -249,4 +287,7 @@ async def skip_frame_removal(uid: UUID, db: AsyncSession = Depends(get_async_db)
         raise HTTPException(status_code=500, detail=f"Failed to skip frame removal: {exc}") from exc
 
     logger.info("Frame removal skipped for %s", uid)
-    return {"status": "frame_cleaned", "message": "Frame removal skipped", "uid": str(uid)}
+    # Вне `try` намеренно: отказ брокера не должен уводить стадию в FAILED —
+    # рамка пропущена, файлы на месте, это настоящий исход этапа.
+    await _autostart_detection(db, diagram)
+    return {"status": diagram.status.value, "message": "Frame removal skipped", "uid": str(uid)}

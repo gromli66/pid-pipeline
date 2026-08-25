@@ -1,7 +1,13 @@
 """
 Detection API - YOLO детекция.
+
+Отправку держит `dispatch_detection` — ЕДИНСТВЕННАЯ точка постановки детекции.
+Её зовут отсюда (кнопка «Поиск элементов») и `app/api/frame.py` (автозапуск
+после подтверждения рамки, Б9 плана точечных болей): конвейер после ручного
+этапа двигает сервер, а не десктоп, иначе закрытая вкладка останавливает схему.
 """
 
+import asyncio
 from typing import Optional
 from uuid import UUID
 
@@ -17,6 +23,72 @@ from app.models import Diagram, DiagramStatus
 router = APIRouter()
 
 logger = get_logger(__name__)
+
+_DETECT_TASK = "worker.tasks.detection.task_detect_yolo"
+
+
+async def dispatch_detection(
+    db: AsyncSession,
+    diagram: Diagram,
+    *,
+    model_id: Optional[str] = None,
+) -> dict:
+    """Перевести диаграмму в DETECTING и поставить задачу детекции.
+
+    `model_id=None` — дефолт разрешает сама задача
+    (`worker/tasks/detection.py`: `project_config.detection.default_model`),
+    поэтому автозапуску не нужно ни знать конфиг, ни ходить в него.
+
+    Отправка идёт через `asyncio.to_thread`: `send_task` синхронный, а на бою
+    мёртвый result-бэкенд держит его до ~64 с (`app/services/dispatch.py`),
+    то есть весь event loop сервера.
+
+    Возвращает `{"task_id", "error"}`. `task_id is None` означает, что отправка
+    не удалась И состояние ВЕРНУТО к пред-вызовному (все три поля). Что ответить
+    оператору, решает вызывающий: `/detect` отдаёт 503, `frame.py` — 200
+    с warning, потому что подтверждение рамки уже состоялось и валить его
+    отказом брокера нельзя.
+    """
+    # Обновляем статус ПЕРЕД запуском task (короткая транзакция)
+    # ⚠️ НЕ оборачивать Celery send_task в ту же транзакцию!
+    # Состояние до перехода держим целиком: если отправка упадёт, вернуть надо
+    # всё, что переход записал, а не один статус — иначе диаграмма останется
+    # в ERROR с пустым error_stage, и клиент погасит ВСЕ кнопки
+    # (ui/widgets/diagram_workspace.py: _error_key).
+    previous_state = (diagram.status, diagram.error_stage, diagram.error_message)
+    diagram.status = DiagramStatus.DETECTING
+    diagram.error_message = None
+    diagram.error_stage = None
+    await db.commit()
+
+    # Запускаем Celery task ВНЕ транзакции
+    from worker.celery_app import celery_app
+    try:
+        task = await asyncio.to_thread(
+            celery_app.send_task,
+            _DETECT_TASK,
+            args=[str(diagram.uid)],
+            kwargs={
+                "project_code": diagram.project_code or "thermohydraulics",
+                "model_id": model_id,
+            },
+        )
+    except Exception as exc:
+        # Брокер недоступен — возвращаем состояние, каким оно было до вызова.
+        # Без этого диаграмма оставалась в DETECTING навсегда: задачи нет,
+        # значит некому ни упасть в error, ни дойти до конца, а кнопка
+        # «Поиск элементов» при *ING-статусе даже не нажимается.
+        # След — ДО коммита возврата: на бою БД падает вместе с брокером, и тогда
+        # исключение коммита унесло бы наружу единственную запись об отказе ОТПРАВКИ.
+        logger.exception(
+            "Отправка детекции не удалась (%s) — возвращаю состояние в '%s'",
+            exc, previous_state[0].value, extra={"event": "dispatch_failed"},
+        )
+        diagram.status, diagram.error_stage, diagram.error_message = previous_state
+        await db.commit()
+        return {"task_id": None, "error": exc}
+
+    return {"task_id": task.id, "error": None}
 
 
 @router.post("/{uid}/detect")
@@ -80,50 +152,17 @@ async def start_detection(
             diagram.error_stage, extra={"event": "retry"},
         )
 
-    # Обновляем статус ПЕРЕД запуском task (короткая транзакция)
-    # ⚠️ НЕ оборачивать Celery send_task в ту же транзакцию!
-    # Состояние до перехода держим целиком: если отправка упадёт, вернуть надо
-    # всё, что переход записал, а не один статус — иначе диаграмма останется
-    # в ERROR с пустым error_stage, и клиент погасит ВСЕ кнопки
-    # (ui/widgets/diagram_workspace.py: _error_key).
-    previous_state = (diagram.status, diagram.error_stage, diagram.error_message)
-    diagram.status = DiagramStatus.DETECTING
-    diagram.error_message = None
-    diagram.error_stage = None
-    await db.commit()
-    
-    # Запускаем Celery task ВНЕ транзакции
-    from worker.celery_app import celery_app
-    try:
-        task = celery_app.send_task(
-            "worker.tasks.detection.task_detect_yolo",
-            args=[str(uid)],
-            kwargs={
-                "project_code": diagram.project_code or "thermohydraulics",
-                "model_id": model_id,
-            },
-        )
-    except Exception as exc:
-        # Брокер недоступен — возвращаем состояние, каким оно было до вызова.
-        # Без этого диаграмма оставалась в DETECTING навсегда: задачи нет,
-        # значит некому ни упасть в error, ни дойти до конца, а кнопка
-        # «Поиск элементов» при *ING-статусе даже не нажимается.
-        # След — ДО коммита возврата: на бою БД падает вместе с брокером, и тогда
-        # исключение коммита унесло бы наружу единственную запись об отказе ОТПРАВКИ.
-        logger.exception(
-            "Отправка детекции не удалась (%s) — возвращаю состояние в '%s'",
-            exc, previous_state[0].value, extra={"event": "dispatch_failed"},
-        )
-        diagram.status, diagram.error_stage, diagram.error_message = previous_state
-        await db.commit()
+    sent = await dispatch_detection(db, diagram, model_id=model_id)
+
+    if sent["task_id"] is None:
         raise HTTPException(
             status_code=503,
-            detail=f"Worker unavailable: {exc}",
+            detail=f"Worker unavailable: {sent['error']}",
         )
-    
+
     return {
         "status": "detecting",
-        "task_id": task.id,
+        "task_id": sent["task_id"],
         "uid": str(uid),
         "model_id": model_id,
     }
