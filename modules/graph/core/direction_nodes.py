@@ -911,6 +911,9 @@ def split_edges_at_corners(nodes, edges, eps: float = _CORNER_EPS,
     result: List[Dict] = []
 
     for e in edges:
+        if e.get("leftover") and (e.get("from") is None or e.get("to") is None):
+            result.append(e)      # непроверенный подбор: узлы-изломы только
+            continue              # прижившимся кускам (drop_unstitched_leftovers)
         path = e.get("path")
         cuts = _corner_indices(path, eps, min_arm) if path else []
         if not cuts:
@@ -961,7 +964,7 @@ def stitch_dangling_into_pipe(nodes, edges, tol: float = _STITCH_TOL,
     трогаем: там правильный ответ — сквозной проход или узел степени 4, а не
     врезка в точку.
     """
-    stats = {"stitched": 0, "crossings_skipped": 0}
+    stats = {"stitched": 0, "crossings_skipped": 0, "orphans_skipped": 0}
 
     buckets: Dict[Tuple[int, int], List[Tuple[str, int]]] = {}
     by_id: Dict[str, Dict] = {}
@@ -989,7 +992,7 @@ def stitch_dangling_into_pipe(nodes, edges, tol: float = _STITCH_TOL,
                         best_d, best_id, best_i = d, eid, i
         return best_id, best_i
 
-    cuts: Dict[str, List[Tuple[int, Dict, str]]] = {}
+    raw: Dict[str, List[Tuple[str, str, int]]] = {}
     for e in edges:
         for end, key in (("from", "source_point"), ("to", "target_point")):
             if e.get(end) is not None:
@@ -1006,6 +1009,21 @@ def stitch_dangling_into_pipe(nodes, edges, tol: float = _STITCH_TOL,
             host_len = len(by_id[host_id]["path"])
             if idx < _CORNER_MIN_ARM or idx > host_len - 1 - _CORNER_MIN_ARM:
                 continue          # у самого узла — это не врезка
+            raw.setdefault(e.get("id"), []).append((end, host_id, idx))
+
+    # обрывок «в никуда» (оба конца None) не режет чужую трубу одним концом:
+    # это подобранный шум маски, а не ветка. Врезаем его только когда ОБА конца
+    # нашли трубу — настоящая перемычка между двумя трубами без стыков.
+    cuts: Dict[str, List[Tuple[int, Dict, str]]] = {}
+    for e in edges:
+        items = raw.get(e.get("id"))
+        if not items:
+            continue
+        both_free = e.get("from") is None and e.get("to") is None
+        if both_free and len(items) < 2:
+            stats["orphans_skipped"] += len(items)
+            continue
+        for end, host_id, idx in items:
             cuts.setdefault(host_id, []).append((idx, e, end))
 
     # висячее ребро, которое само является хозяином врезки, не трогаем:
@@ -1015,11 +1033,8 @@ def stitch_dangling_into_pipe(nodes, edges, tol: float = _STITCH_TOL,
         if not cuts[host_id]:
             del cuts[host_id]
 
-    conn_counter = _max_suffix(nodes, "teeconn_") + 1
-    edge_counter = _max_suffix(edges, "edge_") + 1
-    new_nodes: List[Dict] = []
-    replaced: Dict[str, List[Dict]] = {}
-
+    # кросс-фильтр: два конца в упор на одном хосте = «крест», не врезаем
+    kept_by_host: Dict[str, List[Tuple[int, Dict, str]]] = {}
     for host_id, items in cuts.items():
         items.sort(key=lambda it: it[0])
         kept = []
@@ -1029,9 +1044,32 @@ def stitch_dangling_into_pipe(nodes, edges, tol: float = _STITCH_TOL,
                 stats["crossings_skipped"] += 1
                 continue
             kept.append(it)
-        if not kept:
-            continue
+        if kept:
+            kept_by_host[host_id] = kept
 
+    # перемычка, у которой кросс-фильтр или фильтр хозяев съел один из двух
+    # концов, снова стала одноконцевой врезкой обрывка — снимаем и второй конец
+    left: Dict[str, int] = {}
+    for items in kept_by_host.values():
+        for _, e, _ in items:
+            if e.get("from") is None and e.get("to") is None:
+                left[e["id"]] = left.get(e["id"], 0) + 1
+    for host_id in list(kept_by_host):
+        kept = [it for it in kept_by_host[host_id]
+                if not (it[1].get("from") is None and it[1].get("to") is None
+                        and left.get(it[1]["id"], 0) < 2)]
+        stats["orphans_skipped"] += len(kept_by_host[host_id]) - len(kept)
+        if kept:
+            kept_by_host[host_id] = kept
+        else:
+            del kept_by_host[host_id]
+
+    conn_counter = _max_suffix(nodes, "teeconn_") + 1
+    edge_counter = _max_suffix(edges, "edge_") + 1
+    new_nodes: List[Dict] = []
+    replaced: Dict[str, List[Dict]] = {}
+
+    for host_id, kept in kept_by_host.items():
         host = by_id[host_id]
         idxs = [it[0] for it in kept]
         node_ids = []
@@ -1290,4 +1328,94 @@ def dissolve_boundary_connectors(nodes, edges, max_stub: int = _BOUNDARY_STUB,
 
     if debug:
         print(f"[direction_nodes] dissolve_boundary {stats}")
+    return stats
+
+
+# --------------------------------------------------------------------------- #
+# Подобранный кусок, не прижившийся обоими концами — хвост, а не труба
+# --------------------------------------------------------------------------- #
+# Второй проход трассировки подбирает куски скелета, до которых она не дошла
+# (tracing._leftover_fragments, флаг leftover). Куску доверяем, только если он
+# реально повышает связность: оба конца легли на узлы или врезались в трубу.
+# Хвост, повисший хотя бы одним концом, оператор не рисует ни на одной схеме
+# корпуса — режем до капинга, чтобы не плодить capconn. Покрытие рёбер эталона
+# от этого не падает: хвосты по определению не лежат ни на одном ребре GT.
+
+
+def drop_unstitched_leftovers(nodes, edges, debug: bool = False) -> Dict[str, int]:
+    stats = {"dropped": 0, "px_dropped": 0}
+    kept = []
+    for e in edges:
+        if e.get("leftover") and (e.get("from") is None or e.get("to") is None):
+            stats["dropped"] += 1
+            stats["px_dropped"] += int(e.get("length") or len(e.get("path") or ()))
+        else:
+            kept.append(e)
+    if stats["dropped"]:
+        edges[:] = kept
+    if debug:
+        print(f"[direction_nodes] drop_unstitched_leftovers {stats}")
+    return stats
+
+
+# --------------------------------------------------------------------------- #
+# Компонента из одних наших затычек — подобранный шум маски, а не труба
+# --------------------------------------------------------------------------- #
+# Кусок скелета (текст, штриховка, рамка в маске труб), не дотянувшийся ни до
+# одного настоящего узла, к концу этапа 5 превращается в линию с затычками на
+# концах. filter_isolated_connectors такие не ловит: он работает до капинга,
+# а рёбра с to=None в его смежность не попадают. Правило: компонента связности,
+# все узлы которой созданы этой стадией, удаляется целиком. Модельный стык,
+# оборудование или dirconn в компоненте — признак настоящей трубы, она живёт.
+_ORPHAN_PREFIXES = ("capconn_", "bendconn_", "teeconn_")
+
+
+def drop_synthetic_orphan_components(nodes, edges, debug: bool = False) -> Dict[str, int]:
+    stats = {"components": 0, "nodes_dropped": 0, "edges_dropped": 0, "px_dropped": 0}
+    synth = {n["id"] for n in nodes
+             if isinstance(n.get("id"), str) and n["id"].startswith(_ORPHAN_PREFIXES)}
+    if not synth:
+        return stats
+
+    adj: Dict[str, set] = {}
+    for e in edges:
+        f, t = e.get("from"), e.get("to")
+        if f is not None and t is not None:
+            adj.setdefault(f, set()).add(t)
+            adj.setdefault(t, set()).add(f)
+
+    seen = set()
+    drop = set()
+    for start in synth:
+        if start in seen:
+            continue
+        comp, queue, clean = {start}, [start], True
+        seen.add(start)
+        while queue:
+            cur = queue.pop()
+            if cur not in synth:
+                clean = False     # настоящий узел: компонента живёт, дальше от
+                continue          # него не идём — факта достаточно
+            for nb in adj.get(cur, ()):
+                if nb not in comp:
+                    comp.add(nb)
+                    seen.add(nb)
+                    queue.append(nb)
+        if clean:
+            drop |= comp
+            stats["components"] += 1
+
+    if drop:
+        kept = []
+        for e in edges:
+            if e.get("from") in drop or e.get("to") in drop:
+                stats["edges_dropped"] += 1
+                stats["px_dropped"] += int(e.get("length") or len(e.get("path") or ()))
+            else:
+                kept.append(e)
+        edges[:] = kept
+        nodes[:] = [n for n in nodes if n["id"] not in drop]
+        stats["nodes_dropped"] = len(drop)
+    if debug:
+        print(f"[direction_nodes] drop_synthetic_orphans {stats}")
     return stats
