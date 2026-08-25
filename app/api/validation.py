@@ -45,6 +45,46 @@ VALID_MASK_TYPES = {
 # Типы, которые приезжают JSON'ом, а не PNG.
 JSON_MASK_TYPES = {"junction_points_validated"}
 
+# Фаза B («Проверка схемы» ⇄ «Контуры» ⇄ «Распознавание» ⇄ «Привязка»)
+# ходится свободно: вход в пройденный этап откатом не является (решения
+# Максима №7/№8). Для эндпоинтов, которые двигают статус ВПЕРЁД, это значит
+# «принять подтверждение, но статус не трогать» — иначе повторный проход
+# оказывается скрытым откатом.
+#
+# ⛔ Список нужен ОБЕИМ сторонам: и гейту (пустить), и обработчику (не
+# двигать). Разъедься они — гейт пустит, а обработчик увезёт схему назад,
+# и это ровно тот дефект, ради которого пункт делался.
+_SIMPLE_ALREADY_PAST = (
+    DiagramStatus.EXTRACTING_CONTOURS,
+    DiagramStatus.CONTOURS_EXTRACTED,
+    DiagramStatus.CONTOURS_VALIDATED,
+    DiagramStatus.OCR_PROCESSING,
+    DiagramStatus.OCR_COMPLETED,
+    DiagramStatus.OCR_BOUND,
+    DiagramStatus.GENERATING_FXML,
+    DiagramStatus.COMPLETED,
+)
+
+# Подмножество ветки выше, при котором контуры уже закрыты, а значит геометрия
+# финальная и холст «Ручной правки» имеет смысл. Повторное подтверждение здесь
+# могло сменить ИСТИНУ (оператор правил граф), и холст надо пересчитать —
+# иначе вкладка честно предупреждает «Схема изменилась, холст будет пересобран
+# заново», пересобирает его локальным pretransform БЕЗ раскладки, и оператор
+# получает ту самую жалобу «ничего не изменилось» (приёмка глазами 2026-08-25).
+#
+# ⛔ Раньше контуров не раскладываем: они ещё поменяют геометрию, и диспетчер
+# позовёт `complete_contour_validation` сам («Контуры закрыты — геометрия
+# финальная, можно раскладывать»). Тот же порог, с которого раскладку зовёт
+# соседняя дверь `/graph/complete`.
+_SIMPLE_LAYOUT_AFTER = (
+    DiagramStatus.CONTOURS_VALIDATED,
+    DiagramStatus.OCR_PROCESSING,
+    DiagramStatus.OCR_COMPLETED,
+    DiagramStatus.OCR_BOUND,
+    DiagramStatus.GENERATING_FXML,
+    DiagramStatus.COMPLETED,
+)
+
 # Маппинг mask_type → (stage_folder, filename)
 MASK_STORAGE_MAP = {
     "junction_mask_validated": ("junction", "junction_mask_validated.png"),
@@ -809,7 +849,7 @@ async def complete_simple_graph_validation(
         DiagramStatus.VALIDATING_GRAPH,
         DiagramStatus.BUILT,
         DiagramStatus.VALIDATED_GRAPH,
-    ):
+    ) and diagram.status not in _SIMPLE_ALREADY_PAST:
         raise HTTPException(
             status_code=400,
             detail=f"Cannot complete simple validation: status is '{diagram.status.value}'",
@@ -862,30 +902,50 @@ async def complete_simple_graph_validation(
 
     # Статус → VALIDATED_GRAPH. Контуры идут СЛЕДУЮЩИМ шагом; авто-пропуск
     # OCR (если отключён) происходит ПОСЛЕ контуров — в complete_contour_validation.
-    obs.bind(uid=str(uid), phase="validation")
-    previous_state = (diagram.status, diagram.error_stage, diagram.error_message)
-    diagram.status = DiagramStatus.VALIDATED_GRAPH
-    diagram.error_message = None
-    diagram.error_stage = None
+    #
+    # Повторный проход фазы B (Н2с): статус НЕ двигаем и OCR НЕ переотправляем.
+    # Тупое расширение гейта здесь было бы хуже 400: обработчик увёл бы готовую
+    # схему назад в `validated_graph` И запустил распознавание заново, стерев
+    # привязку подписей. Семантика та же, что у `/masks/complete` выше.
+    already_past = diagram.status in _SIMPLE_ALREADY_PAST
 
     from app.services.project_loader import get_project_loader as _gpl
     _pc = _gpl().load(diagram.project_code)
     _ocr_on = bool(_pc and getattr(_pc.ocr, "enabled", True))
-    await db.commit()
 
     task_id = None
-    if _ocr_on:
-        # Auto-dispatch OCR (NOT FXML!)
-        task_id = await async_safe_dispatch(
-            "worker.tasks.ocr.task_run_ocr",
-            args=[str(uid)],
-            queue="ocr",
-        )
-        if task_id is None:
-            # Здесь OCR — единственная задача шага, и возвращать есть куда:
-            # точка входа `validating_graph` лежит в `_MANUAL_INPROGRESS`,
-            # то есть вкладка открывается повторно и подтверждение уходит снова.
-            await _restore_and_fail(db, diagram, previous_state, "OCR")
+    if already_past and diagram.status in _SIMPLE_LAYOUT_AFTER:
+        # Истина фазы B могла смениться — холст на неё больше не годится.
+        # Диспетчер идемпотентен по sha: на неизменённом графе ответит
+        # ALREADY_FRESH и не сделает НИ ЕДИНОЙ минуты работы, на изменённом —
+        # поставит пересчёт, о котором вкладка и предупреждает.
+        # ⛔ Без `force`: решение №9 в силе — холст законно затирает СМЕНА
+        # ИСТИНЫ, а её видно и без флага. С `force` метка `operator_saved`
+        # слетала бы и на неизменённом графе (та же ловушка, что закрыта в Н1).
+        # ⚠ Свежесть считает ОДИН модуль (`modules/graph/core/canvas_state`) —
+        # проверять её здесь вторым кодом нельзя: две реализации канона дают
+        # расходящиеся sha и ложное «устарело».
+        await dispatch_layout(uid, db)
+    if not already_past:
+        obs.bind(uid=str(uid), phase="validation")
+        previous_state = (diagram.status, diagram.error_stage, diagram.error_message)
+        diagram.status = DiagramStatus.VALIDATED_GRAPH
+        diagram.error_message = None
+        diagram.error_stage = None
+        await db.commit()
+
+        if _ocr_on:
+            # Auto-dispatch OCR (NOT FXML!)
+            task_id = await async_safe_dispatch(
+                "worker.tasks.ocr.task_run_ocr",
+                args=[str(uid)],
+                queue="ocr",
+            )
+            if task_id is None:
+                # Здесь OCR — единственная задача шага, и возвращать есть куда:
+                # точка входа `validating_graph` лежит в `_MANUAL_INPROGRESS`,
+                # то есть вкладка открывается повторно и подтверждение уходит снова.
+                await _restore_and_fail(db, diagram, previous_state, "OCR")
 
     return {
         "status": diagram.status.value,
@@ -915,7 +975,20 @@ async def start_graph_validation(
     if not diagram:
         raise HTTPException(status_code=404, detail="Diagram not found")
 
-    if diagram.status not in (DiagramStatus.BUILT, DiagramStatus.VALIDATING_GRAPH):
+    # Н8+: единственный в семействе, кто не пускал после `validated_graph`.
+    # Набор сведён с `/graph/save`; при уже пройденных статусах отвечаем OK
+    # БЕЗ смены статуса — иначе «начать валидацию» превратилось бы в скрытый
+    # откат готовой схемы в `validating_graph`.
+    if diagram.status not in (
+        DiagramStatus.BUILT,
+        DiagramStatus.VALIDATING_GRAPH,
+        DiagramStatus.VALIDATED_GRAPH,
+        DiagramStatus.CONTOURS_VALIDATED,
+        DiagramStatus.OCR_COMPLETED,
+        DiagramStatus.OCR_BOUND,
+        DiagramStatus.GENERATING_FXML,
+        DiagramStatus.COMPLETED,
+    ):
         raise HTTPException(
             status_code=400,
             detail=f"Cannot start graph validation: status is '{diagram.status.value}', expected 'built'",
@@ -928,7 +1001,7 @@ async def start_graph_validation(
         await db.commit()
 
     return {
-        "status": "validating_graph",
+        "status": diagram.status.value,
         "message": "Graph validation started",
         "uid": str(uid),
     }
@@ -959,6 +1032,11 @@ async def save_validated_graph(
         DiagramStatus.CONTOURS_VALIDATED,
         DiagramStatus.OCR_COMPLETED,
         DiagramStatus.OCR_BOUND,
+        # Свободный вход в пройденный этап без права сохранить — это тот же
+        # «400 после часа работы», только перенесённый с подтверждения на
+        # кнопку «Сохранить». Вкладка открывается и из готовой схемы.
+        DiagramStatus.GENERATING_FXML,
+        DiagramStatus.COMPLETED,
     ):
         raise HTTPException(
             status_code=400,
@@ -1133,6 +1211,15 @@ async def complete_graph_validation(
         DiagramStatus.VALIDATED_GRAPH,
         DiagramStatus.OCR_COMPLETED,
         DiagramStatus.OCR_BOUND,
+        # Повторное подтверждение с уже готовой (или собираемой) схемы: вкладка
+        # «Проверка схемы» открывается и после экспорта, и её «Подтвердить»
+        # приходит сюда. До этого оно отвечало 400 после часа работы.
+        # ⛔ CONTOURS_* сюда НЕ добавлять: подтверждение отсюда уходит прямо
+        # в FXML-задачу (`worker/tasks/graph.py`), то есть перепрыгивает
+        # распознавание и привязку. Полный набор фазы B — только у
+        # `/graph/complete-simple`.
+        DiagramStatus.GENERATING_FXML,
+        DiagramStatus.COMPLETED,
     ):
         raise HTTPException(
             status_code=400,
@@ -1160,8 +1247,12 @@ async def complete_graph_validation(
     # значит холст невалиден и пересчитывается (§3.2 плана). На прямом пути
     # (BUILT/VALIDATING_GRAPH) раскладку звать рано: контуры ещё впереди, и
     # они снова поменяют segmentation.
+    # GENERATING_FXML/COMPLETED здесь обязательны наравне с OCR_*: без них
+    # else-ветка ниже молча УВОДИТ статус готовой схемы назад, в
+    # `validated_graph`, — оператор подтвердил правку и потерял этап.
     returned_after_contours = diagram.status in (
-        DiagramStatus.OCR_BOUND, DiagramStatus.OCR_COMPLETED)
+        DiagramStatus.OCR_BOUND, DiagramStatus.OCR_COMPLETED,
+        DiagramStatus.GENERATING_FXML, DiagramStatus.COMPLETED)
 
     # Обновляем статус
     # Если пришли из OCR_BOUND (после привязки + редактор) → сразу GENERATING_FXML

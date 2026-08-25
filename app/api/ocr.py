@@ -25,6 +25,27 @@ from app.services.storage import StorageService
 
 router = APIRouter()
 
+# Статусы, при которых у привязки подписей есть что сохранять: граф уже
+# проверен, `graph_validated.json` существует. Набор — весь «хвост» конвейера
+# начиная с `VALIDATED_GRAPH`, и это НЕ вкусовщина: ровно на этот список
+# ссылается клиентский порог кнопки `_binding_reachable`
+# (`ui/widgets/diagram_workspace.py`), а сведение обеих сторон поэлементно
+# держит `tests/test_phase_b_reentry.py`. Раньше список был уже клиентского
+# на пять клеток — кнопка горела, вкладка открывалась, сохранение отвечало 400.
+_BINDING_SAVE_STATUSES = (
+    DiagramStatus.VALIDATED_GRAPH,
+    DiagramStatus.EXTRACTING_CONTOURS,
+    DiagramStatus.CONTOURS_EXTRACTED,
+    DiagramStatus.CONTOURS_VALIDATED,
+    DiagramStatus.OCR_PROCESSING,
+    DiagramStatus.OCR_COMPLETED,
+    DiagramStatus.OCR_BOUND,
+    # Повторный проход фазы B из уже готовой схемы (пункт 3.1в): без этих двух
+    # свободный вход во вкладку упирался в 400 на кнопке «Сохранить».
+    DiagramStatus.GENERATING_FXML,
+    DiagramStatus.COMPLETED,
+)
+
 
 @router.post("/{uid}/start")
 async def start_ocr(
@@ -241,12 +262,7 @@ async def save_ocr_binding(
         raise HTTPException(status_code=404, detail="Diagram not found")
 
     # Binding требует: 1) граф провалидирован, 2) OCR результат есть
-    if diagram.status not in (
-        DiagramStatus.VALIDATED_GRAPH,
-        DiagramStatus.CONTOURS_VALIDATED,
-        DiagramStatus.OCR_COMPLETED,
-        DiagramStatus.OCR_BOUND,
-    ):
+    if diagram.status not in _BINDING_SAVE_STATUSES:
         raise HTTPException(
             status_code=400,
             detail=f"Cannot save binding: status is '{diagram.status.value}', "

@@ -96,6 +96,27 @@ def _status_ge(current: DiagramStatus, threshold: DiagramStatus) -> bool:
     return _STATUS_IDX.get(current, -1) >= _STATUS_IDX.get(threshold, 999)
 
 
+def _status_label(status_value: str) -> str:
+    """Русская подпись статуса для диалога — без значка и без ключа.
+
+    Словарь подписей один на клиента (`ui/widgets/diagram_list.py`); пятый
+    самодельный маппинг здесь не заводится. Значок («✓», «⏳») — метка строки
+    списка, а не часть названия, и в тексте вопроса лишний. Термины `OCR` и
+    `Bbox` внутри подписи легальны: это слова, а не технические ключи.
+    """
+    from ui.widgets.diagram_list import STATUS_LABELS
+
+    try:
+        label = STATUS_LABELS.get(DiagramStatus(status_value), "")
+    except ValueError:
+        label = ""
+    if not label:
+        return status_value
+    while label and not label[0].isalnum():
+        label = label[1:]
+    return label.strip() or status_value
+
+
 # Каждая бусина: (idx, key, completed_when, in_progress_statuses, available_when)
 _BEAD_DEFS = [
     (BEAD_FRAME,         "frame",       DiagramStatus.FRAME_CLEANED,
@@ -596,6 +617,31 @@ class DiagramWorkspace(QWidget):
         ("fxml",        "Экспорт"),
     ]
 
+    #: Русская подпись кнопки по её ключу. Одна на класс: тот же словарь
+    #: собирался локально трижды (`_KEY_LABELS = {k: v for k, v in ...}`),
+    #: и четвёртую копию плодить незачем.
+    _KEY_LABELS = dict(_BUTTON_DEFS)
+
+    #: Ключи фазы B: «Проверка схемы» ⇄ «Контуры» ⇄ «Привязка» ⇄ «Ручная
+    #: правка». Вход в уже пройденный этап здесь НЕ откат (решения Максима
+    #: №7/№8): этапы разные, работа независимая, и посмотреть на сделанное
+    #: оператор имеет право без разрушения конвейера. Серверные гейты фазы B
+    #: повторное сохранение и подтверждение принимают (Н2/Н2с/3.1в/Н8+).
+    #: Фаза A (`frame`…`graph`) линейна, повторный проход там разрушающий —
+    #: она остаётся за диалогом отката.
+    _PHASE_B_FREE_ENTRY = ("val_graph", "contours", "ocr_binding", "edit_graph")
+
+    #: Артефакты, независимые от графа, при откате graph/contour-этапов
+    #: сохраняются: OCR и SAM2 считаются параллельно сборке.
+    _PRESERVE_OCR_KEYS = ("graph", "val_graph", "contours")
+    #: `ocr` здесь — пункт 5-1 дороги: «Переделать OCR» не должно сносить
+    #: SAM2-контуры (их считают поточечно руками). После Н3+ клик по
+    #: пройденному распознаванию откатов не делает вовсе, но rollback-путь
+    #: остаётся достижим с других кнопок — страховка та же однострочная.
+    #: В `_PRESERVE_OCR_KEYS` ключа `ocr` быть НЕ должно: при «Переделать OCR»
+    #: старые OCR-артефакты обязаны сноситься.
+    _PRESERVE_CONTOURS_KEYS = ("graph", "val_graph", "contours", "ocr")
+
     def __init__(
         self,
         api_client: APIClient,
@@ -617,6 +663,7 @@ class DiagramWorkspace(QWidget):
         self._active_tab_key = ""  # Ключ: "cvat", "junction", "pipe", "graph"
         self._btn_back_injected = None  # Кнопка ← Назад внутри вкладки
         self._ocr_notified = False  # B6.4: OCR ready notification sent
+        self._ocr_rerunning = False  # идёт подтверждённый перезапуск OCR
         self._was_status_watching = False  # Paused status polling while tab is open
         # Отказы отправки, о которых сказал веер: ключ бусины → отпечаток строк
         # `/stages` этого этапа, известных НА МОМЕНТ отказа (None — не прочитались).
@@ -787,6 +834,7 @@ class DiagramWorkspace(QWidget):
         self._masks_completion_sent = False
         self._stop_ocr_poll()
         self._ocr_notified = False
+        self._ocr_rerunning = False
         self._fxml_save_prompted = True
         self._prtx_armed = False
         self._prtx_skip_next = False
@@ -971,17 +1019,15 @@ class DiagramWorkspace(QWidget):
                 ocr_info = self.api_client.get_ocr_status(self._uid)
                 if ocr_info.get("has_ocr_result"):
                     self._ocr_notified = True
+                    self._ocr_rerunning = False     # новый результат пришёл
                     self._stop_ocr_poll()
                     self.beads.set_state(BEAD_OCR, BeadState.COMPLETED)
                     if "ocr" in self._action_buttons:
                         self._action_buttons["ocr"].setEnabled(True)
                         self._action_buttons["ocr"].setStyleSheet(_BTN_STYLE_GREEN)
-                    # Привязка — только с проверенным графом (`_binding_reachable`).
-                    if (_binding_reachable(status)
-                            and "ocr_binding" in self._action_buttons):
-                        self._action_buttons["ocr_binding"].setEnabled(True)
-                        self._action_buttons["ocr_binding"].setStyleSheet(_BTN_STYLE_YELLOW)
-                        self.beads.set_state(BEAD_OCR_BINDING, BeadState.AVAILABLE)
+                    # Привязка — только с проверенным графом (`_binding_reachable`),
+                    # и цветом по тому, пройден ли этап (`_light_binding_button`).
+                    self._light_binding_button(status)
                     # «Ручная правка» по факту OCR-артефакта БОЛЬШЕ НЕ ОТКРЫВАЕТСЯ:
                     # гейт §3.2 — сначала привязка, потом готовая раскладка
                     # (ui/services/layout_gate.py, применяется в _on_stages_updated).
@@ -1007,12 +1053,9 @@ class DiagramWorkspace(QWidget):
             if "ocr" in self._action_buttons:
                 self._action_buttons["ocr"].setEnabled(True)
                 self._action_buttons["ocr"].setStyleSheet(_BTN_STYLE_GREEN)
-            # Привязка — только с проверенным графом (`_binding_reachable`).
-            if (_binding_reachable(status)
-                    and "ocr_binding" in self._action_buttons):
-                self._action_buttons["ocr_binding"].setEnabled(True)
-                self._action_buttons["ocr_binding"].setStyleSheet(_BTN_STYLE_YELLOW)
-                self.beads.set_state(BEAD_OCR_BINDING, BeadState.AVAILABLE)
+            # Привязка — только с проверенным графом (`_binding_reachable`),
+            # и цветом по тому, пройден ли этап (`_light_binding_button`).
+            self._light_binding_button(status)
             # «Ручная правка» по факту OCR-артефакта БОЛЬШЕ НЕ ОТКРЫВАЕТСЯ:
             # гейт §3.2 — сначала привязка, потом готовая раскладка
             # (ui/services/layout_gate.py, применяется в _on_stages_updated).
@@ -1020,6 +1063,32 @@ class DiagramWorkspace(QWidget):
     # =================================================================
     # OCR artifact polling (independent of DiagramStatus changes)
     # =================================================================
+
+    def _light_binding_button(self, status) -> None:
+        """Зажечь кнопку и бусину привязки по факту готового OCR-результата.
+
+        ⛔ Цвет решает НЕ артефакт, а ПРОЙДЕН ЛИ ЭТАП: при `ocr_bound` и позже
+        привязка уже сделана, и жёлтое «сделай это» там врёт. Замечание приёмки
+        2026-08-25: во время пересчёта раскладки тик поллера перекрашивал
+        готовую зелёную привязку в жёлтую, и оператор видел, как пройденный
+        этап снова просится в работу (замер §P3.11).
+
+        Порог достижимости — тот же `_binding_reachable`, что и у гейта
+        сохранения на сервере; раньше него привязка ВПЕРЕДИ и жёлтый честен.
+
+        Одна точка на три ветки параллельного OCR (`_apply_status` × 2 и
+        `_check_ocr_artifact`): правило было написано трижды, и разъехаться
+        ему было нечем помешать.
+        """
+        btn = self._action_buttons.get("ocr_binding")
+        if btn is None or not _binding_reachable(status):
+            return
+        done = _status_ge(status, DiagramStatus.OCR_BOUND)
+        btn.setEnabled(True)
+        btn.setStyleSheet(_BTN_STYLE_GREEN if done else _BTN_STYLE_YELLOW)
+        self.beads.set_state(
+            BEAD_OCR_BINDING,
+            BeadState.COMPLETED if done else BeadState.AVAILABLE)
 
     def _start_ocr_poll(self):
         """Запустить периодическую проверку OCR артефакта."""
@@ -1044,6 +1113,7 @@ class DiagramWorkspace(QWidget):
             ocr_info = self.api_client.get_ocr_status(self._uid)
             if ocr_info.get("has_ocr_result"):
                 self._ocr_notified = True
+                self._ocr_rerunning = False         # новый результат пришёл
                 self._stop_ocr_poll()
                 logger.info("OCR artifact detected via poll for %s", self._uid[:8])
                 self.status_message.emit(
@@ -1061,11 +1131,7 @@ class DiagramWorkspace(QWidget):
                 # статуса нет. Тик, заставший статус раньше «Проверки схемы»,
                 # дверь не открывает — её откроет `_apply_status` тем же
                 # правилом, когда статус дойдёт (ветка `_ocr_notified` выше).
-                if (_binding_reachable(self._last_status)
-                        and "ocr_binding" in self._action_buttons):
-                    self._action_buttons["ocr_binding"].setEnabled(True)
-                    self._action_buttons["ocr_binding"].setStyleSheet(_BTN_STYLE_YELLOW)
-                    self.beads.set_state(BEAD_OCR_BINDING, BeadState.AVAILABLE)
+                self._light_binding_button(self._last_status)
                 # «Ручная правка» по факту OCR-артефакта БОЛЬШЕ НЕ ОТКРЫВАЕТСЯ:
                 # гейт §3.2 — сначала привязка, потом готовая раскладка
                 # (ui/services/layout_gate.py, применяется в _on_stages_updated).
@@ -1109,6 +1175,15 @@ class DiagramWorkspace(QWidget):
         if (target.get(BEAD_OCR) != BeadState.COMPLETED
                 and _ocr_stage_running(getattr(self, "_last_stages", None))):
             target[BEAD_OCR] = BeadState.IN_PROGRESS
+
+        # ПЕРЕЗАПУСК РАСПОЗНАВАНИЯ: строки стадии может ещё не быть (её заводит
+        # воркер), а результат сервер уже удалил. Пока новый не пришёл, OCR
+        # крутится, а привязке кормиться нечем — и то и другое ВОПРЕКИ статусу,
+        # который про перезапуск не знает (у OCR своего статуса нет).
+        if self._ocr_rerun_in_flight():
+            target[BEAD_OCR] = BeadState.IN_PROGRESS
+            target[BEAD_OCR_BINDING] = BeadState.UNAVAILABLE
+            target[BEAD_EDIT_GRAPH] = BeadState.UNAVAILABLE
 
         # Перекрыть pipe/junction если подтверждены по отдельности
         if status == DiagramStatus.VALIDATING_MASKS:
@@ -1303,6 +1378,26 @@ class DiagramWorkspace(QWidget):
             processing.add("fxml")
             available.discard("fxml")
             completed.discard("fxml")
+
+        # ПЕРЕЗАПУСК РАСПОЗНАВАНИЯ: сервер удаляет `OCR_RESULT` в самом начале
+        # `/ocr/start`, значит кормиться привязке сейчас нечем. Гасим её
+        # НЕЗАВИСИМО от статуса: `_buttons_for_status` считает `ocr_binding`
+        # пройденным при `ocr_bound` и позже, поэтому `_start_ocr` гасил кнопку,
+        # а первый же тик опроса возвращал её на место (замер §P3.11).
+        if self._ocr_rerun_in_flight():
+            processing.add("ocr")
+            available.discard("ocr")
+            completed.discard("ocr")
+            # Привязка и «Ручная правка» кормятся одним и тем же результатом:
+            # холст несёт подписи, привязанные к узлам, и пересобирать его
+            # поверх исчезнувшего OCR не на чем (решение Максима на приёмке
+            # 2026-08-25). По завершении перезапуска доступность «Ручной
+            # правки» снова решает ГЕЙТ РАСКЛАДКИ штатным путём — сам гейт
+            # эта ветка не трогает.
+            for _k in ("ocr_binding", "edit_graph"):
+                processing.discard(_k)
+                available.discard(_k)
+                completed.discard(_k)
 
         # Map error_stage to button key for retry
         _STAGE_TO_KEY = {
@@ -1909,6 +2004,81 @@ class DiagramWorkspace(QWidget):
     # Кнопки действий — фоновые процессы
     # =================================================================
 
+    def _rollback_consequence(self, target: str) -> str:
+        """Что станет с холстом «Ручной правки» при откате до `target`.
+
+        Граница та же, что на сервере (`app/api/rollback.py: canvas_dies`):
+        цель «Привязка подписей» и позже холст сохраняет, более ранняя —
+        сносит вместе с файлом. `graph_canvas.json` — единственное место, где
+        живут правки оператора, и до этого пункта диалог о нём молчал: строка
+        «все последующие артефакты будут удалены» формально не врала, но слов
+        «Ручная правка» и «холст» в ней не было.
+        """
+        try:
+            keeps_canvas = _status_ge(DiagramStatus(target), DiagramStatus.OCR_BOUND)
+        except ValueError:
+            keeps_canvas = False
+        if keeps_canvas:
+            return ("Холст «Ручной правки» сохранится, "
+                    "раскладка будет пересчитана.")
+        return ("Правки в «Ручной правке» будут потеряны: "
+                "холст соберётся заново из проверенной схемы.")
+
+    def _ocr_already_ran(self) -> bool:
+        """Запускалось ли распознавание для этой диаграммы хоть раз.
+
+        ⛔ По статусу диаграммы это НЕ определяется, и на этом сломался первый
+        заход пункта: у распознавания своего статуса нет — оно идёт параллельно
+        сборке графа, — а `OCR_COMPLETED` в конвейере не присваивает НИКТО
+        (`MEASUREMENTS §P3.2`). Вопрос стоял под `key in completed`, то есть
+        в живом конвейере не срабатывал ни разу: оператор жмёт зелёную кнопку
+        при `validated_graph`/`contours_validated`, где этап «пройденным» не
+        числится, а кнопка зеленеет по АРТЕФАКТУ.
+
+        Признаков четыре, и любого достаточно:
+          · результат уже видели (`_ocr_notified` — тот же признак, по которому
+            зеленеет кнопка);
+          · распознавание числится упавшим (`_stage_errors`) — это путь красной
+            кнопки, и там признак есть ВСЕГДА, без опоры на кэш стадий;
+          · строка стадии `ocr` есть в `/stages` — бежит, упала или закончилась;
+          · статус всё-таки дошёл до `ocr_completed` (достижим откатом).
+        «Первый запуск» — это «не бежало И результата нет», обе половины.
+        """
+        if self._ocr_notified:
+            return True
+        if "ocr" in getattr(self, "_stage_errors", {}):
+            return True
+        if _status_ge(self._last_status, DiagramStatus.OCR_COMPLETED):
+            return True
+        for s in (getattr(self, "_last_stages", None) or []):
+            if (s.get("stage_type") or "").lower() == "ocr":
+                return True
+        return False
+
+    def _ocr_rerun_in_flight(self) -> bool:
+        """Идёт подтверждённый ПЕРЕЗАПУСК распознавания — результата сейчас нет.
+
+        Флаг живёт от успешного `POST /ocr/start` до нового `has_ocr_result`.
+        Отдельный от `_ocr_notified` он не для красоты: тот False и на СВЕЖЕЙ
+        загрузке готовой схемы (ветка опроса артефакта не заходит на статусы
+        после контуров), и по нему привязку гасить нельзя — она там законна.
+        """
+        return bool(getattr(self, "_ocr_rerunning", False))
+
+    def _confirm_ocr_restart(self) -> bool:
+        """Спросить про повторный запуск распознавания. True — запускаем."""
+        reply = QMessageBox.question(
+            self, "Распознавание текста",
+            "Распознавание текста уже запускалось.\n"
+            "Запустить его заново?\n\n"
+            "Прежний результат распознавания будет удалён, "
+            "привязку подписей придётся пройти снова.\n"
+            "Схема и контуры не пострадают.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return reply == QMessageBox.StandardButton.Yes
+
     @Slot()
     def _on_button_click(self, key: str, original_handler):
         """Обработчик клика по кнопке — если этап уже пройден, предложить откат."""
@@ -1933,15 +2103,38 @@ class DiagramWorkspace(QWidget):
             original_handler()
             return
 
+        # Фаза B: вход в пройденный этап — не откат. Раньше здесь был один
+        # диалог на все кнопки: «Да» разрушал конвейер, «Нет» не открывал
+        # ничего, то есть посмотреть на сделанное было нельзя вовсе.
+        # Устаревание холста после правки ловит sha (`canvas_state.is_stale`) —
+        # удалять руками нечего.
+        if key in self._PHASE_B_FREE_ENTRY:
+            original_handler()
+            return
+
+        # Распознавание — не вкладка, а POST: `_start_ocr` сносит сырой
+        # результат (`app/api/ocr.py`) и жжёт минуты CPU. Конвейер при этом
+        # назад не идёт — отката тут нет (решение №6 редтима).
+        # ⛔ Вопрос про ПЕРЕЗАПУСК стоит НЕ здесь, а в самом `_start_ocr`:
+        # здесь это была бы одна дверь из двух (вторая — окно отчёта об
+        # ошибке), да ещё и под мёртвым условием `key in completed`. Приёмка
+        # глазами 2026-08-25: при статусах фазы B кнопка зелёная по артефакту,
+        # а «пройденным» этап не числится — вопроса не было ни разу.
+        if key == "ocr":
+            original_handler()
+            return
+
         if key in completed:
             # Этап уже пройден — предложить откат
             target = self._ROLLBACK_TARGET.get(key, "")
             reply = QMessageBox.question(
                 self, "Откат",
-                f"Этап «{key}» уже пройден.\n"
-                f"Откатить до «{target}» и перезапустить?\n\n"
-                f"Все последующие артефакты будут удалены.",
+                f"Этап «{self._KEY_LABELS.get(key, key)}» уже пройден.\n"
+                f"Вернуться к «{_status_label(target)}» и пройти его заново?\n\n"
+                f"{self._rollback_consequence(target)}\n"
+                f"Артефакты последующих этапов будут удалены.",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
             )
             if reply != QMessageBox.StandardButton.Yes:
                 return
@@ -1949,8 +2142,8 @@ class DiagramWorkspace(QWidget):
                 QApplication.setOverrideCursor(Qt.WaitCursor)
                 # Preserve OCR/contour artifacts when rolling back graph/contour stages,
                 # because OCR and SAM2 run in parallel and are independent of graph.
-                preserve_ocr = key in ("graph", "val_graph", "contours")
-                preserve_contours = key in ("graph", "val_graph", "contours")
+                preserve_ocr = key in self._PRESERVE_OCR_KEYS
+                preserve_contours = key in self._PRESERVE_CONTOURS_KEYS
                 result = self.api_client.rollback_diagram(
                     self._uid, target,
                     preserve_ocr=preserve_ocr,
@@ -2061,7 +2254,16 @@ class DiagramWorkspace(QWidget):
 
     @Slot()
     def _start_ocr(self):
-        """Ручной запуск/retry OCR."""
+        """Ручной запуск/retry OCR.
+
+        Вопрос про повторный запуск стоит ЗДЕСЬ, а не в ветке клика: это
+        единственная воронка, через которую все пути оператора попадают в
+        `POST /ocr/start` (греп `start_ocr` по `ui/` даёт один вызывающий).
+        Перечень путей остаётся ДОКАЗАТЕЛЬСТВОМ, а не несущей конструкцией:
+        новая кнопка, ведущая сюда, получит вопрос без правки её ветки.
+        """
+        if self._ocr_already_ran() and not self._confirm_ocr_restart():
+            return
         try:
             self.api_client.start_ocr(self._uid)
             # Immediately show OCR bead as in-progress (don't wait for poll)
@@ -2080,6 +2282,10 @@ class DiagramWorkspace(QWidget):
                 self._action_buttons["edit_graph"].setEnabled(False)
                 self._action_buttons["edit_graph"].setStyleSheet(_BTN_STYLE_GRAY)
             self._ocr_notified = False
+            # Метка «идёт перезапуск» — её читают `_update_buttons`/`_update_beads`.
+            # Без неё они перекрашивают привязку обратно по статусу на первом же
+            # тике опроса, и оператор видит открытую дверь в пустую вкладку.
+            self._ocr_rerunning = True
             self.status_provider.watch(self._uid)
             self._start_ocr_poll()
             self.status_message.emit("🔍 OCR запущен", 3000)

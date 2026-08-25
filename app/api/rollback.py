@@ -102,17 +102,58 @@ _STAGE_ARTIFACTS = {
     ],
     DiagramStatus.COMPLETED: [
         ArtifactType.FXML,
-        # «Ручная правка» своей стадии в _STAGE_ORDER не имеет (её done_status —
-        # GENERATING_FXML), а живёт между OCR_BOUND и COMPLETED. Держим её артефакт
-        # здесь: откат на любую более раннюю стадию сносит холст, и он пересобирается
-        # из свежего graph_validated. Обратно холст не конвертируется — pretransform
-        # необратим (фикс-размеры затирают детекционные, declust двигает символы).
-        ArtifactType.GRAPH_CANVAS,
-        # ЛЕГАСИ (подсветка очагов вырезана 2026-08-02): артефакт больше не
-        # производится, но на старых установках лежит рядом с холстом и
-        # обязан сноситься вместе с ним.
-        ArtifactType.RESIDUAL_DEFECTS,
     ],
+}
+
+# ── артефакты «Ручной правки» ────────────────────────────────────────────
+#
+# Своей стадии в `_STAGE_ORDER` у холста нет (его `done_status` —
+# GENERATING_FXML), и раньше он числился за COMPLETED вместе с FXML — то есть
+# погибал при ЛЮБОЙ цели отката. Это и есть жалоба фронта 2: оператор вернулся
+# на бусину «Привязка подписей», чтобы поправить одну подпись, и потерял часы
+# ручной раскладки.
+#
+# Граница названа явно: возврат НА привязку холст переживает, всё, что глубже,
+# — сносит. Основание не вкусовое: при целях раньше `OCR_BOUND` меняется сам
+# `graph_validated`, из которого холст производен, а обратно он не
+# конвертируется (pretransform необратим — фикс-размеры затирают детекционные,
+# declust двигает символы).
+_CANVAS_ARTIFACTS = [
+    ArtifactType.GRAPH_CANVAS,
+    # ЛЕГАСИ (подсветка очагов вырезана 2026-08-02): артефакт больше не
+    # производится, но на старых установках лежит рядом с холстом и
+    # обязан сноситься вместе с ним.
+    ArtifactType.RESIDUAL_DEFECTS,
+]
+
+#: Файлы холста на диске. Строка БД и файл сносятся ВМЕСТЕ — см. `purge_artifacts`.
+_CANVAS_FILES = ("graph_canvas.json", "residual_defects.json")
+
+#: Цель отката, начиная с которой холст переживает возврат.
+_CANVAS_SURVIVES_FROM = DiagramStatus.OCR_BOUND
+
+
+def canvas_dies(target: DiagramStatus) -> bool:
+    """Гибнет ли холст при откате до `target` — цель СТРОГО РАНЬШЕ привязки.
+
+    Один предикат на два решения сразу: что удалять и звать ли раскладку
+    с `force`. Разъедься они — Н1 аннулировал бы сам себя (см. `rollback_diagram`).
+    """
+    if target not in _STAGE_ORDER:
+        return False
+    return _STAGE_ORDER.index(target) < _STAGE_ORDER.index(_CANVAS_SURVIVES_FROM)
+
+
+# Порядок конвейера для статусов, которых нет в `_STAGE_ORDER`. Промежуточные
+# `*ING` — штатные состояния (в `generating_fxml` диаграмма живёт минутами), и
+# без их позиции гейт цели пропускал ЛЮБУЮ цель, включая движение ВПЕРЁД.
+# Порядок объявления `DiagramStatus` — тот же конвейерный, что и `_STAGE_ORDER`
+# (сторож — `test_stage_order_is_a_subsequence_of_the_enum`).
+# `ERROR` объявлен последним и позиции в конвейере НЕ означает: из него откат
+# разрешён куда угодно, это штатный выход из тупика (`docs/STATUS_MACHINE.md §5`).
+_PIPELINE_RANK = {
+    status: idx for idx, status in enumerate(DiagramStatus)
+    if status is not DiagramStatus.ERROR
 }
 
 
@@ -153,11 +194,57 @@ def _artifacts_to_delete(
     types = []
     for stage in _stages_after(target):
         types.extend(_STAGE_ARTIFACTS.get(stage, []))
+    if canvas_dies(target):
+        types.extend(_CANVAS_ARTIFACTS)
     if preserve_ocr:
         types = [t for t in types if t not in _OCR_ARTIFACTS]
     if preserve_contours:
         types = [t for t in types if t not in _CONTOUR_ARTIFACTS]
     return types
+
+
+def _unlink_canvas_files(uid: UUID) -> None:
+    """Снести файлы холста с диска.
+
+    Раньше удалялась только строка `Artifact`, а `graph_canvas.json` оставался
+    лежать — и вместе с ним флаг `operator_saved`. Задача раскладки читает флаг
+    из ФАЙЛА (`worker/tasks/layout.py`) и при нём выбрасывает свой результат:
+    откат звал пересчёт с force=True, тот честно считал и молча ничего не писал.
+    """
+    from app.services.storage import StorageService
+    graph_dir = StorageService().base_path / str(uid) / "graph"
+    for fname in _CANVAS_FILES:
+        f = graph_dir / fname
+        try:
+            f.unlink()
+            logger.info("rollback %s: снят %s", uid, f.name)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            logger.warning("rollback %s: %s не удалён (%s)", uid, f.name, exc)
+
+
+async def purge_artifacts(uid: UUID, art_types: list, db) -> int:
+    """Снять артефакты: строки БД и файлы холста ВМЕСТЕ. Вернуть число строк.
+
+    Общая точка для отката по бусине и для переоткрытия валидации CVAT
+    (`app/api/cvat.py`), который раньше сносил только строки. Осиротевший
+    `graph_canvas.json` опаснее удалённого: раскладка читает холст С ДИСКА и
+    МИМО строки (`app/services/layout_dispatch.py`), видит в нём чужой
+    `operator_saved` и выбрасывает свой результат. Клиент при этом артефакт не
+    покажет вовсе — он ходит только по БД (`app/api/diagrams.py`).
+    """
+    if not art_types:
+        return 0
+    result = await db.execute(
+        delete(Artifact).where(
+            Artifact.diagram_uid == uid,
+            Artifact.artifact_type.in_(art_types),
+        )
+    )
+    if any(t in art_types for t in _CANVAS_ARTIFACTS):
+        _unlink_canvas_files(uid)
+    return result.rowcount
 
 
 @router.post("/{uid}/rollback")
@@ -195,56 +282,25 @@ async def rollback_diagram(
     if not diagram:
         raise HTTPException(status_code=404, detail="Diagram not found")
 
-    # Нельзя откатить вперёд
-    try:
-        current_idx = _STAGE_ORDER.index(diagram.status)
-        target_idx = _STAGE_ORDER.index(target)
-    except ValueError:
-        current_idx, target_idx = -1, 0
-
-    if target_idx >= current_idx and current_idx >= 0:
+    # Нельзя откатить вперёд.
+    #
+    # ⛔ Считать по `_STAGE_ORDER` нельзя: промежуточных `*ING` там нет, и у
+    # штатного `generating_fxml` индекс получался -1 — проверка не срабатывала
+    # вовсе, проходила ЛЮБАЯ цель, включая движение ВПЕРЁД («откат» из
+    # `generating_fxml` в `completed` сносил артефакты и ставил статус готовой
+    # схемы). Позицию даёт порядок объявления `DiagramStatus`, для стабильных
+    # этапов он тот же, что в `_STAGE_ORDER`.
+    current_rank = _PIPELINE_RANK.get(diagram.status)
+    if current_rank is not None and _PIPELINE_RANK[target] >= current_rank:
         raise HTTPException(
             status_code=400,
             detail=f"Cannot rollback: current '{diagram.status.value}' "
                    f"is not ahead of target '{target_status}'",
         )
 
-    # Собрать типы артефактов для удаления
+    # Собрать типы артефактов для удаления и снести их вместе с файлами.
     art_types = _artifacts_to_delete(target, preserve_ocr=preserve_ocr, preserve_contours=preserve_contours)
-
-    # Удалить артефакты из БД
-    deleted_count = 0
-    if art_types:
-        result = await db.execute(
-            delete(Artifact).where(
-                Artifact.diagram_uid == uid,
-                Artifact.artifact_type.in_(art_types),
-            )
-        )
-        deleted_count = result.rowcount
-
-    # Файл холста сносится ВМЕСТЕ с записью в БД. Раньше удалялась только
-    # строка Artifact, а `graph_canvas.json` оставался лежать — и вместе с ним
-    # флаг `operator_saved`. Задача раскладки читает флаг из ФАЙЛА
-    # (`worker/tasks/layout.py`) и при нём выбрасывает свой результат: откат
-    # звал пересчёт с force=True, тот честно считал и молча ничего не писал.
-    # Холст производный, восстанавливается из graph_validated — держать его
-    # поверх отката нечем.
-    if ArtifactType.GRAPH_CANVAS in art_types:
-        from app.services.storage import StorageService
-        graph_dir = StorageService().base_path / str(uid) / "graph"
-        # residual_defects.json — ЛЕГАСИ (подсветка очагов вырезана
-        # 2026-08-02): больше не производится, но на старых установках лежит
-        # рядом с холстом и сносится вместе с ним.
-        for fname in ("graph_canvas.json", "residual_defects.json"):
-            f = graph_dir / fname
-            try:
-                f.unlink()
-                logger.info("rollback %s: снят %s", uid, f.name)
-            except FileNotFoundError:
-                pass
-            except OSError as exc:
-                logger.warning("rollback %s: %s не удалён (%s)", uid, f.name, exc)
+    deleted_count = await purge_artifacts(uid, art_types, db)
 
     # Откат за этап рамки: вернуть сырое изображение в канонический image.png из
     # бэкапа image_raw.png (при очистке мы перезаписали image.png очищенным).
@@ -264,24 +320,25 @@ async def rollback_diagram(
     diagram.error_stage = None
     await db.commit()
 
-    # Откат СНОСИТ артефакт холста (GRAPH_CANVAS числится за COMPLETED), но
-    # проходит мимо точек запуска раскладки: вернуться можно на бусину
+    # Откат проходит мимо точек запуска раскладки: вернуться можно на бусину
     # привязки, а она ПОСЛЕ контуров, и `complete_contour_validation` второй
     # раз не позовётся. Без этого оператор шёл вперёд и получал в «Ручной
     # правке» pretransform-холст БЕЗ раскладки — молча.
     #
-    # force=True: на возврате холст пересчитывается ВСЕГДА, даже если истина не
-    # менялась (§3.2). Переиспользовать прежний нельзя не из-за экономии — он
-    # несёт правки оператора, сделанные до возврата, а они не сохраняются.
-    # Индекс берём от САМОГО target, а не от `target_idx`: тот считается в
-    # общем try с `current_idx` и обнуляется, когда текущий статус не из
-    # _STAGE_ORDER. А это как раз частый случай возврата — после «Ручной
-    # правки» статус GENERATING_FXML, и его в списке нет. `target` же
-    # гарантированно в списке: проверено выше.
+    # ⚠ `force` — ровно тот же предикат, что и гибель холста, и это не
+    # совпадение: force снимает `operator_saved`
+    # (`app/services/layout_dispatch.py`), после чего воркер через 1-2 минуты
+    # перезаписывает сохранённый оператором холст (`worker/tasks/layout.py`).
+    # Позови мы force при цели «привязка» — Н1 аннулировался бы собственным
+    # пунктом: строку и файл сберегли, а правки всё равно затёрли. Когда холст
+    # погиб, force осмыслен: пересчитывать надо всегда, даже если истина не
+    # менялась (§3.2). Когда холст жив, диспетчер без force ответит
+    # ALREADY_FRESH на свежем, а устаревший пересчитается штатной stale-проверкой.
+    # Индекс берём от САМОГО target: он гарантированно в списке (проверено выше).
     layout = None
     if _STAGE_ORDER.index(target) >= _STAGE_ORDER.index(
             DiagramStatus.CONTOURS_VALIDATED):
-        layout = await dispatch_layout(uid, db, force=True)
+        layout = await dispatch_layout(uid, db, force=canvas_dies(target))
         logger.info("rollback %s -> %s: раскладка %s", uid, target.value,
                     (layout or {}).get("status"))
 

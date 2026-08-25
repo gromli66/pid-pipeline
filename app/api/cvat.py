@@ -559,17 +559,12 @@ async def reopen_bbox_validation(
             stage.error_message = "stopped: reopened bbox validation"
 
         # 2. Сбросить артефакты после detected (seg/skeleton + старый coco_validated).
-        from app.api.rollback import _artifacts_to_delete
+        # Через ОБЩУЮ функцию отката: она сносит строку и файл вместе. Раньше
+        # здесь удалялись только строки, и `graph_canvas.json` оставался сиротой
+        # со своим `operator_saved` — раскладка читает холст с диска и мимо БД.
+        from app.api.rollback import _artifacts_to_delete, purge_artifacts
         art_types = _artifacts_to_delete(DiagramStatus.DETECTED)
-        deleted = 0
-        if art_types:
-            res = await db.execute(
-                delete(Artifact).where(
-                    Artifact.diagram_uid == uid,
-                    Artifact.artifact_type.in_(art_types),
-                )
-            )
-            deleted = res.rowcount
+        deleted = await purge_artifacts(uid, art_types, db)
 
         # 3. Статус → validating_bbox, чистим ошибку.
         diagram.status = DiagramStatus.VALIDATING_BBOX
