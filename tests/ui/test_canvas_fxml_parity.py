@@ -658,3 +658,128 @@ def test_пачка_команд_синхронизируется_один_ра�
     assert ed._bridge_cuts_batch is False
     assert _pieces(ed) == CROSS_NONE
     assert _pieces(ed) == _pieces_expected(ed)
+
+
+# ── 7.5: бегунок разрыва доходит до предпросмотра ────────────────────────
+#
+# `test_регулятор_разрыва_доходит_до_экрана` выше проверяет РЕДАКТОР: ему
+# множитель кладут прямо в атрибут. Здесь проверяется ПРОВОДКА — путь от
+# бегунка панели «Размеры» через вкладку до сцены; до правки 7.5 он
+# обрывался на `UISettings`, и предпросмотр всегда считал разрывы дефолтом.
+
+
+class _MemSettings:
+    """Настройки в памяти — тест не должен писать в реестр пользователя."""
+
+    def __init__(self):
+        self._d = {}
+
+    def _k(self, uid, key):
+        return f"appearance/{uid}/{key}"
+
+    def get_appearance(self, uid, key, default):
+        val = self._d.get(self._k(uid, key), default)
+        try:
+            if isinstance(default, bool):
+                return bool(val)
+            if isinstance(default, float):
+                return float(val)
+            if isinstance(default, int):
+                return int(val)
+        except (TypeError, ValueError):
+            return default
+        return val
+
+    def set_appearance(self, uid, key, value):
+        self._d[self._k(uid, key)] = value
+
+    def has_appearance(self, uid, key):
+        return self._k(uid, key) in self._d
+
+    def clear_appearance(self, uid):
+        for k in [k for k in self._d if k.startswith(f"appearance/{uid}/")]:
+            del self._d[k]
+
+
+@pytest.fixture
+def mem_settings(monkeypatch):
+    from ui.services.ui_settings import UISettings
+
+    mem = _MemSettings()
+    monkeypatch.setattr(UISettings, "_instance", mem)
+    yield mem
+    UISettings._instance = None
+
+
+@pytest.fixture
+def bridged_tab(qapp, tmp_path, monkeypatch, mem_settings):
+    """«Ручная правка» целиком на схеме с мостами: бегунок живёт на вкладке."""
+    from ui.tabs.advanced_graph_tab import AdvancedGraphTab
+    from ui.tabs.base_graph_tab import BaseGraphTab
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(BaseGraphTab, "_download_artifacts", lambda self: None)
+    g = _bridge_graph()
+    tab = AdvancedGraphTab("mefx7-bridge", "проба 7.5", api_client=MagicMock())
+    ed = _new_editor(tmp_path, g)
+    ed.mode_callback = tab._on_mode_changed
+    tab._editor = ed
+    tab._on_editor_ready()
+    yield tab, ed, g
+    _dispose(ed, qapp)
+
+
+def _cuts_at(ed, factor: float) -> dict:
+    return compute_bridge_cuts(ed.edges_data, ed.nodes, base_stroke=BASE,
+                               use_diameter=False, graph_scale=1.0,
+                               bridge_gap_factor=factor)
+
+
+def test_сдвинутый_бегунок_меняет_разрывы_на_экране(bridged_tab, mem_settings):
+    """7.5: жест оператора (спинбокс + «Применить разрыв») доходит до сцены.
+
+    Утверждается РАЗНИЦА: картина разрывов до жеста и после — разная, и
+    после жеста она равна той, что уйдёт в файл при новом множителе.
+    """
+    tab, ed, g = bridged_tab
+    ed.set_show_skins(True)
+    before = dict(ed._bridge_cuts)
+    assert before == _cuts_at(ed, 3.0), "обстановка: предпросмотр не на дефолте"
+
+    panel = tab._ensure_resize_panel()
+    panel._bridge_spin.setValue(WIDE_GAP)
+    panel._bridge_apply_btn.click()        # жест оператора целиком
+
+    assert ed.bridge_gap_factor == WIDE_GAP, "множитель не доехал до редактора"
+    assert ed._bridge_cuts == _cuts_at(ed, WIDE_GAP), "экран не пересчитан"
+    assert ed._bridge_cuts != before, "жест ничего не изменил — тест декоративен"
+    # и настройка по-прежнему уходит туда, откуда её читает генерация
+    assert mem_settings.get_appearance("mefx7-bridge", "bridge_gap_factor",
+                                       3.0) == WIDE_GAP
+
+
+def test_сохранённый_бегунок_доезжает_до_предпросмотра_при_открытии(
+        qapp, tmp_path, monkeypatch, mem_settings):
+    """Тот же множитель при СЛЕДУЮЩЕМ открытии вкладки.
+
+    Панель «Размеры» создаётся лениво и может не открываться вовсе, а
+    генерация читает настройку всегда — без этого пути экран и файл
+    расходились бы у всех, кто однажды подвинул бегунок.
+    """
+    from ui.tabs.advanced_graph_tab import AdvancedGraphTab
+    from ui.tabs.base_graph_tab import BaseGraphTab
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(BaseGraphTab, "_download_artifacts", lambda self: None)
+    mem_settings.set_appearance("mefx7-reopen", "bridge_gap_factor", WIDE_GAP)
+
+    tab = AdvancedGraphTab("mefx7-reopen", "проба 7.5", api_client=MagicMock())
+    ed = _new_editor(tmp_path, _bridge_graph())
+    tab._editor = ed
+    tab.apply_saved_appearance()           # зовётся из _init_editor после загрузки
+
+    assert ed.bridge_gap_factor == WIDE_GAP
+    ed.set_show_skins(True)
+    assert ed._bridge_cuts == _cuts_at(ed, WIDE_GAP)
+    assert ed._bridge_cuts != _cuts_at(ed, 3.0), "множители неразличимы — тест слеп"
+    _dispose(ed, qapp)

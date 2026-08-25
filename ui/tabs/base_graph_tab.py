@@ -1086,8 +1086,12 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
             panel, "Размер коннекторов", "size_connector",
             lambda f: self._set_editor_size("CONNECTOR_DRAW_RADIUS", f),
         )
+        # Подпись по вердикту 7.3: имя «рамка боксов» было у́же действия —
+        # под пером ходят рамки bbox, контуры полигонов, маркеры коннекторов,
+        # OCR-маркеры и стрелки (замер `MEASUREMENTS §MEFX7.5`: 424 предмета
+        # сцены из 416). Ключ хранения не менялся — `size_outline`.
         self._add_size_setting(
-            panel, "Толщина рамки боксов", "size_outline",
+            panel, "Толщина контуров и маркеров", "size_outline",
             lambda f: self._set_editor_size("OUTLINE_WIDTH", f),
         )
         # П8: подсветка стороны блока, где есть подключение. По умолчанию — вкл.
@@ -1176,24 +1180,43 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
         if self._editor:
             self._editor.set_mode(mode)
 
+    def _toggle_mode(self, mode: str):
+        """Клик оператора по кнопке-инструменту: повторный клик по активной
+        кнопке выводит в `idle`, а не перезапускает инструмент (блок 7.1).
+
+        ⛔ Toggle стоит ЗДЕСЬ, а не ранним выходом в `BaseGraphEditor.set_mode`:
+        на переисполнение того же режима завязаны
+        `tests/ui/test_mode_exit_finishes_gesture.py` и
+        `SimpleGraphEditor._enter_resize_mode`, а программные повторные входы
+        (`AdvancedGraphTab._apply_regime_ui`, `_on_edge_color_selected`) зовут
+        `_set_mode` напрямую и под toggle попадать не должны.
+
+        Спрашивается состояние КНОПКИ уже после Qt — тот же приём, что у
+        эталона рядом (`AdvancedGraphTab._set_regime`): группа неэксклюзивна,
+        поэтому клик по нажатой кнопке её отжимает, и «отжали» = «выйти».
+        """
+        btn = self._get_mode_button_map().get(mode)
+        self._set_mode(mode if (btn is None or btn.isChecked()) else "idle")
+
     def _on_mode_changed(self, mode: str):
         """Callback от editor при смене режима — синхронизировать кнопки toolbar.
 
         Снимает checked со всех кнопок mode_group.
         Потомки переопределяют _get_mode_button_map() для автоматической активации.
+
+        Группа неэксклюзивна по построению (7.1), поэтому снимать и возвращать
+        `setExclusive` здесь больше незачем: «одна нажата за раз» держит этот
+        обработчик, а не Qt.
         """
         if not hasattr(self, 'mode_group'):
             return
         btn_map = self._get_mode_button_map()
-        # Снимаем exclusive чтобы можно было uncheck все
-        self.mode_group.setExclusive(False)
         for btn in self.mode_group.buttons():
             btn.setChecked(False)
         # Активируем нужную кнопку если есть маппинг
         target_btn = btn_map.get(mode)
         if target_btn:
             target_btn.setChecked(True)
-        self.mode_group.setExclusive(True)
 
     def _get_mode_button_map(self) -> dict:
         """Маппинг mode_name → QPushButton. Потомки переопределяют."""

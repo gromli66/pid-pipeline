@@ -72,12 +72,13 @@ class AdvancedGraphTab(SimpleGraphTab):
             "Слева открывается панель: выбор класса, набор экземпляров, "
             "ширина/высота (боксы) или масштаб (полигоны).\n"
             "Ctrl+ЛКМ — добавить экземпляр в набор, Ctrl+ПКМ — убрать, "
-            "Shift+рамка — добавить группу."
+            "Shift+рамка — добавить группу.\n"
+            "Повторное нажатие кнопки или Esc — выйти из инструмента."
         )
         self.btn_resize_objects.setStyleSheet(
             "QPushButton:checked { background-color: #16a085; color: white; }"
         )
-        self.btn_resize_objects.clicked.connect(lambda: self._set_mode("resize_objects"))
+        self.btn_resize_objects.clicked.connect(lambda: self._toggle_mode("resize_objects"))
         self.mode_group.addButton(self.btn_resize_objects)
         toolbar.addWidget(self.btn_resize_objects)
 
@@ -181,7 +182,7 @@ class AdvancedGraphTab(SimpleGraphTab):
         self.btn_optimize_edge.setStyleSheet(
             "QPushButton:checked { background-color: #9C27B0; color: white; }"
         )
-        self.btn_optimize_edge.clicked.connect(lambda: self._set_mode("optimize_edge"))
+        self.btn_optimize_edge.clicked.connect(lambda: self._toggle_mode("optimize_edge"))
         self.mode_group.addButton(self.btn_optimize_edge)
         row.addWidget(self.btn_optimize_edge)
 
@@ -215,12 +216,13 @@ class AdvancedGraphTab(SimpleGraphTab):
             "Изломы ребра (точки изгиба трубы).\n"
             "Ctrl+ЛКМ по сегменту ребра — добавить точку изгиба.\n"
             "Ctrl+ЛКМ по точке и тянуть — двигать её (примагничивание к сетке).\n"
-            "Маркеры точек видны только в этом инструменте."
+            "Маркеры точек видны только в этом инструменте.\n"
+            "Повторное нажатие кнопки или Esc — выйти из инструмента."
         )
         self.btn_waypoints.setStyleSheet(
             "QPushButton:checked { background-color: #00BCD4; color: white; }"
         )
-        self.btn_waypoints.clicked.connect(lambda: self._set_mode("edit_waypoint"))
+        self.btn_waypoints.clicked.connect(lambda: self._toggle_mode("edit_waypoint"))
         self.mode_group.addButton(self.btn_waypoints)
         row.addWidget(self.btn_waypoints)
 
@@ -241,12 +243,13 @@ class AdvancedGraphTab(SimpleGraphTab):
             "Добавить текстовый блок рамкой.\n"
             "Зажмите ЛКМ и обведите область текста — создаётся пустой блок.\n"
             "Затем «Распознать добавленные» — распознать текст в них.\n"
-            "Ctrl+перетаскивание блока на узел/ребро — привязка."
+            "Ctrl+перетаскивание блока на узел/ребро — привязка.\n"
+            "Повторное нажатие кнопки или Esc — выйти из инструмента."
         )
         self.btn_add_block.setStyleSheet(
             "QPushButton:checked { background-color: #2ecc71; color: white; }"
         )
-        self.btn_add_block.clicked.connect(lambda: self._set_mode("add_ocr_block"))
+        self.btn_add_block.clicked.connect(lambda: self._toggle_mode("add_ocr_block"))
         self.mode_group.addButton(self.btn_add_block)
         row.addWidget(self.btn_add_block)
 
@@ -277,12 +280,13 @@ class AdvancedGraphTab(SimpleGraphTab):
             "Инструмент изменения цвета ребра.\n"
             "Ctrl+ЛКМ по ребру — покрасить в текущий цвет палитры.\n"
             "Обведённые рёбра (Shift+протяжка) красятся все сразу.\n"
-            "Цвет выбирается в палитре справа и сохраняется в FXML."
+            "Цвет выбирается в палитре справа и сохраняется в FXML.\n"
+            "Повторное нажатие кнопки или Esc — выйти из инструмента."
         )
         self.btn_edge_color.setStyleSheet(
             "QPushButton:checked { background-color: #E91E63; color: white; }"
         )
-        self.btn_edge_color.clicked.connect(lambda: self._set_mode("edit_edge_color"))
+        self.btn_edge_color.clicked.connect(lambda: self._toggle_mode("edit_edge_color"))
         self.mode_group.addButton(self.btn_edge_color)
         row.addWidget(self.btn_edge_color)
 
@@ -315,12 +319,13 @@ class AdvancedGraphTab(SimpleGraphTab):
             "Инструмент изменения размера (толщины) ребра.\n"
             "Ctrl+ЛКМ по ребру — задать текущий размер.\n"
             "Ctrl+колесо в редакторе — менять размер. Обведённым — всем сразу.\n"
-            "Размер виден в редакторе и записывается в FXML."
+            "Размер виден в редакторе и записывается в FXML.\n"
+            "Повторное нажатие кнопки или Esc — выйти из инструмента."
         )
         self.btn_edge_size.setStyleSheet(
             "QPushButton:checked { background-color: #795548; color: white; }"
         )
-        self.btn_edge_size.clicked.connect(lambda: self._set_mode("edit_edge_size"))
+        self.btn_edge_size.clicked.connect(lambda: self._toggle_mode("edit_edge_size"))
         self.mode_group.addButton(self.btn_edge_size)
         row.addWidget(self.btn_edge_size)
 
@@ -342,12 +347,13 @@ class AdvancedGraphTab(SimpleGraphTab):
             "Инструмент штриховки (пунктира) ребра.\n"
             "Ctrl+ЛКМ по ребру — переключить пунктирный стиль.\n"
             "Обведённые рёбра (Shift+протяжка) переключаются все сразу.\n"
-            "Пунктирный стиль сохраняется в FXML."
+            "Пунктирный стиль сохраняется в FXML.\n"
+            "Повторное нажатие кнопки или Esc — выйти из инструмента."
         )
         self.btn_edge_dash.setStyleSheet(
             "QPushButton:checked { background-color: #607D8B; color: white; }"
         )
-        self.btn_edge_dash.clicked.connect(lambda: self._set_mode("edit_edge_dash"))
+        self.btn_edge_dash.clicked.connect(lambda: self._toggle_mode("edit_edge_dash"))
         self.mode_group.addButton(self.btn_edge_dash)
         row.addWidget(self.btn_edge_dash)
 
@@ -384,15 +390,41 @@ class AdvancedGraphTab(SimpleGraphTab):
             p.on_apply = lambda w, h, s: self._editor and self._editor.apply_resize(w, h, s)
             p.on_visibility = self._on_resize_panel_visibility
             # Разрыв моста — общая настройка схемы (per uid), уходит в FXML-генерацию.
-            p.on_bridge_gap = lambda v: UISettings.instance().set_appearance(
-                self.uid, "bridge_gap_factor", float(v)
-            )
+            p.on_bridge_gap = self._on_bridge_gap_changed
             cur = float(UISettings.instance().get_appearance(
                 self.uid, "bridge_gap_factor", 3.0
             ))
             p.set_bridge_gap(cur)
             self._resize_panel = p
         return self._resize_panel
+
+    def _on_bridge_gap_changed(self, value: float):
+        """«Применить разрыв»: множитель в настройки И в предпросмотр (7.5).
+
+        До правки он доходил только до запроса генерации
+        (`diagram_workspace.py:2370`), а редактор рисовал разрывы дефолтом
+        `BRIDGE_GAP_STROKE_FACTOR` = 3.0 — оператор, сдвинувший бегунок, видел
+        новую ширину только в готовом файле. Регулятор единственный в таблице
+        оформления, который уходит в ВЫГРУЗКУ (`UI_GUIDE §11.4`), поэтому
+        расхождение экрана и файла здесь дороже обычного.
+        """
+        value = float(value)
+        UISettings.instance().set_appearance(self.uid, "bridge_gap_factor", value)
+        self._apply_bridge_gap(value)
+
+    def _apply_bridge_gap(self, value: float):
+        """Положить множитель в редактор и свести разрывы предпросмотра.
+
+        Пересчёт — та же дверь, что у жестов (`_sync_bridge_cuts`): при
+        выключенных «Скинах» она выходит сразу, а включение скинов считает
+        разрывы заново уже с новым множителем.
+        """
+        ed = self._editor
+        if ed is None or not hasattr(ed, "bridge_gap_factor"):
+            return
+        ed.bridge_gap_factor = float(value)
+        if hasattr(ed, "_sync_bridge_cuts"):
+            ed._sync_bridge_cuts()
 
     def _on_resize_panel_visibility(self, shown: bool):
         """Панель показана → сдвинуть видимую область редактора вправо,
@@ -700,12 +732,15 @@ class AdvancedGraphTab(SimpleGraphTab):
     def _build_appearance_controls(self, panel):
         from PySide6.QtGui import QColor
         super()._build_appearance_controls(panel)
+        # ⛔ Здесь был регулятор «Ребро без диаметра» (`edge_no_diam_color`).
+        # Снят вердиктом Максима по таблице 7.3: замер `MEASUREMENTS §MEFX7.5` —
+        # 0 изменённых предметов сцены во ВСЕХ четырёх состояниях при поле шума 0.
+        # Умер не опечаткой ключа, а потерянным читателем: `COLOR_NO_DIAMETER`
+        # никто не читал с тех пор, как из состояния «ОКР привязка» убрали красную
+        # подсветку рёбер без диаметра. Правило Максима: не оптимизируем — убираем.
         self._add_color_setting(
-            panel, "Ребро без диаметра", "edge_no_diam_color", QColor(255, 60, 40),
-            lambda c: self._editor and self._editor.set_edge_no_diameter_color(c),
-        )
-        self._add_color_setting(
-            panel, "Неперпенд. ребро", "edge_bad_color", QColor("#e67e22"),
+            panel, "Неперпенд. ребро (в «Перпендикулярности»)", "edge_bad_color",
+            QColor("#e67e22"),
             lambda c: self._editor and self._editor.set_edge_bad_color(c),
         )
         # Слой ОКР (текст-блоки и рамки ОКР-объектов) — одна ручка.
@@ -720,14 +755,18 @@ class AdvancedGraphTab(SimpleGraphTab):
         if ed is None:
             return
         from PySide6.QtGui import QColor
-        if hasattr(ed, "set_edge_no_diameter_color"):
-            self._apply_saved_color("edge_no_diam_color", QColor(255, 60, 40),
-                                    ed.set_edge_no_diameter_color)
+        if hasattr(ed, "set_edge_bad_color"):
             self._apply_saved_color("edge_bad_color", QColor("#e67e22"),
                                     ed.set_edge_bad_color)
         if hasattr(ed, "set_size_factor"):
             self._apply_saved_size(
                 "size_ocr_border", lambda f: ed.set_size_factor("OCR_BORDER_W", f))
+        # 7.5: множитель разрыва живёт per-uid и уходит в выгрузку — предпросмотр
+        # обязан считать его тем же числом при ЛЮБОМ положении бегунка, включая
+        # сохранённое с прошлого открытия (панель «Размеры» может не открываться
+        # вовсе, а генератор читает настройку всегда).
+        self._apply_bridge_gap(UISettings.instance().get_appearance(
+            self.uid, "bridge_gap_factor", 3.0))
 
     def apply_default_appearance(self):
         super().apply_default_appearance()
@@ -735,8 +774,7 @@ class AdvancedGraphTab(SimpleGraphTab):
         if ed is None:
             return
         from PySide6.QtGui import QColor
-        if hasattr(ed, "set_edge_no_diameter_color"):
-            ed.set_edge_no_diameter_color(QColor(255, 60, 40, 180))
+        if hasattr(ed, "set_edge_bad_color"):
             ed.set_edge_bad_color(QColor("#e67e22"))
 
     def set_project_code(self, project_code: str):

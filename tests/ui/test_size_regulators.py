@@ -293,7 +293,7 @@ def test_t6_panel_sliders_are_built_and_wired(qapp, data_paths, mem_settings,
 
     titles = {lbl.text().split(":")[0] for lbl in panel.findChildren(QLabel)}
     assert "Размер коннекторов" in titles
-    assert "Толщина рамки боксов" in titles
+    assert "Толщина контуров и маркеров" in titles
 
     base = ed.CONNECTOR_DRAW_RADIUS
     # подвинуть первый размерный ползунок (25..400) — редактор обязан отреагировать
@@ -331,3 +331,114 @@ def test_t6_ocr_binding_tab_contract(qapp, tmp_path, mem_settings):
     ed.set_node_size_factor(1.0)
     ed.set_text_border_factor(1.0)
     assert (ed.NODE_DRAW_RADIUS, ed.OCR_BORDER_WIDTH, ed._ocr_bound_border_w) == base
+
+
+# ── 7.3: состав шестерёнки «Ручной правки» после вердикта по таблице ──────
+#
+# Замок на все три решения сразу (`MEASUREMENTS §MEFX7.5`): мёртвый регулятор
+# снят, два переименованы, остальные восемь не тронуты. Перечень снимается
+# С КОДА — перехватом строителя панели, а не выборкой: новый контрол попадает
+# в него сам и роняет замок, пока его не внесли осознанно.
+
+#: Шестерёнка «Ручной правки» в порядке построения (предок, затем свои).
+GEAR_CONTROLS = (
+    ("checkbox", "Показать подложку"),
+    ("checkbox", "Светлый лист"),
+    ("slider",   "Затемнение фона"),
+    ("color",    "Цвет рёбер"),
+    ("slider",   "Размер коннекторов"),
+    ("slider",   "Толщина контуров и маркеров"),
+    ("checkbox", "Подсветка сторон с подключением"),
+    ("color",    "Цвет подсветки сторон"),
+    ("color",    "Неперпенд. ребро (в «Перпендикулярности»)"),
+    ("slider",   "Толщина рамки текст-боксов"),
+)
+
+
+@pytest.fixture
+def adv_tab_cls():
+    """«Ручная правка» на РЕАЛЬНОМ `_build_appearance_controls` (своём и предка)."""
+    from ui.tabs.advanced_graph_tab import AdvancedGraphTab
+
+    class _AdvTab(AdvancedGraphTab):
+        def __init__(self, uid, editor):
+            QWidget.__init__(self)
+            self.uid = uid
+            self._editor = editor
+            self._appearance_panel = None
+
+        def _create_editor(self):
+            return self._editor
+
+        def _setup_toolbar(self, toolbar):
+            return
+
+    return _AdvTab
+
+
+def _gear_controls(tab):
+    """Что панель ПОСТРОИЛА: (вид, подпись) в порядке добавления."""
+    from ui.widgets.appearance_panel import AppearancePanel
+
+    seen = []
+
+    class _Rec(AppearancePanel):
+        def add_slider(self, label, lo, hi, cur, on_change):
+            seen.append(("slider", label))
+            return super().add_slider(label, lo, hi, cur, on_change)
+
+        def add_checkbox(self, label, checked, on_change):
+            seen.append(("checkbox", label))
+            return super().add_checkbox(label, checked, on_change)
+
+        def add_color(self, label, initial, on_change):
+            seen.append(("color", label))
+            return super().add_color(label, initial, on_change)
+
+    tab._build_appearance_controls(_Rec(tab))
+    return seen
+
+
+def test_состав_шестерёнки_ручной_правки(qapp, data_paths, mem_settings,
+                                          adv_tab_cls):
+    """Десять контролов, поимённо и по порядку — вердикт Максима по 7.3."""
+    ed = _make_editor(qapp, data_paths)
+    tab = adv_tab_cls(UID, ed)
+    assert _gear_controls(tab) == list(GEAR_CONTROLS)
+
+
+def test_мёртвый_регулятор_ребра_без_диаметра_снят(qapp, data_paths,
+                                                    mem_settings, adv_tab_cls):
+    """«Ребро без диаметра» убрано ЦЕЛИКОМ: контрол, сеттер, константа.
+
+    Замер `§MEFX7.5`: 0 изменённых предметов сцены во всех четырёх состояниях
+    при поле шума 0 — регулятор писал `COLOR_NO_DIAMETER`, которую никто
+    не читал. Утверждается РАЗНИЦА с соседом: живой `edge_bad_color` на месте.
+    """
+    ed = _make_editor(qapp, data_paths)
+    tab = adv_tab_cls(UID, ed)
+    labels = [lbl for _, lbl in _gear_controls(tab)]
+
+    assert not any("без диаметра" in lbl for lbl in labels)
+    assert not hasattr(ed, "set_edge_no_diameter_color")
+    assert not hasattr(ed, "COLOR_NO_DIAMETER")
+    # сосед по ведру «переименовать» жив — иначе тест зелен и при сносе обоих
+    assert hasattr(ed, "set_edge_bad_color")
+    assert any("Неперпенд" in lbl for lbl in labels)
+
+
+def test_переименование_не_тронуло_ключи_хранения(qapp, data_paths,
+                                                   mem_settings, adv_tab_cls):
+    """Подписи сменились, ключи `UISettings` — нет: чужие настройки не протухли."""
+    ed = _make_editor(qapp, data_paths)
+    tab = adv_tab_cls(UID, ed)
+    mem_settings.set_appearance(UID, "size_outline", 300.0)
+    mem_settings.set_appearance(UID, "edge_bad_color", "#123456")
+
+    _gear_controls(tab)          # построение читает сохранённое
+    tab.apply_saved_appearance()
+
+    assert ed.OUTLINE_WIDTH == ed._vis_base["OUTLINE_WIDTH"] * 3.0
+    assert ed.COLOR_EDGE_BAD.name() == "#123456"
+    # и ключ снятого регулятора больше никем не читается
+    assert not mem_settings.has_appearance(UID, "edge_no_diam_color")
