@@ -14988,7 +14988,7 @@ PROTOCOL «зонд не покраснел — сначала подозрев�
 | зона дёрти-флага (`test_editor_open_state_traps` + `test_upload_only_committed` + `test_contour_partial_save` + `test_autosave_non_interactive` + `test_stale_buffer_after_rebuild` + `test_junction_points_save_failure` + `test_ocr_save_failure_is_visible`) | 91 passed |
 | `tests/test_canvas_pipeline_golden.py` (бит-в-бит) | **7 passed**, эталон не дрогнул |
 | `python tools/lint_gate.py --check` | **exit 0** (169/169 BLE001/E722, mypy 0) |
-| `python tools/suite_baseline.py --check` | см. запись в `BOARD.md` |
+| `python tools/suite_baseline.py --check` | **exit 0**, «новых красных нет»: собрано **4361** (было 4351 — мои 10 новых тестов), 4322 passed, 17 skipped, **13 failed / 9 errors** — состав красных тот же, что в базе 2026-08-19 |
 
 ### MEFX5ж. Первый базовый гейт был КРАСНЫМ, и красное было своё
 
@@ -15014,3 +15014,24 @@ PROTOCOL «зонд не покраснел — сначала подозрев�
 | после починки | результат |
 |---|---|
 | все 11 тронутых файлов + 2 новых, одним прогоном | **210 passed** |
+
+### MEFX5з. Перегон гейта повис на `socketpair` — снят стеком, а не объяснением
+
+Второй прогон (после починки §MEFX5ж) встал. Судилось двумя замерами, как требует
+`PROTOCOL`: CPU процесса **25.640625 → 25.640625 за 35 с**, то есть прирост **0.00**
+(здоровый прогон даёт ~+130 %). `py-spy dump` назвал кадр:
+
+    accept (socket.py:294) → socketpair (socket.py:645)
+      → asyncio new_event_loop → asyncio runners.run
+      → test_dispatch_failure_over_every_status (test_stage_dispatch_failure_gate.py:540)
+
+Это тот самый вис на `socket.socketpair()`, которому `PROTOCOL` отвёл отдельный
+абзац: у listener'а нет connect-стороны. Кадр ЧУЖОЙ (asyncio; наборы этого пункта
+петель событий не поднимают), но «не моё» здесь и не заявляется — заявляется
+измеренный кадр. Лечение штатное: прогон снят, перезапущен в тихом окне (чужих
+полных прогонов на машине не было) и дошёл до конца за один заход.
+
+⚠ Обстановка первого прогона названа отдельно и БЕЗ вывода о причине: на машине
+шли ДВА полных прогона сразу (мой и соседней сессии), CPU 196 → 273 с и 532 → 616 с
+за пять минут — оба живые. Вис случился на ВТОРОМ прогоне, когда сосед уже закончил,
+то есть соседями он не объясняется.
