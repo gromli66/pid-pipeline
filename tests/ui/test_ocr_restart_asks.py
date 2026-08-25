@@ -641,3 +641,89 @@ def test_all_three_branches_share_one_rule():
         assert "_BTN_STYLE_YELLOW" not in src, (
             f"{func.__name__}: правило цвета снова расписано на месте"
         )
+
+
+# ── «Ручная правка» на время перезапуска (решение Максима, доработка №4) ──
+#
+# Холст «Ручной правки» несёт подписи, привязанные к узлам, а перезапуск
+# распознавания сносит сырой результат на сервере — пересобирать холст поверх
+# исчезнувшего OCR не на чем. Гасим ТОЙ ЖЕ меткой `_ocr_rerunning`, что и
+# привязку; по завершении перезапуска доступность снова решает ГЕЙТ РАСКЛАДКИ
+# штатным путём — сам гейт не тронут.
+
+# Статусы, при которых «Ручная правка» вообще доступна (её порог — `OCR_BOUND`).
+EDIT_GRAPH_REACHABLE = ["ocr_bound", "generating_fxml", "completed"]
+
+
+@pytest.mark.parametrize("status", EDIT_GRAPH_REACHABLE)
+def test_manual_edit_is_closed_while_ocr_reruns(status, bench):
+    """Гейт пункта: во время перезапуска «Ручная правка» недоступна.
+
+    Проверяется ТИК опроса, а не мгновение после клика: `_start_ocr` гасил
+    кнопку и до правки, но первый же тик возвращал её по статусу (замер §P3.12).
+    """
+    ws, _api = bench(status)
+
+    _click_ocr(ws)
+    _tick(ws, status)
+
+    assert not ws._action_buttons["edit_graph"].isEnabled(), (
+        f"{status}: «Ручная правка» открыта поверх исчезнувшего OCR"
+    )
+    assert ws.beads.get_state(dw.BEAD_EDIT_GRAPH) == BeadState.UNAVAILABLE, status
+
+
+@pytest.mark.parametrize("status", EDIT_GRAPH_REACHABLE)
+def test_manual_edit_returns_by_the_layout_gate(status, bench):
+    """По завершении OCR доступность решает гейт раскладки, как обычно.
+
+    Утверждается РАЗНИЦА: закрыта во время перезапуска, открыта после него —
+    и открыта именно ШТАТНЫМ путём, а не нашей меткой: гейт своего вердикта
+    не менял, `_gate_blocked` мы не трогаем.
+    """
+    ws, api = bench(status)
+    gate_before = getattr(ws, "_gate_blocked", False)
+
+    _click_ocr(ws)
+    _tick(ws, status)
+    assert not ws._action_buttons["edit_graph"].isEnabled(), status
+
+    api.has_ocr_result = True          # воркер положил новый ocr_result
+    ws._check_ocr_artifact()
+    _tick(ws, status)
+
+    assert ws._ocr_rerun_in_flight() is False, "метка перезапуска не снята"
+    assert ws._action_buttons["edit_graph"].isEnabled(), (
+        f"{status}: «Ручная правка» не вернулась после нового результата"
+    )
+    assert getattr(ws, "_gate_blocked", False) == gate_before, (
+        "правка залезла в состояние гейта раскладки"
+    )
+
+
+def test_the_rerun_mark_does_not_touch_the_layout_gate():
+    """Сторож границы: в самом гейте раскладки правки нет.
+
+    Пункт прямо это оговаривает. Ветка метки живёт в `_update_buttons` /
+    `_update_beads`, а `_apply_layout_gate` про перезапуск не знает вовсе.
+    """
+    import inspect
+
+    src = inspect.getsource(dw.DiagramWorkspace._apply_layout_gate)
+    assert "_ocr_rerun" not in src and "_ocr_rerunning" not in src, (
+        "гейт раскладки узнал про перезапуск — пункт этого не разрешал"
+    )
+    gate_src = inspect.getsource(__import__(
+        "ui.services.layout_gate", fromlist=["gate_state"]).gate_state)
+    assert "ocr" not in gate_src.lower().replace("ocr_bound", ""), (
+        "модуль гейта заговорил про OCR"
+    )
+
+
+def test_manual_edit_closed_only_by_the_rerun_not_by_a_fresh_load(bench):
+    """Свежая загрузка готовой схемы «Ручную правку» не гасит."""
+    ws, _api = bench("completed")
+
+    assert ws._ocr_rerun_in_flight() is False
+    assert ws._action_buttons["edit_graph"].isEnabled()
+    assert ws.beads.get_state(dw.BEAD_EDIT_GRAPH) == BeadState.COMPLETED

@@ -1183,6 +1183,7 @@ class DiagramWorkspace(QWidget):
         if self._ocr_rerun_in_flight():
             target[BEAD_OCR] = BeadState.IN_PROGRESS
             target[BEAD_OCR_BINDING] = BeadState.UNAVAILABLE
+            target[BEAD_EDIT_GRAPH] = BeadState.UNAVAILABLE
 
         # Перекрыть pipe/junction если подтверждены по отдельности
         if status == DiagramStatus.VALIDATING_MASKS:
@@ -1387,9 +1388,16 @@ class DiagramWorkspace(QWidget):
             processing.add("ocr")
             available.discard("ocr")
             completed.discard("ocr")
-            processing.discard("ocr_binding")
-            available.discard("ocr_binding")
-            completed.discard("ocr_binding")
+            # Привязка и «Ручная правка» кормятся одним и тем же результатом:
+            # холст несёт подписи, привязанные к узлам, и пересобирать его
+            # поверх исчезнувшего OCR не на чем (решение Максима на приёмке
+            # 2026-08-25). По завершении перезапуска доступность «Ручной
+            # правки» снова решает ГЕЙТ РАСКЛАДКИ штатным путём — сам гейт
+            # эта ветка не трогает.
+            for _k in ("ocr_binding", "edit_graph"):
+                processing.discard(_k)
+                available.discard(_k)
+                completed.discard(_k)
 
         # Map error_stage to button key for retry
         _STAGE_TO_KEY = {
