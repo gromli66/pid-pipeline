@@ -16,6 +16,12 @@
 * **1.5, Б1.** `load_diagram` не сбрасывал ни один из пяти кешей стадий и не
   включал слежение, поэтому кнопки и бусины НОВОЙ диаграммы решались стадиями
   ПРЕДЫДУЩЕЙ (а конфиг проекта — кешем `_project_code` чужого проекта).
+* **Доработка по приёмке (2026-08-25).** Тот же корень с четвёртой стороны:
+  кнопка и бусина «Привязка подписей» зажигались по ЕДИНСТВЕННОМУ признаку
+  `has_ocr_result` — в том числе на `building_graph`/`built`/`validating_graph`,
+  где `graph_validated.json` ещё не существует и вкладке нечего открывать.
+  Лечение — `_binding_reachable`: порог `VALIDATED_GRAPH`, ровно тот, с
+  которого пускает серверный гейт `/ocr/binding/save` (`app/api/ocr.py:244-249`).
 
 Утверждения — о РАЗНИЦЕ (`PROTOCOL §3`): один и тот же статус при бегущей и не
 бегущей стадии обязан давать РАЗНЫЕ бусины, иначе набор зелен и без лечения.
@@ -376,3 +382,117 @@ def test_second_diagram_does_not_inherit_a_closed_gate(bench):
 
     assert getattr(b.ws, "_gate_blocked", False) is False
     assert b.bead(dw.BEAD_EDIT_GRAPH) is not BeadState.IN_PROGRESS
+
+
+# ── доработка: привязка открывается не раньше «Проверки схемы» ────────────
+
+
+def binding_open(b):
+    """Открыта ли дверь привязки — кнопка И бусина одним ответом.
+
+    Обе половины называются здесь, чтобы утверждение нельзя было закрыть
+    половиной лечения: оператор идёт в пустую вкладку и по кнопке, и по
+    бусине.
+    """
+    return (b.ws._action_buttons["ocr_binding"].isEnabled(),
+            b.bead(dw.BEAD_OCR_BINDING))
+
+
+def test_ready_ocr_before_the_graph_check_keeps_binding_shut(bench):
+    """Сама боль: OCR готов, граф ещё не проверен — привязка закрыта.
+
+    `built` — момент, в который распознавание на боевом сервере обычно и
+    заканчивается: оно идёт параллельно сборке. Вкладке привязки при этом
+    открывать нечего — `graph_validated.json` появляется только после
+    «Проверки схемы», и сервер отвечает на сохранение 400.
+    """
+    b = bench(status=DiagramStatus.BUILT, has_ocr_result=True)
+
+    assert b.ws._ocr_notified is True, "признак готовности OCR не взведён"
+    assert binding_open(b) == (False, BeadState.UNAVAILABLE)
+
+
+def test_the_same_artifact_after_the_graph_check_opens_binding(bench):
+    """РАЗНИЦА, а не совпадение: тот же артефакт, но статус дошёл — открыто.
+
+    Без этой половины «лечением» сошло бы простое отключение двери.
+    """
+    b = bench(status=DiagramStatus.VALIDATED_GRAPH, has_ocr_result=True)
+
+    assert binding_open(b) == (True, BeadState.AVAILABLE)
+
+
+def test_green_ocr_button_survives_the_shut_binding_door(bench):
+    """Порог с третьей стороны: «Распознавание текста» порогом НЕ трогается.
+
+    OCR в `built` действительно завершён, и зелёная кнопка про него не врёт —
+    закрывается только дверь, которой нечего открывать.
+    """
+    b = bench(status=DiagramStatus.BUILT, has_ocr_result=True)
+
+    assert b.ws._action_buttons["ocr"].isEnabled() is True
+    assert b.bead(dw.BEAD_OCR) is BeadState.COMPLETED
+
+
+def test_poll_tick_before_the_graph_check_keeps_binding_shut(bench):
+    """Второй путь той же двери — тик OCR-поллера, у него своего статуса нет.
+
+    Сценарий идёт ПОСЛЕ предыстории (`PROTOCOL §3`): артефакта на первом
+    опросе не было, поллер запустился и принёс готовность отдельным тиком.
+    """
+    b = bench(status=DiagramStatus.BUILT, has_ocr_result=False)
+    assert b.ws._ocr_poll_timer.isActive(), "поллер не запустился"
+
+    b.api.has_ocr_result = True
+    b.ocr_tick()
+
+    assert b.ws._ocr_notified is True
+    assert binding_open(b) == (False, BeadState.UNAVAILABLE)
+
+
+def test_graph_check_after_the_tick_opens_binding(bench):
+    """Замок с другой стороны: закрытая тиком дверь обязана ОТКРЫТЬСЯ сама.
+
+    Тик остановил поллер и больше не придёт; открыть дверь после «Проверки
+    схемы» может только ветка `_ocr_notified` в `_apply_status`. Без неё
+    правка меняла бы одну ложь на тупик.
+    """
+    b = bench(status=DiagramStatus.BUILT, has_ocr_result=False)
+    b.api.has_ocr_result = True
+    b.ocr_tick()
+    assert binding_open(b) == (False, BeadState.UNAVAILABLE)
+
+    b.poll_status(DiagramStatus.VALIDATED_GRAPH)
+
+    assert binding_open(b) == (True, BeadState.AVAILABLE)
+
+
+def test_notified_ocr_during_the_graph_check_keeps_binding_shut(bench):
+    """Третье место той же двери — ветка «OCR был готов раньше».
+
+    Оператор открыл «Проверку схемы»: статус ушёл в `validating_graph`, а
+    признак готовности OCR уже взведён предыдущим опросом. Проверенного графа
+    всё ещё нет (он пишется подтверждением), и сервер сохранение отвергает —
+    дверь обязана остаться закрытой.
+    """
+    b = bench(status=DiagramStatus.BUILT, has_ocr_result=True)
+    assert b.ws._ocr_notified is True
+
+    b.poll_status(DiagramStatus.VALIDATING_GRAPH)
+
+    assert binding_open(b) == (False, BeadState.UNAVAILABLE)
+
+
+def test_poll_tick_after_the_graph_check_opens_binding(bench):
+    """Шестая клетка: тик поллера при дошедшем статусе дверь ОТКРЫВАЕТ.
+
+    Три места двери × два исхода — вся таблица, чтобы «лечением» не сошло
+    закрытие какого-нибудь одного пути (`PROTOCOL §4`).
+    """
+    b = bench(status=DiagramStatus.VALIDATED_GRAPH, has_ocr_result=False)
+    assert binding_open(b) == (False, BeadState.UNAVAILABLE)
+
+    b.api.has_ocr_result = True
+    b.ocr_tick()
+
+    assert binding_open(b) == (True, BeadState.AVAILABLE)

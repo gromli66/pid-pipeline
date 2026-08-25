@@ -213,6 +213,25 @@ def _ocr_stage_running(stages) -> bool:
     return False
 
 
+def _binding_reachable(status: DiagramStatus) -> bool:
+    """Есть ли привязке что открывать при этом статусе.
+
+    Готовый OCR-артефакт — только ПОЛОВИНА условия. Вкладка привязки кладёт
+    подписи на узлы ПРОВЕРЕННОГО графа и читает `graph_validated.json`,
+    которого до «Проверки схемы» не существует; распознавание же идёт
+    параллельно сборке и заканчивается раньше неё. Поэтому кнопка и бусина,
+    зажжённые по одному `has_ocr_result`, вели оператора в пустую вкладку
+    из `building_graph`/`built`/`validating_graph`.
+
+    Порог назван не на глаз: ровно с `VALIDATED_GRAPH` пускает серверный гейт
+    `POST /api/ocr/{uid}/binding/save` (`app/api/ocr.py:244-249`) — раньше
+    него сохранение привязок отвечает 400. Кнопку «Распознавание текста»
+    этот порог НЕ трогает: OCR при любом из этих статусов действительно
+    завершён, и зелёная кнопка про него не врёт.
+    """
+    return _status_ge(status, DiagramStatus.VALIDATED_GRAPH)
+
+
 def _stage_stuck(stage, limit_s: float = None, now=None) -> bool:
     """Стадия висит дольше предела ожидания — кнопку больше не глушим.
 
@@ -957,7 +976,9 @@ class DiagramWorkspace(QWidget):
                     if "ocr" in self._action_buttons:
                         self._action_buttons["ocr"].setEnabled(True)
                         self._action_buttons["ocr"].setStyleSheet(_BTN_STYLE_GREEN)
-                    if "ocr_binding" in self._action_buttons:
+                    # Привязка — только с проверенным графом (`_binding_reachable`).
+                    if (_binding_reachable(status)
+                            and "ocr_binding" in self._action_buttons):
                         self._action_buttons["ocr_binding"].setEnabled(True)
                         self._action_buttons["ocr_binding"].setStyleSheet(_BTN_STYLE_YELLOW)
                         self.beads.set_state(BEAD_OCR_BINDING, BeadState.AVAILABLE)
@@ -986,7 +1007,9 @@ class DiagramWorkspace(QWidget):
             if "ocr" in self._action_buttons:
                 self._action_buttons["ocr"].setEnabled(True)
                 self._action_buttons["ocr"].setStyleSheet(_BTN_STYLE_GREEN)
-            if "ocr_binding" in self._action_buttons:
+            # Привязка — только с проверенным графом (`_binding_reachable`).
+            if (_binding_reachable(status)
+                    and "ocr_binding" in self._action_buttons):
                 self._action_buttons["ocr_binding"].setEnabled(True)
                 self._action_buttons["ocr_binding"].setStyleSheet(_BTN_STYLE_YELLOW)
                 self.beads.set_state(BEAD_OCR_BINDING, BeadState.AVAILABLE)
@@ -1033,7 +1056,13 @@ class DiagramWorkspace(QWidget):
                     self._action_buttons["ocr"].setText("Распознавание текста")
                     if getattr(self, "_filled_keys", None):
                         self._filled_keys.pop("ocr", None)
-                if "ocr_binding" in self._action_buttons:
+                # Привязка — только с проверенным графом (`_binding_reachable`).
+                # Здесь порог берётся от `_last_status`: у тика поллера своего
+                # статуса нет. Тик, заставший статус раньше «Проверки схемы»,
+                # дверь не открывает — её откроет `_apply_status` тем же
+                # правилом, когда статус дойдёт (ветка `_ocr_notified` выше).
+                if (_binding_reachable(self._last_status)
+                        and "ocr_binding" in self._action_buttons):
                     self._action_buttons["ocr_binding"].setEnabled(True)
                     self._action_buttons["ocr_binding"].setStyleSheet(_BTN_STYLE_YELLOW)
                     self.beads.set_state(BEAD_OCR_BINDING, BeadState.AVAILABLE)
