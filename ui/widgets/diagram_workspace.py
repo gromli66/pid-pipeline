@@ -2367,10 +2367,21 @@ class DiagramWorkspace(QWidget):
 
     @Slot()
     def _on_frame_confirmed(self):
-        """Очистка рамки завершена (save+complete или skip) — статус уже FRAME_CLEANED."""
+        """Очистка рамки завершена (save+complete или skip) — детекцию ставит сервер.
+
+        Слежение будим БЕЗУСЛОВНО. `_close_tab_and_restore_header` возвращает
+        опрос «как было», а было никак: поллер снимает его на финальном статусе
+        (`_FINAL_STATUSES`), и вход во вкладку запоминает уже мёртвое состояние.
+        До Б9 дыры не было видно — следующее звено двигал сам клиент и звал
+        `watch` в своём теле; теперь звено двигает сервер, и без этой строки
+        оператор видит неподвижную схему до ручного «Обновить».
+        `watch` идемпотентен (множество uid) и снимется сам.
+        """
         logger.info("Frame confirmed via signal")
         self._close_tab_and_restore_header()
         self._refresh_status()
+        if self._uid:
+            self.status_provider.watch(self._uid)
 
     def _open_cvat(self):
         try:
@@ -2630,9 +2641,14 @@ class DiagramWorkspace(QWidget):
                 f"Не удалось получить аннотации:\n{exc.message}",
             )
 
-        # Возвращает слежение за статусом и обновляет бусины/кнопки —
-        # старт сегментации для этого больше не нужен.
         self._close_tab_and_restore_header()
+        # Слежение будим БЕЗУСЛОВНО — та же дыра, что у подтверждения рамки:
+        # `_close_tab_and_restore_header` возвращает опрос «как было», а было
+        # никак (поллер снял его на финальном `detected`/`validated_bbox` ещё
+        # до входа во вкладку). Прежде это чинил сам `_start_segmentation`,
+        # который звал `watch`; он убран, а сегментацию ставит сервер.
+        if self._uid:
+            self.status_provider.watch(self._uid)
 
     def _has_saved_canvas(self) -> bool:
         """Есть ли у диаграммы сохранённый холст «Ручной правки».
