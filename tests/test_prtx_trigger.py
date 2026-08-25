@@ -42,6 +42,11 @@ class _Stub:
     _update_beads = _update_buttons = _update_gif = lambda *a, **k: None
     _start_ocr_poll = _stop_ocr_poll = lambda *a: None
     _apply_error_status = lambda *a, **k: None
+    # Ещё один художник кнопок, которого `_apply_status` зовёт на ветках
+    # параллельного OCR (`ocr_binding` зелёная или жёлтая по тому, пройден
+    # ли этап). Заглушка гоняет НАСТОЯЩИЙ `_apply_status`, поэтому обязана
+    # знать всё, что он трогает у себя, — сторож ниже это и проверяет.
+    _light_binding_button = lambda *a, **k: None
 
     def _start_prtx_conversion(self):
         self.prtx_calls += 1
@@ -54,6 +59,23 @@ def _play(statuses, **pre):
     for st in statuses:
         w._apply_status(st)
     return w
+
+
+def test_заглушка_переживает_каждый_статус():
+    """Сторож самой заглушки: `_apply_status` гоняется по ПОЛНОМУ набору статусов.
+
+    Клетки ниже берут три-четыре статуса каждая, и ветки параллельного OCR
+    (`building_graph`…`contours_validated`) достаются лишь двум из семи. Из-за
+    этого новый вызов внутри `_apply_status` ронял ровно две клетки, а не файл
+    целиком, — и точечный прогон по `tests/ui` его не видел вовсе
+    (доработка №5 блока 3, 2026-08-25).
+
+    Заглушка неизбежно повторяет поверхность настоящего виджета; пусть она
+    ломается на ПЕРЕБОРЕ, с понятным сообщением, а не на выборке.
+    """
+    w = _Stub()
+    for st in S:
+        w._apply_status(st)
 
 
 def test_открытие_готовой_схемы_не_пересобирает():
