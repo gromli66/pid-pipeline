@@ -50,7 +50,6 @@ UID = str(uuid.UUID("0c111111-2222-3333-4444-555566667777"))
 # красят её при `has_ocr_result` (ветки `not self._ocr_notified` и
 # `elif self._ocr_notified`), — это и есть живой конвейер.
 GREEN_BY_ARTIFACT = [
-    "building_graph",
     "built",
     "validating_graph",
     "validated_graph",
@@ -58,6 +57,13 @@ GREEN_BY_ARTIFACT = [
     "contours_extracted",
     "contours_validated",
 ]
+
+# Решение Максима 2026-08-25 (повторный возврат ревизии связки): во время
+# сборки графа кнопка СЕРАЯ — перезапуск заведомо отбит гейтом пересборки,
+# тупиковый вопрос не предлагается. Гасит `_light_ocr_button`, и правило одно
+# на все пути зажигания. Русский отказ сервера остаётся страховкой прямых
+# путей (клетки RESTART_REFUSED ниже зовут обработчик напрямую).
+GREY_WHILE_BUILDING = ["building_graph"]
 
 # Статусы, при которых этап числится пройденным и по статусу тоже. Только на
 # них работало прежнее условие `key in completed`.
@@ -74,8 +80,8 @@ ALL_GREEN = GREEN_BY_ARTIFACT + GREEN_BY_STATUS
 # «зелёных» — и была зелёной только потому, что заглушка `start_ocr` всегда
 # отвечала `dispatched` и белого списка сервера не знала. Теперь заглушка
 # отвечает гейтом, и множества разведены явно: где перезапуск проходит, а где
-# оператор получает честный отказ по-русски.
-RESTART_REFUSED = ["building_graph"]
+# кнопка серая и обработчик держит русский отказ страховкой прямых путей.
+RESTART_REFUSED = list(GREY_WHILE_BUILDING)
 RESTART_OK = [s for s in ALL_GREEN if s not in RESTART_REFUSED]
 
 
@@ -758,7 +764,8 @@ def test_manual_edit_closed_only_by_the_rerun_not_by_a_fresh_load(bench):
 
 @pytest.mark.parametrize("status", RESTART_REFUSED)
 def test_restart_during_the_rebuild_is_refused_honestly(status, bench):
-    """Кнопка зелёная, а перезапуск во время сборки не проходит — и это видно.
+    """Страховка прямого пути: кнопка при сборке СЕРАЯ (решение Максима), но
+    обработчик достижим в обход неё — окно отчёта об ошибке, гонка тика.
 
     Утверждается РАЗНИЦА с `RESTART_OK`: там после «Да» задача уходит и бусина
     крутится, здесь оператор получает отказ и конвейер не трогается. Без этой
@@ -794,3 +801,21 @@ def test_a_refused_restart_does_not_mark_the_tab_as_rerunning(status, bench):
     _click_ocr(ws)
 
     assert ws._ocr_rerunning is False, status
+
+
+@pytest.mark.parametrize("status", GREY_WHILE_BUILDING)
+def test_the_grey_button_survives_both_lighters(status, bench):
+    """Дефект B повторного возврата: гашение обязано пережить ОБА зажигающих
+    пути — тик OCR-поллера и приход стадий; своего статуса у них нет, порог
+    берётся от `_last_status`. Первая редакция правки гасила только в
+    `_apply_status`, и один тик возвращал кнопку.
+    """
+    ws, api = bench(status, stages=[])
+    assert not ws._action_buttons["ocr"].isEnabled(), "не погасла на отрисовке"
+
+    api.has_ocr_result = True
+    ws._check_ocr_artifact()
+    assert not ws._action_buttons["ocr"].isEnabled(), "тик поллера зажёг обратно"
+
+    ws._on_stages_updated(UID, [])
+    assert not ws._action_buttons["ocr"].isEnabled(), "стадии зажгли обратно"

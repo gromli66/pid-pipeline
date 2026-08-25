@@ -705,7 +705,7 @@ def test_layout_dispatch_does_not_see_the_old_contours(storage):
 #: `_apply_status`. Литерал держит набор pains-3 — здесь он ПОВТОРЁН, а не
 #: импортирован: две независимые копии ловят правку одной из них.
 CLIENT_GREEN = {
-    "building_graph", "built", "validating_graph", "validated_graph",
+    "built", "validating_graph", "validated_graph",
     "extracting_contours", "contours_extracted", "contours_validated",
     "ocr_completed", "ocr_bound", "generating_fxml", "completed",
 }
@@ -713,11 +713,15 @@ CLIENT_GREEN = {
 #: Единственное НАМЕРЕННОЕ расхождение: во время сборки перезапуск запрещён
 #: (эндпоинт первым делом сносит `OCR_RESULT`, а сборка ждёт текстовые блоки).
 #: Пока кнопка не погашена — отказ обязан быть по-русски.
-GREEN_BUT_REFUSED = {"building_graph"}
+# Решение Максима 2026-08-25 (повторный возврат ревизии связки): building_graph
+# из зелёных УШЁЛ — кнопка на время сборки серая, зелёных-с-отказом не осталось.
+# Русский отказ сервера на этом статусе — страховка прямых путей, его клетка ниже.
+GREEN_BUT_REFUSED: set = set()
+RUSSIAN_REFUSAL = ["building_graph"]
 
 
 def test_client_green_button_matches_the_ocr_start_gate():
-    """Зелёная кнопка и белый список сервера — одно и то же, кроме одной клетки.
+    """Зелёная кнопка и белый список сервера сведены БЕЗ исключений.
 
     Перебор ведётся ПОЛНЫМ клиентским множеством, а не выборкой.
     """
@@ -739,7 +743,7 @@ def test_the_client_green_set_is_the_real_one():
     assert set(ALL_GREEN) == CLIENT_GREEN
 
 
-@pytest.mark.parametrize("status", sorted(GREEN_BUT_REFUSED))
+@pytest.mark.parametrize("status", RUSSIAN_REFUSAL)
 def test_the_intentional_refusal_speaks_russian(status, layout, broker):
     """Оператор читает отказ ПОСЛЕ «Да» на вопрос о потере результата.
 
