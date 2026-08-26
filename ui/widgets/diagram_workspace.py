@@ -2859,17 +2859,26 @@ class DiagramWorkspace(QWidget):
 
     def _get_project_config_path(self) -> str:
         """Получить путь к YAML конфигу проекта."""
+        import sys
         from pathlib import Path
         code = self._get_project_code()
         project_root = Path(__file__).resolve().parent.parent.parent
-        logger.info("Project code=%s, project_root=%s", code, project_root)
+        roots = [project_root]
+        if getattr(sys, "frozen", False):
+            # В собранном клиенте питоний код лежит ВНУТРИ бандла, а configs
+            # кладутся РЯДОМ С EXE (build_client.ps1). Путь от `__file__`
+            # упирается в бандл, конфиг проекта не находится, и вкладка
+            # привязки честно пишет «каталог конфигов проекта не задан» —
+            # то есть диаметры в собранном клиенте не ставились вообще.
+            roots.insert(0, Path(sys.executable).resolve().parent)
+        logger.info("Project code=%s, roots=%s", code, [str(r) for r in roots])
         candidates = [
             # Подпапка: configs/projects/thermohydraulics/thermohydraulics.yaml
-            project_root / "configs" / "projects" / code / f"{code}.yaml",
-            project_root / "configs" / "projects" / code / f"{code}.yml",
+            *[r / "configs" / "projects" / code / f"{code}.yaml" for r in roots],
+            *[r / "configs" / "projects" / code / f"{code}.yml" for r in roots],
             # Плоская: configs/projects/thermohydraulics.yaml
-            project_root / "configs" / "projects" / f"{code}.yaml",
-            project_root / "configs" / "projects" / f"{code}.yml",
+            *[r / "configs" / "projects" / f"{code}.yaml" for r in roots],
+            *[r / "configs" / "projects" / f"{code}.yml" for r in roots],
             Path(f"configs/projects/{code}/{code}.yaml"),
             Path(f"configs/projects/{code}.yaml"),
         ]
