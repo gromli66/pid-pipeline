@@ -27,6 +27,10 @@ COPY config /opt/box/config
 COPY fix_paths.py /opt/box/fix_paths.py
 COPY server.py    /opt/box/server.py
 COPY json2prtx.sh /usr/local/bin/json2prtx
+# Версия коробки, из которой собран образ (пишет build.ps1). Сервис отдаёт её
+# в /health: иначе по работающему контейнеру не установить, какой конвертер
+# внутри — образ приезжает готовым файлом, а не сборкой из репозитория.
+COPY box.commit   /opt/box/box.commit
 
 RUN python3 /opt/box/fix_paths.py \
  && python3 /opt/box/py/_write_s3ini.py /opt/box/engine \

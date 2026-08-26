@@ -1629,7 +1629,7 @@ def project_endpoint_to_contour(point, adjacent, segmentation):
 
 def generate_fxml_line(edge, nodes, edge_id: str,
                        base_stroke: float = LINE_STROKE_WIDTH,
-                       use_diameter: bool = True,
+                       use_diameter: bool = False,
                        graph_scale: float = 1.0,
                        cuts=None,
                        contour_snap: bool = True) -> Optional[str]:
@@ -1638,6 +1638,15 @@ def generate_fxml_line(edge, nodes, edge_id: str,
 
     Если ребро содержит waypoints — генерируется <Polyline> через все точки.
     Иначе — простая <Line> от start до end.
+
+    use_diameter: ⛔ по умолчанию ВЫКЛЮЧЕН. Толщина линии к диаметру не
+    привязана ни на одном боевом пути (решение Максима 2026-08-25 №1):
+    у холста источников толщины ровно два — дефолт `stroke_width` и кисть
+    оператора `render_width`, у legacy-пути `generate_fxml` флаг тоже False.
+    Живым остался только ключ CLI `--no-diameter`. Дефолт `True` здесь был
+    заряженной миной: новый вызывающий, не знающий про решение, молча получил
+    бы Dv300 -> толщина 12.0 вместо 2.0, то есть трубу вшестеро толще той,
+    что оператор видит на холсте.
 
     contour_snap: посадка конца на SAM2-контур (B2). 1:1-экспорт холста
     (canvas_to_fxml) выключает её: концы там уже посажены редактором, вторая

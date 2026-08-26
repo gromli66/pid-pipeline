@@ -278,9 +278,10 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self._kks_tooltip_visible: bool = False
 
         # ── Режим отображения/правки: 'ocr' | 'perp' | 'style' ──
-        #   ocr   — подсветка привязки (KKS-цвета узлов, красные рёбра без
-        #           диаметра, KKS-подписи/подсказки, правка диаметра/KKS
-        #           двойным кликом);
+        #   ocr   — подсветка привязки (KKS-цвета узлов, KKS-подписи и
+        #           подсказки, правка KKS двойным кликом). Ни красной
+        #           подсветки рёбер без диаметра, ни правки Ду здесь нет:
+        #           первая снята вердиктом mefx-7, вторая — 26.08;
         #   perp  — перпендикулярность (оранжевые рёбра + утолщение);
         #   style — размер и цвет рёбер (по умолчанию белые, кисть цвет/размер);
         #   base  — базовое (нейтральное) состояние: только общие функции,
@@ -6256,7 +6257,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         """Ctrl+двойной клик — единый жест правки, зависящий от состояния:
 
           • базовое      — по боксу: ручки размера; по полигону: правка точек;
-          • ОКР привязка — только KKS бокса / диаметр ребра / текст блока;
+          • ОКР привязка — только KKS бокса / текст блока (правка диаметра
+                           снята 26.08, см. комментарий у бывшего
+                           `_open_diameter_edit_dialog`);
           • перпендикулярность и линии — ничего.
 
         Простой двойной клик (без Ctrl) ничего не делает.
@@ -6292,10 +6295,8 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 if node and node.get('type') == 'equipment':
                     self._open_kks_edit_dialog(clicked)
                     return
-            # Ребро → диаметр.
-            edge_key, _ = self.find_nearest_edge(x, y, threshold=15.0)
-            if edge_key:
-                self._open_diameter_edit_dialog(edge_key)
+            # Ребро → ничего: правка Ду из «Ручной правки» снята (см. ниже,
+            # у бывшего `_open_diameter_edit_dialog`).
             return
 
         if regime == "base":
@@ -6314,180 +6315,21 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         # perp / style → ничего.
         event.accept()
 
-    def _open_diameter_edit_dialog(self, edge_key: tuple):
-        """Диалог редактирования диаметра ребра."""
-        from PySide6.QtWidgets import QDialog, QVBoxLayout, QFormLayout, QLineEdit, QDialogButtonBox, QLabel
+    # ⛔ Правка диаметра из «Ручной правки» СНЯТА (решение заказчика 26.08.2026).
+    #
+    # Она писала Ду в холст, а холст уходит в `graph_canvas` — тогда как `.prtx`
+    # собирается из `graph_validated` (`app/api/graph.py:562`), и назад холст в
+    # него не пишется по устройству (`app/models/artifact.py:61`). То есть Ду,
+    # поправленный здесь, до расчётной схемы не доезжал вообще: оператор правил,
+    # видел число на холсте и получал в САПФИР заводские 0.3 м = Ду300.
+    #
+    # Ду правится в одном месте — вкладка «Привязка текста», которая пишет
+    # `graph_validated` напрямую (`modules/binding/diameter_lines.py`).
+    # Вместе с диалогом снят и `_propagate_all_diameters` — старый поток
+    # (свободный проход через любой `equipment` при любой степени, сравнение
+    # ориентаций H/V вместо угла, единственное классовое правило `perehod`):
+    # 2152 протечки из 4745 проходов на корпусе 24 схем.
 
-        edge_data = self.model.find_edge_data(edge_key)
-        if not edge_data:
-            return
-
-        edge_id = edge_data.get('id', f'{edge_key[0]}|{edge_key[1]}')
-        current_text = edge_data.get('diameter_text', '')
-        current_value = edge_data.get('diameter_value', 0)
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Диаметр ребра")
-        dialog.setMinimumWidth(300)
-        layout = QVBoxLayout(dialog)
-
-        header = QLabel(f"Ребро: {edge_id}")
-        layout.addWidget(header)
-
-        form = QFormLayout()
-        text_edit = QLineEdit(str(current_text))
-        text_edit.setFont(QFont("monospace", 12))
-        text_edit.setPlaceholderText("200")
-        text_edit.selectAll()
-        form.addRow("Диаметр:", text_edit)
-        layout.addLayout(form)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
-
-        text_edit.setFocus()
-
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            new_text = text_edit.text().strip()
-            if new_text == str(current_text or "").strip():
-                return
-
-            # ⛔ Точка возврата — как у соседнего KKS по тому же жесту
-            # (Ctrl+2ЛКМ в «ОКР привязке»). Без неё правка шла МИМО стека:
-            # `revision` не рос, `has_unsaved_changes()` её не видел (вкладка
-            # закрывалась без вопроса, автосохранение не срабатывало), а
-            # первый же Ctrl+Z по соседней команде стирал её вместе с собой —
-            # её `_before` снят ДО правки (§83.31). Распространение по трубам
-            # — часть того же действия оператора, поэтому внутри шага.
-            cmd = self._ocr_push_snapshot("Диаметр ребра")
-            edge_data = self.model.find_edge_data(edge_key)
-
-            if new_text:
-                import re
-                # Чистое число → диаметр без префикса
-                if re.fullmatch(r'\d+', new_text):
-                    new_value = int(new_text)
-                    new_prefix = ''
-                    new_suffix = ''
-                else:
-                    # Полный формат (Dy200, DN50) — парсить как раньше
-                    m = re.search(r'(\d{2,4})', new_text)
-                    new_value = int(m.group(1)) if m else 0
-                    prefix_m = re.match(r'([A-Za-zА-Яа-я]+)', new_text)
-                    new_prefix = prefix_m.group(1) if prefix_m else ''
-                    suffix_m = re.search(r'\d([A-Za-zА-Яа-я]+)$', new_text)
-                    new_suffix = suffix_m.group(1) if suffix_m else ''
-
-                edge_data['diameter_text'] = new_text
-                edge_data['diameter_value'] = new_value
-                edge_data['diameter_prefix'] = new_prefix
-                edge_data['diameter_suffix'] = new_suffix
-                edge_data['diameter_confidence'] = 1.0
-                edge_data['diameter_propagated'] = False  # ручное — источник
-            else:
-                # Очистить диаметр
-                for k in ('diameter_text', 'diameter_value', 'diameter_prefix',
-                          'diameter_suffix', 'diameter_confidence',
-                          'diameter_propagated'):
-                    edge_data.pop(k, None)
-
-            # Распространить диаметры по трубам
-            prop_count = self._propagate_all_diameters()
-
-            # Шаг закрыт здесь: всё, что правка задела (сам диаметр и
-            # распространение по трубам), — один Ctrl+Z оператора.
-            self._ocr_commit(cmd)
-
-            # Refresh visual (edge color may change)
-            self._redraw_all()
-            msg = f"Диаметр: {new_text}" if new_text else "Диаметр удалён"
-            if prop_count:
-                msg += f" (распространено на {prop_count} рёбер)"
-            self.update_status(msg)
-
-    def _propagate_all_diameters(self) -> int:
-        """Распространить диаметры по трубам от рёбер-источников.
-
-        Алгоритм:
-        1. Очистить все propagated рёбра (diameter_propagated=True)
-        2. Собрать source рёбра (не propagated, имеют diameter_text)
-        3. Propagate от sources
-        4. Записать с diameter_propagated=True
-
-        Returns:
-            Количество распространённых рёбер.
-        """
-        try:
-            from modules.text_binding.binder import TextBinder, DiameterBinding
-            from modules.text_binding.config import TextRecognitionConfig
-
-            edges = self.model.edges_data
-
-            # 1. Очистить все propagated рёбра
-            for edge in edges:
-                if edge.get('diameter_propagated'):
-                    for k in ('diameter_text', 'diameter_value', 'diameter_prefix',
-                              'diameter_suffix', 'diameter_confidence',
-                              'diameter_propagated'):
-                        edge.pop(k, None)
-
-            # 2. Собрать source bindings (не propagated, с diameter_text)
-            nodes = list(self.model.nodes.values())
-            bindings = []
-            for idx, edge in enumerate(edges):
-                dtext = edge.get('diameter_text')
-                if not dtext:
-                    continue
-                src = edge.get('source', '')
-                tgt = edge.get('target', '')
-                bindings.append(DiameterBinding(
-                    ocr_block_idx=-1,
-                    edge_idx=idx,
-                    edge_id=edge.get('id', ''),
-                    edge_key=f"{src}|{tgt}",
-                    text=dtext,
-                    prefix=edge.get('diameter_prefix', ''),
-                    diameter=edge.get('diameter_value', 0),
-                    suffix=edge.get('diameter_suffix', ''),
-                    confidence=edge.get('diameter_confidence', 1.0),
-                    distance=0.0,
-                ))
-
-            if not bindings:
-                return 0
-
-            # 3. Propagate
-            cfg = TextRecognitionConfig()
-            binder = TextBinder(cfg)
-            report = binder.propagate_diameters(nodes, edges, bindings)
-
-            # 4. Записать propagated с пометкой
-            propagated_count = 0
-            for pd in report.propagated:
-                if pd.edge_idx < len(edges):
-                    edge = edges[pd.edge_idx]
-                    if edge.get('diameter_text'):
-                        continue  # source — не трогать
-                    edge['diameter_text'] = pd.text
-                    edge['diameter_value'] = pd.diameter
-                    edge['diameter_prefix'] = pd.prefix
-                    edge['diameter_suffix'] = pd.suffix
-                    edge['diameter_confidence'] = pd.confidence
-                    edge['diameter_propagated'] = True
-                    propagated_count += 1
-
-            return propagated_count
-
-        except ImportError:
-            return 0
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning("Diameter propagation failed: %s", e)
-            return 0
 
     def _toggle_kks_label(self, node_id: str):
         """Toggle KKS label above the equipment bbox."""

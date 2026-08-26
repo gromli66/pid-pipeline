@@ -116,12 +116,16 @@ def test_closed_ocr_tab_leaves_no_top_level_widgets(open_and_close):
 
 def test_control_toolbars_are_still_built(open_and_close, blobs, qapp,
                                           monkeypatch):
-    """Контроль честности: панели по-прежнему создаются и обслуживаются.
+    """Контроль честности: панель по-прежнему создаётся и обслуживается.
 
-    Утверждается РАЗНИЦА с «просто удалить их»: `_update_other_stats`
-    (`:576`, `:584`) и `_reset_all_modes` (`:1294`) обращаются к обеим
-    панелям по имени, и снос вместо переподчинения свалил бы вкладку
-    там, а не здесь.
+    Утверждается РАЗНИЦА с «просто удалить её»: `_reset_all_modes` обращается
+    к панели по имени, и снос вместо переподчинения свалил бы вкладку там, а
+    не здесь.
+
+    ⛔ Панель `diam_toolbar` СНЯТА 26.08.2026 (решение Максима: подвкладок не
+    делаем, авто-привязки Ø не будет, «Очистить Ø» не нужна). Осталась одна —
+    `kks_toolbar`; она такая же сирота, и её судьба — отдельное решение:
+    снести вместе с `_auto_bind_kks` или вернуть ей читателя.
     """
     monkeypatch.setattr(ocr_binding_tab, "QMessageBox", FakeMsgBox)
     api = HoldingAPI(blobs, None)
@@ -129,7 +133,8 @@ def test_control_toolbars_are_still_built(open_and_close, blobs, qapp,
     thread = tab._download_thread
     try:
         assert api.wait_until_downloading()
-        for name in ("kks_toolbar", "diam_toolbar"):
+        assert not hasattr(tab, "diam_toolbar"), "тулбар Ø вернулся"
+        for name in ("kks_toolbar",):
             panel = getattr(tab, name, None)
             assert panel is not None, f"панель {name} не построена"
             panel.stats_label.setText("проба")
