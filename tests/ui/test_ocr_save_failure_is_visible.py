@@ -146,7 +146,7 @@ def _make_tab(qapp, monkeypatch, api):
     ed = tab.editor
     ed._ocr_blocks = [dict(BLOCK_KKS), dict(BLOCK_DN)]
     ed._bindings = [{"ocr_block_idx": 0, "node_id": "node_1", "text": "10LAB10AP001"}]
-    ed._diameter_bindings = []
+    ed._diameter_marks = []
     ed._kks_bindings = []
     ed._validation_results = []
     tab._saved = False

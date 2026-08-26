@@ -1430,42 +1430,25 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
             logger.info("Restored %d KKS bindings from graph", len(kks_dicts))
 
         # --- Диаметры ---
-        diameter_dicts = []
-        seen_edge_keys = set()
-        for edge_idx, edge in enumerate(edges):
-            diam_text = edge.get("diameter_text")
-            if not diam_text:
-                continue
-            src, tgt = edge.get("source", ""), edge.get("target", "")
-            edge_key = f"{min(src, tgt)}|{max(src, tgt)}"
-            if edge_key in seen_edge_keys:
-                continue
-            seen_edge_keys.add(edge_key)
+        # Хранилище меток одно — сам граф. Второго (записи в `ocr_binding.json`)
+        # сознательно нет: два ответа на вопрос «что показать при открытии»
+        # дают дубли и расхождения.
+        #
+        # Поток (`diameter_source == "line"`) метками не считается и не
+        # восстанавливается — он пересчитывается по правилу линии. Хранить его
+        # было нельзя: после правки графа он устаревал молча.
+        #
+        # Связь метки с ОКР-блоком (`ocr_block_idx`) при перезагрузке не
+        # восстанавливается: угадывать блок по тексту и расстоянию значит иногда
+        # погасить ЧУЖОЙ блок. Цена — после открытия исходный текст показан в
+        # полную силу, что оператору скорее на пользу.
+        from modules.binding.diameter_lines import marks_from_edges
 
-            # Найти OCR-блок соответствующий этому диаметру
-            ocr_block_idx = self._find_diameter_ocr_block(
-                edge, diam_text, edge.get("diameter_value", 0), ocr_blocks
-            )
+        marks = marks_from_edges(edges)
+        if marks:
+            self.editor.set_diameter_marks(marks)
+            logger.info("Восстановлено меток Ду из графа: %d", len(marks))
 
-            diameter_dicts.append({
-                "edge_idx": edge_idx,
-                "edge_id": edge.get("id", ""),
-                "edge_key": edge_key,
-                "text": diam_text,
-                "prefix": edge.get("diameter_prefix", ""),
-                "diameter": edge.get("diameter_value", 0),
-                "suffix": edge.get("diameter_suffix", ""),
-                "confidence": edge.get("diameter_confidence", 1.0),
-                "propagated": edge.get("diameter_propagated", False),
-                "ocr_block_idx": ocr_block_idx,
-            })
-
-        if diameter_dicts:
-            direct = [d for d in diameter_dicts if not d.get("propagated")]
-            propagated = [d for d in diameter_dicts if d.get("propagated")]
-            self.editor.set_diameter_bindings(direct, propagated)
-            logger.info("Restored %d diameter bindings from graph (%d direct, %d propagated)",
-                        len(diameter_dicts), len(direct), len(propagated))
 
     def _find_ocr_near_node(self, node: dict, ocr_blocks: list) -> Optional[int]:
         """Fallback: найти ближайший OCR-блок к узлу."""
@@ -1493,60 +1476,59 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
                 best_idx = idx
         return best_idx
 
-    def _find_diameter_ocr_block(self, edge: dict, diam_text: str,
-                                  diam_value: int, ocr_blocks: list) -> Optional[int]:
-        """Найти OCR-блок диаметра, соответствующий ребру.
+    def _stamp_diameters(self) -> int:
+        """Записать Ду в рёбра графа: метки оператора + поток по линиям.
 
-        Ищет блок с текстом, содержащим значение диаметра (например 'Dy100'),
-        ближайший к середине ребра.
+        Разбиение считается ЗАНОВО от того графа, который сейчас уходит на диск,
+        а не берётся готовым у редактора: `Lines` держит индексы рёбер, и если
+        списки успели разойтись, Ду лёг бы на чужие рёбра. Расхождение поймал бы
+        отпечаток (`LinesOutOfDateError`), но дешевле его не создавать.
+
+        Чужие записи Ду (источник не наш) не трогаются — ни при записи, ни при
+        очистке: снести диаметр, которого мы не ставили, значит молча стереть
+        чью-то работу.
         """
-        import re as _re
+        from modules.binding.diameter_lines import (
+            apply_marks, build_lines, clear_diameters,
+        )
 
-        # Середина ребра
-        sp = edge.get("source_point")
-        tp = edge.get("target_point")
-        if not sp or not tp:
-            return None
-        wps = edge.get("waypoints", [])
-        if wps:
-            mid = wps[len(wps) // 2]
-            emx, emy = mid[1], mid[0]
-        else:
-            emx = (sp[1] + tp[1]) / 2
-            emy = (sp[0] + tp[0]) / 2
+        edges = self._graph_data.get("links") or []
+        nodes = self._graph_data.get("nodes") or []
+        if not edges or not getattr(self.editor, "_graph_edges", None):
+            # Редактор не загружен — своего мнения о диаметрах у нас нет,
+            # и чистить чужую разметку не за что.
+            return 0
 
-        # Паттерн для поиска: текст содержит число диаметра
-        diam_str = str(diam_value) if diam_value else ""
-        best_idx = None
-        best_dist = float("inf")
+        marks = self.editor.get_diameter_marks()
+        if not marks:
+            kept = clear_diameters(edges)
+            if kept:
+                logger.info("Ду: своих меток нет, чужих записей оставлено %d", kept)
+            return 0
 
-        for idx, block in enumerate(ocr_blocks):
-            if block.get("merged_into") is not None:
-                continue
-            text = block.get("text", "").strip()
-            if not text:
-                continue
-            # Текст должен содержать значение диаметра
-            if diam_str and diam_str not in text:
-                continue
-            # Текст должен быть похож на диаметр (Dy/DN/Ду/Dv + число)
-            if not _re.search(r'(?:Dy|DN|Ду|ДУ|Dv)\s*\d', text, _re.IGNORECASE):
-                continue
-            bbox = block.get("bbox")
-            if not bbox or len(bbox) != 4:
-                continue
-            bcx = (bbox[0] + bbox[2]) / 2
-            bcy = (bbox[1] + bbox[3]) / 2
-            dist = ((bcx - emx) ** 2 + (bcy - emy) ** 2) ** 0.5
-            if dist < best_dist:
-                best_dist = dist
-                best_idx = idx
+        rules = self.editor._diameter_line_rules()
+        if rules is None:
+            logger.error("Ду: таблица классов не прочитана — диаметры НЕ записаны, "
+                         "чтобы не сохранить их по неверному правилу")
+            return 0
 
-        return best_idx
+        lines_ = build_lines(nodes, edges, rules)
+        report = apply_marks(edges, lines_, marks)
 
-    # =================================================================
-    # Config helpers
-    # =================================================================
+        if report.conflicts:
+            logger.warning("Ду: линий с двумя разными значениями: %d %s",
+                           len(report.conflicts), report.conflicts[:5])
+        if report.orphan_marks:
+            logger.warning("Ду: меток на исчезнувших рёбрах: %d %s",
+                           len(report.orphan_marks), report.orphan_marks[:5])
+        if report.ineffective_marks:
+            logger.warning("Ду: метки ничего не изменили (линия занята чужой "
+                           "записью): %s", report.ineffective_marks[:5])
+        logger.info("Ду: меток %d -> линий %d, рёбер %d (чужих оставлено %d)",
+                    len(marks), report.lines_covered, report.edges_stamped,
+                    report.kept_foreign_edges)
+        return report.edges_stamped
+
 
     def _try_load_domain_binding_config(self):
         """Попробовать загрузить DomainBindingConfig из domain_profile.yaml.
@@ -1749,38 +1731,8 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
             self.api_client.save_ocr_binding(self.uid, binding_path)
 
             # === 3. Записать диаметры в рёбра графа ===
-            diameter_bindings = self.editor.get_diameter_bindings()
-            propagated = self.editor._propagated_diameters
-            diameter_count = 0
-            if self._graph_data.get("links"):
-                diam_by_edge_key = {}
-                for db in (diameter_bindings or []):
-                    ek = db.get("edge_key")
-                    if ek:
-                        diam_by_edge_key[ek] = db
-                for pd in (propagated or []):
-                    ek = pd.get("edge_key")
-                    if ek and ek not in diam_by_edge_key:
-                        diam_by_edge_key[ek] = pd
+            diameter_count = self._stamp_diameters()
 
-                for edge in self._graph_data["links"]:
-                    src, tgt = edge.get("source", ""), edge.get("target", "")
-                    ek = f"{min(src, tgt)}|{max(src, tgt)}"
-                    if ek in diam_by_edge_key:
-                        db = diam_by_edge_key[ek]
-                        edge["diameter_text"] = db.get("text", "")
-                        edge["diameter_value"] = db.get("diameter", 0)
-                        edge["diameter_prefix"] = db.get("prefix", "")
-                        edge["diameter_suffix"] = db.get("suffix", "")
-                        edge["diameter_confidence"] = db.get("confidence", 1.0)
-                        edge["diameter_propagated"] = bool(db.get("propagated", False))
-                        edge.pop("diameter_ocr_block_idx", None)
-                        diameter_count += 1
-                    else:
-                        for key in ("diameter_text", "diameter_value",
-                                    "diameter_prefix", "diameter_suffix",
-                                    "diameter_confidence", "diameter_propagated"):
-                            edge.pop(key, None)
 
             # === 4. Записать KKS в узлы графа ===
             kks_bindings = self.editor.get_kks_bindings()
