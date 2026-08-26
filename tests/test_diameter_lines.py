@@ -854,3 +854,23 @@ def test_pustoi_no_diameter_ends_vyklyuchaet_pravilo():
     r = LineRules.from_section(
         {"transit": ["truba", "datchik"], "stop": ["nasos"], "no_diameter_ends": []})
     assert r.no_diameter_ends == frozenset()
+
+
+def test_tolschina_linii_ne_privyazana_k_diametru():
+    """Ду НЕ управляет толщиной линии ни на одном пути выгрузки.
+
+    Решение Максима 2026-08-25 №1: у холста источников толщины ровно два —
+    дефолт и кисть оператора. `calculate_diameter_stroke` превращала Dv300 в
+    12.0 вместо 2.0, и труба уезжала в FXML вшестеро толще той, что оператор
+    видит, — прямое нарушение договора 1:1. Сторож на ДЕФОЛТЫ, потому что
+    заряженная мина — именно дефолт: вызывающий, не знающий про решение,
+    включил бы масштабирование, ничего не написав.
+    """
+    import inspect
+    from modules.canvas_to_fxml import generate_canvas_fxml
+    from modules.graph_to_fxml import generate_fxml, generate_fxml_line
+
+    for fn in (generate_fxml_line, generate_fxml, generate_canvas_fxml):
+        default = inspect.signature(fn).parameters["use_diameter"].default
+        assert default is False, "%s: use_diameter по умолчанию %r" % (
+            fn.__name__, default)
