@@ -1,0 +1,181 @@
+{
+  "edges": 8911,
+  "labelled_lines": 24,
+  "lines": 2602,
+  "mixed_lines": 0,
+  "mixed_where": [],
+  "need": 2531,
+  "per_sheet": {
+    "06b938ec-70ed-4e51-8698-753fd2c88db7": {
+      "edges": 456,
+      "labelled": 0,
+      "lines": 117,
+      "need": 112,
+      "sha": "fc6defe8df3ad8cd"
+    },
+    "089feca2-9d01-439e-8b07-e4e03ad7834e": {
+      "edges": 74,
+      "labelled": 0,
+      "lines": 20,
+      "need": 19,
+      "sha": "7f20011f27cc924f"
+    },
+    "0aea61c0-c957-47a7-9438-4ac06c6180fb": {
+      "edges": 541,
+      "labelled": 0,
+      "lines": 135,
+      "need": 118,
+      "sha": "0cefa5fdfa7facf2"
+    },
+    "0fc9d04c-83a9-4f66-afed-d8343c4b0289": {
+      "edges": 397,
+      "labelled": 0,
+      "lines": 116,
+      "need": 113,
+      "sha": "b6e59a7a1b761af5"
+    },
+    "13d1ef5f-d251-4a88-bfd4-e0b51f144b69": {
+      "edges": 162,
+      "labelled": 0,
+      "lines": 49,
+      "need": 48,
+      "sha": "305174ade2371d5f"
+    },
+    "26747a10-dbe5-4232-a4b2-b628f90e6631": {
+      "edges": 568,
+      "labelled": 0,
+      "lines": 183,
+      "need": 183,
+      "sha": "9cad58b9537ee50c"
+    },
+    "302171b3-f42a-4e57-9609-d4a888ac19c9": {
+      "edges": 209,
+      "labelled": 0,
+      "lines": 59,
+      "need": 59,
+      "sha": "a368ff9ae1cb25f1"
+    },
+    "3263039b-ca7b-4868-af7e-9ced960e787d": {
+      "edges": 62,
+      "labelled": 2,
+      "lines": 19,
+      "need": 17,
+      "sha": "ff4a56076b941898"
+    },
+    "51b339ab-3e4c-429c-ac5f-49c44cb9c755": {
+      "edges": 938,
+      "labelled": 0,
+      "lines": 297,
+      "need": 295,
+      "sha": "c93dbc22b3ab0ef2"
+    },
+    "54a60fd1-55d9-4e08-aa56-0eb60cb00421": {
+      "edges": 296,
+      "labelled": 0,
+      "lines": 91,
+      "need": 82,
+      "sha": "0414942ca4a8ed0d"
+    },
+    "5df8dea9-0833-469d-984c-46b5af46bb3b": {
+      "edges": 869,
+      "labelled": 0,
+      "lines": 293,
+      "need": 292,
+      "sha": "dbc8d4277008705a"
+    },
+    "620cc50d-394a-4dc6-9217-e899dfda154c": {
+      "edges": 541,
+      "labelled": 0,
+      "lines": 150,
+      "need": 148,
+      "sha": "17e9b06e2a92d366"
+    },
+    "6e7144d5-19fc-4661-b90a-f26dcaa8c71a": {
+      "edges": 118,
+      "labelled": 20,
+      "lines": 36,
+      "need": 36,
+      "sha": "9495326646e67153"
+    },
+    "70701271-ad19-433a-baea-d3a81800709b": {
+      "edges": 344,
+      "labelled": 0,
+      "lines": 79,
+      "need": 79,
+      "sha": "daa34fda30738162"
+    },
+    "751116c9-322e-4680-bd18-530e640841be": {
+      "edges": 236,
+      "labelled": 0,
+      "lines": 69,
+      "need": 63,
+      "sha": "7b87672859f00e8f"
+    },
+    "7d46ff96-2214-4fbe-ab85-e93f428fc7a5": {
+      "edges": 673,
+      "labelled": 0,
+      "lines": 174,
+      "need": 174,
+      "sha": "1a40644a9d51f0eb"
+    },
+    "89ca7583-233e-44da-b30b-f2f08eb2567d": {
+      "edges": 282,
+      "labelled": 0,
+      "lines": 80,
+      "need": 74,
+      "sha": "5f4a183b9e72ffe9"
+    },
+    "8d14cf73-983d-4633-b12d-51177ce23b78": {
+      "edges": 306,
+      "labelled": 0,
+      "lines": 103,
+      "need": 102,
+      "sha": "abb4d6ada60d1c44"
+    },
+    "8d517a35-0435-48d7-bc17-300345a15162": {
+      "edges": 513,
+      "labelled": 0,
+      "lines": 139,
+      "need": 137,
+      "sha": "7ae0fce2b4dbe39e"
+    },
+    "a5264536-5cb9-4b7c-9978-f1dc692f8c9c": {
+      "edges": 252,
+      "labelled": 0,
+      "lines": 85,
+      "need": 85,
+      "sha": "bbb5b6588a86816b"
+    },
+    "a6d28736-5039-4f40-9f7a-37b476f6fafb": {
+      "edges": 418,
+      "labelled": 0,
+      "lines": 107,
+      "need": 98,
+      "sha": "2f5d942243de3d88"
+    },
+    "c2f79462-02cc-4141-93ad-5d2275aac63c": {
+      "edges": 147,
+      "labelled": 0,
+      "lines": 41,
+      "need": 38,
+      "sha": "b8d95f2a5b636eeb"
+    },
+    "ca1f6ea2-47a3-4083-9736-451880ea8efb": {
+      "edges": 446,
+      "labelled": 0,
+      "lines": 143,
+      "need": 143,
+      "sha": "b459f16e9c4cb721"
+    },
+    "d74eb9f1-668d-4596-891f-d4e5a16d04d0": {
+      "edges": 63,
+      "labelled": 2,
+      "lines": 17,
+      "need": 16,
+      "sha": "988e673ef2161fc4"
+    }
+  },
+  "sheets": 24,
+  "skip": 71,
+  "unstable_sheets": []
+}
