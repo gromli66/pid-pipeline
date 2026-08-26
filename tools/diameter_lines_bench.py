@@ -84,13 +84,13 @@ def partition_ids(edges, lines):
 
 
 def labels_on_lines(uid_dir: Path, edges, lines):
-    """{номер линии: множество Ду с подписей}. Пустой, если OCR нет."""
+    """{номер линии: [(Ду, индекс ребра), …]}. Пустой, если OCR нет."""
     ocr = uid_dir / "ocr" / "ocr_result.json"
     if not ocr.exists():
         return {}
     with open(ocr, encoding="utf-8") as f:
         blocks = json.load(f).get("target") or []
-    hits = collections.defaultdict(set)
+    hits = collections.defaultdict(list)
     for b in blocks:
         m = DIAM_RE.search((b.get("text") or "").strip())
         bbox = b.get("bbox")
@@ -105,7 +105,7 @@ def labels_on_lines(uid_dir: Path, edges, lines):
             continue
         li = lines.line_for(best)
         if li is not None:
-            hits[li].add(int(m.group(1)))
+            hits[li].append((int(m.group(1)), best))
     return hits
 
 
@@ -113,7 +113,7 @@ def measure(root: Path, rules: LineRules, verbose: bool):
     rnd = random.Random(SHUFFLE_SEED)
     result = {
         "sheets": 0, "edges": 0, "lines": 0, "need": 0, "skip": 0,
-        "labelled_lines": 0, "mixed_lines": 0,
+        "labelled_lines": 0, "mixed_lines": 0, "ambiguous_labels": 0,
     }
     per_sheet = {}
     unstable = []
@@ -135,7 +135,20 @@ def measure(root: Path, rules: LineRules, verbose: bool):
             unstable.append(uid_dir.name[:8])
 
         hits = labels_on_lines(uid_dir, edges, lines)
-        mixed = [li for li, vals in hits.items() if len(vals) > 1]
+        # Две подписи с разным Ду, оказавшиеся ближайшими к ОДНОМУ ребру, —
+        # это неоднозначность привязки подписи, а не смешение линии: мелкий
+        # отвод подписан рядом с магистралью, и «ближайшее ребро» отдаёт обе
+        # подписи магистрали. Правило линии тут ни при чём, и краснеть на этом
+        # стенд не должен — но и молчать тоже: считается отдельно.
+        mixed, ambiguous = [], 0
+        for li, vals in hits.items():
+            if len({v for v, _e in vals}) < 2:
+                continue
+            if len({e for _v, e in vals}) == 1:
+                ambiguous += 1
+            else:
+                mixed.append(li)
+        result["ambiguous_labels"] += ambiguous
         if mixed:
             mixed_where.append((uid_dir.name[:8], len(mixed)))
 
@@ -205,6 +218,8 @@ def report(r):
           % (r["need"], r["skip"], r["edges"] / max(1, r["need"])))
     print("  подписи легли в линий: %d, из них смешанных: %d"
           % (r["labelled_lines"], r["mixed_lines"]))
+    print("  подписей, спорящих за одно ребро (не про правило): %d"
+          % r.get("ambiguous_labels", 0))
     print("  листов с неустойчивым разбиением: %d" % len(r["unstable_sheets"]))
     print("  листов, где Ду сдвинул проекцию холста: %d"
           % len(r["stale_sha_sheets"]))
