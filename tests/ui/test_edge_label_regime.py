@@ -21,10 +21,14 @@
 ⚠ **Общий у экрана и файла ТОЛЬКО кегль** (решение №7): Tahoma в клиент не
 бандлим, семейство на экране остаётся прежним (`sans-serif` у диаметра,
 `DejaVu Sans` у подписи текст-блока).
-⛔ **Множитель `_ocr_vis_scale()` из кегля убран**: кегль в FXML — это em
-в координатах ХОЛСТА, ровно тех, в которых живёт сцена, поэтому домножать
-его на вписывание растра значит снова расходиться с файлом. Замок ниже
-запирает именно это: у фикстуры `_bg_scale` заведомо не 1.0.
+⛔ **Кегль ФЛАЖКА над текст-блоком паритету с файлом больше не подчиняется**
+(решение Максима 2026-08-26: «это чистый визуал»). Он равен 9 pt вкладки
+«Привязка текста» (`OcrBindingEditor.TEXT_FONT_SIZE`), домноженным на
+`_ocr_vis_scale()` — как толщина рамки блока. Прежние 18 px без множителя
+держали равенство с файлом, но в холсте блок ужат в `_bg_scale` до ~15x6 px,
+и флажок выходил втрое выше своего блока. Замок ниже запирает новое правило:
+у фикстуры `_bg_scale` заведомо не 1.0, значит множитель проверяется всерьёз.
+Кегль самой выгрузки (`TEXT_STYLES`) правкой не тронут.
 
 ⛔ **Фикстура поднята ЗА ПОРОГ.** В исходных байтах `d74eb9f1` нет НИ ОДНОГО
 ребра с `diameter_text` (замер §MEFX3), а без него подпись не создаётся
@@ -45,6 +49,7 @@ from PySide6.QtGui import QImage, QColor, QMouseEvent       # noqa: E402
 from PySide6.QtWidgets import QApplication                  # noqa: E402
 
 from modules.graph_to_fxml import TEXT_STYLES               # noqa: E402
+from ui.editors.ocr_layer_mixin import _LABEL_PT          # noqa: E402
 
 FIXTURES = os.path.join(os.path.dirname(os.path.dirname(__file__)),
                         "fixtures", "graph")
@@ -250,14 +255,17 @@ def test_кегль_подписи_диаметра_одинаков_и_в_пр�
         _dispose(editor, qapp)
 
 
-def test_кегль_подписи_текст_блока_из_общей_таблицы(ed):
-    """Тот же кегль, что уйдёт в `<Text>` — и он же не умножен на вписывание."""
+def test_кегль_флажка_как_в_привязке_текста(ed):
+    """Флажок держит пропорцию вкладки «Привязка текста», а не кегль файла."""
     editor, _g = ed
     editor.set_display_regime("ocr")
     labels = [pair["text"] for pair in editor._ocr_block_items.values()
               if pair.get("text") is not None]
     assert len(labels) == BLOCK_COUNT, "фикстура обязана нести текст-блоки"
-    assert {it.font().pixelSize() for it in labels} == {SIZE}
+    scale = editor._ocr_vis_scale()
+    assert scale != 1.0, "замок пуст: у фикстуры вписывание растра обязано быть != 1"
+    assert {round(it.font().pointSizeF(), 3) for it in labels} ==         {round(_LABEL_PT * scale, 3)}
+    assert {it.font().pixelSize() for it in labels} == {-1},         "кегль задаётся в пунктах — пиксельный размер обязан остаться незаданным"
 
 
 def test_семейство_шрифта_на_экране_прежнее(ed):

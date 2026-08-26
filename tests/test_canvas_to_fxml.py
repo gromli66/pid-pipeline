@@ -137,10 +137,20 @@ def test_bound_label_printed_in_block_frame():
     xml = _fxml()
     hits = [ln for ln in xml.splitlines() if 'text="10KAA10AP001"' in ln]
     assert len(hits) == 1, hits
-    # bbox блока [140, 60, 260, 90]: левый край рамки + её ширина, центр по Y
-    assert 'layoutX="140.0"' in hits[0]
+    # bbox блока [140, 60, 260, 90]: коробка 80 центрируется на рамке
+    # (200-40), центр по Y как был — решение Максима 2026-08-26.
+    assert 'layoutX="160.0"' in hits[0]
     assert 'layoutY="66.0"' in hits[0]
-    assert 'wrappingWidth="120.0"' in hits[0]
+    assert 'wrappingWidth="80.0"' in hits[0]
+
+
+def test_free_label_has_no_wrapping_at_all():
+    """Коробка переноса — только у привязанных; у свободного атрибута нет."""
+    hits = [ln for ln in _fxml().splitlines() if 'text="Свободный"' in ln]
+    assert len(hits) == 1, hits
+    # bbox [1200, 800, 1300, 830]: подпись идёт от левого края рамки
+    assert 'layoutX="1200.0"' in hits[0]
+    assert 'wrappingWidth' not in hits[0]
 
 
 def test_detector_stub_kks_stays_on_control():
