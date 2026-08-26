@@ -276,3 +276,52 @@ def test_otkrytie_vkladki_podnimaet_metki_iz_grafa():
         "боевой путь открытия вкладки не поднимает метки Ду из графа — "
         "следующее сохранение сотрёт их с сервера"
     )
+
+
+# ── инструкция по Ду ───────────────────────────────────────────────────────
+
+def test_instrukciya_po_du_dostupna_iz_tulbara(tab):
+    """Жесты Ду нигде не подписаны — кнопка обязана их называть.
+
+    Tooltip и окно берут ОДИН текст: подсказка на наведении и по клику не
+    должны разъезжаться.
+    """
+    from ui.tabs.ocr_binding_tab import DIAMETER_HELP
+
+    t, _api = tab
+    assert t.btn_diam_help.toolTip() == DIAMETER_HELP
+    assert t.btn_diam_help.text() == "Ø", "значок диаметра на кнопке потерян"
+    for gesture in ("Ctrl+drag", "Ctrl+2×клик", "Пробел", "Enter",
+                    "Ctrl+ПКМ", "Ctrl+Z"):
+        assert gesture in DIAMETER_HELP, gesture
+
+
+def test_schjotchik_pokrytiya_obyasnyaet_svoi_cifry(tab):
+    """«линии 1/48 · длина 1%» без подсказки не читается."""
+    from ui.tabs.ocr_binding_tab import STATS_HELP
+
+    t, _api = tab
+    assert t.stats_label.toolTip() == STATS_HELP
+    assert "длина" in STATS_HELP and "не требуется" in STATS_HELP
+
+
+def test_knopka_du_fiktivnaya_i_ne_lovit_probel(tab, monkeypatch):
+    """Кнопка живёт ради подсказки и ничего не вызывает (решение 26.08).
+
+    Фокус ей запрещён нарочно: сфокусированная кнопка съела бы Пробел и Enter,
+    а это клавиши обхода линий без Ду.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QDialog, QMessageBox
+
+    t, _api = tab
+    opened = []
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: opened.append(self))
+    monkeypatch.setattr(QDialog, "exec", lambda self: opened.append(self))
+    before = list(t.editor.get_diameter_marks())
+
+    t.btn_diam_help.click()
+
+    assert opened == [], "фиктивная кнопка что-то открыла"
+    assert list(t.editor.get_diameter_marks()) == before
+    assert t.btn_diam_help.focusPolicy() == Qt.FocusPolicy.NoFocus
