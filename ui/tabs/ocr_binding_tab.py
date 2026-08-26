@@ -1211,15 +1211,21 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
 
         # --- KKS ---
         kks_dicts = []
+        guessed = 0
         for node in nodes:
             kks_full = node.get("kks_full")
             if not kks_full:
                 continue
             node_id = node.get("id", "")
+            # ⛔ Восстанавливаем ТОЛЬКО записанную связь. Прежде здесь стоял
+            # `_find_ocr_near_node` — поиск ближайшего блока в 100 px, — и он
+            # при открытии вкладки СОЗДАВАЛ привязки, которых оператор не делал.
+            # Это не восстановление, а авто-привязка по догадке, а её решением
+            # заказчика быть не должно. Если граф не помнит, какой блок дал KKS,
+            # связь не выдумываем: сам `kks_full` на узле при этом цел.
             ocr_idx = node.get("kks_ocr_block_idx", -1)
-            if ocr_idx < 0 or ocr_idx >= n_blocks:
-                ocr_idx = self._find_ocr_near_node(node, ocr_blocks)
-            if ocr_idx is None or ocr_idx < 0:
+            if not isinstance(ocr_idx, int) or ocr_idx < 0 or ocr_idx >= n_blocks:
+                guessed += 1
                 continue
             kks_dicts.append({
                 "ocr_block_idx": ocr_idx,
@@ -1235,7 +1241,10 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
 
         if kks_dicts:
             self.editor.set_kks_bindings(kks_dicts)
-            logger.info("Restored %d KKS bindings from graph", len(kks_dicts))
+            logger.info("Восстановлено KKS-привязок из графа: %d", len(kks_dicts))
+        if guessed:
+            logger.info("Узлов с KKS без записанного блока: %d — связь не "
+                        "восстановлена (угадывать блок нельзя)", guessed)
 
         # --- Диаметры ---
         # Хранилище меток одно — сам граф. Второго (записи в `ocr_binding.json`)
@@ -1258,31 +1267,10 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
             logger.info("Восстановлено меток Ду из графа: %d", len(marks))
 
 
-    def _find_ocr_near_node(self, node: dict, ocr_blocks: list) -> Optional[int]:
-        """Fallback: найти ближайший OCR-блок к узлу."""
-        import re as _re
-        _diam_re = _re.compile(r'^(Dy|DN|Ду|ДУ)\s*\d', _re.IGNORECASE)
-        node_bbox = node.get("bbox")
-        if not node_bbox or len(node_bbox) != 4:
-            return None
-        best_idx = None
-        best_dist = 100
-        for idx, block in enumerate(ocr_blocks):
-            if block.get("merged_into") is not None:
-                continue
-            text = block.get("text", "").strip()
-            if len(text) < 3:
-                continue
-            if _diam_re.match(text):
-                continue
-            bbox = block.get("bbox")
-            if not bbox or len(bbox) != 4:
-                continue
-            dist = _bbox_to_bbox_dist(bbox, node_bbox)
-            if dist < best_dist:
-                best_dist = dist
-                best_idx = idx
-        return best_idx
+    # ⛔ `_find_ocr_near_node` снят: он искал «ближайший блок в 100 px» и
+    # создавал этим KKS-привязки, которых оператор не делал. Восстановление
+    # работает только по ЗАПИСАННОЙ связи (`kks_ocr_block_idx`).
+
 
     #: Сколько линий уехало на сервер с конфликтом Ду — для строки состояния.
     _diameter_conflicts = 0
