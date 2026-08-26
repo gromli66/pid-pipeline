@@ -23,6 +23,10 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Signal, Slot, Qt, QThread
 
 from ui.services.api_client import APIClient, APIError
+from ui.services.layout_gate import (
+    RETRY_DOOR, latest_layout as _latest_layout, layout_task_pending,
+    layout_wait_overdue,
+)
 from ui.services.thread_lifetime import hand_over
 from ui.services.artifact_downloader import (
     ArtifactDownloader, Job, artifact, one,
@@ -675,6 +679,110 @@ def _canvas_contours_stale(canvas_path: Path, contours_path,
     return stale
 
 
+#: Вердикт холстового режима: что вкладка делает с тем, что скачалось (8.1/8.2).
+#: Аварийного холста (`_pretransform_to_canvas`) среди исходов больше НЕТ —
+#: три из четырёх прежних веток собирали его молча, с меткой
+#: `layout_applied=False`, и оператор правил недосчитанное, а настоящая
+#: раскладка ложилась рядом.
+CANVAS_READY = "ready"                  # холст свеж — открываем редактор
+CANVAS_MISSING = "missing"              # холста нет вовсе (404)
+CANVAS_STALE = "stale"                  # холст отстал от истины (граф/контуры)
+CANVAS_UNREADABLE = "download_failed"   # холст МОГ быть, но не скачался (5xx/сеть)
+CANVAS_BROKEN = "broken"                # холст скачался, но не готовится
+
+
+def canvas_verdict(artifacts: dict) -> str:
+    """Пускать ли оператора в холст и почему нет (чистая функция, без Qt).
+
+    ⛔ «Не скачался» отделён от «нет» СОЗНАТЕЛЬНО (дыра C редтима): пустота от
+    5xx неотличима от 404 по содержимому, но не по цене ошибки — на сервере
+    может лежать ручная раскладка, и запирать вкладку с текстом «холста нет»
+    значит соврать. Порядок веток тот же, что был в `_on_downloaded`: сначала
+    сорванная загрузка, потом отсутствие, потом свежесть.
+    """
+    if artifacts.get("canvas_download_failed"):
+        return CANVAS_UNREADABLE
+    saved = artifacts.get("graph_canvas")
+    if not saved:
+        return CANVAS_MISSING
+    # `graph_json` — ФОЛБЭК, когда сохранённый граф не отдался: судить по нему
+    # о свежести холста нельзя, источник не прочитан (1.x9).
+    source_unknown = bool(artifacts.get("saved_graph_download_failed"))
+    if _canvas_is_stale(saved, artifacts["graph_json"],
+                        download_failed=source_unknown):
+        return CANVAS_STALE
+    if _canvas_contours_stale(
+            saved, artifacts.get("contours_validated"),
+            download_failed=bool(artifacts.get("contours_download_failed"))):
+        return CANVAS_STALE
+    return CANVAS_READY
+
+
+#: Заголовок и тело экрана по вердикту (чистая функция — проверяется без Qt).
+_CANVAS_GATE_BODY = {
+    CANVAS_MISSING:
+        "Раскладка для этой схемы не посчитана, открывать нечего.",
+    CANVAS_STALE:
+        "Схема правилась после «Ручной правки» (контуры, распознавание или "
+        "проверка схемы), и холст отстал от неё. Прежде вкладка молча "
+        "пересобирала его без раскладки — теперь ждёт настоящую.\n\n"
+        # ⛔ Цена названа ЗДЕСЬ, потому что дверь ниже её берёт: пересчёт
+        # снимает с холста метку «правился руками» и перезаписывает файл на
+        # сервере (`app/services/layout_dispatch._clear_operator_saved` →
+        # `worker/tasks/layout.py`). Ровно это говорила снесённая модалка
+        # «Схема изменилась»; экран обязан говорить не меньше неё.
+        "⚠ Пересчёт соберёт холст заново: ручная раскладка, сохранённая "
+        "в нём раньше, не сохранится.",
+    CANVAS_UNREADABLE:
+        "Сохранённый холст «Ручной правки» не удалось скачать — сервер или "
+        "сеть. Это НЕ значит, что холста нет: ваша раскладка на сервере цела, "
+        "и пересобирать её заново вкладка не станет.",
+    CANVAS_BROKEN:
+        "Скачанный холст не удалось подготовить к открытию — файл на сервере "
+        "цел, но прочитать его этой вкладкой не вышло.",
+}
+
+
+def canvas_gate_text(verdict: str, *, waiting: bool, detail: str = "",
+                     overdue: bool = False) -> tuple[str, str]:
+    """(заголовок, тело) экрана вместо редактора.
+
+    `waiting` — задача раскладки РЕАЛЬНО поставлена или бежит (стадия из
+    `/stages`, не наличие файла). Только тогда обещание «пересчитывается»
+    правда; иначе оно было бы ложью навечно, и вместо него — дверь.
+    """
+    if verdict in (CANVAS_UNREADABLE, CANVAS_BROKEN):
+        # Сорванная загрузка и порча файла — не «нет холста»: ретрай, а не дверь.
+        body = _CANVAS_GATE_BODY[verdict]
+        if detail:
+            body += f"\n\nПричина: {detail}"
+        if verdict == CANVAS_BROKEN:
+            # ⛔ Отказ ДЕТЕРМИНИРОВАННЫЙ (разбор скачанного, а не сеть) —
+            # обещать «повторите, когда связь восстановится» здесь значит
+            # звать оператора нажимать кнопку, которая не поможет никогда.
+            return ("Холст не открыт",
+                    body + "\n\nПовтор загрузки, скорее всего, даст то же "
+                    "самое: сообщите разработчику причину выше.")
+        return ("Холст не загружен",
+                body + "\n\nПовторите, когда связь восстановится.")
+    if waiting and overdue:
+        # ⛔ Обещание «откроется сама» имеет срок годности: задача, зависшая
+        # насмерть (воркер убит, контейнер пересоздан), держала бы его вечно,
+        # а вечное ожидание — та же ложь, что и «пересчитывается» без задачи.
+        door = RETRY_DOOR[0].upper() + RETRY_DOOR[1:]
+        return ("Раскладка считается дольше обычного",
+                "Задача раскладки запущена, но идёт дольше ожидаемого. "
+                "Можно подождать — экран откроется сам, если она закончится."
+                f"\n\nЕсли ждать надоело: закройте вкладку. {door}.")
+    if waiting:
+        return ("Раскладка пересчитывается",
+                "Схема откроется сама, как только пересчёт закончится — "
+                "закрывать вкладку не нужно.")
+    door = RETRY_DOOR[0].upper() + RETRY_DOOR[1:]
+    return ("Холст «Ручной правки» не готов",
+            f"{_CANVAS_GATE_BODY.get(verdict, '')}\n\n{door}.")
+
+
 def _graph_jobs(want_canvas: bool) -> tuple[Job, ...]:
     """Что вкладка редактора графа тянет с сервера.
 
@@ -737,6 +845,14 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
 
     confirmed = Signal()           # Пользователь подтвердил
     status_message = Signal(str)   # Сообщение для статусбара workspace
+    #: Экран ожидания просит слежение (`True`) и отпускает его (`False`):
+    #: пока вкладка открыта, воркспейс опрос снимает (`_open_tab` → `unwatch`),
+    #: и готовность раскладки узнать не от кого — дверь не отпиралась бы без
+    #: перезахода в диаграмму (8.2). Обратный `False` обязателен: опрос — два
+    #: синхронных HTTP каждые 2 с в GUI-потоке, и держать его всю сессию
+    #: ручной правки значит вернуть просадку, ради которой `_open_tab` его и
+    #: глушит.
+    layout_watch_requested = Signal(bool)
 
     @staticmethod
     def _add_separator(toolbar: QHBoxLayout):
@@ -766,6 +882,18 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
         self.temp_dir = Path(self._temp_dir_obj.name)
 
         self._editor: Optional[BaseGraphEditor] = None
+        # Экран вместо редактора (блок 8): вердикт холста, его виджеты и
+        # память о том, что задача раскладки БЫЛА, — по ней отпирается дверь.
+        self._canvas_gate: Optional[QWidget] = None
+        self._canvas_gate_label: Optional[QLabel] = None
+        self._canvas_gate_retry: Optional[QPushButton] = None
+        self._canvas_gate_verdict: Optional[str] = None
+        self._canvas_gate_detail: str = ""
+        self._layout_seen_running = False
+        self._canvas_gate_shown = False
+        #: стадии, которые дал воркспейс (None — он сам их ещё не читал)
+        self._known_stages = None
+        self._watch_asked = False
         # Точка последнего успешного save: счётчик мутаций и САМА верхняя
         # команда стека (см. `has_unsaved_changes`).
         self._saved_revision: int = 0
@@ -926,8 +1054,50 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
                            ("canvas_download_failed", "graph_canvas")):
             if artifacts.get(flag):
                 self._unreadable_on_server.add(name)
+            else:
+                # ЭТА попытка артефакт прочитала — запрет снимается вместе с
+                # причиной. Без снятия повтор загрузки (кнопка «Повторить» и
+                # автоперечитывание после пересчёта, блок 8) оставлял бы
+                # вкладку с вопросом «сохранение затрёт непрочитанное» уже
+                # после того, как непрочитанное прочиталось.
+                self._unreadable_on_server.discard(name)
 
         try:
+            # WYSIWYG-вкладка («Ручная правка») работает в холсте 1920x1080, и
+            # холст либо ЕСТЬ, либо вкладки нет: аварийная пересборка убрана
+            # (8.1/8.2). Судим ДО создания редактора — брошенный виджет пережил
+            # бы отказ и достался бы соседнему набору (PROTOCOL §5, замер 1-36).
+            canvas_mode = False
+            if self.USE_CANVAS:
+                try:
+                    verdict = canvas_verdict(artifacts)
+                except Exception as exc:      # noqa: BLE001 — судить нечем
+                    logger.exception("свежесть холста не определена: %s", exc)
+                    verdict = CANVAS_BROKEN
+                if verdict != CANVAS_READY:
+                    self._show_canvas_gate(verdict)
+                    return
+                saved = artifacts["graph_canvas"]
+                source_unknown = bool(
+                    artifacts.get("saved_graph_download_failed"))
+                try:
+                    # Холст актуален — готовим правки оператора как есть.
+                    if not source_unknown:
+                        _import_text_into_canvas(
+                            Path(saved), Path(artifacts["graph_json"]))
+                    # §8.3.1: посадка концов чинится при каждом открытии
+                    # (на каноничном холсте — no-op).
+                    _reseat_canvas_endpoints(Path(saved))
+                except Exception as exc:      # noqa: BLE001
+                    # Прежде здесь стоял except-хвост «грузим граф как есть»:
+                    # сырой граф в исходных координатах — тот же аварийный
+                    # холст, только без метки вовсе. Молчать об этом нельзя.
+                    logger.exception("холст не подготовлен: %s", exc)
+                    self._show_canvas_gate(CANVAS_BROKEN, detail=str(exc))
+                    return
+                canvas_mode = True
+                logger.info("Загружен сохранённый холст graph_canvas")
+
             # Остаток раскладки (Э12): показывает только AdvancedGraphTab,
             # путь сохраняется здесь — artifacts дальше не передаются.
             editor = self._create_editor()
@@ -935,88 +1105,20 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
             editor.stats_callback = self._update_stats
             editor.mode_callback = self._on_mode_changed
             editor.save_requested_callback = self._save_from_hotkey
-            # WYSIWYG: pre-transform графа в холст 1920x1080 перед загрузкой.
-            # При неудаче — грузим как есть (граф в исходных координатах).
             graph_for_editor = artifacts["graph_json"]
-            if self.USE_CANVAS:
-                # WYSIWYG-вкладка (Ручная правка): работаем в холсте 1920x1080.
-                # Вкладки в оригинале (Проверка схемы и др.) сюда не заходят —
-                # иначе они бы сконвертили граф и автосейв залил бы 1920.
-                try:
-                    saved = artifacts.get("graph_canvas")
-                    # graph_json — это ФОЛБЭК, когда сохранённый граф не отдался:
-                    # ни судить по нему о свежести холста, ни подмешивать из
-                    # него подписи нельзя — источник не прочитан (1.x9).
-                    source_unknown = bool(
-                        artifacts.get("saved_graph_download_failed"))
-                    if saved and not _canvas_is_stale(
-                                saved, artifacts["graph_json"],
-                                download_failed=source_unknown) \
-                            and not _canvas_contours_stale(
-                                saved, artifacts.get("contours_validated"),
-                                download_failed=bool(artifacts.get(
-                                    "contours_download_failed"))):
-                        # Холст актуален — грузим правки оператора как есть
-                        if not source_unknown:
-                            _import_text_into_canvas(
-                                Path(saved), Path(artifacts["graph_json"]))
-                        # §8.3.1: посадка концов чинится при каждом открытии
-                        # (на каноничном холсте — no-op).
-                        _reseat_canvas_endpoints(Path(saved))
-                        graph_for_editor = saved
-                        editor._canvas_mode = True
-                        # Холст с раскладкой узлы переставил, а подложка — это
-                        # исходный растр: она больше не система отсчёта и по
-                        # умолчанию прячется (включается в панели вида).
-                        editor._bg_visible = not _canvas_has_layout(Path(saved))
-                        logger.info("Загружен сохранённый холст graph_canvas")
-                    else:
-                        if saved:
-                            # Схема правилась на предыдущих вкладках. Смёржить нельзя
-                            # (pretransform необратим) — пересобираем холст с нуля.
-                            logger.info("graph_canvas устарел → пересборка из graph_validated")
-                            QMessageBox.information(
-                                self, "Схема изменилась",
-                                "Схема правилась после «Ручной правки» "
-                                "(контуры/OCR/проверка схемы).\n\n"
-                                "Холст будет пересобран заново — прежние правки "
-                                "в нём не сохранятся.",
-                            )
-                        elif artifacts.get("canvas_download_failed"):
-                            # Холст МОГ лежать на сервере и просто не отдался:
-                            # пустота от 5xx неотличима от «холста нет», а цена
-                            # ошибки — ручная раскладка, затёртая первым Ctrl+S.
-                            logger.warning(
-                                "graph_canvas не скачался — холст пересобран заново")
-                            QMessageBox.warning(
-                                self, "Холст не загружен",
-                                "Не удалось скачать сохранённый холст «Ручной "
-                                "правки» — он будет пересобран заново, прежние "
-                                "правки в нём не сохранятся.\n\n"
-                                "Сохранение из этой вкладки затрёт холст на "
-                                "сервере. Закройте вкладку и откройте её "
-                                "заново, когда связь восстановится.",
-                            )
-                        canvas_graph = self.temp_dir / "graph_1920.json"
-                        if _pretransform_to_canvas(
-                            Path(artifacts["graph_json"]),
-                            Path(artifacts["original_image"]),
-                            canvas_graph,
-                            contours_path=artifacts.get("contours_validated"),
-                            contours_unknown=bool(artifacts.get(
-                                "contours_download_failed")),
-                        ):
-                            graph_for_editor = canvas_graph
-                            editor._canvas_mode = True   # сцена в холсте 1920x1080
-                except Exception as exc:
-                    # Не фатально: грузим граф в исходных координатах (legacy).
-                    logger.exception("pre-transform не выполнен, гружу как есть: %s", exc)
+            if canvas_mode:
+                graph_for_editor = artifacts["graph_canvas"]
+                editor._canvas_mode = True
+                # Холст с раскладкой узлы переставил, а подложка — это
+                # исходный растр: она больше не система отсчёта и по
+                # умолчанию прячется (включается в панели вида).
+                editor._bg_visible = not _canvas_has_layout(
+                    Path(graph_for_editor))
 
             # Предупреждение — ПОСЛЕ развилки холста: оно называет артефакт,
             # который затрёт сохранение, а его выбирает `_canvas_mode` (5.1).
             if artifacts.get("saved_graph_download_failed"):
-                self._warn_saved_graph_not_loaded(
-                    getattr(editor, "_canvas_mode", False))
+                self._warn_saved_graph_not_loaded(canvas_mode)
 
             editor.load_data(
                 image_path=str(artifacts["original_image"]),
@@ -1032,12 +1134,188 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
             self.status_label.setText("Граф загружен")
             self.apply_saved_appearance()
             self._on_editor_ready()
+            self._release_watch()      # холст открыт — опрос больше не нужен
         except Exception as exc:
             logger.error("Failed to init graph editor: %s", exc, exc_info=True)
             QMessageBox.critical(
                 self, "Ошибка",
                 f"Не удалось инициализировать редактор графа:\n{exc}"
             )
+
+    # =================================================================
+    # Экран вместо редактора: холста нет / устарел / не скачался (блок 8)
+    # =================================================================
+
+    def _show_canvas_gate(self, verdict: str, detail: str = "") -> None:
+        """Отказ вместо аварийного холста (8.1) и ожидание пересчёта (8.2).
+
+        Стадии берём У ВОРКСПЕЙСА (он их и так опрашивает, `set_known_stages`),
+        и только если он ничего не дал — спрашиваем сами. ⛔ Свой вопрос
+        СИНХРОННЫЙ и идёт из GUI-потока (`timeout=60` плюс ретрай у
+        `get_stages`), то есть на молчащем сервере морозит окно; попадаем сюда
+        как раз тогда, когда сервер болен. Дальше состояние ведут
+        `stages_updated` — их приносит воркспейс, разбуженный сигналом
+        `layout_watch_requested`.
+        """
+        self._canvas_gate_verdict = verdict
+        self._canvas_gate_detail = detail
+        self.loading_label.hide()
+        self._canvas_gate_shown = True
+        # Д2: след с uid и с ПОСЛЕДСТВИЕМ, а не только с причиной — рядом
+        # стоит строка загрузчика про тот же артефакт, и без последствия она
+        # сдала бы экзамен за вкладку (PROTOCOL §5 про соседа).
+        logger.warning("graph_canvas: %s — холст не открыт, аварийная "
+                       "пересборка отменена (uid=%s)%s",
+                       verdict, self.uid, f": {detail}" if detail else "")
+        # Писать некуда: редактора нет. `_save_graph` и так вернул бы False, но
+        # молча — а молчащая кнопка «Подтвердить» на экране отказа врёт жестом.
+        for btn, tip in ((self.btn_save, "Холст не открыт — сохранять нечего"),
+                         (self.btn_confirm,
+                          "Холст не открыт — подтверждать нечего")):
+            if btn.property("_pre_gate_tooltip") is None:
+                btn.setProperty("_pre_gate_tooltip", btn.toolTip())
+            btn.setEnabled(False)
+            btn.setToolTip(tip)
+        stages = []
+        if verdict in (CANVAS_MISSING, CANVAS_STALE):
+            # Спрашиваем ТОЛЬКО там, где ответ меняет экран: у «не скачался»
+            # и «не готовится» исход один — ретрай.
+            if self._known_stages is not None:
+                stages = self._known_stages
+            else:
+                try:
+                    stages = self.api_client.get_stages(self.uid) or []
+                except Exception as exc:  # noqa: BLE001 — сеть/сервер/формат
+                    logger.warning("стадии раскладки не прочитаны (%s) — "
+                                   "экран покажет дверь, а не ожидание", exc)
+        self.apply_stages(stages, first=True)
+        # Слежение на время вкладки снято — попросить воркспейс его вернуть.
+        self._watch_asked = True
+        self.layout_watch_requested.emit(True)
+
+    def set_known_stages(self, stages) -> None:
+        """Стадии, которые воркспейс уже держит (`_last_stages`).
+
+        Дают экрану первый вердикт БЕЗ синхронного похода в сеть. `None` —
+        «воркспейс сам ещё не читал», тогда вкладка спросит сама.
+        """
+        self._known_stages = stages
+
+    @Slot(str, object)
+    def _on_stages_updated(self, uid: str, stages) -> None:
+        """Сигнал `StatusProvider.stages_updated` — только про свою схему."""
+        if uid != self.uid:
+            return
+        self._known_stages = stages
+        self.apply_stages(stages)
+
+    def _release_watch(self) -> None:
+        """Экрана больше нет — вернуть опрос в то состояние, в каком он был.
+
+        ⛔ Не «опрос снимет себя сам»: снятие живёт ВНУТРИ ветки смены статуса
+        (`StatusProvider._poll`), а после подтверждения контуров статус часто
+        не меняется вовсе — значит опрос остался бы жить всю сессию ручной
+        правки. А это два синхронных HTTP каждые 2 с в GUI-потоке плюс
+        перекраска кнопок и бусин — ровно то, что `_open_tab` глушит нарочно.
+        """
+        if self._watch_asked:
+            self._watch_asked = False
+            self.layout_watch_requested.emit(False)
+
+    def apply_stages(self, stages, *, first: bool = False) -> None:
+        """Свежие стадии → состояние экрана ожидания (8.2).
+
+        ⛔ Дверь отпирается ПЕРЕХОДОМ «задача была → задачи нет», а не фактом
+        «стадия completed»: холст умеет родиться протухшим и при завершённой
+        задаче (угол `ALREADY_RUNNING`, `app/services/layout_dispatch.py`), и
+        перезагрузка по одному «completed» закольцевала бы экран на том же
+        вердикте. Задачи нет вовсе — честная дверь, а не вечное ожидание.
+
+        ⛔ **Пустой список стадий на ТИКЕ экран не двигает.** `get_stages`
+        глотает отказ сервера и отдаёт `[]` (`api_client.py`), а
+        `StatusProvider._poll` эмитит этот `[]` наравне с настоящими стадиями:
+        один сбойный тик неотличим от «задача кончилась» и запускал полную
+        перезагрузку артефактов (замер редтима: 1 → 2 захода на сервер с
+        одного пустого тика; на дрожащей связи — шторм). Поэтому переход
+        требует ПОЛОЖИТЕЛЬНОГО знания: строка раскладки есть и она
+        завершилась. `first=True` — первый показ экрана, там пустой список
+        законно значит «задачи нет» и ведёт в дверь.
+        """
+        if self._canvas_gate_verdict is None:
+            return                       # редактор открыт — экрана нет
+        if layout_task_pending(stages):
+            self._layout_seen_running = True
+            self._paint_canvas_gate(waiting=True,
+                                    overdue=layout_wait_overdue(stages))
+            return
+        row = _latest_layout(stages)
+        if row is None and not first:
+            return                       # судить нечем — экран как был
+        if self._layout_seen_running and row is not None:
+            self._layout_seen_running = False
+            logger.info("раскладка досчиталась (%s) — перечитываем холст",
+                        row.get("status"))
+            self._retry_download()
+            return
+        self._paint_canvas_gate(waiting=False)
+
+    def _paint_canvas_gate(self, waiting: bool, overdue: bool = False) -> None:
+        """Собрать (один раз) и наполнить экран отказа/ожидания."""
+        title, body = canvas_gate_text(
+            self._canvas_gate_verdict, waiting=waiting, overdue=overdue,
+            detail=self._canvas_gate_detail)
+        if self._canvas_gate is None:
+            box = QWidget(self)
+            lay = QVBoxLayout(box)
+            lay.setAlignment(Qt.AlignCenter)
+            self._canvas_gate_label = QLabel()
+            self._canvas_gate_label.setAlignment(Qt.AlignCenter)
+            self._canvas_gate_label.setWordWrap(True)
+            self._canvas_gate_label.setStyleSheet(
+                "font-size: 15px; color: #444; padding: 12px;")
+            lay.addWidget(self._canvas_gate_label)
+            self._canvas_gate_retry = QPushButton("Повторить")
+            self._canvas_gate_retry.setMaximumWidth(200)
+            self._canvas_gate_retry.clicked.connect(self._retry_download)
+            lay.addWidget(self._canvas_gate_retry, alignment=Qt.AlignCenter)
+            # Перед status_label (последний виджет) — как и редактор.
+            self._editor_layout.insertWidget(
+                self._editor_layout.count() - 1, box)
+            self._canvas_gate = box
+        self._canvas_gate_label.setText(f"{title}\n\n{body}")
+        self.status_label.setText(title)
+
+    def _retry_download(self) -> None:
+        """Перечитать артефакты и пересудить холст (кнопка и готовность).
+
+        ⛔ Память о бегущей задаче гасится ЗДЕСЬ, а не только в `apply_stages`:
+        иначе один клик «Повторить» в момент, когда задача только что
+        кончилась, давал повтор дважды — новый экран внутри того же
+        `_on_downloaded` снова видел переход (замер редтима: 1 → 3 захода
+        на сервер с одного клика).
+        """
+        self._layout_seen_running = False
+        if self._canvas_gate is not None:
+            self._editor_layout.removeWidget(self._canvas_gate)
+            self._canvas_gate.setParent(None)
+            self._canvas_gate.deleteLater()
+            self._canvas_gate = None
+            self._canvas_gate_label = None
+            self._canvas_gate_retry = None
+        self._canvas_gate_verdict = None
+        self._canvas_gate_detail = ""
+        # B7: возвращаем и ПОДСКАЗКИ, а не только доступность — иначе на
+        # открытом холсте кнопка 💾 живая, а тултип до конца сессии врёт
+        # «холст не открыт, сохранять нечего» (приём `_pre_lock_tooltip` из 4.1).
+        for btn in (self.btn_save, self.btn_confirm):
+            btn.setEnabled(True)
+            saved_tip = btn.property("_pre_gate_tooltip")
+            if saved_tip is not None:
+                btn.setToolTip(saved_tip)
+        self.loading_label.setText("Загрузка артефактов...")
+        self.loading_label.show()
+        self.status_label.setText("")
+        self._download_artifacts()
 
     def _warn_saved_graph_not_loaded(self, canvas_mode: bool) -> None:
         """`graph_validated` не отдался (5xx, сеть, диск) — сказать правду.
@@ -1184,6 +1462,12 @@ class BaseGraphTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
         self._download_thread.quit()
         self._download_thread.wait()
         self.loading_label.setText(f"Ошибка: {error_msg}")
+        if self.USE_CANVAS:
+            # ⛔ Иначе неудачный ПОВТОР оставляет вкладку тупиком: экран уже
+            # снесён (`_retry_download`), кнопки «Повторить» нет, вердикта
+            # нет — значит и `apply_stages` молчит навсегда, и автооткрытие
+            # по готовности раскладки мертво. Выход был только «← Назад».
+            self._show_canvas_gate(CANVAS_UNREADABLE, detail=error_msg)
 
     def _on_editor_ready(self):
         """Хук: вызывается сразу после успешной загрузки редактора.

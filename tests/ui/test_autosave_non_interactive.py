@@ -236,6 +236,25 @@ class GraphAPI:
         return dest
 
 
+def _canvas_blob(graph: bytes, png, tmp_path_factory) -> bytes:
+    """Холст «Ручной правки» — тем же кодом, каким его собирал сам клиент.
+
+    ⚠ mefx-8: вкладка в холстовом режиме больше не пересобирает холст сама
+    (`canvas_verdict` → экран «холст не готов»), поэтому набору нужен готовый
+    и СВЕЖИЙ холст: метка источника считается от того же графа. Содержимое
+    редактора при этом ровно то же, что видели прежние редакции набора, —
+    прежде его собирал фолбэк, теперь фикстура.
+    """
+    from ui.tabs.base_graph_tab import _pretransform_to_canvas
+
+    root = tmp_path_factory.mktemp("graph_canvas")
+    src = root / "graph.json"
+    src.write_bytes(graph)
+    out = root / "graph_canvas.json"
+    assert _pretransform_to_canvas(src, png, out), "холст не собрался"
+    return out.read_bytes()
+
+
 @pytest.fixture(scope="module")
 def graph_blobs(qapp, tmp_path_factory):
     path = corpus.graph_path(GRAPH_UID)
@@ -247,7 +266,8 @@ def graph_blobs(qapp, tmp_path_factory):
     png = tmp_path_factory.mktemp("graph_raster") / f"{GRAPH_UID}.png"
     assert img.save(str(png))
     return {"original_image": png.read_bytes(), "graph_json": graph,
-            "graph_validated": graph, "graph_canvas": graph}
+            "graph_validated": graph,
+            "graph_canvas": _canvas_blob(graph, png, tmp_path_factory)}
 
 
 @pytest.fixture(scope="module")
@@ -283,7 +303,7 @@ def open_graph_tab(qapp, monkeypatch, dialogs, graph_blobs):
 
     opened = []
 
-    def _open(cls, api):
+    def _open(cls, api, *, expect_editor=True):
         monkeypatch.setattr(
             BaseGraphTab, "_download_artifacts",
             lambda self: setattr(self, "_download_thread", QThread(self)))
@@ -298,7 +318,11 @@ def open_graph_tab(qapp, monkeypatch, dialogs, graph_blobs):
         dl.run()
         assert out.get("error") is None, f"загрузчик увёл вкладку в ошибку: {out}"
         tab._on_downloaded(out["artifacts"])
-        assert tab._editor is not None, "редактор не собрался"
+        if expect_editor:
+            assert tab._editor is not None, "редактор не собрался"
+        else:
+            assert tab._editor is None, (
+                "холст непрочитан, а редактор собрался — блок 8 обещал отказ")
         del dialogs[:]          # предупреждения ОТКРЫТИЯ — не предмет пункта
         return tab
 
@@ -352,7 +376,15 @@ def _unread_graph_api(graph_blobs, cls):
 
 # ── дверь 1: вопрос о слепой перезаписи ──────────────────────────────────
 
-@GRAPH_TABS
+#: Вкладка, у которой непрочитанный артефакт ВСЁ ЕЩЁ открывается: «Проверка
+#: схемы» пишет в `graph_validated` и работает в исходных координатах.
+#: ⚠ mefx-8: у «Ручной правки» этот сценарий закрылся РАНЬШЕ двери — с
+#: непрочитанным холстом вкладка не открывается вовсе (тест-сосед ниже),
+#: поэтому обе параметризации здесь были бы разными сценариями, а не одним.
+BLIND_TABS = pytest.mark.parametrize("factory", [_simple], ids=["simple"])
+
+
+@BLIND_TABS
 def test_graph_tick_never_asks_about_blind_overwrite(
         factory, open_graph_tab, graph_blobs, dialogs):
     """Тик не спрашивает, не пишет вслепую и НЕ СНИМАЕТ запрет.
@@ -377,7 +409,7 @@ def test_graph_tick_never_asks_about_blind_overwrite(
         f"строка не объясняет отказ и не зовёт сохранить вручную: {_line(tab)!r}")
 
 
-@GRAPH_TABS
+@BLIND_TABS
 def test_graph_manual_save_still_asks_after_a_silent_tick(
         factory, open_graph_tab, graph_blobs, dialogs):
     """Ручное сохранение ПОСЛЕ молчаливого тика по-прежнему спрашивает.
@@ -400,6 +432,33 @@ def test_graph_manual_save_still_asks_after_a_silent_tick(
     assert api.uploads == [artifact], f"запись не прошла: {api.uploads}"
     assert artifact not in tab._unreadable_on_server, (
         "«Да» оператора не сняло запрет")
+
+
+def test_unreadable_canvas_never_reaches_the_tick(open_graph_tab, graph_blobs,
+                                                 dialogs):
+    """«Ручная правка»: непрочитанный холст закрывает вкладку до всякой записи.
+
+    ⚠ mefx-8. Прежде вкладка открывалась на аварийном холсте с взведённым
+    запретом, и набор проверял дверь 1-33 на тике. Теперь холст, который не
+    удалось прочитать, вкладку не открывает (`canvas_verdict` →
+    `CANVAS_UNREADABLE`): тику нечего сохранять, а серверная раскладка цела
+    без всякой двери. Обратная полярность — у соседей: с ПРОЧИТАННЫМ холстом
+    та же вкладка открывается и пишет (`test_graph_tick_reports_a_refused_
+    upload_by_a_line[advanced]` здесь же и `test_retry_after_the_network_
+    heals_opens_the_canvas_and_saves` в наборе 1.23).
+    """
+    cls = _advanced()
+    api, artifact = _unread_graph_api(graph_blobs, cls)
+    assert artifact == "graph_canvas"
+    tab = open_graph_tab(cls, api, expect_editor=False)
+
+    assert tab._editor is None, "редактор собран на непрочитанном холсте"
+    assert artifact in tab._unreadable_on_server, "запрет не взведён — стенд пуст"
+
+    _tick(tab)
+
+    assert api.uploads == [], f"слепая запись прошла по таймеру: {api.uploads}"
+    assert dialogs == [], f"тик автосохранения поднял модалку: {dialogs}"
 
 
 # ── дверь 2: предупреждение об отказе записи ─────────────────────────────

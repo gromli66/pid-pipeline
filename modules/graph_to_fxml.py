@@ -1820,7 +1820,7 @@ def scale_graph_to_page(graph_data: dict, page_size: str = None,
 
 
 def generate_fxml(graph_data: dict, stroke_width: float = LINE_STROKE_WIDTH,
-                  page_size: str = None, use_diameter: bool = True,
+                  page_size: str = None, use_diameter: bool = False,
                   bridge_gap_factor: float = BRIDGE_GAP_STROKE_FACTOR) -> str:
     """
     Генерирует полный FXML документ из графа.
@@ -1829,7 +1829,19 @@ def generate_fxml(graph_data: dict, stroke_width: float = LINE_STROKE_WIDTH,
         graph_data: JSON-граф (НЕ мутируется — внутри создаётся deepcopy)
         stroke_width: Базовая толщина линий
         page_size: 'A4', 'A3', 'A2' и т.д. или None (пиксельные координаты)
-        use_diameter: Масштабировать толщину по diameter_value
+        use_diameter: Масштабировать толщину по diameter_value.
+            ⛔ ДЕФОЛТ `False` — решение Максима №10 (2026-08-26, mefx-8),
+            выравнивание легаси-пути по решению №1. Выгрузка двухпутная:
+            свежий холст идёт `canvas_to_fxml` (там диаметр выключен с
+            mefx-2), а устаревший — сюда, из `graph_validated`
+            (`worker/tasks/graph.py`, `_canvas_is_fresh`). Толщина трубы
+            имеет ровно два источника — дефолт `LINE_STROKE_WIDTH` и кисть
+            оператора (`render_width`), — и она не может зависеть от того,
+            какой из двух путей выбрал воркер. Мосты легаси-пути тоже
+            считаются от базовой толщины: `compute_bridge_cuts` получает тот
+            же флаг — осознанная часть паритета. Расчёт по диаметру не снесён
+            (`calculate_diameter_stroke` жив) и остаётся у CLI:
+            `--no-diameter` там по-прежнему ВЫКЛЮЧАТЕЛЬ, дефолт CLI не меняли.
 
     Note:
         Координаты в graph_data используют формат [y, x] (row, col).

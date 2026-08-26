@@ -1366,8 +1366,11 @@ class DiagramWorkspace(QWidget):
             if (_st.get("status") or "").lower() != "running":
                 continue          # pending без старта кнопку не глушит
             # ВЫХОД ПО ПРЕДЕЛУ. Иначе повисшая задача глушила бы кнопку
-            # навсегда: гейт-то пускает после WAIT_LIMIT_S, но нажать
-            # было бы нечего. Отсчёт от created_at, если старта не было.
+            # навсегда. ⚠ Прежняя редакция объясняла это тем, что «гейт-то
+            # пускает после WAIT_LIMIT_S» — с блока 8 (решение №9) гейт там
+            # НАОБОРОТ запирает; предел здесь остаётся ради самой кнопки,
+            # а не ради согласия с гейтом. Отсчёт от created_at, если старта
+            # не было (он до клиента не доезжает — см. `layout_gate`).
             if _stage_stuck(_st):
                 continue
             _k = _STAGE_TYPE_TO_KEY.get(
@@ -2800,6 +2803,17 @@ class DiagramWorkspace(QWidget):
             tab.status_message.connect(
                 lambda msg: self.status_message.emit(msg, 5000),
             )
+            # Канал готовности для экрана ожидания (8.2). Холст мог устареть
+            # или не родиться вовсе, и тогда вкладка вместо аварийной
+            # пересборки ждёт настоящий пересчёт — а узнать о нём ей неоткуда:
+            # `_open_tab` слежение снимает. Стадии приходят сюда, вкладка
+            # просит их сама сигналом ниже.
+            self.status_provider.stages_updated.connect(tab._on_stages_updated)
+            tab.layout_watch_requested.connect(self._on_tab_wants_stages)
+            # Свои стадии отдаём СРАЗУ: воркспейс их и так опрашивает, а без
+            # них вкладке пришлось бы спрашивать сервер синхронно, из
+            # GUI-потока, ровно в тот момент, когда сервер может молчать.
+            tab.set_known_stages(getattr(self, "_last_stages", None))
             self._open_tab(tab, "edit_graph")
 
         except APIError as exc:
@@ -2807,6 +2821,27 @@ class DiagramWorkspace(QWidget):
                 self, "Ошибка",
                 f"Не удалось открыть редактор графа:\n{exc.message}",
             )
+
+    @Slot(bool)
+    def _on_tab_wants_stages(self, want: bool):
+        """Экран ожидания «Ручной правки» просит опрос — и отпускает его (8.2).
+
+        `_open_tab` глушит опрос на время вкладки (он дёргает repaint'ы), и
+        это верно для всех этапов, кроме одного: экран ожидания живёт именно
+        опросом. ⛔ Обратный ход обязателен: снятие слежения у `StatusProvider`
+        живёт ВНУТРИ ветки смены статуса, а после подтверждения контуров
+        статус часто не меняется вовсе — «снимет себя сам» здесь неверно, и
+        опрос остался бы на всю сессию ручной правки (два синхронных HTTP
+        каждые 2 с в GUI-потоке). Возвращаем ровно то состояние, которое
+        `_open_tab` и установил; `_close_tab_and_restore_header` со своим
+        `_was_status_watching` от этого не зависит.
+        """
+        if not self._uid:
+            return
+        if want:
+            self.status_provider.watch(self._uid)
+        else:
+            self.status_provider.unwatch(self._uid)
 
     def _get_project_code(self) -> str:
         """Получить код проекта (с кэшированием)."""
@@ -3031,6 +3066,16 @@ class DiagramWorkspace(QWidget):
             return
 
         self._close_tab_and_restore_header()
+
+        # Слежение ОБЯЗАТЕЛЬНО (8.2): закрытие «Контуров» — единственное
+        # подтверждение, которое ставит раскладку ВСЕГДА
+        # (`app/api/contours.py` → `dispatch_layout`), и ровно оно же было
+        # единственным, кто слежение не будил. Восстановление «как было» в
+        # `_close_tab_and_restore_header` не помогает: на финальном статусе
+        # опрос снимает себя сам ДО входа во вкладку (pains-2, тот же дефект
+        # у рамки и CVAT). Без этого кнопка «Ручной правки» не узнавала о
+        # готовности пересчёта, а экран ожидания вкладки — тем более.
+        self.status_provider.watch(self._uid)
 
     @Slot()
     def _on_graph_confirmed(self):

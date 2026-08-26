@@ -147,6 +147,25 @@ class GraphAPI:
         raise APIError(f"contours_auto not found for {uid}", 404)
 
 
+def _canvas_blob(graph: bytes, png, tmp_path_factory) -> bytes:
+    """Холст «Ручной правки» — тем же кодом, каким его собирал сам клиент.
+
+    ⚠ mefx-8: вкладка в холстовом режиме больше не пересобирает холст сама
+    (`canvas_verdict` → экран «холст не готов»), поэтому набору нужен готовый
+    и СВЕЖИЙ холст: метка источника считается от того же графа. Содержимое
+    редактора при этом ровно то же, что видели прежние редакции набора, —
+    прежде его собирал фолбэк, теперь фикстура.
+    """
+    from ui.tabs.base_graph_tab import _pretransform_to_canvas
+
+    root = tmp_path_factory.mktemp("graph_canvas")
+    src = root / "graph.json"
+    src.write_bytes(graph)
+    out = root / "graph_canvas.json"
+    assert _pretransform_to_canvas(src, png, out), "холст не собрался"
+    return out.read_bytes()
+
+
 @pytest.fixture(scope="module")
 def graph_blobs(qapp, tmp_path_factory):
     """Растр размером с корпусную схему + сам корпусный граф."""
@@ -158,7 +177,8 @@ def graph_blobs(qapp, tmp_path_factory):
     img.fill(QColor("white"))
     png = tmp_path_factory.mktemp("graph_raster") / f"{UID}.png"
     assert img.save(str(png))
-    return {"original_image": png.read_bytes(), "graph_json": graph}
+    return {"original_image": png.read_bytes(), "graph_json": graph,
+            "graph_canvas": _canvas_blob(graph, png, tmp_path_factory)}
 
 
 @pytest.fixture

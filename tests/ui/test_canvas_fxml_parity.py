@@ -56,6 +56,7 @@ from modules.graph_to_fxml import (                          # noqa: E402
     LINE_STROKE_WIDTH,
     calculate_diameter_stroke,
     compute_bridge_cuts,
+    generate_fxml,
 )
 
 FIXTURES = os.path.join(os.path.dirname(os.path.dirname(__file__)),
@@ -190,6 +191,17 @@ def _fxml_strokes(xml: str) -> dict:
         eid = re.sub(r'_b\d+$', '', m.group(1))
         out.setdefault(eid, set()).add(float(w.group(1)))
     return {k: v.pop() for k, v in out.items() if len(v) == 1}
+
+
+def _fxml_geometry(xml: str) -> list:
+    """Линии выгрузки БЕЗ толщины — только то, где они проходят.
+
+    Нужно там, где проверяется влияние аргумента на РАЗРЫВЫ: толщина от того
+    же аргумента меняется сама, и сравнение целых тегов доказало бы её, а не
+    геометрию мостов.
+    """
+    return [re.sub(r'\sstrokeWidth="[0-9.]+"', '', tag)
+            for tag in re.findall(r'<(?:Line|Polyline)\s[^>]*/>', xml)]
 
 
 def _fxml_segments(xml: str) -> dict:
@@ -783,3 +795,82 @@ def test_сохранённый_бегунок_доезжает_до_предп�
     assert ed._bridge_cuts == _cuts_at(ed, WIDE_GAP)
     assert ed._bridge_cuts != _cuts_at(ed, 3.0), "множители неразличимы — тест слеп"
     _dispose(ed, qapp)
+
+
+# ── 8.4 (mefx-8, решение Максима №10): ВТОРОЙ путь выгрузки ──────────────
+#
+# Выгрузка двухпутная: свежий холст идёт `canvas_to_fxml` (всё выше), а
+# устаревший — легаси `generate_fxml` из `graph_validated`
+# (`worker/tasks/graph.py`, развилка `_canvas_is_fresh`). Оператор выбор
+# воркера не видит и не делает, поэтому толщина не имеет права от него
+# зависеть: решение №1 действует на ОБОИХ путях.
+
+
+def test_легаси_путь_даёт_ту_же_толщину_что_и_холстовый(thick):
+    """Дефолт `use_diameter` у легаси-генератора — `False`, как у холста.
+
+    Утверждается РАЗНИЦА, а не совпадение с «до»: у пяти рёбер фикстуры
+    Dv300, и старое правило дало бы им 12.0 — число заперто рядом.
+    """
+    _ed, g = thick
+    strokes = _fxml_strokes(generate_fxml(g))
+    assert strokes, "легаси-выгрузка не отдала ни одного ребра"
+
+    dv_edges = [e for e in g["links"]
+                if e.get("diameter_value") and not e.get("render_width")]
+    assert len(dv_edges) == DV_COUNT, "фикстура сдвинулась — порог не поднят"
+    for e in dv_edges:
+        assert strokes[e["id"]] == BASE, (
+            f"{e['id']}: легаси-путь считает толщину по диаметру — "
+            f"{strokes[e['id']]} вместо {BASE}")
+
+    # Порог заперт с той стороны: выключатель не снесён, и он РАЗЛИЧАЮЩИЙ.
+    on = _fxml_strokes(generate_fxml(g, use_diameter=True))
+    assert [on[e["id"]] for e in dv_edges] == [12.0] * DV_COUNT, (
+        "аргумент перестал что-либо менять — тест слеп при любом дефолте")
+
+    # Кисть оператора старше обоих правил и на легаси-пути тоже.
+    for e in g["links"]:
+        if e.get("render_width"):
+            assert strokes[e["id"]] == BRUSH, e["id"]
+
+
+def test_легаси_мосты_считаются_от_базовой_толщины(bridged):
+    """Осознанная часть паритета: разрывы легаси-пути тоже уходят с диаметра.
+
+    `generate_fxml` отдаёт один и тот же флаг и линиям, и `compute_bridge_cuts`,
+    поэтому доказательство берётся у самого генератора: разрывы дефолтной
+    выгрузки совпадают с `use_diameter=False` и расходятся с `True`.
+
+    ⛔ Сравнивается ГЕОМЕТРИЯ без толщины: число кусков от флага не зависит
+    (замер: 5 рёбер / 7 разрывов при обоих), меняется ШИРИНА разрыва — 6 px
+    против 36 px. Считать куски здесь значило бы получить зелёное при любом
+    правиле; а сравнивать XML целиком — получить красное из-за самой толщины,
+    то есть доказать соседнее утверждение вместо этого.
+    """
+    _ed, g = bridged
+    default = _fxml_geometry(generate_fxml(g))
+    off = _fxml_geometry(generate_fxml(g, use_diameter=False))
+    on = _fxml_geometry(generate_fxml(g, use_diameter=True))
+
+    assert default == off, "дефолт легаси-пути разошёлся с use_diameter=False"
+    assert default != on, (
+        "разрывы одинаковы при обоих флагах — фикстура не различает правила")
+
+
+def test_ключ_CLI_остался_выключателем():
+    """Граница правки: `--no-diameter` не трогали, дефолт CLI прежний.
+
+    Читается ИСХОДНИК разбора аргументов, а не поведение: у CLI своя
+    развилка (`use_diameter=not args.no_diameter`), и она обязана пережить
+    смену библиотечного дефолта — иначе ключ стал бы включателем наоборот.
+    """
+    import inspect
+
+    import modules.graph_to_fxml as gf
+
+    src = inspect.getsource(gf.main) if hasattr(gf, "main") else \
+        inspect.getsource(gf)
+    assert "use_diameter=not args.no_diameter" in src, (
+        "CLI перестал сам решать про диаметр — граница пункта нарушена")
+    assert "'--no-diameter'" in src or '"--no-diameter"' in src
