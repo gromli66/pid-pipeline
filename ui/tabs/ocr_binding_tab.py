@@ -236,7 +236,6 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
         self._kks_config = None
         self._cls_to_kks_config = None
         self._diameter_matcher = None
-        self._auto_bind_diameters_data = None
         self._retry_count = 0
 
         #: артефакты, чью серверную копию прочитать не удалось: запись в них
@@ -245,7 +244,6 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
 
         # Confirmation flags per sub-tab
         self._kks_confirmed = False
-        self._diam_confirmed = False
 
         # Block ownership: idx → subtab name
         self._block_subtab: dict[int, str] = {}  # "kks"/"diameter"/"other"
@@ -358,39 +356,17 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
         # П3: подвкладка KKS убрана
         # self.sub_tabs.addTab(self.kks_toolbar, "🏷 KKS")
 
-        # === Sub-tab 2: Diameter ===
-        # Родитель и `hide()` — по той же причине, что у `kks_toolbar` выше.
-        self.diam_toolbar = _SubTabToolbar(self)
-        self.diam_toolbar.hide()
-        self.diam_toolbar.hint_label.setText(
-            "Ctrl+drag: привязка к ребру | Ctrl+ПКМ: отвязка | Ctrl+2×клик: текст"
-        )
-        self.btn_auto_bind_diam = QPushButton("🔗 Авто-привязка Ø")
-        self.btn_auto_bind_diam.setToolTip("Привязать диаметры к рёбрам графа автоматически")
-        self.btn_auto_bind_diam.clicked.connect(self._run_auto_bind_diameters)
-        self.diam_toolbar.custom_layout.addWidget(self.btn_auto_bind_diam)
-
-        self.btn_confirm_diam = QPushButton("✅ Подтвердить Ø")
-        self.btn_confirm_diam.setToolTip("Подтвердить привязку диаметров")
-        self.btn_confirm_diam.setStyleSheet(
-            "QPushButton { background-color: #2E86C1; color: white; "
-            "font-weight: bold; padding: 4px 12px; border-radius: 3px; }"
-            "QPushButton:hover { background-color: #2874A6; }"
-        )
-        self.btn_confirm_diam.clicked.connect(self._confirm_diam_step)
-        self.diam_toolbar.custom_layout.addWidget(self.btn_confirm_diam)
-
-        self.btn_clear_diam = QPushButton("🗑 Очистить Ø")
-        self.btn_clear_diam.setToolTip("Очистить все привязки диаметров")
-        self.btn_clear_diam.clicked.connect(self._clear_diam_bindings)
-        self.diam_toolbar.custom_layout.addWidget(self.btn_clear_diam)
-
-        self.diam_toolbar.add_clicked.connect(lambda: self._toggle_add_mode(self.diam_toolbar))
-        self.diam_toolbar.delete_clicked.connect(lambda: self._toggle_del_mode(self.diam_toolbar))
-        self.diam_toolbar.move_clicked.connect(lambda: self._toggle_move_mode(self.diam_toolbar))
-        self.diam_toolbar.undo_clicked.connect(self._undo)
-        # П3: подвкладка Диаметр убрана
-        # self.sub_tabs.addTab(self.diam_toolbar, "Ø Диаметр")
+        # ⛔ Тулбар «Ø Диаметр» СНЯТ (решение Максима 26.08.2026: подвкладок
+        # не делаем). Он висел сиротой: `sub_tabs` в коде нет, оба `addTab`
+        # закомментированы, в раскладку он не попадал никогда. Вместе с ним ушли
+        # «Авто-привязка Ø» (решение №1 — авто-привязки не будет, а живая кнопка
+        # под выключенным решением зальёт лист автоматикой), «Подтвердить Ø»
+        # (`pass`, статус диаграммы не двигала) и «Очистить Ø» (решение 26.08:
+        # не нужна, отмена — Ctrl+ПКМ и Undo).
+        #
+        # Ду теперь живёт в жестах редактора: Ctrl+drag подписи на ребро,
+        # Ctrl+2×клик — ввод/правка, Ctrl+ПКМ — снять с линии
+        # (`ui/editors/ocr_binding_editor.py`, `modules/binding/diameter_lines.py`).
 
         # kks/diam-тулбары создаются выше (не показываются) — тулбар OCR построен в начале _setup_ui
 
@@ -611,14 +587,6 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
         if self._kks_confirmed:
             status += " | ✅ Подтверждено"
         self.kks_toolbar.stats_label.setText(status)
-
-    def _update_diam_stats(self):
-        diam_total = len(self._diameter_indices)
-        diam_bound = len(self.editor.get_diameter_bindings()) if self.editor.isVisible() else 0
-        status = f"Диаметров: {diam_total} | Привязано: {diam_bound}"
-        if self._diam_confirmed:
-            status += " | ✅ Подтверждено"
-        self.diam_toolbar.stats_label.setText(status)
 
     def _update_other_stats(self):
         other_total = len(self._other_indices)
@@ -1106,185 +1074,12 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
     # Diameter sub-tab actions
     # =================================================================
 
-    def _run_auto_bind_diameters(self):
-        """Привязать диаметры к рёбрам графа."""
-        if not self._ocr_blocks:
-            QMessageBox.warning(self, "Привязка Ø", "Нет OCR-блоков для привязки диаметров")
-            return
-        self._auto_bind_diameters_data = None
-        self._auto_bind_diameters()
+    # ⛔ `_run_auto_bind_diameters` / `_auto_bind_diameters` сняты: авто-привязка
+    # Ø выключена решением заказчика, а её единственная кнопка жила в
+    # тулбаре-сироте. Вместе с ними осиротел `TextBinder` целиком.
+    # `_confirm_diam_step` был `pass` — статус диаграммы он не двигал, этап
+    # подтверждает `_on_confirm` на главном тулбаре.
 
-        if self._auto_bind_diameters_data:
-            d, p, c = self._auto_bind_diameters_data
-            self.editor.set_diameter_bindings(d, p, c)
-            self._auto_bind_diameters_data = None
-            self._saved = False
-            self._update_diam_stats()
-
-    def _auto_bind_diameters(self):
-        """Автоматическая привязка диаметров OCR к рёбрам графа через TextBinder."""
-        edges = self._graph_data.get("links", [])
-        if not edges or not self._ocr_blocks:
-            return
-
-        try:
-            from modules.text_binding.config import TextRecognitionConfig
-            from modules.text_binding.binder import TextBinder
-            from modules.text_binding.matcher import DiameterMatcher
-
-            if self._project_config_path:
-                try:
-                    cfg = TextRecognitionConfig.from_project_yaml(self._project_config_path)
-                except Exception as exc:
-                    logger.warning("Failed to load config from %s: %s — using defaults",
-                                   self._project_config_path, exc)
-                    cfg = TextRecognitionConfig()
-            else:
-                logger.warning("No project_config_path — using default TextRecognitionConfig (no patterns)")
-                cfg = TextRecognitionConfig()
-
-            # domain_profile (v2.0) может содержать ⌀/Ø паттерны
-            # которых нет в legacy text_recognition
-            bcfg = getattr(self, '_domain_binding_config', None)
-
-            if not cfg.diameter.patterns and not bcfg:
-                logger.info("No diameter patterns configured, skipping auto-bind")
-                return
-
-            binder = TextBinder(cfg)
-
-            # Override diameter matcher если domain_profile имеет свои паттерны
-            if bcfg and "diameter" in bcfg.code_types:
-                domain_diam_matcher = DiameterMatcher(bcfg)
-                binder._diameter_matcher = domain_diam_matcher
-                logger.info("Using diameter patterns from domain_profile")
-
-            report = binder.bind_diameters(self._ocr_blocks, edges)
-
-            self.editor._text_binder = binder
-            self.editor._diameter_matcher = binder._diameter_matcher
-            self._diameter_matcher = binder._diameter_matcher
-
-            if report.bindings:
-                import re as _re
-                diameter_dicts = []
-                split_happened = False
-
-                real_blocks = [
-                    self._ocr_blocks[d.ocr_block_idx]
-                    for d in report.bindings
-                    if d.ocr_block_idx < len(self._ocr_blocks)
-                ]
-                if real_blocks:
-                    avg_w = sum(b["bbox"][2] - b["bbox"][0] for b in real_blocks) / len(real_blocks)
-                    avg_h = sum(b["bbox"][3] - b["bbox"][1] for b in real_blocks) / len(real_blocks)
-                else:
-                    avg_w, avg_h = 60, 25
-                avg_w = max(avg_w, 40)
-                avg_h = max(avg_h, 20)
-
-                for db in report.bindings:
-                    ocr_idx = db.ocr_block_idx
-                    block = self._ocr_blocks[ocr_idx]
-                    full_text = block.get("text", "").strip()
-
-                    esc_prefix = _re.escape(db.prefix)
-                    esc_suffix = _re.escape(db.suffix) if db.suffix else ""
-                    remove_pat = esc_prefix + r'\s*' + str(db.diameter) + (r'\s*' + esc_suffix if esc_suffix else '')
-                    remaining = _re.sub(remove_pat, '', full_text, count=1, flags=_re.IGNORECASE).strip()
-                    remaining = _re.sub(r'^[\s,;.\-]+|[\s,;.\-]+$', '', remaining)
-
-                    diam_ocr_idx = ocr_idx  # по умолчанию — исходный блок
-                    if remaining:
-                        block["text"] = remaining
-                        bbox = block.get("bbox", [0, 0, 0, 0])
-                        bx2 = bbox[2]
-                        by1 = bbox[1]
-                        new_bbox = [bx2 + 2, by1, bx2 + 2 + avg_w, by1 + avg_h]
-                        new_idx = len(self._ocr_blocks)
-                        self._ocr_blocks.append({
-                            "bbox": new_bbox, "text": db.text,
-                            "confidence": db.confidence,
-                        })
-                        # Новый блок → diameter subtab
-                        self._block_subtab[new_idx] = "diameter"
-                        split_happened = True
-                        diam_ocr_idx = new_idx
-                        logger.info("Auto-split OCR[%d]: '%s' → '%s' + '%s'",
-                                    ocr_idx, full_text, remaining, db.text)
-
-                    diameter_dicts.append({
-                        "ocr_block_idx": diam_ocr_idx,
-                        "edge_idx": db.edge_idx,
-                        "edge_id": db.edge_id,
-                        "edge_key": _sorted_edge_key(db.edge_key),
-                        "text": db.text,
-                        "prefix": db.prefix,
-                        "diameter": db.diameter,
-                        "suffix": db.suffix,
-                        "confidence": db.confidence,
-                    })
-
-                if split_happened:
-                    self.editor._ocr_blocks = self._ocr_blocks
-                    for items_dict in (self.editor._ocr_items, self.editor._ocr_text_items,
-                                       self.editor._ocr_text_bg_items, self.editor._ocr_inner_text_items):
-                        for item in items_dict.values():
-                            self.editor.scene.removeItem(item)
-                        items_dict.clear()
-                    self.editor._draw_ocr_blocks()
-                    self.editor._redraw_all_colors()
-                    # Rebuild indices after split
-                    self._rebuild_indices_from_subtab()
-                    logger.info("Editor notified about split blocks")
-
-                nodes = self._graph_data.get("nodes", [])
-                prop_report = binder.propagate_diameters(nodes, edges, report.bindings)
-
-                propagated_dicts = []
-                for pd in prop_report.propagated:
-                    propagated_dicts.append({
-                        "edge_idx": pd.edge_idx,
-                        "edge_id": pd.edge_id,
-                        "edge_key": _sorted_edge_key(pd.edge_key),
-                        "text": pd.text,
-                        "prefix": pd.prefix,
-                        "diameter": pd.diameter,
-                        "suffix": pd.suffix,
-                        "confidence": pd.confidence,
-                        "propagated": True,
-                    })
-
-                conflict_dicts = []
-                for cf in prop_report.conflicts:
-                    conflict_dicts.append({
-                        "edge_idx": cf.edge_idx,
-                        "edge_id": cf.edge_id,
-                        "edge_key": _sorted_edge_key(cf.edge_key),
-                        "candidates": cf.candidates,
-                    })
-
-                self._auto_bind_diameters_data = (diameter_dicts, propagated_dicts, conflict_dicts)
-                conflicts_msg = f", {len(conflict_dicts)} конфликтов" if conflict_dicts else ""
-                self.status_label.setText(
-                    f"Диаметры: {report.bound_count} OCR + "
-                    f"{len(prop_report.propagated)} распространено{conflicts_msg}"
-                )
-            else:
-                logger.info("Diameter auto-bind: no bindings found")
-
-        except ImportError as exc:
-            logger.warning("text_binding module not available: %s", exc)
-        except Exception as exc:
-            logger.error("Diameter auto-bind failed: %s", exc, exc_info=True)
-
-    def _confirm_diam_step(self):
-        """Подтвердить привязку диаметров, перейти к «Другое»."""
-        self._diam_confirmed = True
-        self._saved = False
-        self._update_diam_stats()
-        self.status_label.setText("✅ Привязка диаметров подтверждена")
-        pass  # (подвкладки убраны)
 
     # =================================================================
     # Other sub-tab / clear / modes
@@ -1304,21 +1099,6 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
                 self.editor.set_kks_bindings([])
             self._update_current_stats()
 
-    def _clear_diam_bindings(self):
-        """Очистить только привязки диаметров."""
-        reply = QMessageBox.question(
-            self, "Очистка Ø",
-            "Удалить все привязки диаметров?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            self._auto_bind_diameters_data = None
-            self._diam_confirmed = False
-            self._saved = False
-            if self.editor.isVisible():
-                self.editor.set_diameter_bindings([], [])
-            self._update_current_stats()
-
     def _clear_other_bindings(self):
         """Очистить прочие привязки (text→node)."""
         reply = QMessageBox.question(
@@ -1335,7 +1115,7 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
 
     def _reset_all_modes(self):
         """Сброс всех режимов → idle (pan)."""
-        for tb in (self.kks_toolbar, self.diam_toolbar):
+        for tb in (self.kks_toolbar,):
             tb.reset_modes()
         self.btn_add.setChecked(False)
         self.editor._add_mode = False
