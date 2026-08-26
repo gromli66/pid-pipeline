@@ -374,7 +374,7 @@ def _magistral_s_otvodom():
 def test_metka_krasit_vsyu_liniyu_i_ne_zahodit_v_otvod():
     nodes, edges = _magistral_s_otvodom()
     lines = build_lines(nodes, edges, rules())
-    rep = apply_marks(edges, lines, [DiameterMark("e1", 300, SOURCE_OCR, "300")])
+    rep = apply_marks(edges, lines, nodes=nodes, marks=[DiameterMark("e1", 300, SOURCE_OCR, "300")])
 
     assert rep.ok and rep.lines_covered == 1
     assert edges[0]["diameter_value"] == 300
@@ -385,7 +385,7 @@ def test_metka_krasit_vsyu_liniyu_i_ne_zahodit_v_otvod():
 def test_istochnik_razlichaet_metku_i_potok():
     nodes, edges = _magistral_s_otvodom()
     lines = build_lines(nodes, edges, rules())
-    apply_marks(edges, lines, [DiameterMark("e1", 300, SOURCE_OCR, "300")])
+    apply_marks(edges, lines, nodes=nodes, marks=[DiameterMark("e1", 300, SOURCE_OCR, "300")])
 
     assert edges[0]["diameter_source"] == SOURCE_OCR
     assert edges[0]["diameter_propagated"] is False
@@ -397,7 +397,7 @@ def test_du_v_rebre_celoe_v_millimetrah():
     """Контракт с расчётной схемой: `json2xml` берёт `float(d)/1000`."""
     nodes, edges = _magistral_s_otvodom()
     lines = build_lines(nodes, edges, rules())
-    apply_marks(edges, lines, [DiameterMark("e1", 300, SOURCE_MANUAL)])
+    apply_marks(edges, lines, nodes=nodes, marks=[DiameterMark("e1", 300, SOURCE_MANUAL)])
     assert isinstance(edges[0]["diameter_value"], int)
     assert edges[0]["diameter_text"] == "300"
 
@@ -405,7 +405,7 @@ def test_du_v_rebre_celoe_v_millimetrah():
 def test_nomer_linii_zapisan_v_rebro():
     nodes, edges = _magistral_s_otvodom()
     lines = build_lines(nodes, edges, rules())
-    apply_marks(edges, lines, [DiameterMark("e1", 300)])
+    apply_marks(edges, lines, nodes=nodes, marks=[DiameterMark("e1", 300)])
     assert edges[0]["diameter_line"] == edges[1]["diameter_line"] == lines.line_for(0)
 
 
@@ -422,7 +422,7 @@ def test_parallelnye_rebra_klyuch_po_id_a_ne_po_koncam():
     ]
     lines = build_lines(nodes, edges, rules())
     assert len(lines) == 2
-    apply_marks(edges, lines, [DiameterMark("p1", 200)])
+    apply_marks(edges, lines, nodes=nodes, marks=[DiameterMark("p1", 200)])
     assert edges[0]["diameter_value"] == 200
     assert "diameter_value" not in edges[1]
 
@@ -449,7 +449,7 @@ def test_chuzhaya_zapis_ne_perezapisyvaetsya():
     edges[1]["diameter_source"] = "chuzhoi"
     lines = build_lines(nodes, edges, rules())
 
-    rep = apply_marks(edges, lines, [DiameterMark("e1", 300, SOURCE_OCR)])
+    rep = apply_marks(edges, lines, nodes=nodes, marks=[DiameterMark("e1", 300, SOURCE_OCR)])
     assert edges[0]["diameter_value"] == 300
     assert edges[1]["diameter_value"] == 250          # правка редактора цела
     assert edges[1]["diameter_source"] == "chuzhoi"
@@ -495,7 +495,7 @@ def test_dve_metki_s_raznym_du_na_odnoi_linii_konflikt():
     """Молча выбрать «по большинству» нельзя — на выходе расчётная схема."""
     nodes, edges = _magistral_s_otvodom()
     lines = build_lines(nodes, edges, rules())
-    rep = apply_marks(edges, lines, [
+    rep = apply_marks(edges, lines, nodes=nodes, marks=[
         DiameterMark("e1", 300, SOURCE_OCR),
         DiameterMark("e2", 250, SOURCE_OCR),
     ])
@@ -509,7 +509,7 @@ def test_dve_metki_s_raznym_du_na_odnoi_linii_konflikt():
 def test_dve_metki_s_odnim_du_ne_konflikt():
     nodes, edges = _magistral_s_otvodom()
     lines = build_lines(nodes, edges, rules())
-    rep = apply_marks(edges, lines, [
+    rep = apply_marks(edges, lines, nodes=nodes, marks=[
         DiameterMark("e1", 300), DiameterMark("e2", 300),
     ])
     assert rep.ok and rep.lines_covered == 1
@@ -519,7 +519,7 @@ def test_metka_na_ischeznuvshee_rebro_ne_ronyaet_a_soobschaet():
     """Пересборка графа меняет `id` — метка осиротеет, и это надо увидеть."""
     nodes, edges = _magistral_s_otvodom()
     lines = build_lines(nodes, edges, rules())
-    rep = apply_marks(edges, lines, [DiameterMark("net-takogo", 300)])
+    rep = apply_marks(edges, lines, nodes=nodes, marks=[DiameterMark("net-takogo", 300)])
     assert rep.orphan_marks == ["net-takogo"]
     assert rep.edges_stamped == 0
 
@@ -528,7 +528,7 @@ def test_metki_chitayutsya_obratno_iz_grafa_bez_potoka():
     """Граф — единственное хранилище меток; поток метками не считается."""
     nodes, edges = _magistral_s_otvodom()
     lines = build_lines(nodes, edges, rules())
-    apply_marks(edges, lines, [DiameterMark("e1", 300, SOURCE_OCR, "300")])
+    apply_marks(edges, lines, nodes=nodes, marks=[DiameterMark("e1", 300, SOURCE_OCR, "300")])
 
     back = marks_from_edges(edges)
     assert len(back) == 1
@@ -540,11 +540,11 @@ def test_krug_zamykaetsya_bez_dublei():
     nodes, edges = _magistral_s_otvodom()
     lines = build_lines(nodes, edges, rules())
     first = [DiameterMark("e1", 300, SOURCE_OCR, "300")]
-    apply_marks(edges, lines, first)
+    apply_marks(edges, lines, first, nodes)
 
     for _ in range(3):
         again = marks_from_edges(edges)
-        apply_marks(edges, lines, again)
+        apply_marks(edges, lines, again, nodes)
     assert len(marks_from_edges(edges)) == 1
     assert [e.get("diameter_value") for e in edges] == [300, 300, None]
 
@@ -560,7 +560,7 @@ def test_du_ne_menyaet_geometricheskuyu_proekciyu_holsta():
     before = canvas_state.graph_projection_sha(graph)
 
     lines = build_lines(nodes, edges, rules())
-    apply_marks(edges, lines, [DiameterMark("e1", 300, SOURCE_OCR, "300")])
+    apply_marks(edges, lines, nodes=nodes, marks=[DiameterMark("e1", 300, SOURCE_OCR, "300")])
 
     assert canvas_state.graph_projection_sha(graph) == before
 
@@ -659,14 +659,14 @@ def test_ustarevshee_razbienie_ne_krasit_chuzhie_rebra():
     lines = build_lines(nodes, edges, rules())
     pereputannye = [edges[2], edges[0], edges[1]]
     with pytest.raises(LinesOutOfDateError):
-        apply_marks(pereputannye, lines, [DiameterMark("e1", 300)])
+        apply_marks(pereputannye, lines, nodes=nodes, marks=[DiameterMark("e1", 300)])
 
 
 def test_ukorochennoe_razbienie_ne_vyklyuchaet_pravilo_molcha():
     nodes, edges = _magistral_s_otvodom()
     lines = build_lines(nodes, edges, rules())
     with pytest.raises(LinesOutOfDateError):
-        apply_marks(edges[:2], lines, [DiameterMark("e1", 300)])
+        apply_marks(edges[:2], lines, nodes=nodes, marks=[DiameterMark("e1", 300)])
 
 
 def test_konflikt_ne_zatiraet_chuzhuyu_zapis():
@@ -674,7 +674,7 @@ def test_konflikt_ne_zatiraet_chuzhuyu_zapis():
     edges[1]["diameter_value"] = 250
     edges[1]["diameter_source"] = "chuzhoi"
     lines = build_lines(nodes, edges, rules())
-    rep = apply_marks(edges, lines, [
+    rep = apply_marks(edges, lines, nodes=nodes, marks=[
         DiameterMark("e1", 400, SOURCE_OCR), DiameterMark("e2", 300, SOURCE_MANUAL),
     ])
     assert not rep.ok and rep.conflicts
@@ -688,7 +688,7 @@ def test_metka_protiv_chuzhoi_zapisi_eto_konflikt():
     edges[0]["diameter_value"] = 250
     edges[0]["diameter_source"] = "chuzhoi"
     lines = build_lines(nodes, edges, rules())
-    rep = apply_marks(edges, lines, [DiameterMark("e1", 300, SOURCE_OCR)])
+    rep = apply_marks(edges, lines, nodes=nodes, marks=[DiameterMark("e1", 300, SOURCE_OCR)])
     assert rep.conflicts and rep.conflicts[0][1] == [250, 300]
     assert edges[0]["diameter_value"] == 250
 
@@ -700,7 +700,7 @@ def test_liniya_celikom_iz_chuzhih_zapisei_metka_ne_srabotala():
         edges[i]["diameter_value"] = 300
         edges[i]["diameter_source"] = "chuzhoi"
     lines = build_lines(nodes, edges, rules())
-    rep = apply_marks(edges, lines, [DiameterMark("e1", 300, SOURCE_OCR)])
+    rep = apply_marks(edges, lines, nodes=nodes, marks=[DiameterMark("e1", 300, SOURCE_OCR)])
     assert rep.edges_stamped == 0 and rep.lines_covered == 0
     assert rep.ineffective_marks == ["e1"]
     assert not rep.ok
@@ -713,13 +713,13 @@ def test_negodnoe_znachenie_du_ne_uezzhaet_na_disk(bad):
     nodes, edges = _magistral_s_otvodom()
     lines = build_lines(nodes, edges, rules())
     with pytest.raises(ValueError):
-        apply_marks(edges, lines, [DiameterMark("e1", bad)])
+        apply_marks(edges, lines, nodes=nodes, marks=[DiameterMark("e1", bad)])
 
 
 def test_celoe_v_vide_float_prinimaetsya():
     nodes, edges = _magistral_s_otvodom()
     lines = build_lines(nodes, edges, rules())
-    apply_marks(edges, lines, [DiameterMark("e1", 300.0)])
+    apply_marks(edges, lines, nodes=nodes, marks=[DiameterMark("e1", 300.0)])
     assert edges[0]["diameter_value"] == 300
     assert isinstance(edges[0]["diameter_value"], int)
 
@@ -730,7 +730,7 @@ def test_krug_s_chuzhoi_zapisyu_ne_teryaet_ee():
     edges[1]["diameter_source"] = "chuzhoi"
     lines = build_lines(nodes, edges, rules())
     for _ in range(3):
-        apply_marks(edges, lines, marks_from_edges(edges))
+        apply_marks(edges, lines, marks_from_edges(edges), nodes)
     assert edges[1]["diameter_value"] == 250
     assert edges[1]["diameter_source"] == "chuzhoi"
 

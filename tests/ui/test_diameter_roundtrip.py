@@ -252,3 +252,27 @@ def test_snyatie_vseh_metok_ochischaet_tolko_svoe(tab):
     for eid in LINE_EDGES:
         assert "diameter_value" not in saved[eid], eid
     assert saved["e4"]["diameter_value"] == 250
+
+
+def test_otkrytie_vkladki_podnimaet_metki_iz_grafa():
+    """⛔ Сторож ПРОВОДКИ: боевой путь открытия обязан звать восстановление.
+
+    Тесты выше зовут `_restore_bindings_from_graph` напрямую и потому не видели
+    главного: с 2026-07-01 (`5c6d3f4`, вместе с подвкладками) вызов был снят из
+    `_on_download_finished` и не вернулся. Вкладка открывалась пустой, метки не
+    поднимались, а следующее сохранение сносило Ду с сервера — `_stamp_diameters`
+    без меток чистит своё. Замер редтима: сеанс 2 уезжал на сервер с `[{}, {}]`.
+
+    Сторож структурный сознательно: поведенческий прогон всего
+    `_on_download_finished` требует полного набора артефактов и сети, а потерять
+    здесь можно ровно одну строку — её и стережём.
+    """
+    import inspect
+
+    from ui.tabs.ocr_binding_tab import OcrBindingTab
+
+    src = inspect.getsource(OcrBindingTab._on_download_finished)
+    assert "_restore_bindings_from_graph" in src, (
+        "боевой путь открытия вкладки не поднимает метки Ду из графа — "
+        "следующее сохранение сотрёт их с сервера"
+    )

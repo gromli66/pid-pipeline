@@ -832,6 +832,13 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
             )
             self.apply_saved_appearance()
 
+            # Метки Ду (и KKS) живут в самом графе — поднять их сразу после
+            # загрузки. ⛔ Вызов был снят вместе с подвкладками 2026-07-01 и
+            # не вернулся: без него вкладка открывалась пустой, а следующее
+            # сохранение сносило Ду с сервера (`_stamp_diameters` без меток
+            # чистит своё). Замер редтима: сеанс 2 уезжал на сервер с `[{}, {}]`.
+            self._restore_bindings_from_graph()
+
             # П3: авто-классификация KKS/диаметр и цветовая валидация убраны
             self.loading_label.setVisible(False)
             self.editor.setVisible(True)
@@ -1256,6 +1263,9 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
                 best_idx = idx
         return best_idx
 
+    #: Сколько линий уехало на сервер с конфликтом Ду — для строки состояния.
+    _diameter_conflicts = 0
+
     def _stamp_diameters(self) -> int:
         """Записать Ду в рёбра графа: метки оператора + поток по линиям.
 
@@ -1293,8 +1303,9 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
             return 0
 
         lines_ = build_lines(nodes, edges, rules)
-        report = apply_marks(edges, lines_, marks)
+        report = apply_marks(edges, lines_, marks, nodes)
 
+        self._diameter_conflicts = len(report.conflicts)
         if report.conflicts:
             logger.warning("Ду: линий с двумя разными значениями: %d %s",
                            len(report.conflicts), report.conflicts[:5])
@@ -1592,6 +1603,12 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
                 parts.append(f"{diameter_count} диаметров")
             if kks_count:
                 parts.append(f"{kks_count} KKS")
+            # Конфликт Ду уезжает на сервер как есть (каждое помеченное ребро
+            # при своём значении), и оператор обязан это увидеть: линия с двумя
+            # диаметрами превращается в расчётной схеме в канал БЕЗ диаметра,
+            # то есть в заводские 0.3 м = Ду300.
+            if self._diameter_conflicts:
+                parts.append(f"⚠ {self._diameter_conflicts} линий с двумя Ду")
             self.status_label.setText(f"✅ Сохранено: {', '.join(parts)}")
             return True
 
@@ -1661,10 +1678,10 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
     # Public accessors
     # =================================================================
 
-    def get_propagated_diameters(self) -> list[dict]:
-        if self.editor.isVisible():
-            return self.editor._propagated_diameters or []
-        return []
+    # ⛔ `get_propagated_diameters` снят вместе со свойством, которое он читал:
+    # вызывающих не было ни одного. Поток по линии больше не хранится — он
+    # вычисляется при каждой правке, и «отдать его наружу» значило бы отдать
+    # снимок, устаревающий на следующем жесте.
 
     # =================================================================
     # Cleanup

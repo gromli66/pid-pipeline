@@ -25,7 +25,11 @@ def _sorted_edge_key(ek: str) -> str:
 
 def _is_connector_excluded(class_name: str) -> bool:
     """Логика исключения connectors из auto_bind.
-    Source: ui/tabs/ocr_binding_tab.py — _auto_bind_diameters."""
+
+    Source: `ui/tabs/ocr_binding_tab.py` — `_auto_bind_diameters`, СНЯТ
+    26.08.2026 вместе с авто-привязкой Ø. Тест самодостаточен (логика
+    воспроизведена здесь), поэтому оставлен как замок на саму форму правила.
+    """
     return class_name.lower() in ("connector", "off-page connector")
 
 

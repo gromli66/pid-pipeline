@@ -48,8 +48,8 @@ pid_pipeline/
 │   ├── junction_segmentation/  # UNet++ heatmap (CenterNet-style), junction/bridge
 │   ├── graph/                  # Построение топологического графа
 │   ├── ocr/                    # Surya + PaddleOCR (3-pass tiling, classify/noise engine)
-│   ├── binding/                # Привязка текста к узлам/рёбрам
-│   ├── text_binding/           # Привязка диаметров
+│   ├── binding/                # Привязка текста к узлам/рёбрам + правило линии Ду
+│   ├── text_binding/           # Конфиг распознавания текста (TextBinder удалён 26.08.2026)
 │   ├── kks_binding/            # Привязка KKS-кодов
 │   ├── ocr_validation/         # Валидация OCR-результатов
 │   ├── sam2_contour.py         # SAM2 контурная сегментация (Hiera Small + LoRA)

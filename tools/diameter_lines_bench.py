@@ -152,7 +152,7 @@ def measure(root: Path, rules: LineRules, verbose: bool):
             value = 100 + 10 * (li % 5)
             want[li] = value
             marks.append(DiameterMark(str(edges[g[0]].get("id") or g[0]), value))
-        rep = apply_marks(edges, lines, marks)
+        rep = apply_marks(edges, lines, marks, nodes)
 
         if canvas_state.graph_projection_sha(graph) != sha_before:
             stale_sha.append(uid_dir.name[:8])

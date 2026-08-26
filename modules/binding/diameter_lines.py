@@ -323,11 +323,26 @@ def _edge_keys(edges: list[dict]):
     return lambda i: cache[i]
 
 
-def _fingerprint(edges: list[dict], key) -> str:
+def _fingerprint(nodes: list[dict], edges: list[dict], key) -> str:
+    """Отпечаток входа разбиения: рёбра И классы узлов.
+
+    ⛔ Классы обязательны. Разбиение зависит от них не меньше, чем от рёбер:
+    смена `class_name` на стоп-класс рвёт линию. Отпечаток только по рёбрам
+    пропускал такую правку молча — экран показывал залитую магистраль, а на
+    диск уходила её половина (замер редтима: реклассификация узла при
+    авто-привязке KKS).
+    """
     import hashlib
     h = hashlib.sha256()
     for i in range(len(edges)):
         h.update(key(i).encode("utf-8"))
+        h.update(b"\x00")
+    h.update(b"\x01nodes\x01")
+    for nid, cls in sorted(
+            ((str(n.get("id")), str(n.get("class_name", ""))) for n in nodes)):
+        h.update(nid.encode("utf-8"))
+        h.update(b"\x00")
+        h.update(cls.encode("utf-8"))
         h.update(b"\x00")
     return h.hexdigest()[:16]
 
@@ -432,7 +447,7 @@ def build_lines(nodes: list[dict], edges: list[dict], rules: LineRules) -> Lines
     # Номер линии — по минимальному ключу ребра, а не по порядку обхода.
     ordered_groups = sorted(groups.values(), key=lambda g: min(key(i) for i in g))
 
-    lines = Lines(fingerprint=_fingerprint(edges, key))
+    lines = Lines(fingerprint=_fingerprint(nodes, edges, key))
     for li, group in enumerate(ordered_groups):
         group = sorted(group, key=key)
         lines.edges_of_line.append(group)
@@ -580,8 +595,8 @@ def clear_diameters(edges: list[dict]) -> int:
     return kept
 
 
-def apply_marks(edges: list[dict], lines: Lines,
-                marks: list[DiameterMark]) -> ApplyReport:
+def apply_marks(edges: list[dict], lines: Lines, marks: list[DiameterMark],
+                nodes: list[dict]) -> ApplyReport:
     """Разложить метки по линиям и проставить Ду в рёбра.
 
     Ду метки красит ВСЮ линию её ребра и ничего кроме. Рёбра с чужой записью
@@ -592,10 +607,11 @@ def apply_marks(edges: list[dict], lines: Lines,
     возвращается оператору. Молча выбирать «по большинству» нельзя — на выходе
     расчётная схема, и незамеченная ошибка там дороже вопроса.
     """
-    if lines.fingerprint and lines.fingerprint != _fingerprint(edges, _edge_keys(edges)):
+    if lines.fingerprint and nodes is not None and \
+            lines.fingerprint != _fingerprint(nodes, edges, _edge_keys(edges)):
         raise LinesOutOfDateError(
-            "разбиение на линии построено на другом списке рёбер — пересчитайте "
-            "его перед раскладкой меток, иначе Ду ляжет на чужие рёбра"
+            "разбиение на линии построено на другом графе — пересчитайте его "
+            "перед раскладкой меток, иначе Ду ляжет на чужие рёбра"
         )
 
     report = ApplyReport()
