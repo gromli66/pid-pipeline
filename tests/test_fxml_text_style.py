@@ -131,7 +131,7 @@ def test_кегль_не_доля_от_размера_бокса():
     assert _attr(small, "size") == _attr(big, "size") == f"{SIZE:.1f}"
 
 
-# ── шрифт: семейство в name, жирность в style ────────────────────────────
+# ── шрифт: семейство в name, начертание обычное ──────────────────────────
 
 def test_семейство_а_не_начертание_в_имени_шрифта():
     """JDK-8089450: «Tahoma Bold» в `name` = молча System на листе."""
@@ -141,16 +141,17 @@ def test_семейство_а_не_начертание_в_имени_шриф�
     assert " " not in name, "полное имя начертания JavaFX подменяет на System"
 
 
-def test_жирность_идёт_отдельным_стилем():
+def test_начертание_обычное_у_любой_подписи():
+    """Решение Максима 2026-08-26: жирности нет ни у привязанной, ни у свободной."""
     xml = generate_fxml_text(_block(HBOX))
-    assert "-fx-font-weight: bold;" in _attr(xml, "style")
+    assert "font-weight" not in xml
 
 
 def test_вертикальная_подпись_несёт_тот_же_шрифт():
     """Поворот -90° — та же ветка стиля, а не своя копия."""
     xml = generate_fxml_text(_block(VBOX))
     assert '<Font name="Tahoma" size="18.0"/>' in xml
-    assert "-fx-font-weight: bold;" in _attr(xml, "style")
+    assert "font-weight" not in xml
     assert '<Rotate angle="-90.0"' in xml
 
 

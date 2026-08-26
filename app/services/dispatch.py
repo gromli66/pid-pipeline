@@ -43,6 +43,7 @@ async def async_safe_dispatch(
     task_name: str,
     args: list,
     queue: Optional[str] = None,
+    task_kwargs: Optional[dict] = None,
 ) -> Optional[str]:
     """
     Send a Celery task from an async API endpoint.
@@ -56,6 +57,8 @@ async def async_safe_dispatch(
     kwargs = {"args": args}
     if queue:
         kwargs["queue"] = queue
+    if task_kwargs:
+        kwargs["kwargs"] = task_kwargs
 
     try:
         result = await asyncio.to_thread(

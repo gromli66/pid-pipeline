@@ -145,7 +145,8 @@ def _axis_and_orientation(node, connections):
     return axis, emit
 
 
-def generate_canvas_control(node, node_id: str, connections, kks=None) -> Optional[str]:
+def generate_canvas_control(node, node_id: str, connections, kks=None,
+                            kks_visible: bool = True) -> Optional[str]:
     """Контрол со скином: геометрия СТРОГО из bbox холста.
 
     Вертикаль: swap W/H + пересчёт layout — контракт библиотеки скинов
@@ -198,7 +199,11 @@ def generate_canvas_control(node, node_id: str, connections, kks=None) -> Option
     if kks:
         esc_kks = escape(str(kks), {chr(34): "&quot;", chr(39): "&apos;"})
         attrs.append(f'kks="{esc_kks}"')
-        attrs.append('kksVisible="true"')
+        # kks_visible=False — подпись печатается своим <Text> в рамке блока;
+        # оставить показ за библиотекой скинов значило бы вторую подпись,
+        # прямо на боксе (см. generate_canvas_fxml).
+        _vis = 'true' if kks_visible else 'false'
+        attrs.append(f'kksVisible="{_vis}"')
         attrs.append(f'kksFontSize="{KKS_FONT_SIZE:.1f}"')
         attrs.append('kksTextOffset="1.0"')
 
@@ -346,9 +351,23 @@ def generate_canvas_fxml(graph_data: dict,
     pane_h, pane_w = int(size[0]), int(size[1])
 
     kks_by_node = build_node_kks_map(graph_data)
-    bound_block_ids = {
-        b.get('block_id') for b in (graph_data.get('bindings') or [])
-        if b.get('block_id')
+    bindings = graph_data.get('bindings') or []
+    # Привязка к ребру (диаметр) как не печаталась текстом, так и не печатается.
+    edge_bound_block_ids = {
+        b.get('block_id') for b in bindings
+        if b.get('block_id') and (b.get('kind') == 'edge' or b.get('edge_key'))
+    }
+    printable_blocks = {
+        blk.get('id') for blk in (graph_data.get('text_blocks') or [])
+        if blk.get('merged_into') is None and (blk.get('text') or '').strip()
+    }
+    # Узлы, чью подпись печатаем сами → на контроле её гасим. У датчика с
+    # заглушкой 'fff' и у ручного KKS (`nodekks_*`) текст-блока нет — печатать
+    # нечего, показ остаётся за контролом, иначе подпись исчезнет с листа.
+    kks_printed_nodes = {
+        b.get('node_id') for b in bindings
+        if b.get('node_id') and b.get('block_id') in printable_blocks
+        and not (b.get('kind') == 'edge' or b.get('edge_key'))
     }
 
     control_elements, rectangle_elements = [], []
@@ -377,7 +396,9 @@ def generate_canvas_fxml(graph_data: dict,
 
         connections = get_node_connections(node_id, edges, nodes)
 
-        fxml = generate_canvas_control(node, node_id, connections, kks=kks)
+        fxml = generate_canvas_control(
+            node, node_id, connections, kks=kks,
+            kks_visible=node_id not in kks_printed_nodes)
         if fxml:
             _put(control_elements, fxml)
             continue
@@ -424,12 +445,17 @@ def generate_canvas_fxml(graph_data: dict,
             line_elements.append(fxml)
     line_elements.extend(auto_lines)
 
-    # Тексты OCR: непривязанные блоки → <Text> (привязанные ушли в kks).
+    # Тексты OCR → <Text> в рамке блока: и привязанные к оборудованию, и
+    # свободные, одним шрифтом и одними свойствами (TEXT_STYLES['text_block']).
+    # Привязанный блок на холсте уже стоит СБОКУ от узла — сторона и отступ
+    # привязки вшиты в его bbox (`ocr_layer_mixin._bound_block_bbox`), так что
+    # положение на листе совпадает с экранным без пересчёта (решение Максима
+    # 2026-08-26: «печатаем там, где расположен бокс, что привязанный, что нет»).
     text_elements = []
     for blk in (graph_data.get('text_blocks') or []):
         if blk.get('merged_into') is not None:
             continue
-        if blk.get('id') in bound_block_ids:
+        if blk.get('id') in edge_bound_block_ids:
             continue
         if not (blk.get('text') or '').strip():
             continue

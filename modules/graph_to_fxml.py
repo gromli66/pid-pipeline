@@ -855,9 +855,11 @@ class TextStyle(NamedTuple):
 #: печатается, паритета с файлом у неё нет, и кегль у неё свой, внутренний —
 #: см. `base_graph_editor._create_edge_label`. Редактор из этой таблицы читает
 #: только кегль подписи текст-блока: Tahoma в клиент не бандлим (решение №7).
+#: Начертание — обычное у ЛЮБОЙ подписи выгрузки, привязанной и свободной
+#: (решение Максима 2026-08-26): шрифт и свойства текста везде одни.
 TEXT_STYLES = {
-    'text_block': TextStyle('Tahoma', 18.0, True),   # OCR-блок → <Text>
-    'kks': TextStyle('Tahoma', 18.0, True),          # оборудование → kksFontSize
+    'text_block': TextStyle('Tahoma', 18.0, False),  # OCR-блок → <Text>
+    'kks': TextStyle('Tahoma', 18.0, False),         # оборудование → kksFontSize
 }
 _TEXT_BOLD_STYLE = "-fx-font-weight: bold;"
 

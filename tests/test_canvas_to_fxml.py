@@ -124,10 +124,29 @@ def test_kks_from_bindings_with_const_font():
     p1 = xml.split('fx:id="p1"')[1].split('/>')[0]
     assert 'kks="10KAA10AP001"' in p1
     assert f'kksFontSize="{KKS_FONT_SIZE:.1f}"' in p1
-    # привязанный блок не печатается текстом
-    assert 'text="10KAA10AP001"' not in xml
+    # подпись печатает <Text> в рамке блока, показ на контроле погашен —
+    # иначе библиотека скинов нарисует вторую, прямо на боксе
+    assert 'kksVisible="false"' in p1
+    assert 'text="10KAA10AP001"' in xml
     assert 'text="Свободный"' in xml
     assert 'text="слит"' not in xml
+
+
+def test_bound_label_printed_in_block_frame():
+    """Блок 5 привязан к p1: <Text> встаёт в рамку блока, а не на бокс узла."""
+    xml = _fxml()
+    hits = [ln for ln in xml.splitlines() if 'text="10KAA10AP001"' in ln]
+    assert len(hits) == 1, hits
+    # bbox блока [140, 60, 260, 90]: левый край рамки + её ширина, центр по Y
+    assert 'layoutX="140.0"' in hits[0]
+    assert 'layoutY="66.0"' in hits[0]
+    assert 'wrappingWidth="120.0"' in hits[0]
+
+
+def test_detector_stub_kks_stays_on_control():
+    """У заглушки 'fff' привязки нет — печатать нечего, показ гасить нельзя."""
+    d1 = _fxml().split('fx:id="d1"')[1].split('/>')[0]
+    assert 'kks="fff"' in d1 and 'kksVisible="true"' in d1
 
 
 def test_polygon_node_and_napravlenie_triangle():
