@@ -2340,7 +2340,12 @@ class OcrBindingEditor(QGraphicsView):
         import json
         snap_blocks = json.dumps(self._ocr_blocks, ensure_ascii=False)
         snap_bindings = json.dumps(self._bindings, ensure_ascii=False)
-        snap_diameter = json.dumps(self._diameter_bindings, ensure_ascii=False)
+        # Метки — датаклассы; в снимок кладём словарями, чтобы стек оставался
+        # json-совместимым, как остальные его поля.
+        snap_diameter = json.dumps(
+            [{"edge_id": m.edge_id, "value": m.value, "kind": m.kind,
+              "text": m.text, "ocr_block_idx": m.ocr_block_idx}
+             for m in self._diameter_marks], ensure_ascii=False)
         snap_kks = json.dumps(self._kks_bindings, ensure_ascii=False)
         # Validation results — сохраняем как list of dicts
         snap_validation = None
@@ -2370,7 +2375,13 @@ class OcrBindingEditor(QGraphicsView):
 
         self._ocr_blocks = json.loads(snap_blocks)
         self._bindings = json.loads(snap_bindings)
-        self._diameter_bindings = json.loads(snap_diameter)
+        from modules.binding.diameter_lines import DiameterMark
+        self._diameter_marks = [
+            DiameterMark(edge_id=d["edge_id"], value=d["value"],
+                         kind=d.get("kind", "manual"), text=d.get("text", ""),
+                         ocr_block_idx=d.get("ocr_block_idx"))
+            for d in json.loads(snap_diameter)
+        ]
         self._kks_bindings = json.loads(snap_kks)
         self._kks_bound_ocr_indices = {b["ocr_block_idx"] for b in self._kks_bindings}
         self._kks_bound_node_ids = {b["node_id"] for b in self._kks_bindings}
@@ -2725,7 +2736,8 @@ class OcrBindingEditor(QGraphicsView):
 
     def _after_change(self):
         self._rebuild_bound_indices()
-        self._rebuild_diameter_bound_indices()
+        # `_rebuild_diameter_bound_indices` снят вместе со своими множествами:
+        # они только заполнялись, читателей у них не было ни одного.
         self._redraw_all_colors()
 
         # Перерисовать ВСЕ типы привязок: каждый redraw сначала чистит старые items

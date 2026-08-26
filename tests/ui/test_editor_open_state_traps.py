@@ -340,15 +340,21 @@ def _drag_ocr_handle(editor, bid, grow=30.0):
     ov.end_drag()
 
 
-def _edit_diameter(editor, edge_key, text, monkeypatch):
-    """Ctrl+2ЛКМ по ребру в состоянии «ОКР привязка» → диалог диаметра → ОК."""
+def _edit_kks(editor, node_id, text, monkeypatch):
+    """Ctrl+2ЛКМ по оборудованию в состоянии «ОКР привязка» → диалог KKS → ОК.
+
+    Раньше здесь стоял диалог ДИАМЕТРА; он снят 26.08.2026 (решение Максима:
+    правки Ду в «Ручной правке» не будет — она писала в холст, а `.prtx`
+    собирается из `graph_validated`). Инвариант стека тот же, путь соседний:
+    оба строят шаг через `_ocr_push_snapshot`.
+    """
     def fake_exec(self):
         for w in self.findChildren(QLineEdit):
             w.setText(text)
         return QDialog.DialogCode.Accepted
 
     monkeypatch.setattr(QDialog, "exec", fake_exec)
-    editor._open_diameter_edit_dialog(edge_key)
+    editor._open_kks_edit_dialog(node_id)
 
 
 def _autosave_tick(tab):
@@ -472,57 +478,52 @@ def test_the_open_handles_do_not_capture_anything_until_the_drag_starts(
 # S3 — правка диаметра ребра мимо стека (§83.31)
 # =========================================================================
 
-def test_diameter_edit_is_a_step_the_tab_and_the_stack_both_see(
+def test_kks_edit_is_a_step_the_tab_and_the_stack_both_see(
         box_tab, dialogs, monkeypatch):
-    """Правка диаметра обязана быть ШАГОМ: её видит и стек, и дёрти-флаг.
+    """Правка по Ctrl+2ЛКМ обязана быть ШАГОМ: её видит и стек, и дёрти-флаг.
 
     Без шага вкладка считала, что несохранённого нет, и закрывалась без
     вопроса; автосохранение по той же причине не срабатывало вовсе.
-    Соседний путь того же жеста (KKS по Ctrl+2ЛКМ) шаг строит — здесь
-    заперта та же форма.
     """
     ed = box_tab._editor
+    ed.set_display_regime("ocr")
     box_tab._saved_revision = ed.undo_mgr.revision
     assert box_tab.has_unsaved_changes() is False, "вкладка грязная до правки"
+    assert ed._node_kks(BOX_NID) == ""
 
-    key = ed.model.edge_key(*PIN_EDGE)
-    assert ed.model.find_edge_data(key).get("diameter_text") is None
+    _edit_kks(ed, BOX_NID, "10LAB10AP001", monkeypatch)
 
-    _edit_diameter(ed, key, "200", monkeypatch)
-
-    assert ed.model.find_edge_data(key).get("diameter_text") == "200"
-    assert ed.model.find_edge_data(key).get("diameter_value") == 200
+    assert ed._node_kks(BOX_NID) == "10LAB10AP001"
     assert ed.undo_mgr.stack_depth == 1
     assert box_tab.has_unsaved_changes() is True
     assert dialogs == []
 
     ed.undo()
-    assert ed.model.find_edge_data(key).get("diameter_text") is None
+    assert ed._node_kks(BOX_NID) == ""
     ed.redo()
-    assert ed.model.find_edge_data(key).get("diameter_text") == "200"
+    assert ed._node_kks(BOX_NID) == "10LAB10AP001"
 
 
-def test_undo_of_a_neighbour_command_does_not_erase_the_diameter(
+def test_undo_of_a_neighbour_command_does_not_erase_the_edit(
         box_tab, dialogs, monkeypatch):
-    """ЧУЖАЯ снимочная команда → правка диаметра → Ctrl+Z.
+    """ЧУЖАЯ снимочная команда → правка по Ctrl+2ЛКМ → Ctrl+Z.
 
     Минимальная форма дефекта: `_before` соседней команды снят ДО правки, и
-    один Ctrl+Z по ней стирал диаметр вместе с ней — обе правки уходили за
-    один шаг, а вернуть диаметр было нечем.
+    один Ctrl+Z по ней стирал правку вместе с ней — обе уходили за один шаг,
+    а вернуть правку было нечем.
     """
     ed = box_tab._editor
     ed.set_display_regime("ocr")
     doomed = _live_blocks(ed)[0]["id"]
     ed.delete_ocr_block(doomed)                   # соседняя снимочная команда
 
-    key = ed.model.edge_key(*PIN_EDGE)
-    _edit_diameter(ed, key, "200", monkeypatch)
-    assert ed.undo_mgr.stack_depth == 2, "правка диаметра не стала своим шагом"
+    _edit_kks(ed, BOX_NID, "10LAB10AP001", monkeypatch)
+    assert ed.undo_mgr.stack_depth == 2, "правка не стала своим шагом"
 
-    ed.undo()                                     # первый Ctrl+Z — по диаметру
-    assert ed.model.find_edge_data(key).get("diameter_text") is None
+    ed.undo()                                     # первый Ctrl+Z — по правке
+    assert ed._node_kks(BOX_NID) == ""
     assert ed.model.find_text_block(doomed) is None, \
-        "первый Ctrl+Z откатил СОСЕДНЮЮ команду вместо диаметра"
+        "первый Ctrl+Z откатил СОСЕДНЮЮ команду вместо правки"
 
     ed.undo()                                     # второй — по соседней команде
     assert ed.model.find_text_block(doomed) is not None
