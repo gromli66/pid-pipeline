@@ -144,13 +144,13 @@ def test_bound_label_printed_in_block_frame():
     assert 'wrappingWidth="80.0"' in hits[0]
 
 
-def test_free_label_keeps_its_frame_width():
-    """80 — только у привязанных; свободный блок печатается как раньше."""
+def test_free_label_has_no_wrapping_at_all():
+    """Коробка переноса — только у привязанных; у свободного атрибута нет."""
     hits = [ln for ln in _fxml().splitlines() if 'text="Свободный"' in ln]
     assert len(hits) == 1, hits
-    # bbox [1200, 800, 1300, 830]: левый край рамки + её ширина
+    # bbox [1200, 800, 1300, 830]: подпись идёт от левого края рамки
     assert 'layoutX="1200.0"' in hits[0]
-    assert 'wrappingWidth="100.0"' in hits[0]
+    assert 'wrappingWidth' not in hits[0]
 
 
 def test_detector_stub_kks_stays_on_control():

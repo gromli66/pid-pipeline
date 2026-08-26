@@ -904,10 +904,16 @@ def generate_fxml_text(block: dict, wrapping_width: float = None):
     длиннее строка. ⚠ `textAlignment` стоял в выгрузке и раньше, но для
     однострочного `<Text>` без `wrappingWidth` он мёртв — потому и жила оценка.
 
-    `wrapping_width` — фиксированная ширина коробки вместо ширины рамки
-    (привязанные подписи, `BOUND_TEXT_WRAPPING`). Коробка центрируется на
-    рамке, поэтому подпись остаётся там, где её привязали. Без параметра
-    формулы дают ровно прежние числа: `cx - w/2 == x1`, `cy + h/2 == y2`.
+    `wrapping_width` — ширина коробки переноса; её получают ТОЛЬКО привязанные
+    подписи (`BOUND_TEXT_WRAPPING`). Коробка центрируется на рамке, поэтому
+    подпись остаётся там, где её привязали.
+
+    ⛔ У непривязанного блока атрибута `wrappingWidth` в выгрузке НЕТ вовсе
+    (решение Максима 2026-08-26): рамки блоков в разы уже кегля 18, и перенос
+    по ширине рамки рвал подпись в столбик по одной букве. Ценой этого
+    `textAlignment` у свободной подписи мёртв (см. выше) — она идёт одной
+    строкой вправо от левого края рамки. Позиция при этом прежняя:
+    `cx - w/2 == x1`, `cy + h/2 == y2`.
     """
     bbox = block.get('bbox')
     if not bbox or len(bbox) != 4:
@@ -930,23 +936,25 @@ def generate_fxml_text(block: dict, wrapping_width: float = None):
         # Поворот 90° влево (angle=-90) вокруг локальной точки (0,0):
         # локальная (px,py) → (py,-px). Повёрнутая строка занимает по x толщину
         # [layout_x .. layout_x+F], по y длину [layout_y-W .. layout_y], где W —
-        # `wrappingWidth`. Берём W = высоте рамки и сажаем нижний конец на её
-        # нижнюю грань: строка ложится ровно вдоль рамки и центрируется в ней
-        # средствами формата. Толщина строки центрируется кеглем, не оценкой.
-        wrapping = wrapping_width or h
+        # `wrappingWidth`. Нижний конец сидит на нижней грани рамки; при
+        # заданном W строка центрируется вдоль рамки средствами формата.
+        # Толщина строки центрируется кеглем, не оценкой.
+        wrapping = wrapping_width
         layout_x = cx - font_size / 2.0
-        layout_y = cy + wrapping / 2.0
+        layout_y = cy + (wrapping or h) / 2.0
     else:
-        # Горизонтальный: строка занимает всю ширину рамки от её левого края,
-        # центрируется внутри неё; по Y — центр рамки минус половина кегля.
-        wrapping = wrapping_width or w
-        layout_x = cx - wrapping / 2.0
+        # Горизонтальный: строка идёт от левого края рамки; при заданном W
+        # центрируется внутри W. По Y — центр рамки минус половина кегля.
+        wrapping = wrapping_width
+        layout_x = cx - (wrapping or w) / 2.0
         layout_y = cy - font_size / 2.0
 
     head = (f'        <Text layoutX="{max(0.0, layout_x):.1f}"'
-            f' layoutY="{max(0.0, layout_y):.1f}"'
-            f' wrappingWidth="{wrapping:.1f}" text="{esc}" fill="{_TEXT_COLOR}"'
-            f' textAlignment="CENTER" textOrigin="TOP"')
+            f' layoutY="{max(0.0, layout_y):.1f}"')
+    if wrapping:
+        head += f' wrappingWidth="{wrapping:.1f}"'
+    head += (f' text="{esc}" fill="{_TEXT_COLOR}"'
+             f' textAlignment="CENTER" textOrigin="TOP"')
     if style.bold:
         head += f' style="{_TEXT_BOLD_STYLE}"'
     lines = [
