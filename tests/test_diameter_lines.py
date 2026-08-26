@@ -470,15 +470,26 @@ def test_ochistka_ne_trogaet_pravku_redaktora():
     assert edges[1]["diameter_value"] == 250
 
 
-def test_starye_polya_snimayutsya_pri_ochistke():
+def test_starye_polya_snimayutsya_so_SVOEI_zapisi():
     """`prefix/suffix/confidence` уходят: читателей у них нет, в prtx не едут."""
     nodes, edges = _magistral_s_otvodom()
-    edges[0].update({"diameter_value": 50, "diameter_prefix": "Dy",
-                     "diameter_suffix": "", "diameter_confidence": 0.9,
-                     "diameter_ocr_block_idx": 7})
+    edges[0].update({"diameter_value": 50, "diameter_source": SOURCE_LINE,
+                     "diameter_prefix": "Dy", "diameter_suffix": "",
+                     "diameter_confidence": 0.9, "diameter_ocr_block_idx": 7})
     clear_diameters(edges)
     for k in LEGACY_DIAMETER_FIELDS:
         assert k not in edges[0]
+    assert "diameter_value" not in edges[0]
+
+
+def test_chuzhaya_zapis_bez_istochnika_ne_stiraetsya():
+    """Ду без `diameter_source` — не наш: так пишет «Ручная правка» и старый
+    поток. Снести его значило бы молча стереть работу оператора."""
+    nodes, edges = _magistral_s_otvodom()
+    edges[0].update({"diameter_value": 250, "diameter_prefix": "Dy"})
+    kept = clear_diameters(edges)
+    assert kept == 1
+    assert edges[0]["diameter_value"] == 250
 
 
 def test_dve_metki_s_raznym_du_na_odnoi_linii_konflikt():
@@ -558,3 +569,289 @@ def test_du_ne_menyaet_geometricheskuyu_proekciyu_holsta():
 def test_polya_du_ne_vhodyat_v_belyi_spisok_proekcii():
     from modules.graph.core import canvas_state
     assert not (set(DIAMETER_FIELDS) & set(canvas_state._EDGE_KEYS))
+
+
+# ── дыры, найденные красной командой ───────────────────────────────────────
+
+from modules.binding.diameter_lines import LinesOutOfDateError  # noqa: E402
+
+
+def _nichya():
+    """Врезка с ТОЧНОЙ ничьёй: два кандидата в продолжение с равным отклонением.
+
+    Тайбрейк по ключу — единственное, что делает выбор устойчивым; на 0° и 0.6°
+    ничья не воспроизводится, и порядко-зависимая версия проходит тест.
+    """
+    nodes = [node("t"), node("a"), node("b"), node("c")]
+    edges = [
+        edge("e1", "t", "a", (100, 100), (100, 200)),          # восток
+        edge("e2", "t", "b", (100, 100), (117.36, 1.52)),      # 170° к востоку
+        edge("e3", "t", "c", (100, 100), (82.64, 1.52)),       # тоже 170°
+    ]
+    return nodes, edges
+
+
+def _partition_by_ident(edges, lines, ident):
+    return {frozenset(ident(edges[i]) for i in g) for g in lines.edges_of_line}
+
+
+def _vse_perestanovki_dayut_odno(nodes, edges, ident):
+    import itertools
+    ref = None
+    for perm in itertools.permutations(range(len(edges))):
+        shuffled = [edges[i] for i in perm]
+        got = _partition_by_ident(shuffled, build_lines(nodes, shuffled, rules()),
+                                  ident)
+        if ref is None:
+            ref = got
+        elif got != ref:
+            return False, perm
+    return True, None
+
+
+def test_determinizm_pri_tochnoi_nichye():
+    nodes, edges = _nichya()
+    ok, perm = _vse_perestanovki_dayut_odno(nodes, edges, lambda e: e["id"])
+    assert ok, "перестановка %s дала другое разбиение" % (perm,)
+
+
+def test_determinizm_bez_id_u_reber():
+    """Ключ по содержимому: без него сортировка падала на индексы."""
+    nodes, edges = _nichya()
+    for e in edges:
+        e.pop("id")
+    ok, perm = _vse_perestanovki_dayut_odno(
+        nodes, edges, lambda e: (e["source"], e["target"], tuple(e["target_point"])))
+    assert ok, "перестановка %s дала другое разбиение" % (perm,)
+
+
+def test_determinizm_pri_dublyah_id():
+    nodes, edges = _nichya()
+    for e in edges:
+        e["id"] = "dup"
+    ok, perm = _vse_perestanovki_dayut_odno(
+        nodes, edges, lambda e: tuple(e["target_point"]))
+    assert ok, "перестановка %s дала другое разбиение" % (perm,)
+
+
+def test_id_nol_i_pustoi_ne_lomayut_determinizm():
+    nodes, edges = _nichya()
+    edges[0]["id"] = 0
+    edges[1]["id"] = ""
+    ok, perm = _vse_perestanovki_dayut_odno(
+        nodes, edges, lambda e: tuple(e["target_point"]))
+    assert ok, "перестановка %s дала другое разбиение" % (perm,)
+
+
+def test_dubli_id_ne_puskayut_metku_na_chuzhoe_rebro():
+    """При дублях `id` метка неоднозначна — разбиение уходит на ключ содержимого."""
+    nodes = [node("a", "perehod"), node("b", "perehod")]
+    edges = [
+        edge("dup", "a", "b", (100, 0), (100, 100)),
+        edge("dup", "a", "b", (120, 0), (120, 100)),
+    ]
+    lines = build_lines(nodes, edges, rules())
+    assert len(lines) == 2      # рёбра всё равно разведены по линиям
+
+
+def test_ustarevshee_razbienie_ne_krasit_chuzhie_rebra():
+    """`Lines` держит индексы; список рёбер переписали — индексы указывают не туда."""
+    nodes, edges = _magistral_s_otvodom()
+    lines = build_lines(nodes, edges, rules())
+    pereputannye = [edges[2], edges[0], edges[1]]
+    with pytest.raises(LinesOutOfDateError):
+        apply_marks(pereputannye, lines, [DiameterMark("e1", 300)])
+
+
+def test_ukorochennoe_razbienie_ne_vyklyuchaet_pravilo_molcha():
+    nodes, edges = _magistral_s_otvodom()
+    lines = build_lines(nodes, edges, rules())
+    with pytest.raises(LinesOutOfDateError):
+        apply_marks(edges[:2], lines, [DiameterMark("e1", 300)])
+
+
+def test_konflikt_ne_zatiraet_pravku_redaktora():
+    nodes, edges = _magistral_s_otvodom()
+    edges[1]["diameter_value"] = 250
+    edges[1]["diameter_source"] = SOURCE_EDITOR
+    lines = build_lines(nodes, edges, rules())
+    rep = apply_marks(edges, lines, [
+        DiameterMark("e1", 400, SOURCE_OCR), DiameterMark("e2", 300, SOURCE_MANUAL),
+    ])
+    assert not rep.ok and rep.conflicts
+    assert edges[1]["diameter_value"] == 250
+    assert edges[1]["diameter_source"] == SOURCE_EDITOR
+
+
+def test_metka_protiv_pravki_redaktora_eto_konflikt():
+    """Иначе на линии два разных Ду, а отчёт зелёный — и в prtx уедет пустота."""
+    nodes, edges = _magistral_s_otvodom()
+    edges[0]["diameter_value"] = 250
+    edges[0]["diameter_source"] = SOURCE_EDITOR
+    lines = build_lines(nodes, edges, rules())
+    rep = apply_marks(edges, lines, [DiameterMark("e1", 300, SOURCE_OCR)])
+    assert rep.conflicts and rep.conflicts[0][1] == [250, 300]
+    assert edges[0]["diameter_value"] == 250
+
+
+def test_liniya_celikom_iz_pravki_redaktora_metka_ne_srabotala():
+    """«Ничего не произошло» не должно выглядеть как успех."""
+    nodes, edges = _magistral_s_otvodom()
+    for i in (0, 1):
+        edges[i]["diameter_value"] = 300
+        edges[i]["diameter_source"] = SOURCE_EDITOR
+    lines = build_lines(nodes, edges, rules())
+    rep = apply_marks(edges, lines, [DiameterMark("e1", 300, SOURCE_OCR)])
+    assert rep.edges_stamped == 0 and rep.lines_covered == 0
+    assert rep.ineffective_marks == ["e1"]
+    assert not rep.ok
+
+
+@pytest.mark.parametrize("bad", [0, -50, 250.7, "300", None, True])
+def test_negodnoe_znachenie_du_ne_uezzhaet_na_disk(bad):
+    """`json2xml` читает поле как `float(d)/1000`, а ноль пропускает: мусор там
+    молча становится заводскими 0.3 м = Ду300."""
+    nodes, edges = _magistral_s_otvodom()
+    lines = build_lines(nodes, edges, rules())
+    with pytest.raises(ValueError):
+        apply_marks(edges, lines, [DiameterMark("e1", bad)])
+
+
+def test_celoe_v_vide_float_prinimaetsya():
+    nodes, edges = _magistral_s_otvodom()
+    lines = build_lines(nodes, edges, rules())
+    apply_marks(edges, lines, [DiameterMark("e1", 300.0)])
+    assert edges[0]["diameter_value"] == 300
+    assert isinstance(edges[0]["diameter_value"], int)
+
+
+def test_krug_s_metkoi_redaktora_ne_teryaet_ee():
+    nodes, edges = _magistral_s_otvodom()
+    edges[1]["diameter_value"] = 250
+    edges[1]["diameter_source"] = SOURCE_EDITOR
+    lines = build_lines(nodes, edges, rules())
+    for _ in range(3):
+        apply_marks(edges, lines, marks_from_edges(edges))
+    assert edges[1]["diameter_value"] == 250
+    assert edges[1]["diameter_source"] == SOURCE_EDITOR
+
+
+def test_du_ne_trebuetsya_ne_dayut_kusku_magistrali():
+    """Отвод к прибору, склеенный с двумя кусками врезки, — не тупик.
+
+    На корпусе такой случай есть (лист `89ca7583`), и он молча уносил кусок
+    магистрали в «Ду не требуется».
+    """
+    nodes = [node(n) for n in ("p", "t1", "u", "v", "b")] + [node("d", "datchik")]
+    edges = [
+        # линия: A (p→t1) + C (t1→d), они коллинеарны на t1
+        edge("A", "p", "t1", (100, 100), (100, 200)),
+        edge("C", "t1", "d", (100, 200), (100, 300)),
+        # у p своя сквозная пара (север-юг) — A там отдельная ветка
+        edge("P1", "p", "u", (100, 100), (0, 100)),
+        edge("P2", "p", "v", (100, 100), (200, 100)),
+        # у t1 свой отвод вниз
+        edge("B", "t1", "b", (100, 200), (200, 200)),
+    ]
+    lines = build_lines(nodes, edges, rules())
+    li = lines.line_for(0)
+    assert lines.edges_of_line[li] == [0, 1]        # A + C — одна линия
+    # линия держится за граф ДВУМЯ узлами (p и t1) — это кусок магистрали,
+    # а не тупиковый отвод, и Ду ему нужен
+    assert lines.requires_diameter[li] is True
+
+
+def test_chistyi_tupik_k_priboru_du_ne_trebuet_i_pri_dline_2():
+    """Контроль к предыдущему: тот же отвод, но держащийся ОДНИМ узлом."""
+    nodes = [node("p"), node("t1"), node("b"), node("d", "datchik")]
+    edges = [
+        edge("A", "p", "t1", (100, 100), (100, 200)),
+        edge("C", "t1", "d", (100, 200), (100, 300)),
+        edge("B", "t1", "b", (100, 200), (200, 200)),
+    ]
+    lines = build_lines(nodes, edges, rules())
+    li = lines.line_for(0)
+    assert lines.requires_diameter[li] is False
+
+
+def test_samopetlya_ne_udvaivaet_stepen():
+    nodes = [node("a"), node("loop"), node("b")]
+    edges = [
+        edge("e1", "a", "loop", (100, 0), (100, 100)),
+        edge("e2", "loop", "loop", (100, 100), (100, 100)),
+        edge("e3", "loop", "b", (100, 100), (100, 200)),
+    ]
+    lines = build_lines(nodes, edges, rules())
+    assert lines.line_for(0) == lines.line_for(2)
+
+
+def test_nan_v_tochke_ne_ronyaet_razbienie():
+    nodes, edges = _troinik()
+    edges[2]["target_point"] = [float("nan"), float("nan")]
+    lines = build_lines(nodes, edges, rules())
+    assert line_sets(lines) == {frozenset({0, 1}), frozenset({2})}
+
+
+def test_granica_dopuska_rabotaet_tolko_na_vrezke():
+    """Допуск судит ВРЕЗКУ (степень >= 3). На степени 2 угол не смотрят вовсе —
+    колено 90° это та же линия, и это отдельное правило."""
+    import math as _m
+    nodes = [node("t"), node("a"), node("b"), node("c")]
+
+    def troika(dev_deg):
+        a = _m.radians(180.0 - dev_deg)
+        return [
+            edge("e1", "t", "a", (100, 100), (100, 200)),
+            edge("e2", "t", "b", (100, 100),
+                 (100 + 100 * _m.sin(a), 100 + 100 * _m.cos(a))),
+            edge("e3", "t", "c", (100, 100), (0, 100)),   # третье ребро — врезка
+        ]
+
+    assert len(build_lines(nodes, troika(29.99), rules())) == 2   # сшилось
+    assert len(build_lines(nodes, troika(30.5), rules())) == 3    # не сшилось
+
+
+# ── конфиг: валидация не должна выключаться молча ──────────────────────────
+
+def test_yaml_bez_classes_ronyaet_zagruzku(tmp_path):
+    y = tmp_path / "p.yaml"
+    y.write_text("diameter_lines:\n  transit: [trubaa]\n  stop: [nasoss]\n",
+                 encoding="utf-8")
+    with pytest.raises(LineRulesError, match="classes"):
+        LineRules.from_project_yaml(y)
+
+
+def test_transit_skalyarom_ronyaet_zagruzku():
+    with pytest.raises(LineRulesError, match="списком"):
+        LineRules.from_section({"transit": "truba", "stop": ["nasos"]})
+
+
+def test_dubli_v_spiske_ronyayut_zagruzku():
+    with pytest.raises(LineRulesError, match="Дубли|дубли"):
+        LineRules.from_section({"transit": ["truba", "truba"], "stop": ["nasos"]})
+
+
+def test_pustoi_transit_ronyaet_zagruzku():
+    with pytest.raises(LineRulesError, match="transit"):
+        LineRules.from_section({"transit": [], "stop": ["nasos"]})
+
+
+def test_tol_ne_chislo_daet_LineRulesError():
+    with pytest.raises(LineRulesError, match="не число"):
+        LineRules.from_section(
+            {"transit": ["truba"], "stop": ["nasos"], "collinear_tol_deg": "abc"})
+
+
+def test_max_edges_ne_chislo_i_nol_dayut_LineRulesError():
+    with pytest.raises(LineRulesError):
+        LineRules.from_section(
+            {"transit": ["truba"], "stop": ["nasos"], "no_diameter_max_edges": "abc"})
+    with pytest.raises(LineRulesError, match="не меньше 1"):
+        LineRules.from_section(
+            {"transit": ["truba"], "stop": ["nasos"], "no_diameter_max_edges": 0})
+
+
+def test_pustoi_no_diameter_ends_vyklyuchaet_pravilo():
+    r = LineRules.from_section(
+        {"transit": ["truba", "datchik"], "stop": ["nasos"], "no_diameter_ends": []})
+    assert r.no_diameter_ends == frozenset()

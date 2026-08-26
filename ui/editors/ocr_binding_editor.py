@@ -84,6 +84,13 @@ COLOR_DIAMETER_FILL = QColor(155, 89, 182, 50)
 COLOR_DIAMETER_LINE = QColor(155, 89, 182, 160)
 COLOR_DIAMETER_LABEL_BG = QColor(155, 89, 182, 200)
 COLOR_DIAMETER_LABEL_TEXT = QColor(255, 255, 255, 240)
+# Линия с Ду — зелёная, линия с двумя разными метками — оранжевая.
+# Линии БЕЗ Ду постоянным цветом не красим: в начале работы без Ду весь
+# лист, и заливка на 100% объектов не несёт информации (решение Максима
+# 26.08 — красную подсветку «без Ду» не возвращать).
+COLOR_DIAMETER_OK = QColor(39, 174, 96, 200)            # #27AE60
+COLOR_DIAMETER_CONFLICT = QColor(230, 126, 34, 220)     # #E67E22
+COLOR_DIAMETER_CONFLICT_BG = QColor(230, 126, 34, 200)
 DIAMETER_BORDER_WIDTH = 1.5
 
 # Conflict edge colors
@@ -206,6 +213,7 @@ class OcrBindingEditor(QGraphicsView):
     CLICK_THRESHOLD = 25
     EDGE_HIT_THRESHOLD = 25
     TEXT_FONT_SIZE = 9
+    DIAMETER_LINE_W = 3          # толщина подсветки линии с Ду
     # Порог различия клик/drag для Ctrl+ЛКМ по блоку (px) —
     # синхронно с OcrBindHandler.OCR_CLICK_MOVE_THRESHOLD.
     OCR_CLICK_MOVE_THRESHOLD = 4.0
@@ -312,17 +320,18 @@ class OcrBindingEditor(QGraphicsView):
         self._undo_stack: list = []  # [(ocr_blocks_json, bindings_json)]
         self._MAX_UNDO = 30
 
-        # Diameter bindings (edge-based, no ocr_block_idx)
-        self._diameter_bindings: list[dict] = []
-        self._propagated_diameters: list[dict] = []
-        self._conflict_edges: list[dict] = []
-        self._diameter_bound_edge_keys: set[str] = set()
-        self._diameter_bound_ocr_indices: set[int] = set()
-        self._conflict_edge_keys: set[str] = set()
+        # Диаметры — «правило линии» (`modules/binding/diameter_lines.py`).
+        # Оператор создаёт только МЕТКИ; поток по линии не хранится, а считается
+        # заново при каждой правке. Ключ метки — `edge_id`, не пара концов:
+        # у параллельных рёбер пара концов общая (51 ребро на корпусе).
+        self._diameter_marks: list = []          # list[DiameterMark]
+        self._diameter_lines = None              # Lines — по координатам ОРИГИНАЛА
+        self._diameter_rules = None              # LineRules из YAML проекта
+        self._diam_by_edge: dict = {}            # edge_idx -> поля Ду ребра
+        self._diam_conflicts: dict = {}          # line_idx -> [значения-претенденты]
         self._diameter_items: list = []  # visual items (lines, labels, rects)
-        self._diameter_label_rects: list[tuple] = []  # [(x1,y1,x2,y2, edge_key, edge_idx, is_propagated)]
+        self._diameter_label_rects: list[tuple] = []  # [(x1,y1,x2,y2, line_idx, edge_idx)]
         self._diameter_matcher = None  # DiameterMatcher, set from tab
-        self._text_binder = None       # TextBinder, set from tab
 
         # Validation state
         self._validation_results: list = []  # BlockClassification list
@@ -422,19 +431,65 @@ class OcrBindingEditor(QGraphicsView):
     def clear_bindings(self):
         self.set_bindings([])
 
-    def set_diameter_bindings(self, bindings: list[dict], propagated: list[dict] = None,
-                                conflicts: list[dict] = None):
-        """Установить привязки диаметров (от TextBinder) + распространённые + конфликты."""
-        self._diameter_bindings = bindings
-        self._propagated_diameters = propagated or []
-        self._conflict_edges = conflicts or []
-        self._rebuild_diameter_bound_indices()
+    def set_diameter_marks(self, marks: list):
+        """Установить метки Ду. Поток по линиям считается здесь же, заново."""
+        self._diameter_marks = list(marks or [])
+        self._repropagate_diameters()
         self._redraw_diameter_bindings()
         self._redraw_all_colors()
 
+    def get_diameter_marks(self) -> list:
+        """Метки оператора — то единственное, что нужно сохранять."""
+        return self._diameter_marks
+
+    def set_diameter_bindings(self, bindings: list[dict], propagated: list[dict] = None,
+                              conflicts: list[dict] = None):
+        """Совместимость со старым вызовом вкладки: словари → метки.
+
+        `propagated` и `conflicts` игнорируются намеренно — поток и конфликты
+        теперь вычисляются, а не приносятся снаружи. Хранить их было нельзя:
+        после правки графа они устаревали молча.
+        """
+        from modules.binding.diameter_lines import DiameterMark, SOURCE_OCR, SOURCE_MANUAL
+        marks = []
+        for db in (bindings or []):
+            value = db.get("diameter") or db.get("value") or 0
+            if not value:
+                continue
+            marks.append(DiameterMark(
+                edge_id=str(db.get("edge_id") or ""),
+                value=int(value),
+                kind=str(db.get("kind")
+                         or (SOURCE_OCR if db.get("ocr_block_idx") is not None
+                             else SOURCE_MANUAL)),
+                text=str(db.get("text") or value),
+                ocr_block_idx=db.get("ocr_block_idx"),
+            ))
+        self.set_diameter_marks(marks)
+
     def get_diameter_bindings(self) -> list[dict]:
-        """Получить текущие привязки диаметров."""
-        return self._diameter_bindings
+        """Совместимость: метки словарями (вкладка пока считает их длину)."""
+        return [
+            {"edge_id": m.edge_id, "diameter": m.value, "text": m.as_text(),
+             "kind": m.kind, "ocr_block_idx": m.ocr_block_idx}
+            for m in self._diameter_marks
+        ]
+
+    @property
+    def _propagated_diameters(self) -> list[dict]:
+        """Совместимость: рёбра, получившие Ду потоком по линии."""
+        out = []
+        for eidx, d in sorted(self._diam_by_edge.items()):
+            if d.get("source") != "line":
+                continue
+            edge = self._graph_edges[eidx] if eidx < len(self._graph_edges) else {}
+            out.append({
+                "edge_idx": eidx, "edge_id": edge.get("id", ""),
+                "edge_key": self._edge_key_str(eidx) or "",
+                "text": d.get("text", ""), "diameter": d.get("value", 0),
+                "propagated": True,
+            })
+        return out
 
     # =================================================================
     # Block filter API (sub-tab visibility)
@@ -805,127 +860,85 @@ class OcrBindingEditor(QGraphicsView):
                 return True
         return False
 
-    def _rebuild_diameter_bound_indices(self):
-        """Пересчитать множества привязанных edges/OCR для диаметров."""
-        self._diameter_bound_edge_keys = set()
-        self._diameter_bound_ocr_indices = set()
-        self._conflict_edge_keys = set()
-        for db in self._diameter_bindings:
-            ek = db.get("edge_key")
-            if ek:
-                self._diameter_bound_edge_keys.add(ek)
-            ocr_idx = db.get("ocr_block_idx")
-            if ocr_idx is not None:
-                self._diameter_bound_ocr_indices.add(ocr_idx)
-        for pd in self._propagated_diameters:
-            ek = pd.get("edge_key")
-            if ek:
-                self._diameter_bound_edge_keys.add(ek)
-        for cf in self._conflict_edges:
-            ek = cf.get("edge_key")
-            if ek:
-                self._conflict_edge_keys.add(ek)
+    def _diameter_line_rules(self):
+        """Таблица классов из YAML проекта. Читается один раз на вкладку."""
+        if self._diameter_rules is not None:
+            return self._diameter_rules
+        from pathlib import Path as _P
+        from modules.binding.diameter_lines import LineRules
+        cfg_dir = _P(self._project_config_dir) if self._project_config_dir else None
+        if cfg_dir:
+            for y in sorted(cfg_dir.glob("*.yaml")):
+                if "kks_config" in y.name or "class_to_kks" in y.name:
+                    continue
+                try:
+                    self._diameter_rules = LineRules.from_project_yaml(y)
+                    break
+                except Exception as exc:   # секции нет или таблица не полна
+                    logger.warning("diameter_lines из %s не прочитан: %s", y.name, exc)
+        if self._diameter_rules is None:
+            logger.error("Таблица классов Ду не прочитана — поток по линии выключен")
+        return self._diameter_rules
+
+    def _rebuild_diameter_lines(self):
+        """Пересчитать разбиение на линии. Звать после правки ГРАФА, не меток."""
+        rules = self._diameter_line_rules()
+        if rules is None or not self._graph_edges:
+            self._diameter_lines = None
+            return
+        from modules.binding.diameter_lines import build_lines
+        self._diameter_lines = build_lines(self._graph_nodes, self._graph_edges, rules)
 
     def _repropagate_diameters(self):
-        """Пересчитать распространение диаметров от текущих привязок."""
-        if not self._diameter_bindings:
-            self._propagated_diameters = []
-            self._conflict_edges = []
-            self._rebuild_diameter_bound_indices()
+        """Разложить метки по линиям и обновить, что рисовать.
+
+        Заменяет `TextBinder.propagate_diameters`: там Ду свободно проходил
+        через любой `type == equipment` при любой степени (2152 протечки из 4745
+        проходов на корпусе), развилки судились сравнением H/V (ломалось на 342
+        диагоналях), а классовое правило было одно — `perehod`.
+        """
+        from modules.binding.diameter_lines import DIAMETER_FIELDS, apply_marks
+
+        self._diam_by_edge = {}
+        self._diam_conflicts = {}
+        if self._diameter_lines is None:
+            self._rebuild_diameter_lines()
+        if self._diameter_lines is None or not self._graph_edges:
             return
 
-        # Lazy-init _text_binder если ещё не создан
-        if not self._text_binder:
-            try:
-                from modules.text_binding.config import TextRecognitionConfig
-                from modules.text_binding.binder import TextBinder
-                cfg = TextRecognitionConfig()
-                if self._project_config_dir:
-                    from pathlib import Path as _P
-                    # Найти project yaml
-                    cfg_dir = _P(self._project_config_dir)
-                    for y in cfg_dir.glob("*.yaml"):
-                        if "kks_config" in y.name or "class_to_kks" in y.name:
-                            continue
-                        try:
-                            test_cfg = TextRecognitionConfig.from_project_yaml(str(y))
-                            if test_cfg.diameter.patterns:
-                                cfg = test_cfg
-                                break
-                        except Exception:
-                            pass
-                self._text_binder = TextBinder(cfg)
-                if not self._diameter_matcher and cfg.diameter.patterns:
-                    from modules.text_binding.matcher import DiameterMatcher
-                    self._diameter_matcher = DiameterMatcher(cfg.diameter)
-                logger.info("Lazy-created TextBinder for repropagation")
-            except Exception as exc:
-                logger.warning("Cannot create TextBinder for repropagation: %s", exc)
-                self._propagated_diameters = []
-                self._conflict_edges = []
-                self._rebuild_diameter_bound_indices()
-                return
+        # Считаем на копии полей: сам граф вкладка пишет только при сохранении.
+        saved = [{k: e[k] for k in DIAMETER_FIELDS if k in e}
+                 for e in self._graph_edges]
+        report = apply_marks(self._graph_edges, self._diameter_lines,
+                             self._diameter_marks)
+        for eidx, e in enumerate(self._graph_edges):
+            if e.get("diameter_value"):
+                self._diam_by_edge[eidx] = {
+                    "value": e["diameter_value"],
+                    "text": e.get("diameter_text", ""),
+                    "source": e.get("diameter_source", ""),
+                    "line": e.get("diameter_line", -1),
+                }
+        for line_idx, values in report.conflicts:
+            self._diam_conflicts[line_idx] = values
+        for e, was in zip(self._graph_edges, saved):
+            for k in DIAMETER_FIELDS:
+                e.pop(k, None)
+            e.update(was)
 
-        from modules.text_binding.binder import DiameterBinding
-        bindings = []
-        for db in self._diameter_bindings:
-            bindings.append(DiameterBinding(
-                ocr_block_idx=db.get("ocr_block_idx", -1),
-                edge_idx=db.get("edge_idx", -1),
-                edge_id=db.get("edge_id", ""),
-                edge_key=db.get("edge_key", ""),
-                text=db.get("text", ""),
-                prefix=db.get("prefix", ""),
-                diameter=db.get("diameter", 0),
-                suffix=db.get("suffix", ""),
-                confidence=db.get("confidence", 1.0),
-                distance=db.get("distance", 0.0),
-            ))
+        if report.orphan_marks:
+            logger.warning("Метки Ду на исчезнувших рёбрах: %d (%s)",
+                           len(report.orphan_marks), report.orphan_marks[:5])
+            alive = {str(e.get("id")) for e in self._graph_edges}
+            self._diameter_marks = [m for m in self._diameter_marks
+                                    if str(m.edge_id) in alive]
 
-        try:
-            prop_report = self._text_binder.propagate_diameters(
-                self._graph_nodes, self._graph_edges, bindings
-            )
-        except Exception as exc:
-            logger.warning("Diameter propagation failed: %s", exc)
-            self._propagated_diameters = []
-            self._conflict_edges = []
-            self._rebuild_diameter_bound_indices()
-            return
+    def _diameter_line_edges(self, edge_idx: int) -> list[int]:
+        """Индексы рёбер линии, которой принадлежит ребро."""
+        if self._diameter_lines is None:
+            return [edge_idx]
+        return self._diameter_lines.edges_like(edge_idx)
 
-        self._propagated_diameters = []
-        for pd in prop_report.propagated:
-            # Нормализовать edge_key в sorted формат (min|max)
-            ek = pd.edge_key
-            parts = ek.split("|", 1)
-            if len(parts) == 2:
-                ek = f"{min(parts[0], parts[1])}|{max(parts[0], parts[1])}"
-            self._propagated_diameters.append({
-                "edge_idx": pd.edge_idx,
-                "edge_id": pd.edge_id,
-                "edge_key": ek,
-                "text": pd.text,
-                "prefix": pd.prefix,
-                "diameter": pd.diameter,
-                "suffix": pd.suffix,
-                "confidence": pd.confidence,
-                "propagated": True,
-            })
-
-        self._conflict_edges = []
-        for cf in prop_report.conflicts:
-            ek = cf.edge_key
-            parts = ek.split("|", 1)
-            if len(parts) == 2:
-                ek = f"{min(parts[0], parts[1])}|{max(parts[0], parts[1])}"
-            self._conflict_edges.append({
-                "edge_idx": cf.edge_idx,
-                "edge_id": cf.edge_id,
-                "edge_key": ek,
-                "candidates": cf.candidates,
-            })
-
-        self._rebuild_diameter_bound_indices()
 
     # =================================================================
     # Drawing
@@ -1300,205 +1313,112 @@ class OcrBindingEditor(QGraphicsView):
     # =================================================================
 
     def _draw_diameter_bindings(self):
-        """Нарисовать привязки диаметров: скрыть OCR-бокс, линия от ребра, флажок с текстом."""
-        # В режиме KKS — не рисовать метки диаметров
-        if self._bind_mode == "kks":
+        """Линии с Ду: вся линия в цвете + ОДНА метка-число на линию.
+
+        Метка одна, а не на каждом ребре: линия из 10 рёбер дала бы 10 одинаковых
+        чисел (на корпусе это 8911 подписей вместо 2602). Ставится в середине
+        самого длинного ребра линии — там, где для неё больше всего места.
+        """
+        if self._bind_mode == "kks" or not self._diam_by_edge:
             return
 
-        pen_line = QPen(COLOR_DIAMETER_LINE, 1.5, Qt.PenStyle.DashLine)
         font = QFont("DejaVu Sans", self.TEXT_FONT_SIZE + 1)
         fm = QFontMetricsF(font)
 
-        # Собрать occupied rects (все OCR bbox)
-        occupied_rects = []
-        for idx, block in enumerate(self._ocr_blocks):
-            if block.get("merged_into") is not None:
+        # Рёбра, сгруппированные по линии.
+        by_line: dict = {}
+        for eidx, d in self._diam_by_edge.items():
+            by_line.setdefault(d.get("line", -1), []).append(eidx)
+
+        for line_idx, eidxs in sorted(by_line.items()):
+            conflict = line_idx in self._diam_conflicts
+            color = COLOR_DIAMETER_CONFLICT if conflict else COLOR_DIAMETER_OK
+            pen = QPen(color, self.DIAMETER_LINE_W)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+
+            longest, longest_len = None, -1.0
+            for eidx in eidxs:
+                pts = self._edge_points(eidx)
+                if len(pts) < 2:
+                    continue
+                total = 0.0
+                for a, b in zip(pts, pts[1:]):
+                    total += math.hypot(b[0] - a[0], b[1] - a[1])
+                    seg = self.scene.addLine(a[1], a[0], b[1], b[0], pen)
+                    seg.setZValue(14)
+                    self._diameter_items.append(seg)
+                if total > longest_len:
+                    longest, longest_len = eidx, total
+
+            if longest is None:
                 continue
-            bbox = block.get("bbox")
-            if bbox and len(bbox) == 4:
-                occupied_rects.append(bbox)
 
-        # Собрать edge_keys с прямыми привязками
-        direct_edge_keys = set()
-
-        for db in self._diameter_bindings:
-            edge_key = db.get("edge_key")
-            ocr_idx = db.get("ocr_block_idx")
-            text = db.get("text", "")
-            diam_value = db.get("diameter", "")
-            edge_idx = db.get("edge_idx")
-
-            ecx, ecy = None, None
-            if edge_key:
-                ecx, ecy = self._get_edge_midpoint_by_key(edge_key)
-                direct_edge_keys.add(edge_key)
-            if ecx is None:
-                continue
-
-            # Скрыть OCR-бокс
-            if ocr_idx is not None and ocr_idx < len(self._ocr_blocks):
-                if ocr_idx in self._ocr_items:
-                    self._ocr_items[ocr_idx].setVisible(False)
-                if ocr_idx in self._ocr_text_items:
-                    self._ocr_text_items[ocr_idx].setVisible(False)
-                if ocr_idx in self._ocr_text_bg_items:
-                    self._ocr_text_bg_items[ocr_idx].setVisible(False)
-                if ocr_idx in self._ocr_inner_text_items:
-                    self._ocr_inner_text_items[ocr_idx].setVisible(False)
-
-            # Текст флажка
-            label_text = str(diam_value) if diam_value else text
-            if not label_text:
-                continue
-            tw = fm.horizontalAdvance(label_text) + 8
-            th = fm.height() + 4
-
-            # Позиция флажка: над OCR-боксом (как KKS)
-            if ocr_idx is not None and ocr_idx < len(self._ocr_blocks):
-                block = self._ocr_blocks[ocr_idx]
-                bbox = block.get("bbox", [0, 0, 0, 0])
-                lx = bbox[0]
-                ly = bbox[1] - th - 2
-                if ly < 0:
-                    ly = bbox[3] + 2
+            if conflict:
+                text = "/".join(str(v) for v in self._diam_conflicts[line_idx])
             else:
-                lx = ecx - tw / 2
-                ly = ecy - th - 8
+                d = self._diam_by_edge[longest]
+                text = str(d.get("value") or d.get("text") or "")
+            if not text:
+                continue
 
-            # Линия от середины ребра к флажку
-            flag_cx = lx + tw / 2
-            flag_cy = ly + th / 2
-            line = self.scene.addLine(ecx, ecy, flag_cx, flag_cy, pen_line)
-            line.setZValue(15)
-            self._diameter_items.append(line)
+            cy, cx = self._edge_midpoint(longest)
+            tw = fm.horizontalAdvance(text) + 8
+            th = fm.height() + 4
+            lx, ly = cx - tw / 2, cy - th / 2
 
-            # Флажок (фон + текст)
             bg = self.scene.addRect(
-                lx, ly, tw, th,
-                QPen(COLOR_DIAMETER_BORDER, 1.0), QBrush(COLOR_DIAMETER_LABEL_BG),
-            )
+                lx, ly, tw, th, QPen(color, 1.0),
+                QBrush(COLOR_DIAMETER_CONFLICT_BG if conflict
+                       else COLOR_DIAMETER_LABEL_BG))
             bg.setZValue(16)
             self._diameter_items.append(bg)
 
-            label = self.scene.addSimpleText(label_text, font)
+            label = self.scene.addSimpleText(text, font)
             label.setBrush(QBrush(COLOR_DIAMETER_LABEL_TEXT))
             label.setPos(lx + 4, ly + 2)
             label.setZValue(17)
             self._diameter_items.append(label)
 
-            # Запомнить rect для клик-детекции
             self._diameter_label_rects.append(
-                (lx, ly, lx + tw, ly + th, edge_key, edge_idx, False)
-            )
-            occupied_rects.append([lx, ly, lx + tw, ly + th])
+                (lx, ly, lx + tw, ly + th, line_idx, longest))
 
-        # Propagated diameters — метка на ребре (полупрозрачная, без скрытия бокса)
-        prop_bg = QColor(155, 89, 182, 140)
-        prop_border = QColor(155, 89, 182, 180)
-        font_prop = QFont("DejaVu Sans", self._label_pt)
-        fm_prop = QFontMetricsF(font_prop)
-
-        for pd in self._propagated_diameters:
-            edge_key = pd.get("edge_key")
-            if not edge_key or edge_key in direct_edge_keys:
+        # OCR-бокс метки НЕ прячем, а гасим до контура: спрятанный бокс лишает
+        # оператора источника — числа с чертежа, по которому он и проверяет Ду.
+        for m in self._diameter_marks:
+            oidx = m.ocr_block_idx
+            if oidx is None or oidx >= len(self._ocr_blocks):
                 continue
+            for items in (self._ocr_text_items, self._ocr_text_bg_items,
+                          self._ocr_inner_text_items):
+                if oidx in items:
+                    items[oidx].setOpacity(0.35)
 
-            ecx, ecy = self._get_edge_midpoint_by_key(edge_key)
-            if ecx is None:
-                continue
+    def _edge_points(self, edge_idx: int) -> list:
+        """Точки ребра в координатах сцены, [y, x] как в графе."""
+        if edge_idx is None or edge_idx >= len(self._graph_edges):
+            return []
+        e = self._graph_edges[edge_idx]
+        pts = [e.get("source_point")] + list(e.get("waypoints") or [])             + [e.get("target_point")]
+        return [tuple(p) for p in pts if p and len(p) >= 2]
 
-            diam_value = pd.get("diameter", "")
-            label_text = str(diam_value) if diam_value else pd.get("text", "")
-            edge_idx = pd.get("edge_idx")
-            self._draw_edge_diameter_label(fm_prop, font_prop, label_text, ecx, ecy,
-                                           prop_bg, prop_border, edge_idx, edge_key, True)
+    def _edge_midpoint(self, edge_idx: int):
+        """Середина ребра по длине пути, (y, x)."""
+        pts = self._edge_points(edge_idx)
+        if not pts:
+            return (0.0, 0.0)
+        if len(pts) == 1:
+            return pts[0]
+        total = sum(math.hypot(b[0] - a[0], b[1] - a[1])
+                    for a, b in zip(pts, pts[1:]))
+        half, run = total / 2.0, 0.0
+        for a, b in zip(pts, pts[1:]):
+            seg = math.hypot(b[0] - a[0], b[1] - a[1])
+            if run + seg >= half and seg > 0:
+                t = (half - run) / seg
+                return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+            run += seg
+        return pts[-1]
 
-        # Conflict edges — красная метка
-        font_conf = QFont("DejaVu Sans", self.TEXT_FONT_SIZE + 1)
-        font_conf.setBold(True)
-        fm_conf = QFontMetricsF(font_conf)
-
-        for cf in self._conflict_edges:
-            edge_key = cf.get("edge_key")
-            edge_idx = cf.get("edge_idx")
-            candidates = cf.get("candidates", [])
-            if not edge_key or not candidates:
-                continue
-
-            ecx, ecy = self._get_edge_midpoint_by_key(edge_key)
-            if ecx is None:
-                continue
-
-            label_text = "? " + " | ".join(str(c) for c in candidates)
-            self._draw_edge_diameter_label(fm_conf, font_conf, label_text, ecx, ecy,
-                                           COLOR_CONFLICT_LABEL_BG, COLOR_CONFLICT_EDGE,
-                                           edge_idx, edge_key, False)
-
-    def _draw_edge_diameter_label(self, fm, font, text, ecx, ecy, bg_color, border_color,
-                                    edge_idx=None, edge_key=None, is_propagated=False):
-        """Нарисовать метку диаметра рядом с серединой ребра, не перекрывая ребро и боксы."""
-        if not text:
-            return
-        tw = fm.horizontalAdvance(text) + 6
-        th = fm.height() + 2
-        OFFSET = 4  # отступ от центра ребра (вплотную)
-
-        # Определить ориентацию ребра → смещаем перпендикулярно
-        orient = None
-        if edge_idx is not None and edge_idx < len(self._graph_edges):
-            from modules.text_binding.geometry import edge_orientation
-            orient = edge_orientation(self._graph_edges[edge_idx])
-
-        if orient == "V":
-            # Вертикальное ребро → метка слева
-            lx = ecx - tw - OFFSET
-            ly = ecy - th / 2
-        else:
-            # Горизонтальное или диагональное → метка сверху
-            lx = ecx - tw / 2
-            ly = ecy - th - OFFSET
-
-        # Проверить не перекрывает ли OCR-бокс, если да — сместить на другую сторону
-        label_rect = [lx, ly, lx + tw, ly + th]
-        for block in self._ocr_blocks:
-            if block.get("merged_into") is not None:
-                continue
-            bbox = block.get("bbox")
-            if not bbox or len(bbox) != 4:
-                continue
-            # Перекрытие?
-            if not (label_rect[2] < bbox[0] or label_rect[0] > bbox[2] or
-                    label_rect[3] < bbox[1] or label_rect[1] > bbox[3]):
-                # Перекрывается → отзеркалить
-                if orient == "V":
-                    lx = ecx + OFFSET  # справа
-                else:
-                    ly = ecy + OFFSET  # снизу
-                break
-
-        # #64: propagated → dashed border
-        if is_propagated:
-            pen = QPen(border_color, 1.0, Qt.PenStyle.DashLine)
-        else:
-            pen = QPen(border_color, 0.5)
-        bg_rect = self.scene.addRect(
-            lx, ly, tw, th,
-            pen,
-            QBrush(bg_color),
-        )
-        bg_rect.setZValue(16)
-        self._diameter_items.append(bg_rect)
-
-        label = self.scene.addSimpleText(text, font)
-        label.setBrush(QBrush(COLOR_DIAMETER_LABEL_TEXT))
-        label.setPos(lx + 3, ly + 1)
-        label.setZValue(17)
-        self._diameter_items.append(label)
-
-        # Запомнить позицию метки для клика
-        self._diameter_label_rects.append(
-            (lx, ly, lx + tw, ly + th, edge_key, edge_idx, is_propagated)
-        )
 
     def _redraw_diameter_bindings(self):
         """Перерисовать визуализацию диаметров."""
@@ -2099,24 +2019,33 @@ class OcrBindingEditor(QGraphicsView):
         self._after_change()
         self.status_message.emit(f"Отвязано: «{removed[0].get('text', '')[:30]}»")
 
-    def _unbind_diameter_by_edge(self, edge_key: str):
-        """Отвязать диаметр от ребра по edge_key и пересчитать поток."""
-        self._push_undo()
-        removed = [db for db in self._diameter_bindings if db.get("edge_key") == edge_key]
+    def _unbind_diameter_at(self, edge_idx: int) -> bool:
+        """Ctrl+ПКМ по ребру — снять метку Ду с линии этого ребра.
+
+        Снимается МЕТКА, а не «Ду с ребра»: Ду ребра — это, как правило, поток
+        от метки, стоящей на другом ребре той же линии. Гасить надо источник,
+        иначе линия перекрасится обратно на следующем же пересчёте.
+        """
+        if edge_idx is None or edge_idx >= len(self._graph_edges):
+            return False
+        group = set(self._diameter_line_edges(edge_idx))
+        ids = {str(self._graph_edges[i].get("id") or "") for i in group}
+        removed = [m for m in self._diameter_marks if str(m.edge_id) in ids]
         if not removed:
-            return
-        self._diameter_bindings = [
-            db for db in self._diameter_bindings if db.get("edge_key") != edge_key
-        ]
-        # Восстановить видимость OCR-бокса
-        for db in removed:
-            ocr_idx = db.get("ocr_block_idx")
-            if ocr_idx is not None:
-                self._restore_ocr_visibility(ocr_idx)
+            return False
+        self._push_undo()
+        self._diameter_marks = [m for m in self._diameter_marks
+                                if str(m.edge_id) not in ids]
+        for m in removed:
+            if m.ocr_block_idx is not None:
+                self._restore_ocr_visibility(m.ocr_block_idx)
         self._repropagate_diameters()
         self._after_change()
-        text = removed[0].get("text", "")[:30]
-        self.status_message.emit(f"Диаметр отвязан: «{text}» (поток пересчитан)")
+        self.status_message.emit(
+            "Ду снят с линии (%d %s)" % (len(removed),
+                                         "метка" if len(removed) == 1 else "меток"))
+        return True
+
 
     def _merge_blocks(self, src_idx, tgt_idx):
         self._push_undo()
@@ -2232,198 +2161,124 @@ class OcrBindingEditor(QGraphicsView):
             self._reclassify_block(ocr_idx)
 
     def _edit_diameter_label_at(self, x, y) -> bool:
-        """Редактировать диаметр по клику на метке визуализации. Возвращает True если нашёл."""
-        for lx1, ly1, lx2, ly2, edge_key, edge_idx, is_propagated in self._diameter_label_rects:
+        """Правка Ду по клику на метке-числе. True, если метка под курсором."""
+        for lx1, ly1, lx2, ly2, line_idx, edge_idx in self._diameter_label_rects:
             if lx1 <= x <= lx2 and ly1 <= y <= ly2:
-                # Проверить: это конфликтное ребро?
-                conflict = None
-                for cf in self._conflict_edges:
-                    if cf.get("edge_key") == edge_key:
-                        conflict = cf
-                        break
-                if conflict:
-                    self._resolve_conflict(conflict)
+                if line_idx in self._diam_conflicts:
+                    self._resolve_conflict(line_idx)
                 else:
-                    self._edit_diameter_on_edge(edge_key, edge_idx, is_propagated)
+                    self._edit_diameter_on_line(line_idx, edge_idx)
                 return True
         return False
 
-    def _resolve_conflict(self, conflict: dict):
-        """Диалог выбора диаметра для конфликтного ребра."""
-        candidates = conflict.get("candidates", [])
-        edge_key = conflict.get("edge_key", "")
-        edge_idx = conflict.get("edge_idx")
+    def _resolve_conflict(self, line_idx: int):
+        """Две метки с разным Ду на линии — оператор оставляет одну."""
+        candidates = self._diam_conflicts.get(line_idx) or []
         if not candidates:
             return
-
         from PySide6.QtWidgets import QMessageBox
         msg = QMessageBox(self)
-        msg.setWindowTitle("Конфликт диаметров")
-        msg.setText(f"Несколько диаметров претендуют на ребро.\nВыберите правильный:")
-        buttons = []
-        for c in candidates:
-            btn = msg.addButton(f"Ø {c}", QMessageBox.ButtonRole.ActionRole)
-            buttons.append((btn, c))
-        cancel_btn = msg.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
+        msg.setWindowTitle("Два диаметра на одной линии")
+        msg.setText("На эту линию привязаны разные диаметры. Оставить какой?")
+        buttons = [(msg.addButton("\u00d8 %s" % c, QMessageBox.ButtonRole.ActionRole), c)
+                   for c in candidates]
+        cancel = msg.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
         msg.exec()
-
         clicked = msg.clickedButton()
-        if clicked == cancel_btn or clicked is None:
+        if clicked is None or clicked is cancel:
+            return
+        chosen = next((c for btn, c in buttons if btn is clicked), None)
+        if chosen is None:
             return
 
-        chosen_diameter = None
-        for btn, c in buttons:
-            if clicked == btn:
-                chosen_diameter = c
-                break
-        if chosen_diameter is None:
-            return
-
+        group = self._line_edge_ids(line_idx)
         self._push_undo()
-
-        edge = self._graph_edges[edge_idx] if edge_idx is not None and edge_idx < len(self._graph_edges) else {}
-        dm_text = f"Dy{chosen_diameter}"
-
-        # Привязать диаметр напрямую к ребру
-        self._diameter_bindings.append({
-            "ocr_block_idx": None,
-            "edge_idx": edge_idx or 0,
-            "edge_id": edge.get("id", ""),
-            "edge_key": edge_key,
-            "text": dm_text, "prefix": "Dy",
-            "diameter": chosen_diameter, "suffix": "",
-            "confidence": 1.0,
-        })
+        self._diameter_marks = [
+            m for m in self._diameter_marks
+            if str(m.edge_id) not in group or int(m.value) == int(chosen)
+        ]
         self._repropagate_diameters()
         self._after_change()
-        self.status_message.emit(f"Конфликт решён: Ø{chosen_diameter}")
+        self.status_message.emit("Оставлен \u00d8%s" % chosen)
+
+    def _line_edge_ids(self, line_idx: int) -> set:
+        """`id` всех рёбер линии."""
+        if self._diameter_lines is None or line_idx < 0 \
+                or line_idx >= len(self._diameter_lines):
+            return set()
+        return {str(self._graph_edges[i].get("id") or "")
+                for i in self._diameter_lines.edges_of_line[line_idx]}
+
+    def _add_diameter_mark(self, edge_idx: int, value: int, kind: str,
+                           text: str = "", ocr_block_idx=None) -> bool:
+        """Поставить метку Ду на ребро, сняв прежнюю метку с ЭТОГО ребра."""
+        from modules.binding.diameter_lines import DiameterMark
+        edge_id = str(self._graph_edges[edge_idx].get("id") or "")
+        if not edge_id:
+            self.status_message.emit("У ребра нет id — метку поставить некуда")
+            return False
+        self._diameter_marks = [m for m in self._diameter_marks
+                                if str(m.edge_id) != edge_id]
+        self._diameter_marks.append(DiameterMark(
+            edge_id=edge_id, value=int(value), kind=kind,
+            text=text or str(value), ocr_block_idx=ocr_block_idx))
+        self._repropagate_diameters()
+        self._after_change()
+        return True
 
     def _create_diameter_on_edge(self, x, y, edge_idx):
-        """Ctrl+2×клик по ребру — ввести диаметр и привязать к ребру."""
+        """Ctrl+2\u00d7клик по ребру — набрать число и привязать его к линии."""
         new_val, ok = QInputDialog.getText(
-            self, "Текст на ребре", "Диаметр (число):", text=""
-        )
+            self, "Диаметр линии", "Ду (число):", text="")
         if not ok or not new_val.strip():
             return
+        value = _first_number(_clean_text(new_val))
+        if value is None:
+            self.status_message.emit("Не число: «%s»" % new_val.strip()[:20])
+            return
         self._push_undo()
-        new_val = _clean_text(new_val)
+        if self._add_diameter_mark(edge_idx, value, "manual", str(value)):
+            n = len(self._diameter_line_edges(edge_idx))
+            self.status_message.emit(
+                "Ду %d → линия (%d %s)" % (value, n,
+                                           "ребро" if n == 1 else "рёбер"))
 
-        # Создать OCR-бокс для визуализации
-        avg_w, avg_h = 60, 30
-        new_bbox = [x - avg_w / 2, y - avg_h / 2, x + avg_w / 2, y + avg_h / 2]
-        diam_idx = len(self._ocr_blocks)
-        self._ocr_blocks.append({
-            "bbox": new_bbox, "text": new_val, "confidence": 1.0,
-        })
-        self._draw_single_ocr_block(diam_idx)
+    def _edit_diameter_on_line(self, line_idx: int, edge_idx: int):
+        """2\u00d7клик по метке — поправить число; перекрашивается вся линия."""
+        cur = self._diam_by_edge.get(edge_idx, {})
+        new_val, ok = QInputDialog.getText(
+            self, "Диаметр линии", "Ду (число):",
+            text=str(cur.get("value") or ""))
+        if not ok:
+            return
+        if not new_val.strip():
+            if not self._unbind_diameter_at(edge_idx):
+                self.status_message.emit("Пустое значение — Ду не изменён")
+            return
+        value = _first_number(_clean_text(new_val))
+        if value is None:
+            self.status_message.emit("Не число: «%s»" % new_val.strip()[:20])
+            return
 
-        # Добавить в текущий block_filter
-        if self._block_filter is not None:
-            self._block_filter.add(diam_idx)
-
-        edge = self._graph_edges[edge_idx] if edge_idx < len(self._graph_edges) else {}
-        _s, _t = edge.get('source', ''), edge.get('target', '')
-        ek = f"{min(_s, _t)}|{max(_s, _t)}"
-
-        # Чистое число → диаметр без prefix
-        import re
-        if re.fullmatch(r'\d+', new_val):
-            from modules.text_binding.matcher import DiameterMatch
-            dm = DiameterMatch(prefix="", diameter=int(new_val), suffix="",
-                               text=new_val, confidence=1.0, pattern_name="manual")
-        else:
-            dm = self._diameter_matcher.match(new_val) if self._diameter_matcher else None
-
-        if dm:
-            # Убрать старую привязку на это ребро
-            self._diameter_bindings = [
-                db for db in self._diameter_bindings if db.get("edge_key") != ek
-            ]
-            self._diameter_bindings.append({
-                "ocr_block_idx": diam_idx,
-                "edge_idx": edge_idx,
-                "edge_id": edge.get("id", ""),
-                "edge_key": ek,
-                "text": dm.text, "prefix": dm.prefix,
-                "diameter": dm.diameter, "suffix": dm.suffix,
-                "confidence": dm.confidence,
-            })
+        # Правим МЕТКУ линии, а не ребро под курсором: метка может стоять на
+        # другом ребре той же линии, и правка ребра её бы не тронула.
+        group = self._line_edge_ids(line_idx)
+        marked = [m for m in self._diameter_marks if str(m.edge_id) in group]
+        self._push_undo()
+        if marked:
+            from modules.binding.diameter_lines import DiameterMark
+            keep = [m for m in self._diameter_marks if str(m.edge_id) not in group]
+            src = marked[0]
+            keep.append(DiameterMark(edge_id=src.edge_id, value=value,
+                                     kind=src.kind, text=str(value),
+                                     ocr_block_idx=src.ocr_block_idx))
+            self._diameter_marks = keep
             self._repropagate_diameters()
             self._after_change()
-            self.blocks_changed.emit()
-            self.status_message.emit(f"Диаметр {dm.text} → ребро (+ поток)")
         else:
-            # Обычная привязка к ребру
-            self._bindings.append({
-                "edge_key": ek, "text": new_val,
-                "ocr_block_idx": diam_idx, "bbox": new_bbox,
-            })
-            self._after_change()
-            self.blocks_changed.emit()
-            self.status_message.emit(f"Текст «{new_val}» → ребро")
+            self._add_diameter_mark(edge_idx, value, "manual", str(value))
+        self.status_message.emit("Ду линии → %d" % value)
 
-    def _edit_diameter_on_edge(self, edge_key, edge_idx, is_propagated):
-        """Открыть диалог редактирования диаметра на ребре."""
-        current_text = ""
-        current_diameter = 0
-        if not is_propagated:
-            for db in self._diameter_bindings:
-                if db.get("edge_key") == edge_key:
-                    current_text = db.get("text", "")
-                    current_diameter = db.get("diameter", 0)
-                    break
-        else:
-            for pd in self._propagated_diameters:
-                if pd.get("edge_key") == edge_key:
-                    current_text = pd.get("text", "")
-                    current_diameter = pd.get("diameter", 0)
-                    break
-
-        new_val, ok = QInputDialog.getText(
-            self, "Диаметр ребра",
-            f"Диаметр (число):",
-            text=current_text or str(current_diameter),
-        )
-        if not ok or not new_val.strip():
-            return
-
-        self._push_undo()
-        new_val = _clean_text(new_val)
-
-        dm = self._diameter_matcher.match(new_val) if self._diameter_matcher else None
-        if not dm:
-            try:
-                d = int(new_val.strip())
-                from modules.text_binding.matcher import DiameterMatch
-                dm = DiameterMatch(prefix="", diameter=d, suffix="",
-                                   text=str(d), confidence=1.0, pattern_name="manual")
-            except ValueError:
-                self.status_message.emit(f"Не удалось распознать диаметр: «{new_val}»")
-                return
-
-        # Убрать старую привязку на это ребро и добавить новую
-        old_ocr_idx = None
-        for db in self._diameter_bindings:
-            if db.get("edge_key") == edge_key:
-                old_ocr_idx = db.get("ocr_block_idx")
-                break
-        self._diameter_bindings = [
-            db for db in self._diameter_bindings if db.get("edge_key") != edge_key
-        ]
-        edge = self._graph_edges[edge_idx] if edge_idx is not None and edge_idx < len(self._graph_edges) else {}
-        self._diameter_bindings.append({
-            "ocr_block_idx": old_ocr_idx,
-            "edge_idx": edge_idx or 0,
-            "edge_id": edge.get("id", ""),
-            "edge_key": edge_key or "",
-            "text": dm.text, "prefix": dm.prefix,
-            "diameter": dm.diameter, "suffix": dm.suffix,
-            "confidence": dm.confidence,
-        })
-
-        self._repropagate_diameters()
-        self._after_change()
-        self.status_message.emit(f"Диаметр ребра → {dm.diameter}")
 
     def _push_undo(self):
         """Сохранить снимок состояния в undo стек."""

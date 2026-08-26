@@ -59,6 +59,26 @@ class LineRulesError(ValueError):
     """Таблица классов в конфиге не полна или противоречива."""
 
 
+def _name_list(value, field_name: str, source: str) -> frozenset:
+    """Список имён классов из YAML. Скаляр — ошибка, а не строка по буквам.
+
+    `transit: truba` без дефиса даёт `frozenset("truba")` = набор букв, и все
+    классы молча становятся стопом. Такую опечатку надо ловить, а не переживать.
+    """
+    if value is None:
+        return frozenset()
+    if isinstance(value, str) or not isinstance(value, (list, tuple, set, frozenset)):
+        raise LineRulesError(
+            f"{source}: `{field_name}` должен быть списком имён классов, "
+            f"получено {value!r}"
+        )
+    names = [str(v) for v in value]
+    dups = sorted({n for n in names if names.count(n) > 1})
+    if dups:
+        raise LineRulesError(f"{source}: дубли в `{field_name}`: {dups}")
+    return frozenset(names)
+
+
 @dataclass(frozen=True)
 class LineRules:
     """Таблица классов и допуск. Источник — секция `diameter_lines` YAML проекта."""
@@ -99,6 +119,14 @@ class LineRules:
             for c in (data.get("classes") or [])
             if isinstance(c, dict) and c.get("name")
         }
+        if not known:
+            # Без списка классов сверять таблицу не с чем, и вся защита ниже
+            # выключается МОЛЧА: опечатка в `transit` уводит класс в стоп, линии
+            # режутся, оператор получает лишний ручной труд вместо ошибки.
+            raise LineRulesError(
+                f"{path.name}: не прочитан блок `classes:` — сверить таблицу "
+                f"`diameter_lines` не с чем. Проверять её «как получится» нельзя."
+            )
         rules = cls.from_section(section, known_classes=known, source=path.name)
         logger.info(
             "diameter_lines: transit %d, stop %d, tol %.0f°, «Ду не требуется» до "
@@ -112,8 +140,13 @@ class LineRules:
     def from_section(cls, section: dict, known_classes: set[str] | None = None,
                      source: str = "<config>") -> "LineRules":
         """Собрать правила из уже прочитанной секции (точка входа для тестов)."""
-        transit = frozenset(section.get("transit") or ())
-        stop = frozenset(section.get("stop") or ())
+        transit = _name_list(section.get("transit"), "transit", source)
+        stop = _name_list(section.get("stop"), "stop", source)
+        if not transit:
+            raise LineRulesError(
+                f"{source}: `transit` пуст — проходимых классов нет, каждое ребро "
+                f"становится своей линией, и правило линии выключено целиком."
+            )
 
         both = sorted(transit & stop)
         if both:
@@ -138,7 +171,12 @@ class LineRules:
                     f"классов проекта: {stray}. Похоже на опечатку."
                 )
 
-        tol = float(section.get("collinear_tol_deg", _DEFAULT_TOL_DEG))
+        try:
+            tol = float(section.get("collinear_tol_deg", _DEFAULT_TOL_DEG))
+        except (TypeError, ValueError) as exc:
+            raise LineRulesError(
+                f"{source}: `collinear_tol_deg` не число: "
+                f"{section.get('collinear_tol_deg')!r}") from exc
         if not 0.0 < tol < 90.0:
             raise LineRulesError(
                 f"{source}: `collinear_tol_deg` = {tol}; допуск коллинеарности "
@@ -146,14 +184,29 @@ class LineRules:
             )
 
         ends = section.get("no_diameter_ends")
-        max_edges = int(section.get("no_diameter_max_edges",
-                                    _DEFAULT_NO_DIAM_MAX_EDGES))
+        if "no_diameter_ends" in section:
+            # Явный `null` или `[]` — это «правило выключено», а не «по умолчанию».
+            ends = frozenset(_name_list(ends, "no_diameter_ends", source)) \
+                if ends else frozenset()
+        else:
+            ends = _DEFAULT_NO_DIAM_ENDS
+        try:
+            max_edges = int(section.get("no_diameter_max_edges",
+                                        _DEFAULT_NO_DIAM_MAX_EDGES))
+        except (TypeError, ValueError) as exc:
+            raise LineRulesError(
+                f"{source}: `no_diameter_max_edges` не целое: "
+                f"{section.get('no_diameter_max_edges')!r}") from exc
+        if max_edges < 1:
+            raise LineRulesError(
+                f"{source}: `no_diameter_max_edges` = {max_edges}; порог длины "
+                f"тупика должен быть не меньше 1."
+            )
         return cls(
             transit=transit,
             stop=stop,
             collinear_tol_deg=tol,
-            no_diameter_ends=frozenset(ends) if ends is not None
-            else _DEFAULT_NO_DIAM_ENDS,
+            no_diameter_ends=ends,
             no_diameter_max_edges=max_edges,
         )
 
@@ -170,6 +223,14 @@ class Lines:
     edges_of_line: list[list[int]] = field(default_factory=list)
     line_of_edge: dict[int, int] = field(default_factory=dict)
     requires_diameter: list[bool] = field(default_factory=list)
+    fingerprint: str = ""
+    """Отпечаток списка рёбер, на котором построено разбиение.
+
+    Линия хранит ИНДЕКСЫ рёбер, а метка резолвится по `id`. Если между
+    `build_lines` и `apply_marks` список рёбер переписали (а порядок `links` —
+    не инвариант), индексы поедут и Ду ляжет на чужие рёбра. Отпечаток
+    превращает этот молчаливый промах в внятную ошибку.
+    """
 
     def __len__(self) -> int:
         return len(self.edges_of_line)
@@ -195,19 +256,80 @@ def edge_ray(edge: dict, node_id: str) -> tuple[float, float] | None:
     врезке задаёт именно он, а не хорда «конец-в-конец».
     Возвращает None, если сегмент вырожден (обе точки совпали).
     """
-    sp, tp = edge.get("source_point"), edge.get("target_point")
-    if not sp or not tp:
+    sp = _point(edge.get("source_point"))
+    tp = _point(edge.get("target_point"))
+    if sp is None or tp is None:
         return None
-    wps = [tuple(w) for w in (edge.get("waypoints") or [])]
+    wps = [w for w in (_point(q) for q in (edge.get("waypoints") or []))
+           if w is not None]
     if edge.get("source") == node_id:
-        p0, p1 = tuple(sp), (wps[0] if wps else tuple(tp))
+        p0, p1 = sp, (wps[0] if wps else tp)
     else:
-        p0, p1 = tuple(tp), (wps[-1] if wps else tuple(sp))
+        p0, p1 = tp, (wps[-1] if wps else sp)
     dy, dx = p1[0] - p0[0], p1[1] - p0[1]
     n = math.hypot(dy, dx)
-    if n <= 1e-6:
+    if not (n > 1e-6) or n != n:        # 0, NaN — направления нет
         return None
     return (dy / n, dx / n)
+
+
+def _point(p):
+    """Точка ребра как (y, x) или None, если это не точка.
+
+    Мусор на входе (None, короткий список, строка, NaN) не должен ронять
+    разбиение целиком: ребро просто не участвует в склейке на этом узле.
+    """
+    if not isinstance(p, (list, tuple)) or len(p) < 2:
+        return None
+    try:
+        y, x = float(p[0]), float(p[1])
+    except (TypeError, ValueError):
+        return None
+    if y != y or x != x:          # NaN
+        return None
+    return (y, x)
+
+
+def _content_key(edge: dict) -> str:
+    """Ключ ребра по содержимому — на случай, когда `id` нет или он не уникален.
+
+    Инвариантен к перестановке `links`: зависит только от концов и геометрии.
+    У полных дублей ключ совпадёт, но и разбиение на них симметрично.
+    """
+    pts = [_point(edge.get("source_point"))] \
+        + [_point(q) for q in (edge.get("waypoints") or [])] \
+        + [_point(edge.get("target_point"))]
+    return "#%s|%s|%s" % (
+        edge.get("source"), edge.get("target"),
+        ";".join("%.3f,%.3f" % q if q else "-" for q in pts),
+    )
+
+
+def _edge_keys(edges: list[dict]):
+    """Функция ключа ребра: `id`, если он есть у всех и уникален, иначе содержимое.
+
+    ⛔ Детерминизм разбиения держится на этом ключе. Полагаться на `id`
+    безусловно нельзя: ребро без `id`, с `id = 0` или с дублем ключа вернуло бы
+    сортировку к индексам, а индекс перестановке `links` не инвариантен —
+    и разбиение поехало бы вместе с номерами линий на диске.
+    """
+    ids = [e.get("id") for e in edges]
+    ok = all(i not in (None, "", 0) for i in ids) and len(set(map(str, ids))) == len(ids)
+    if ok:
+        return lambda i: str(edges[i].get("id"))
+    cache = {i: _content_key(e) for i, e in enumerate(edges)}
+    logger.warning("id рёбер не уникальны или пусты — ключ линии считается "
+                   "по геометрии (разбиение остаётся устойчивым)")
+    return lambda i: cache[i]
+
+
+def _fingerprint(edges: list[dict], key) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    for i in range(len(edges)):
+        h.update(key(i).encode("utf-8"))
+        h.update(b"\x00")
+    return h.hexdigest()[:16]
 
 
 def _deviation_deg(ra: tuple[float, float], rb: tuple[float, float]) -> float:
@@ -256,18 +378,16 @@ def build_lines(nodes: list[dict], edges: list[dict], rules: LineRules) -> Lines
         if not src or not tgt:
             continue
         incident.setdefault(src, []).append(i)
-        incident.setdefault(tgt, []).append(i)
         degree[src] = degree.get(src, 0) + 1
-        degree[tgt] = degree.get(tgt, 0) + 1
+        if tgt != src:              # самопетля не удваивает степень узла
+            incident.setdefault(tgt, []).append(i)
+            degree[tgt] = degree.get(tgt, 0) + 1
 
-    # Ключ ребра для устойчивой сортировки: `id` уникален во всех боевых графах,
-    # но на синтетике его может не быть — тогда индекс, он тоже детерминирован.
-    def key(i: int) -> str:
-        return str(edges[i].get("id") or f"@{i:08d}")
+    key = _edge_keys(edges)
 
     union = _Union(len(edges))
 
-    for node_id in sorted(incident):
+    for node_id in sorted(incident, key=str):
         eids = incident[node_id]
         if not rules.passes(node_class.get(node_id, "")):
             continue                      # stop или класс вне таблицы
@@ -312,36 +432,47 @@ def build_lines(nodes: list[dict], edges: list[dict], rules: LineRules) -> Lines
     # Номер линии — по минимальному ключу ребра, а не по порядку обхода.
     ordered_groups = sorted(groups.values(), key=lambda g: min(key(i) for i in g))
 
-    lines = Lines()
+    lines = Lines(fingerprint=_fingerprint(edges, key))
     for li, group in enumerate(ordered_groups):
         group = sorted(group, key=key)
         lines.edges_of_line.append(group)
         for i in group:
             lines.line_of_edge[i] = li
         lines.requires_diameter.append(
-            _requires_diameter(group, edges, node_class, degree, rules)
+            _requires_diameter(group, edges, node_class, degree, incident, rules)
         )
     return lines
 
 
 def _requires_diameter(group: list[int], edges: list[dict],
                        node_class: dict[str, str], degree: dict[str, int],
-                       rules: LineRules) -> bool:
+                       incident: dict, rules: LineRules) -> bool:
     """Нужен ли линии Ду.
 
     Не нужен тупиковому отводу не длиннее `no_diameter_max_edges` рёбер, который
     оканчивается на прибор из `no_diameter_ends`: импульсную линию к прибору на
     чертеже не подписывают.
     """
-    if len(group) > rules.no_diameter_max_edges:
+    if len(group) > rules.no_diameter_max_edges or not rules.no_diameter_ends:
         return True
-    for i in group:
-        e = edges[i]
-        for nid in (e.get("source"), e.get("target")):
-            if nid and degree.get(nid, 0) == 1:
-                if node_class.get(nid, "") in rules.no_diameter_ends:
-                    return False
-    return True
+
+    own = set(group)
+    has_instrument_end = False
+    attachments = 0          # узлы, которыми линия держится за остальной граф
+    for nid in {n for i in group for n in (edges[i].get("source"),
+                                           edges[i].get("target")) if n}:
+        deg = degree.get(nid, 0)
+        inside = sum(1 for i in incident.get(nid, ()) if i in own)
+        if deg == 1 and node_class.get(nid, "") in rules.no_diameter_ends:
+            has_instrument_end = True
+        if deg > inside:
+            attachments += 1
+
+    # Отвод держится за граф ОДНИМ узлом. Если узлов два и больше — это кусок
+    # магистрали, и освобождать его от Ду нельзя: на корпусе такой случай уже
+    # есть (лист `89ca7583`, импульсный отвод склеен с двумя кусками врезки),
+    # а пустой Ду в расчётной схеме превращается в заводские 0.3 м = Ду300.
+    return not (has_instrument_end and attachments <= 1)
 
 
 # ── метки оператора и запись Ду в рёбра ────────────────────────────────────
@@ -386,8 +517,17 @@ class DiameterMark:
     text: str = ""
     ocr_block_idx: int | None = None
 
+    def __post_init__(self):
+        # Проверка на входе, а не «где-нибудь потом»: негодное значение иначе
+        # доедет до диска и превратится в САПФИР в заводские 0.3 м = Ду300.
+        object.__setattr__(self, "value", _check_value(self.value))
+
     def as_text(self) -> str:
         return self.text or str(self.value)
+
+
+class LinesOutOfDateError(RuntimeError):
+    """`Lines` построено на другом списке рёбер — индексы указывают не туда."""
 
 
 @dataclass
@@ -399,23 +539,41 @@ class ApplyReport:
     conflicts: list[tuple[int, list[int]]] = field(default_factory=list)
     orphan_marks: list[str] = field(default_factory=list)
     kept_editor_edges: int = 0
+    ineffective_marks: list[str] = field(default_factory=list)
+    """Метки, не давшие ни одного ребра: линия целиком занята правкой редактора.
+
+    Без этого списка «ничего не произошло» выглядело бы как успех: оператор
+    нажал, отчёт зелёный, на диске пусто.
+    """
 
     @property
     def ok(self) -> bool:
-        return not self.conflicts and not self.orphan_marks
+        return not (self.conflicts or self.orphan_marks or self.ineffective_marks)
 
 
-def clear_diameters(edges: list[dict], *, keep_sources: tuple[str, ...] = (SOURCE_EDITOR,)) -> int:
-    """Снять поля Ду со всех рёбер, кроме тех, чей источник в `keep_sources`.
+OWN_SOURCES = (SOURCE_OCR, SOURCE_MANUAL, SOURCE_LINE)
 
-    Вкладка привязки управляет ТОЛЬКО своим. До этой правки сохранение вкладки
-    проходило по всем рёбрам и сносило `diameter_*` у всего, чего не было в её
-    карте, — то есть убивало Ду, поставленный в «Ручной правке».
+
+def clear_diameters(edges: list[dict], *,
+                    keep_sources: tuple[str, ...] = (SOURCE_EDITOR,)) -> int:
+    """Снять поля Ду с рёбер, которые проставили МЫ. Чужое не трогать.
+
+    Вкладка привязки управляет только своим. Чужое — это и явная правка
+    редактора (`diameter_source` из `keep_sources`), и ребро с диаметром, но
+    БЕЗ источника: так пишет старый поток и «Ручная правка», которая
+    `diameter_source` пока не ставит вовсе. Снести такое ребро означало бы
+    молча стереть работу оператора — ровно тот отказ, против которого правило
+    «ручная правка главнее» и вводилось.
     """
     kept = 0
     for e in edges:
-        if e.get("diameter_source") in keep_sources:
+        src = e.get("diameter_source")
+        if src in keep_sources:
             kept += 1
+            continue
+        if src is None and any(e.get(k) for k in
+                               ("diameter_value", "diameter_text")):
+            kept += 1          # чужая запись без источника — не наша, не трогаем
             continue
         for k in DIAMETER_FIELDS + LEGACY_DIAMETER_FIELDS:
             e.pop(k, None)
@@ -434,6 +592,12 @@ def apply_marks(edges: list[dict], lines: Lines, marks: list[DiameterMark], *,
     возвращается оператору. Молча выбирать «по большинству» нельзя — на выходе
     расчётная схема, и незамеченная ошибка там дороже вопроса.
     """
+    if lines.fingerprint and lines.fingerprint != _fingerprint(edges, _edge_keys(edges)):
+        raise LinesOutOfDateError(
+            "разбиение на линии построено на другом списке рёбер — пересчитайте "
+            "его перед раскладкой меток, иначе Ду ляжет на чужие рёбра"
+        )
+
     report = ApplyReport()
     report.kept_editor_edges = clear_diameters(edges, keep_sources=keep_sources)
 
@@ -456,16 +620,27 @@ def apply_marks(edges: list[dict], lines: Lines, marks: list[DiameterMark], *,
         per_line.setdefault(li, []).append((idx, m))
 
     for li, items in sorted(per_line.items()):
-        values = {m.value for _idx, m in items}
+        group = lines.edges_of_line[li] if li >= 0 else [items[0][0]]
+
+        # Значения-претенденты на линию: метки оператора И то, что уже стоит на
+        # линии от «Ручной правки». Её Ду мы не перезаписываем, а значит
+        # расхождение с меткой — такой же конфликт, а не «победила метка».
+        values = {int(m.value) for _idx, m in items}
+        for i in group:
+            if edges[i].get("diameter_source") in keep_sources \
+                    and edges[i].get("diameter_value"):
+                values.add(int(edges[i]["diameter_value"]))
+
         if len(values) > 1:
             report.conflicts.append((li, sorted(values)))
             for idx, m in items:
+                if edges[idx].get("diameter_source") in keep_sources:
+                    continue          # правка редактора главнее и в конфликте
                 _stamp(edges[idx], m.value, m.as_text(), m.kind, li)
                 report.edges_stamped += 1
             continue
 
         m = items[0][1]
-        group = lines.edges_of_line[li] if li >= 0 else [items[0][0]]
         marked = {idx for idx, _ in items}
         covered = False
         for i in group:
@@ -477,16 +652,36 @@ def apply_marks(edges: list[dict], lines: Lines, marks: list[DiameterMark], *,
             covered = True
         if covered:
             report.lines_covered += 1
+        else:
+            report.ineffective_marks.extend(mm.edge_id for _i, mm in items)
 
     return report
 
 
 def _stamp(edge: dict, value: int, text: str, source: str, line_idx: int) -> None:
-    edge["diameter_value"] = int(value)
+    edge["diameter_value"] = _check_value(value)
     edge["diameter_text"] = text
     edge["diameter_source"] = source
     edge["diameter_line"] = int(line_idx)
     edge["diameter_propagated"] = (source == SOURCE_LINE)
+
+
+def _check_value(value) -> int:
+    """Ду — целое положительное число миллиметров. Иначе это не Ду.
+
+    Проверка здесь, а не «где-нибудь потом»: `json2xml.py` читает поле как
+    `float(d) / 1000`, а `if _d:` пропускает ноль. Ноль, дробь и отрицательное
+    молча превратились бы в заводские 0.3 м, то есть в честный Ду300 в САПФИР.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("Ду должен быть числом, получено %r" % (value,))
+    if isinstance(value, float) and not value.is_integer():
+        raise ValueError("Ду должен быть целым числом миллиметров, получено %r"
+                         % (value,))
+    ivalue = int(value)
+    if ivalue <= 0:
+        raise ValueError("Ду должен быть положительным, получено %r" % (value,))
+    return ivalue
 
 
 def marks_from_edges(edges: list[dict]) -> list[DiameterMark]:

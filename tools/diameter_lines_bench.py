@@ -25,10 +25,14 @@
 3. **Смешанных линий ноль** — на линию не должны попасть две подписи Ду с
    разными значениями. Подписи берутся из `ocr/ocr_result.json` тем же
    способом, что и в замере: ближайшее ребро, порог 150 px.
-4. **Разметка Ду не устаривает холст.** На каждом листе диаметры проставляются
-   всем линиям и сверяется `graph_projection_sha` до и после. Сдвинется — холст
-   объявится устаревшим, раскладка перезапустится, и оператор получит другую
-   картинку после простой правки диаметра.
+4. **Раскладка меток по линиям.** На каждом листе каждой линии ставится своя
+   метка, и проверяется РЕЗУЛЬТАТ: Ду получили все рёбра линии и ровно они;
+   значение — целое положительное (`json2xml.py` читает поле как `float(d)/1000`,
+   а ноль пропускает — мусор там молча станет заводскими 0.3 м = Ду300);
+   `graph_projection_sha` не сдвинулась (иначе холст объявится устаревшим и
+   раскладка перезапустится после каждой правки диаметра).
+   Без этой проверки стенд давал зелёный на `apply_marks`, который вообще не
+   распространял Ду и писал значение строкой.
 
 Корпус берётся из `--corpus`, переменной `PID_CORPUS` или `storage/diagrams`.
 """
@@ -115,6 +119,7 @@ def measure(root: Path, rules: LineRules, verbose: bool):
     unstable = []
     mixed_where = []
     stale_sha = []
+    apply_broken = []
 
     for uid_dir in corpus_dirs(root):
         edges, nodes, sha = read_graph(uid_dir)
@@ -139,12 +144,31 @@ def measure(root: Path, rules: LineRules, verbose: bool):
         # картинку. Проверяется на РЕАЛЬНОМ листе, не на синтетике.
         graph = {"nodes": nodes, "links": edges}
         sha_before = canvas_state.graph_projection_sha(graph)
-        apply_marks(edges, lines, [
-            DiameterMark(str(edges[g[0]].get("id") or g[0]), 100 + 10 * (li % 5))
-            for li, g in enumerate(lines.edges_of_line) if g
-        ])
+        want = {}
+        marks = []
+        for li, g in enumerate(lines.edges_of_line):
+            if not g:
+                continue
+            value = 100 + 10 * (li % 5)
+            want[li] = value
+            marks.append(DiameterMark(str(edges[g[0]].get("id") or g[0]), value))
+        rep = apply_marks(edges, lines, marks)
+
         if canvas_state.graph_projection_sha(graph) != sha_before:
             stale_sha.append(uid_dir.name[:8])
+
+        # Ду обязан лечь на ВСЕ рёбра линии и нигде больше, целым и положительным.
+        bad = 0
+        for li, g in enumerate(lines.edges_of_line):
+            for i in g:
+                got = edges[i].get("diameter_value")
+                if got != want.get(li) or not isinstance(got, int) \
+                        or isinstance(got, bool):
+                    bad += 1
+        if bad or rep.edges_stamped != len(edges) or not rep.ok:
+            apply_broken.append((uid_dir.name[:8], bad, rep.edges_stamped,
+                                 len(edges), rep.ok))
+
         for e in edges:
             for k in DIAMETER_FIELDS:
                 e.pop(k, None)
@@ -168,6 +192,7 @@ def measure(root: Path, rules: LineRules, verbose: bool):
 
     result["unstable_sheets"] = sorted(unstable)
     result["stale_sha_sheets"] = sorted(stale_sha)
+    result["apply_broken"] = apply_broken
     result["mixed_where"] = mixed_where
     result["per_sheet"] = per_sheet
     return result
@@ -183,6 +208,8 @@ def report(r):
     print("  листов с неустойчивым разбиением: %d" % len(r["unstable_sheets"]))
     print("  листов, где Ду сдвинул проекцию холста: %d"
           % len(r["stale_sha_sheets"]))
+    print("  листов, где раскладка меток легла не так: %d"
+          % len(r["apply_broken"]))
 
 
 def main():
@@ -220,6 +247,10 @@ def main():
             "Номер линии уезжает на диск (`diameter_line`) — после пересохранения "
             "графа Ду окажется на других рёбрах."
             % ", ".join(r["unstable_sheets"]))
+    if r["apply_broken"]:
+        failures.append(
+            "раскладка меток по линиям легла не так (лист, плохих рёбер, "
+            "проставлено/всего, отчёт ok): %s" % r["apply_broken"][:5])
     if r["stale_sha_sheets"]:
         failures.append(
             "разметка Ду сдвинула `graph_projection_sha` на листах: %s. "
