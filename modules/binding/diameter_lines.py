@@ -509,6 +509,15 @@ DIAMETER_FIELDS = (
 )
 
 # Поля, оставшиеся от прежней схемы: их писал старый поток, читателей у них нет.
+#: «Ду этой линии не нужен» — по правилу разбора, а не по молчанию оператора.
+#:
+#: Наружу, в конвертер расчётной схемы, уезжает вместе с `diameter_value`.
+#: Без него канал без Ду и канал, которому Ду не положен, для prt неразличимы:
+#: оба остаются с заводскими 0.3 м, то есть приезжают в САПФИР как честный
+#: Ду300. Дренаж под видом Ду300 — самая дорогая ошибка цепочки, поэтому
+#: «не требуется» обязано ехать явно.
+NOT_REQUIRED_FIELD = "diameter_not_required"
+
 LEGACY_DIAMETER_FIELDS = (
     "diameter_prefix", "diameter_suffix", "diameter_confidence",
     "diameter_ocr_block_idx",
@@ -569,6 +578,7 @@ class ApplyReport:
 
     edges_stamped: int = 0
     lines_covered: int = 0
+    edges_not_required: int = 0
     conflicts: list[tuple[int, list[int]]] = field(default_factory=list)
     orphan_marks: list[str] = field(default_factory=list)
     kept_foreign_edges: int = 0
@@ -591,6 +601,10 @@ def clear_diameters(edges: list[dict]) -> int:
     """
     kept = 0
     for e in edges:
+        # Флаг «не требуется» снимается ВСЕГДА, даже с чужой записи: он наш
+        # целиком, чужого источника у него не бывает, а застрявший на ребре
+        # старый флаг соврал бы конвертеру про целую линию.
+        e.pop(NOT_REQUIRED_FIELD, None)
         if is_foreign(e):
             kept += 1
             continue
@@ -620,6 +634,16 @@ def apply_marks(edges: list[dict], lines: Lines, marks: list[DiameterMark],
 
     report = ApplyReport()
     report.kept_foreign_edges = clear_diameters(edges)
+
+    # «Ду не требуется» ставится ПЕРЕД раскладкой меток: если оператор всё же
+    # привязал Ду к такой линии, `_stamp` снимет флаг с этих рёбер сам —
+    # значение на ребре и «не требуется» на нём же противоречили бы друг другу.
+    for li, group in enumerate(lines.edges_of_line):
+        if lines.requires_diameter[li]:
+            continue
+        for i in group:
+            edges[i][NOT_REQUIRED_FIELD] = True
+            report.edges_not_required += 1
 
     by_id = {}
     for i, e in enumerate(edges):
@@ -678,6 +702,8 @@ def apply_marks(edges: list[dict], lines: Lines, marks: list[DiameterMark],
 
 
 def _stamp(edge: dict, value: int, text: str, source: str, line_idx: int) -> None:
+    # Ду на ребре есть — значит он тут требуется, что бы ни решило правило.
+    edge.pop(NOT_REQUIRED_FIELD, None)
     edge["diameter_value"] = _check_value(value)
     edge["diameter_text"] = text
     edge["diameter_source"] = source

@@ -1,4 +1,4 @@
-# Собрать образ prtx-конвертера.
+﻿# Собрать образ prtx-конвертера.
 #
 # Контекст сборки — коробка конвертера (свой git, ~250 МБ, под git этого
 # проекта не лежит). Скрипт готовит временный контекст: берёт из коробки
@@ -37,6 +37,46 @@ if ($LASTEXITCODE -ge 8) { throw "robocopy config: код $LASTEXITCODE" }
 
 foreach ($f in @("Dockerfile", "fix_paths.py", "server.py", "json2prtx.sh")) {
     Copy-Item (Join-Path $here $f) (Join-Path $ctx $f) -Force
+}
+
+# Канарейка: фаза диаметров обязана быть в контексте.
+#
+# Без неё образ соберётся МОЛЧА, а канал без Ду останется с заводскими 0.3 м —
+# в САПФИР это честный Ду300. Пропуск здесь даёт не отказ, а неверные
+# инженерные данные, поэтому сборка падает, а не предупреждает.
+$j2x = Join-Path $ctx "py/json2xml.py"
+if (-not (Select-String -Path $j2x -Pattern "diameter_value" -SimpleMatch -Quiet)) {
+    throw "В контексте нет фазы Ду: py\json2xml.py без diameter_value. Обновите коробку $Box."
+}
+$cls = Join-Path $ctx "engine/cli-classes/ru/get/dcad/SPIRIT/ChannelMerger.class"
+if (-not (Test-Path $cls)) { throw "Нет $cls — cli-classes в контекст не попали" }
+$clsText = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($cls))
+if ($clsText -notmatch "channelDiameters") {
+    throw ("cli-classes собраны БЕЗ фазы Ду (в ChannelMerger.class нет channelDiameters). " +
+           "Пересоберите классы в коробке: javac ... cli-src/ru/get/dcad/SPIRIT/*.java")
+}
+Write-Host "канарейка Ду: фаза на месте (json2xml + cli-classes)"
+
+# Штамп версии коробки. Без него по работающему образу нельзя установить, какой
+# конвертер внутри: сервис приезжает готовым файлом, а не сборкой из репозитория
+# (в docker-compose.yml у prtx нет секции build). Сервис отдаёт штамп в /health.
+$commit = (& git -C $Box rev-parse --short HEAD 2>$null)
+if (-not $commit) { $commit = "unknown" }
+# Грязным считается только то, что уезжает в образ: SETTINGS движок пишет сам
+# на каждом прогоне, и по нему дерево грязное всегда.
+$dirty = (& git -C $Box status --porcelain -- py config engine/cli-classes engine/cli-src 2>$null)
+$dirtyFlag = 0
+if ($dirty) { $dirtyFlag = 1 }
+@(
+    "commit=$commit",
+    "dirty=$dirtyFlag",
+    "diam=1",
+    "built=$(Get-Date -Format 'yyyy-MM-dd HH:mm')"
+) -join "`n" | Set-Content -Path (Join-Path $ctx "box.commit") -Encoding utf8
+if ($dirtyFlag -eq 1) {
+    Write-Host "версия коробки: $commit — ВНИМАНИЕ, дерево грязное, образ несёт незакоммиченное"
+} else {
+    Write-Host "версия коробки: $commit"
 }
 
 $size = [math]::Round(((Get-ChildItem -Recurse $ctx | Measure-Object -Property Length -Sum).Sum / 1MB), 1)

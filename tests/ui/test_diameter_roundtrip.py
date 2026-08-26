@@ -82,15 +82,18 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
-def _make_tab(qapp, monkeypatch):
+def _make_tab(qapp, monkeypatch, nodes=None, links=None):
+    """Вкладка на графе из фикстуры; `nodes`/`links` — для своего графа."""
     from ui.tabs.ocr_binding_tab import OcrBindingTab
 
     monkeypatch.setattr(OcrBindingTab, "_start_download", lambda self: None)
     api = FakeAPI()
     tab = OcrBindingTab(UID, "проба Ду", api)
 
-    tab._graph_data = {"nodes": [dict(n) for n in NODES],
-                       "links": [dict(e) for e in LINKS]}
+    tab._graph_data = {
+        "nodes": [dict(n) for n in (nodes if nodes is not None else NODES)],
+        "links": [dict(e) for e in (links if links is not None else LINKS)],
+    }
     tab._classifications = []
 
     ed = tab.editor
@@ -325,3 +328,138 @@ def test_knopka_du_fiktivnaya_i_ne_lovit_probel(tab, monkeypatch):
     assert opened == [], "фиктивная кнопка что-то открыла"
     assert list(t.editor.get_diameter_marks()) == before
     assert t.btn_diam_help.focusPolicy() == Qt.FocusPolicy.NoFocus
+
+
+# ── замок «Подтвердить» при неразрешённых конфликтах Ду ────────────────────
+
+def _record(seen):
+    """Заглушка сервера: помнит вызов и отвечает так же, как настоящий API."""
+    def _apply(uid):
+        seen.append(uid)
+        return {"updated_nodes": 0}
+    return _apply
+
+
+def _conflict(t):
+    """Две метки с разными Ду на ОДНОЙ линии (e1 и e2 — одна магистраль)."""
+    t.editor.set_diameter_marks([
+        DiameterMark("e1", 300, "manual", "300"),
+        DiameterMark("e2", 400, "manual", "400"),
+    ])
+
+
+def test_konflikt_vidno_snaruzhi(tab):
+    """Вкладка обязана уметь спросить редактор про конфликты до сохранения."""
+    t, _api = tab
+    assert t.editor.diameter_conflicts() == []
+    _conflict(t)
+    conflicts = t.editor.diameter_conflicts()
+    assert len(conflicts) == 1
+    assert conflicts[0][1] == [300, 400]
+
+
+def test_zamok_ne_puskaet_podtverzhdenie_s_konfliktom(tab, monkeypatch):
+    """Линия с двумя Ду уедет проставленной НАПОЛОВИНУ, а пустое ребро в
+    расчётной схеме — заводской Ду300. Выпускать такое молча нельзя."""
+    from PySide6.QtWidgets import QMessageBox
+
+    t, api = tab
+    _conflict(t)
+    shown = []
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: shown.append(self.text()))
+    before = dict(api.uploads)
+    applied = []
+    monkeypatch.setattr(t.api_client, "apply_ocr_binding",
+                        _record(applied), raising=False)
+
+    t._on_confirm()
+
+    assert shown, "оператора не предупредили"
+    assert "разными диаметрами" in shown[0], shown
+    assert api.uploads == before, "схема всё-таки ушла на сервер"
+    assert applied == [], "привязки всё-таки применили"
+
+
+def test_bez_konflikta_zamok_ne_meshaet(tab, monkeypatch):
+    t, api = tab
+    t.editor.set_diameter_marks([DiameterMark("e1", 300, "manual", "300")])
+    applied = []
+    monkeypatch.setattr(t.api_client, "apply_ocr_binding",
+                        _record(applied), raising=False)
+
+    t._on_confirm()
+
+    assert applied == [UID], "замок сработал там, где конфликта нет"
+    assert "graph" in api.uploads
+
+
+def test_razreshjonnyi_konflikt_otkryvaet_dver(tab, monkeypatch):
+    """Оператор выбрал одно значение — дверь открывается без перезапуска."""
+    from PySide6.QtWidgets import QMessageBox
+
+    t, api = tab
+    _conflict(t)
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: None)
+    t._on_confirm()
+    assert "graph" not in api.uploads
+
+    t.editor.set_diameter_marks([DiameterMark("e1", 300, "manual", "300")])
+    applied = []
+    monkeypatch.setattr(t.api_client, "apply_ocr_binding",
+                        _record(applied), raising=False)
+
+    t._on_confirm()
+
+    assert applied == [UID]
+
+
+def test_flag_ne_trebuetsya_uezzhaet_na_server(qapp, monkeypatch):
+    """Контракт с расчётной схемой: «Ду не нужен» едет ЯВНО, полем на ребре.
+
+    Иначе канал без Ду и канал, которому Ду не положен, для конвертера
+    неразличимы — оба остаются с заводскими 0.3 м, то есть приезжают в САПФИР
+    честным Ду300. Дренаж под видом Ду300 — самая дорогая ошибка цепочки.
+    """
+    from modules.binding.diameter_lines import NOT_REQUIRED_FIELD
+
+    # Отвод к датчику уходит от развилки `t` вкось. Продолжение магистрали
+    # (хоть прямо, хоть под 90°) сшилось бы с ней в ОДНУ линию, и тогда
+    # «не требуется» накрыло бы всю магистраль — проверено на этой же фикстуре.
+    nodes = [dict(n) for n in NODES] + [
+        {"id": "d", "class_name": "datchik", "centroid": [50.0, 150.0]}]
+    links = [dict(e) for e in LINKS] + [
+        {"id": "e5", "source": "t", "target": "d",
+         "source_point": [100.0, 100.0], "target_point": [50.0, 150.0],
+         "waypoints": []}]
+    t, api = _make_tab(qapp, monkeypatch, nodes=nodes, links=links)
+    try:
+        t.editor.set_diameter_marks([DiameterMark("e1", 300, "manual", "300")])
+        assert t._save_binding() is True
+
+        saved = _edges_by_id(api.uploads["graph"])
+        flagged = sorted(eid for eid, e in saved.items()
+                         if e.get(NOT_REQUIRED_FIELD))
+        assert flagged == ["e5"], flagged
+        assert NOT_REQUIRED_FIELD not in saved["e1"], "флаг поверх Ду"
+    finally:
+        t.cleanup()
+
+
+def test_list_bez_edinogo_du_podtverzhdaetsya_svobodno(tab, monkeypatch):
+    """Замок стоит на КОНФЛИКТЕ, а не на отсутствии Ду.
+
+    Схема без единого диаметра обязана проходить «Подтвердить» как раньше:
+    Ду — не обязательное поле конвейера, и запирать на нём дверь никто не
+    просил.
+    """
+    t, api = tab
+    t.editor.set_diameter_marks([])
+    assert t.editor.diameter_conflicts() == []
+    applied = []
+    monkeypatch.setattr(t.api_client, "apply_ocr_binding",
+                        _record(applied), raising=False)
+
+    t._on_confirm()
+
+    assert applied == [UID], "замок сработал на схеме вообще без Ду"
+    assert "graph" in api.uploads

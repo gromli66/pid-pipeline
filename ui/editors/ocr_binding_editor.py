@@ -1560,6 +1560,18 @@ class OcrBindingEditor(QGraphicsView):
             seg.setZValue(z)
             self._diameter_items.append(seg)
 
+    def diameter_conflicts(self) -> list:
+        """Линии, на которых висят РАЗНЫЕ Ду: [(номер линии, [значения])].
+
+        Спрашивает вкладка перед «Подтвердить». Конфликт — единственное
+        состояние, в котором линия уезжает проставленной ЧАСТИЧНО: залиты
+        только помеченные рёбра, остальные пустые. В расчётной схеме пустое
+        ребро становится заводскими 0.3 м, поэтому выпускать такую линию
+        молча нельзя.
+        """
+        return sorted((li, list(vals))
+                      for li, vals in self._diam_conflicts.items())
+
     def diameter_coverage(self) -> dict:
         """Покрытие Ду: линии, рёбра и ДЛИНА.
 

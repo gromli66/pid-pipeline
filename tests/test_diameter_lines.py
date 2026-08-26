@@ -11,9 +11,13 @@
 import pytest
 
 from modules.binding.diameter_lines import (
+    DiameterMark,
     LineRules,
     LineRulesError,
+    NOT_REQUIRED_FIELD,
+    apply_marks,
     build_lines,
+    clear_diameters,
     edge_ray,
 )
 
@@ -874,3 +878,84 @@ def test_tolschina_linii_ne_privyazana_k_diametru():
         default = inspect.signature(fn).parameters["use_diameter"].default
         assert default is False, "%s: use_diameter по умолчанию %r" % (
             fn.__name__, default)
+
+
+# ── «Ду не требуется» уезжает флагом, а не молчанием ───────────────────────
+
+def _skip_line_graph():
+    """Магистраль a—t—b и импульсный отвод t—m к прибору (Ду не требуется)."""
+    nodes = [
+        {"id": "a", "type": "connector", "class_name": "connector", "centroid": [100.0, 0.0]},
+        {"id": "t", "type": "connector", "class_name": "connector", "centroid": [100.0, 100.0]},
+        {"id": "b", "type": "connector", "class_name": "connector", "centroid": [100.0, 200.0]},
+        {"id": "m", "class_name": "manometr", "centroid": [200.0, 100.0]},
+    ]
+    edges = [
+        {"id": "e1", "source": "a", "target": "t",
+         "source_point": [100.0, 0.0], "target_point": [100.0, 100.0], "waypoints": []},
+        {"id": "e2", "source": "t", "target": "b",
+         "source_point": [100.0, 100.0], "target_point": [100.0, 200.0], "waypoints": []},
+        {"id": "e3", "source": "t", "target": "m",
+         "source_point": [100.0, 100.0], "target_point": [200.0, 100.0], "waypoints": []},
+    ]
+    return nodes, edges
+
+
+def _rules_with_skip():
+    """Правило проекта: импульсный отвод к прибору Ду не подписывают."""
+    return rules(no_diameter_ends=frozenset({"manometr"}),
+                 no_diameter_max_edges=2)
+
+
+def test_flag_stoit_na_linii_kotoroi_du_ne_nuzhen():
+    """Флаг ставится ПО ПРАВИЛУ разбора, а не там, где оператор не дошёл.
+
+    Для конвертера расчётной схемы канал без Ду и канал, которому Ду не
+    положен, иначе неразличимы: оба остаются с заводскими 0.3 м, то есть
+    приезжают в САПФИР честным Ду300.
+    """
+    nodes, edges = _skip_line_graph()
+    lines = build_lines(nodes, edges, _rules_with_skip())
+    skip = [li for li in range(len(lines)) if not lines.requires_diameter[li]]
+    assert skip, "отвод к прибору должен освобождаться от Ду"
+
+    report = apply_marks(edges, lines, [], nodes)
+
+    flagged = [e["id"] for e in edges if e.get(NOT_REQUIRED_FIELD)]
+    assert flagged == ["e3"], flagged
+    assert report.edges_not_required == 1
+    assert not any(e.get("diameter_value") for e in edges)
+
+
+def test_du_na_takoi_linii_snimaet_flag():
+    """Оператор всё же поставил Ду — значение и «не требуется» на одном ребре
+    противоречат друг другу, побеждает значение."""
+    nodes, edges = _skip_line_graph()
+    lines = build_lines(nodes, edges, _rules_with_skip())
+    mark = DiameterMark(edge_id="e3", value=25, kind="manual", text="25")
+
+    apply_marks(edges, lines, [mark], nodes)
+
+    e3 = next(e for e in edges if e["id"] == "e3")
+    assert e3["diameter_value"] == 25
+    assert NOT_REQUIRED_FIELD not in e3, "флаг остался поверх проставленного Ду"
+
+
+def test_flag_snimaetsya_pri_pereschjote():
+    """Застрявший флаг соврал бы конвертеру про целую линию."""
+    nodes, edges = _skip_line_graph()
+    for e in edges:
+        e[NOT_REQUIRED_FIELD] = True
+    clear_diameters(edges)
+    assert not any(NOT_REQUIRED_FIELD in e for e in edges)
+
+
+def test_flag_ne_putaetsya_s_chuzhoi_zapisyu():
+    """Чужой Ду не перезаписывается, но флаг снимается и с него — он наш."""
+    nodes, edges = _skip_line_graph()
+    edges[0].update({"diameter_value": 100, "diameter_source": "чужой",
+                     NOT_REQUIRED_FIELD: True})
+    kept = clear_diameters(edges)
+    assert kept == 1
+    assert edges[0]["diameter_value"] == 100, "чужую запись стёрли"
+    assert NOT_REQUIRED_FIELD not in edges[0]

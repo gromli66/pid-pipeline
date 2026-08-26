@@ -645,6 +645,38 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
             status += " | ✅ Подтверждено"
         self.kks_toolbar.stats_label.setText(status)
 
+    def _confirm_diameter_conflicts(self) -> bool:
+        """Замок: не выпускать схему с неразрешёнными конфликтами Ду.
+
+        Конфликт — линия, на которой висят два разных диаметра. Она уедет
+        проставленной ЧАСТИЧНО: залиты только помеченные рёбра, остальные
+        пустые, а пустое ребро в расчётной схеме — заводские 0.3 м, то есть
+        честный Ду300 в САПФИР. Ошибка молчаливая и дорогая, а снимается одним
+        кликом по красному квадрату, поэтому дверь закрыта наглухо: сначала
+        разрешить, потом подтверждать.
+        """
+        conflicts = self.editor.diameter_conflicts()
+        if not conflicts:
+            return True
+        where = ", ".join("Ø" + "/".join(str(v) for v in vals)
+                          for _li, vals in conflicts[:5])
+        if len(conflicts) > 5:
+            where += ", …"
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Разные Ду на одной линии")
+        box.setText("Линий с двумя разными диаметрами: %d (%s)."
+                    % (len(conflicts), where))
+        box.setInformativeText(
+            "Такая линия уедет проставленной наполовину, а пустое ребро в "
+            "расчётной схеме превращается в заводской Ду300. Кликните по "
+            "красному квадрату на линии, выберите нужное значение — и "
+            "подтвердите снова.")
+        box.exec()
+        self.status_label.setText(
+            "Подтверждение остановлено: линий с разными Ду — %d" % len(conflicts))
+        return False
+
     def _update_diameter_stats(self):
         """Строка покрытия Ду в общем `stats_label` (О-8).
 
@@ -1704,6 +1736,8 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
     @Slot()
     def _on_confirm(self):
         """Финальное подтверждение: сохранить + применить к графу + emit confirmed."""
+        if not self._confirm_diameter_conflicts():
+            return
         if not self._save_binding():
             return
 
