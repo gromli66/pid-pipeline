@@ -343,3 +343,218 @@ def test_konfig_proekta_gruzitsya_i_pokryvaet_vse_klassy():
     assert r.passes("napravlenie")
     assert r.collinear_tol_deg == 30.0
     assert r.no_diameter_ends == frozenset({"datchik"})
+
+
+# ── метки и запись Ду в рёбра (блок 2) ─────────────────────────────────────
+
+from modules.binding.diameter_lines import (  # noqa: E402
+    DIAMETER_FIELDS,
+    LEGACY_DIAMETER_FIELDS,
+    SOURCE_EDITOR,
+    SOURCE_LINE,
+    SOURCE_MANUAL,
+    SOURCE_OCR,
+    DiameterMark,
+    apply_marks,
+    clear_diameters,
+    marks_from_edges,
+)
+
+
+def _magistral_s_otvodom():
+    """a—t—b по горизонтали (одна линия) и отвод t—c (другая)."""
+    nodes = [node("a"), node("t"), node("b"), node("c")]
+    edges = [
+        edge("e1", "a", "t", (100, 0), (100, 100)),
+        edge("e2", "t", "b", (100, 100), (100, 200)),
+        edge("e3", "t", "c", (100, 100), (200, 100)),
+    ]
+    return nodes, edges
+
+
+def test_metka_krasit_vsyu_liniyu_i_ne_zahodit_v_otvod():
+    nodes, edges = _magistral_s_otvodom()
+    lines = build_lines(nodes, edges, rules())
+    rep = apply_marks(edges, lines, [DiameterMark("e1", 300, SOURCE_OCR, "300")])
+
+    assert rep.ok and rep.lines_covered == 1
+    assert edges[0]["diameter_value"] == 300
+    assert edges[1]["diameter_value"] == 300          # продолжение той же линии
+    assert "diameter_value" not in edges[2]           # отвод не тронут
+
+
+def test_istochnik_razlichaet_metku_i_potok():
+    nodes, edges = _magistral_s_otvodom()
+    lines = build_lines(nodes, edges, rules())
+    apply_marks(edges, lines, [DiameterMark("e1", 300, SOURCE_OCR, "300")])
+
+    assert edges[0]["diameter_source"] == SOURCE_OCR
+    assert edges[0]["diameter_propagated"] is False
+    assert edges[1]["diameter_source"] == SOURCE_LINE
+    assert edges[1]["diameter_propagated"] is True
+
+
+def test_du_v_rebre_celoe_v_millimetrah():
+    """Контракт с расчётной схемой: `json2xml` берёт `float(d)/1000`."""
+    nodes, edges = _magistral_s_otvodom()
+    lines = build_lines(nodes, edges, rules())
+    apply_marks(edges, lines, [DiameterMark("e1", 300, SOURCE_MANUAL)])
+    assert isinstance(edges[0]["diameter_value"], int)
+    assert edges[0]["diameter_text"] == "300"
+
+
+def test_nomer_linii_zapisan_v_rebro():
+    nodes, edges = _magistral_s_otvodom()
+    lines = build_lines(nodes, edges, rules())
+    apply_marks(edges, lines, [DiameterMark("e1", 300)])
+    assert edges[0]["diameter_line"] == edges[1]["diameter_line"] == lines.line_for(0)
+
+
+def test_parallelnye_rebra_klyuch_po_id_a_ne_po_koncam():
+    """51 ребро корпуса делит ключ `min|max` — метка обязана идти по `id`.
+
+    Концы здесь стоп-классы, поэтому нитки лежат в РАЗНЫХ линиях: старый ключ
+    `f"{min}|{max}"` залил бы Ду сразу на обе.
+    """
+    nodes = [node("a", "perehod"), node("b", "perehod")]
+    edges = [
+        edge("p1", "a", "b", (100, 0), (100, 100)),
+        edge("p2", "a", "b", (120, 0), (120, 100)),   # тот же `min|max`
+    ]
+    lines = build_lines(nodes, edges, rules())
+    assert len(lines) == 2
+    apply_marks(edges, lines, [DiameterMark("p1", 200)])
+    assert edges[0]["diameter_value"] == 200
+    assert "diameter_value" not in edges[1]
+
+
+def test_parallelnye_rebra_mezhdu_tranzitami_odna_liniya():
+    """А вот между двумя транзитными концами пара ниток — законно одна линия.
+
+    Обе стороны — узлы степени 2 транзитного класса, правило велит идти всегда.
+    Зафиксировано намеренно: это не дыра ключа, а прямое следствие правила.
+    """
+    nodes = [node("a"), node("b")]
+    edges = [
+        edge("p1", "a", "b", (100, 0), (100, 100)),
+        edge("p2", "a", "b", (120, 0), (120, 100)),
+    ]
+    lines = build_lines(nodes, edges, rules())
+    assert len(lines) == 1
+
+
+def test_ruchnaya_pravka_glavnee_privyazki():
+    """Ду из «Ручной правки» вкладка привязки не перезаписывает и не стирает."""
+    nodes, edges = _magistral_s_otvodom()
+    edges[1]["diameter_value"] = 250
+    edges[1]["diameter_source"] = SOURCE_EDITOR
+    lines = build_lines(nodes, edges, rules())
+
+    rep = apply_marks(edges, lines, [DiameterMark("e1", 300, SOURCE_OCR)])
+    assert edges[0]["diameter_value"] == 300
+    assert edges[1]["diameter_value"] == 250          # правка редактора цела
+    assert edges[1]["diameter_source"] == SOURCE_EDITOR
+    assert rep.kept_editor_edges == 1
+
+
+def test_ochistka_ne_trogaet_pravku_redaktora():
+    nodes, edges = _magistral_s_otvodom()
+    edges[0]["diameter_value"] = 100
+    edges[0]["diameter_source"] = SOURCE_LINE
+    edges[1]["diameter_value"] = 250
+    edges[1]["diameter_source"] = SOURCE_EDITOR
+
+    kept = clear_diameters(edges)
+    assert kept == 1
+    assert "diameter_value" not in edges[0]
+    assert edges[1]["diameter_value"] == 250
+
+
+def test_starye_polya_snimayutsya_pri_ochistke():
+    """`prefix/suffix/confidence` уходят: читателей у них нет, в prtx не едут."""
+    nodes, edges = _magistral_s_otvodom()
+    edges[0].update({"diameter_value": 50, "diameter_prefix": "Dy",
+                     "diameter_suffix": "", "diameter_confidence": 0.9,
+                     "diameter_ocr_block_idx": 7})
+    clear_diameters(edges)
+    for k in LEGACY_DIAMETER_FIELDS:
+        assert k not in edges[0]
+
+
+def test_dve_metki_s_raznym_du_na_odnoi_linii_konflikt():
+    """Молча выбрать «по большинству» нельзя — на выходе расчётная схема."""
+    nodes, edges = _magistral_s_otvodom()
+    lines = build_lines(nodes, edges, rules())
+    rep = apply_marks(edges, lines, [
+        DiameterMark("e1", 300, SOURCE_OCR),
+        DiameterMark("e2", 250, SOURCE_OCR),
+    ])
+    assert not rep.ok
+    assert rep.conflicts and rep.conflicts[0][1] == [250, 300]
+    assert edges[0]["diameter_value"] == 300          # каждое при своём
+    assert edges[1]["diameter_value"] == 250
+    assert rep.lines_covered == 0                     # линия не залита
+
+
+def test_dve_metki_s_odnim_du_ne_konflikt():
+    nodes, edges = _magistral_s_otvodom()
+    lines = build_lines(nodes, edges, rules())
+    rep = apply_marks(edges, lines, [
+        DiameterMark("e1", 300), DiameterMark("e2", 300),
+    ])
+    assert rep.ok and rep.lines_covered == 1
+
+
+def test_metka_na_ischeznuvshee_rebro_ne_ronyaet_a_soobschaet():
+    """Пересборка графа меняет `id` — метка осиротеет, и это надо увидеть."""
+    nodes, edges = _magistral_s_otvodom()
+    lines = build_lines(nodes, edges, rules())
+    rep = apply_marks(edges, lines, [DiameterMark("net-takogo", 300)])
+    assert rep.orphan_marks == ["net-takogo"]
+    assert rep.edges_stamped == 0
+
+
+def test_metki_chitayutsya_obratno_iz_grafa_bez_potoka():
+    """Граф — единственное хранилище меток; поток метками не считается."""
+    nodes, edges = _magistral_s_otvodom()
+    lines = build_lines(nodes, edges, rules())
+    apply_marks(edges, lines, [DiameterMark("e1", 300, SOURCE_OCR, "300")])
+
+    back = marks_from_edges(edges)
+    assert len(back) == 1
+    assert back[0].edge_id == "e1" and back[0].value == 300
+    assert back[0].kind == SOURCE_OCR
+
+
+def test_krug_zamykaetsya_bez_dublei():
+    nodes, edges = _magistral_s_otvodom()
+    lines = build_lines(nodes, edges, rules())
+    first = [DiameterMark("e1", 300, SOURCE_OCR, "300")]
+    apply_marks(edges, lines, first)
+
+    for _ in range(3):
+        again = marks_from_edges(edges)
+        apply_marks(edges, lines, again)
+    assert len(marks_from_edges(edges)) == 1
+    assert [e.get("diameter_value") for e in edges] == [300, 300, None]
+
+
+# ── проекции холста: разметка Ду не должна устаривать холст ────────────────
+
+def test_du_ne_menyaet_geometricheskuyu_proekciyu_holsta():
+    """Иначе холст всех схем объявится устаревшим и раскладка перезапустится."""
+    from modules.graph.core import canvas_state
+
+    nodes, edges = _magistral_s_otvodom()
+    graph = {"nodes": nodes, "links": edges}
+    before = canvas_state.graph_projection_sha(graph)
+
+    lines = build_lines(nodes, edges, rules())
+    apply_marks(edges, lines, [DiameterMark("e1", 300, SOURCE_OCR, "300")])
+
+    assert canvas_state.graph_projection_sha(graph) == before
+
+
+def test_polya_du_ne_vhodyat_v_belyi_spisok_proekcii():
+    from modules.graph.core import canvas_state
+    assert not (set(DIAMETER_FIELDS) & set(canvas_state._EDGE_KEYS))

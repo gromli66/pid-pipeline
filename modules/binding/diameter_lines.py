@@ -342,3 +342,172 @@ def _requires_diameter(group: list[int], edges: list[dict],
                 if node_class.get(nid, "") in rules.no_diameter_ends:
                     return False
     return True
+
+
+# ── метки оператора и запись Ду в рёбра ────────────────────────────────────
+
+# Поля Ду у ребра `graph_validated.json`. Наружу, в конвертер расчётной схемы,
+# уезжает ровно одно из них — `diameter_value` (мм, целое): `json2xml.py` берёт
+# `float(e["diameter_value"]) / 1000`, всё остальное — наше внутреннее.
+DIAMETER_FIELDS = (
+    "diameter_value",       # мм, целое — единственное поле контракта с prtx
+    "diameter_text",        # то же число строкой, для подписи на холсте
+    "diameter_source",      # "ocr" | "manual" | "line" | "editor"
+    "diameter_line",        # номер линии; на диске — чтобы правка на холсте
+                            # не зависела от пересчёта разбиения по холсту
+    "diameter_propagated",  # == (source == "line"), для старых читателей
+)
+
+# Поля, оставшиеся от прежней схемы: их писал старый поток, читателей у них нет.
+LEGACY_DIAMETER_FIELDS = (
+    "diameter_prefix", "diameter_suffix", "diameter_confidence",
+    "diameter_ocr_block_idx",
+)
+
+SOURCE_OCR = "ocr"          # оператор перетащил распознанную подпись
+SOURCE_MANUAL = "manual"    # оператор набрал число
+SOURCE_LINE = "line"        # поток по линии от метки оператора
+SOURCE_EDITOR = "editor"    # правка в «Ручной правке» — она главнее (решение
+                            # заказчика 26.08): вкладка привязки её не трогает
+
+
+@dataclass(frozen=True)
+class DiameterMark:
+    """Метка оператора: единственное, что он создаёт руками.
+
+    Ключ — `edge_id`, а не `"{min}|{max}"` из source/target: ключ по концам
+    неоднозначен на параллельных рёбрах (51 ребро в 28 группах на корпусе), и
+    Ду садился бы сразу на всю пару.
+    """
+
+    edge_id: str
+    value: int
+    kind: str = SOURCE_MANUAL
+    text: str = ""
+    ocr_block_idx: int | None = None
+
+    def as_text(self) -> str:
+        return self.text or str(self.value)
+
+
+@dataclass
+class ApplyReport:
+    """Что получилось при раскладке меток по линиям."""
+
+    edges_stamped: int = 0
+    lines_covered: int = 0
+    conflicts: list[tuple[int, list[int]]] = field(default_factory=list)
+    orphan_marks: list[str] = field(default_factory=list)
+    kept_editor_edges: int = 0
+
+    @property
+    def ok(self) -> bool:
+        return not self.conflicts and not self.orphan_marks
+
+
+def clear_diameters(edges: list[dict], *, keep_sources: tuple[str, ...] = (SOURCE_EDITOR,)) -> int:
+    """Снять поля Ду со всех рёбер, кроме тех, чей источник в `keep_sources`.
+
+    Вкладка привязки управляет ТОЛЬКО своим. До этой правки сохранение вкладки
+    проходило по всем рёбрам и сносило `diameter_*` у всего, чего не было в её
+    карте, — то есть убивало Ду, поставленный в «Ручной правке».
+    """
+    kept = 0
+    for e in edges:
+        if e.get("diameter_source") in keep_sources:
+            kept += 1
+            continue
+        for k in DIAMETER_FIELDS + LEGACY_DIAMETER_FIELDS:
+            e.pop(k, None)
+    return kept
+
+
+def apply_marks(edges: list[dict], lines: Lines, marks: list[DiameterMark], *,
+                keep_sources: tuple[str, ...] = (SOURCE_EDITOR,)) -> ApplyReport:
+    """Разложить метки по линиям и проставить Ду в рёбра.
+
+    Ду метки красит ВСЮ линию её ребра и ничего кроме. Рёбра, чей Ду поставлен
+    в «Ручной правке», не перезаписываются: они главнее.
+
+    Две метки с разными значениями на одной линии — конфликт: линия не
+    заливается, каждое помеченное ребро остаётся при своём значении, конфликт
+    возвращается оператору. Молча выбирать «по большинству» нельзя — на выходе
+    расчётная схема, и незамеченная ошибка там дороже вопроса.
+    """
+    report = ApplyReport()
+    report.kept_editor_edges = clear_diameters(edges, keep_sources=keep_sources)
+
+    by_id = {}
+    for i, e in enumerate(edges):
+        eid = e.get("id")
+        if eid:
+            by_id[str(eid)] = i
+
+    # Метки, разложенные по линиям.
+    per_line: dict[int, list[tuple[int, DiameterMark]]] = {}
+    for m in marks:
+        idx = by_id.get(str(m.edge_id))
+        if idx is None:
+            report.orphan_marks.append(m.edge_id)
+            continue
+        li = lines.line_for(idx)
+        if li is None:
+            li = -1 - idx          # ребро вне разбиения — сама себе линия
+        per_line.setdefault(li, []).append((idx, m))
+
+    for li, items in sorted(per_line.items()):
+        values = {m.value for _idx, m in items}
+        if len(values) > 1:
+            report.conflicts.append((li, sorted(values)))
+            for idx, m in items:
+                _stamp(edges[idx], m.value, m.as_text(), m.kind, li)
+                report.edges_stamped += 1
+            continue
+
+        m = items[0][1]
+        group = lines.edges_of_line[li] if li >= 0 else [items[0][0]]
+        marked = {idx for idx, _ in items}
+        covered = False
+        for i in group:
+            if edges[i].get("diameter_source") in keep_sources:
+                continue                      # правка редактора главнее
+            src = m.kind if i in marked else SOURCE_LINE
+            _stamp(edges[i], m.value, m.as_text(), src, li)
+            report.edges_stamped += 1
+            covered = True
+        if covered:
+            report.lines_covered += 1
+
+    return report
+
+
+def _stamp(edge: dict, value: int, text: str, source: str, line_idx: int) -> None:
+    edge["diameter_value"] = int(value)
+    edge["diameter_text"] = text
+    edge["diameter_source"] = source
+    edge["diameter_line"] = int(line_idx)
+    edge["diameter_propagated"] = (source == SOURCE_LINE)
+
+
+def marks_from_edges(edges: list[dict]) -> list[DiameterMark]:
+    """Собрать метки обратно из графа — граф и есть их хранилище.
+
+    Второго хранилища (записи в `ocr_binding.json`) сознательно нет: два ответа
+    на вопрос «что показать при открытии» дают дубли и расхождения. Поток
+    (`diameter_source == "line"`) метками не считается — он пересчитывается.
+    """
+    out = []
+    for e in edges:
+        src = e.get("diameter_source")
+        if src in (None, SOURCE_LINE):
+            continue
+        value = e.get("diameter_value")
+        if not value:
+            continue
+        out.append(DiameterMark(
+            edge_id=str(e.get("id") or ""),
+            value=int(value),
+            kind=str(src),
+            text=str(e.get("diameter_text") or value),
+        ))
+    return out

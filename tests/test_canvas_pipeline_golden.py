@@ -47,6 +47,11 @@ EDGE_KEYS = {
     "render_color", "render_width", "color", "dashed", "diameter_text",
     "diameter_value", "connection_type", "_src_side", "_tgt_side",
     "_manual_route", "_auto_route",
+    # Правило линии Ду (`modules/binding/diameter_lines.py`): чей это диаметр,
+    # какой линии он принадлежит и пришёл ли он потоком. В геометрическую
+    # проекцию холста (`canvas_state._EDGE_KEYS`) ни один из них не входит —
+    # разметка Ду не обязана устаривать холст и перезапускать раскладку.
+    "diameter_source", "diameter_line", "diameter_propagated",
 }
 NODE_REQUIRED = {"id", "type", "centroid"}
 EDGE_REQUIRED = {"source", "target", "source_point", "target_point"}

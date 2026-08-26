@@ -25,6 +25,10 @@
 3. **Смешанных линий ноль** — на линию не должны попасть две подписи Ду с
    разными значениями. Подписи берутся из `ocr/ocr_result.json` тем же
    способом, что и в замере: ближайшее ребро, порог 150 px.
+4. **Разметка Ду не устаривает холст.** На каждом листе диаметры проставляются
+   всем линиям и сверяется `graph_projection_sha` до и после. Сдвинется — холст
+   объявится устаревшим, раскладка перезапустится, и оператор получит другую
+   картинку после простой правки диаметра.
 
 Корпус берётся из `--corpus`, переменной `PID_CORPUS` или `storage/diagrams`.
 """
@@ -41,7 +45,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from modules.binding.diameter_lines import LineRules, build_lines  # noqa: E402
+from modules.binding.diameter_lines import (  # noqa: E402
+    DIAMETER_FIELDS, DiameterMark, LineRules, apply_marks, build_lines,
+)
+from modules.graph.core import canvas_state  # noqa: E402
 from modules.binding.geometry import bbox_to_edge_distance_weighted  # noqa: E402
 
 BASELINE = Path(__file__).with_name("bench") / "diameter_lines_baseline.json"
@@ -107,6 +114,7 @@ def measure(root: Path, rules: LineRules, verbose: bool):
     per_sheet = {}
     unstable = []
     mixed_where = []
+    stale_sha = []
 
     for uid_dir in corpus_dirs(root):
         edges, nodes, sha = read_graph(uid_dir)
@@ -126,6 +134,21 @@ def measure(root: Path, rules: LineRules, verbose: bool):
         if mixed:
             mixed_where.append((uid_dir.name[:8], len(mixed)))
 
+        # Разметка Ду не должна устаривать холст: иначе после каждой правки
+        # диаметра раскладка пересчитывается заново и оператор видит другую
+        # картинку. Проверяется на РЕАЛЬНОМ листе, не на синтетике.
+        graph = {"nodes": nodes, "links": edges}
+        sha_before = canvas_state.graph_projection_sha(graph)
+        apply_marks(edges, lines, [
+            DiameterMark(str(edges[g[0]].get("id") or g[0]), 100 + 10 * (li % 5))
+            for li, g in enumerate(lines.edges_of_line) if g
+        ])
+        if canvas_state.graph_projection_sha(graph) != sha_before:
+            stale_sha.append(uid_dir.name[:8])
+        for e in edges:
+            for k in DIAMETER_FIELDS:
+                e.pop(k, None)
+
         result["sheets"] += 1
         result["edges"] += len(edges)
         result["lines"] += len(lines)
@@ -144,6 +167,7 @@ def measure(root: Path, rules: LineRules, verbose: bool):
                      lines.needing_diameter, len(hits)))
 
     result["unstable_sheets"] = sorted(unstable)
+    result["stale_sha_sheets"] = sorted(stale_sha)
     result["mixed_where"] = mixed_where
     result["per_sheet"] = per_sheet
     return result
@@ -157,6 +181,8 @@ def report(r):
     print("  подписи легли в линий: %d, из них смешанных: %d"
           % (r["labelled_lines"], r["mixed_lines"]))
     print("  листов с неустойчивым разбиением: %d" % len(r["unstable_sheets"]))
+    print("  листов, где Ду сдвинул проекцию холста: %d"
+          % len(r["stale_sha_sheets"]))
 
 
 def main():
@@ -194,6 +220,12 @@ def main():
             "Номер линии уезжает на диск (`diameter_line`) — после пересохранения "
             "графа Ду окажется на других рёбрах."
             % ", ".join(r["unstable_sheets"]))
+    if r["stale_sha_sheets"]:
+        failures.append(
+            "разметка Ду сдвинула `graph_projection_sha` на листах: %s. "
+            "Холст объявится устаревшим, раскладка перезапустится, и оператор "
+            "увидит другую картинку после простой правки диаметра."
+            % ", ".join(r["stale_sha_sheets"]))
     if r["mixed_lines"]:
         failures.append(
             "смешанные линии (две подписи с разным Ду на одной линии): %s. "
