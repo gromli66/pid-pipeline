@@ -3034,9 +3034,17 @@ class OcrBindingEditor(QGraphicsView):
     def _handle_diameter_key(self, event) -> bool:
         """Клавиатура режима обхода (О-1). True — событие съедено.
 
-        Цикл оператора: Tab → камера на следующую линию без Ду, набрал число,
+        Цикл оператора: Пробел → камера на следующую линию без Ду, набрал число,
         Enter → поставлено и сразу прыжок на следующую. Ноль движений мышью и
         ноль поиска глазами; на листе это 36 действий вместо 118 рёбер.
+
+        ⛔ **Tab здесь не годится, хотя просился первым.** Qt разбирает его в
+        `QWidget.event()` как клавишу перехода фокуса и до `keyPressEvent`
+        не доводит вовсе — замер: `sendEvent(Tab)` до обработчика НЕ доходит,
+        `Space` и `F3` доходят. Плюс Tab уже означает «следующее» в самом
+        клиенте, и переопределять его значило бы спорить с привычкой.
+        Пробел — большой, под большой палец, свободный; `F3` — привычное
+        «найти следующее» и не зависит от раскладки.
         """
         key = event.key()
         mods = event.modifiers()
@@ -3044,7 +3052,7 @@ class OcrBindingEditor(QGraphicsView):
                    | Qt.KeyboardModifier.AltModifier):
             return False
 
-        if key in (Qt.Key.Key_Tab, Qt.Key.Key_Space):
+        if key in (Qt.Key.Key_Space, Qt.Key.Key_F3):
             self.goto_next_line_without_diameter()
             return True
         if self._diam_current_line is None:

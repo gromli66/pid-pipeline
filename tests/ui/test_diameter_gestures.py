@@ -340,8 +340,14 @@ from PySide6.QtGui import QKeyEvent  # noqa: E402
 
 
 def _key(ed, key, text=""):
+    """Клавиша БОЕВЫМ путём — через `event()`, а не прямым `keyPressEvent`.
+
+    ⛔ Прямой вызов даёт ложный зелёный: Tab, например, Qt разбирает в
+    `QWidget.event()` как переход фокуса и до `keyPressEvent` не доводит вовсе.
+    Привязка на Tab «работала» в тесте и была мертва в приложении.
+    """
     ev = QKeyEvent(QKeyEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier, text)
-    ed.keyPressEvent(ev)
+    QApplication.sendEvent(ed, ev)
 
 
 def test_pokrytie_schitaet_linii_rebra_i_dlinu(ed):
@@ -365,14 +371,14 @@ def test_obhod_idet_ot_samoi_dlinnoi_linii(ed):
     assert lengths == sorted(lengths, reverse=True)
 
 
-def test_tab_vstaet_na_liniyu_bez_du(ed):
-    _key(ed, Qt.Key.Key_Tab)
+def test_probel_vstaet_na_liniyu_bez_du(ed):
+    _key(ed, Qt.Key.Key_Space, " ")
     assert ed._diam_current_line == ed.lines_without_diameter()[0]
 
 
 def test_cikl_nabral_enter_prygnul_dalshe(ed):
-    """Главный цикл оператора: Tab, цифры, Enter — и сразу следующая линия."""
-    _key(ed, Qt.Key.Key_Tab)
+    """Главный цикл оператора: Пробел, цифры, Enter — и сразу следующая линия."""
+    _key(ed, Qt.Key.Key_Space, " ")
     first = ed._diam_current_line
 
     for ch in "300":
@@ -386,7 +392,7 @@ def test_cikl_nabral_enter_prygnul_dalshe(ed):
 
 def test_enter_bez_nabora_beret_proshloe_znachenie(ed):
     """О-3: Ду на листе повторяются — Enter повторяет прошлое значение."""
-    _key(ed, Qt.Key.Key_Tab)
+    _key(ed, Qt.Key.Key_Space, " ")
     for ch in "250":
         _key(ed, getattr(Qt.Key, "Key_%s" % ch), ch)
     _key(ed, Qt.Key.Key_Return)
@@ -397,7 +403,7 @@ def test_enter_bez_nabora_beret_proshloe_znachenie(ed):
 
 
 def test_backspace_pravit_nabor(ed):
-    _key(ed, Qt.Key.Key_Tab)
+    _key(ed, Qt.Key.Key_Space, " ")
     for ch in "329":
         _key(ed, getattr(Qt.Key, "Key_%s" % ch), ch)
     _key(ed, Qt.Key.Key_Backspace)
@@ -406,7 +412,7 @@ def test_backspace_pravit_nabor(ed):
 
 
 def test_esc_vyhodit_iz_obhoda(ed):
-    _key(ed, Qt.Key.Key_Tab)
+    _key(ed, Qt.Key.Key_Space, " ")
     assert ed._diam_current_line is not None
     _key(ed, Qt.Key.Key_Escape)
     assert ed._diam_current_line is None
@@ -428,3 +434,20 @@ def test_cifry_vne_obhoda_ne_perehvatyvayutsya(ed):
     assert ed._diam_current_line is None
     _key(ed, Qt.Key.Key_3, "3")
     assert ed._diam_entry == ""
+
+
+def test_tab_ne_perehvatyvaetsya_on_prinadlezhit_fokusu(ed):
+    """⛔ Tab остаётся клавишей перехода фокуса.
+
+    Он и не мог бы работать: Qt разбирает его в `QWidget.event()` и до
+    `keyPressEvent` не доводит (замер — `sendEvent(Tab)` до обработчика не
+    доходит, `Space` и `F3` доходят). Сторож на случай, если кто-то снова
+    решит, что «Tab = следующее» — тест на прямом вызове был бы зелёным.
+    """
+    _key(ed, Qt.Key.Key_Tab)
+    assert ed._diam_current_line is None
+
+
+def test_f3_takzhe_vedet_obhod(ed):
+    _key(ed, Qt.Key.Key_F3)
+    assert ed._diam_current_line == ed.lines_without_diameter()[0]
