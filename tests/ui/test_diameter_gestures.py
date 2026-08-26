@@ -402,39 +402,59 @@ def test_probel_vstaet_na_liniyu_bez_du(ed):
     assert ed._diam_current_line == ed.lines_without_diameter()[0]
 
 
-def test_cikl_nabral_enter_prygnul_dalshe(ed):
-    """Главный цикл оператора: Пробел, цифры, Enter — и сразу следующая линия."""
+def test_cikl_probel_enter_okno_enter(ed, monkeypatch):
+    """Цикл оператора: Пробел — встали на линию, Enter — окно, Enter — поставили.
+
+    ⛔ Подтверждение НИКУДА не прыгает само: шаг по линиям — только Пробел/F3.
+    Прыжок «за компанию» с вводом оператор назвал ошибкой.
+    """
+    monkeypatch.setattr(QInputDialog, "getText",
+                        staticmethod(lambda *a, **kw: ("300", True)))
     _key(ed, Qt.Key.Key_Space, " ")
     first = ed._diam_current_line
 
-    for ch in "300":
-        _key(ed, getattr(Qt.Key, "Key_%s" % ch), ch)
     _key(ed, Qt.Key.Key_Return)
 
     assert [m.value for m in ed.get_diameter_marks()] == [300]
-    assert ed._diam_current_line != first, "обход не шагнул дальше"
+    assert ed._diam_current_line == first, "Enter увёл обход на другую линию"
     assert first not in ed.lines_without_diameter()
 
-
-def test_enter_bez_nabora_beret_proshloe_znachenie(ed):
-    """О-3: Ду на листе повторяются — Enter повторяет прошлое значение."""
     _key(ed, Qt.Key.Key_Space, " ")
-    for ch in "250":
-        _key(ed, getattr(Qt.Key, "Key_%s" % ch), ch)
-    _key(ed, Qt.Key.Key_Return)
+    assert ed._diam_current_line != first, "Пробел не шагнул дальше"
 
-    _key(ed, Qt.Key.Key_Return)          # ничего не набирали
 
+def test_okno_zaranee_zapolneno_proshlym_znacheniem(ed, monkeypatch):
+    """Ду на листе повторяются — поле подставляет прошлое, хватает Enter."""
+    seen = []
+
+    def _dialog(parent, title, label, text="", *a, **kw):
+        seen.append(text)
+        return (text or "250", True)
+
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(_dialog))
+    _key(ed, Qt.Key.Key_Space, " ")
+    _key(ed, Qt.Key.Key_Return)          # первое окно пустое -> набрали 250
+    _key(ed, Qt.Key.Key_Space, " ")
+    _key(ed, Qt.Key.Key_Return)          # второе уже с 250 -> просто Enter
+
+    assert seen[0] == "", "в первом окне что-то уже стояло"
+    assert seen[1] == "250", "прошлое значение не подставилось"
     assert sorted(m.value for m in ed.get_diameter_marks()) == [250, 250]
 
 
-def test_backspace_pravit_nabor(ed):
+def test_cifry_i_backspace_vkladke_ne_perehvatyvayutsya(ed):
+    """Набор идёт в окне ввода — там привычная правка работает сама.
+
+    Раньше цифры копились в строке состояния, а Backspace перехватывался
+    редактором. Оператор назвал это неправильным: «только в окне, как с
+    текстом обычно».
+    """
     _key(ed, Qt.Key.Key_Space, " ")
-    for ch in "329":
-        _key(ed, getattr(Qt.Key, "Key_%s" % ch), ch)
+    assert ed._diam_current_line is not None
+    _key(ed, Qt.Key.Key_3, "3")
     _key(ed, Qt.Key.Key_Backspace)
-    _key(ed, Qt.Key.Key_Return)
-    assert [m.value for m in ed.get_diameter_marks()] == [32]
+    assert ed.get_diameter_marks() == []
+
 
 
 def test_esc_vyhodit_iz_obhoda(ed):
@@ -459,7 +479,7 @@ def test_cifry_vne_obhoda_ne_perehvatyvayutsya(ed):
     """Пока обход не начат, клавиатура принадлежит остальной вкладке."""
     assert ed._diam_current_line is None
     _key(ed, Qt.Key.Key_3, "3")
-    assert ed._diam_entry == ""
+    assert ed.get_diameter_marks() == []
 
 
 def test_tab_ne_perehvatyvaetsya_on_prinadlezhit_fokusu(ed):
@@ -512,3 +532,30 @@ def test_bez_pyyaml_vkladka_otkryvaetsya(qapp, tmp_path, monkeypatch):
         assert any("yaml" in s for s in seen), seen
     finally:
         ed.deleteLater()
+
+
+def test_cvet_odin_nezavisimo_ot_sposoba_privyazki(ed, monkeypatch):
+    """⛔ Требование оператора: у ребра с Ду ОДИН цвет, как бы его ни привязали.
+
+    Перетащил подпись, набрал руками, пришло потоком по линии — на экране это
+    одно и то же «ребро с диаметром». Разный цвет по источнику заставлял бы
+    оператора помнить, откуда взялось число, а ему важно только «есть Ду».
+    Отличается лишь КОНФЛИКТ — но это состояние линии, а не способ привязки.
+    """
+    def pens(editor):
+        from PySide6.QtWidgets import QGraphicsLineItem
+        return {(it.pen().color().name(), it.pen().width())
+                for it in editor._diameter_items
+                if isinstance(it, QGraphicsLineItem)}
+
+    ed._bind_to_edge(0, 0)                       # перетаскиванием подписи
+    by_drag = pens(ed)
+    ed._unbind_diameter_at(0)
+
+    monkeypatch.setattr(QInputDialog, "getText",
+                        staticmethod(lambda *a, **kw: ("300", True)))
+    ed._create_diameter_on_edge(0, 0, 0)         # руками
+    by_hand = pens(ed)
+
+    assert by_drag == by_hand, "цвет/толщина зависят от способа привязки"
+    assert len(by_drag) == 1, "метка и поток нарисованы по-разному"

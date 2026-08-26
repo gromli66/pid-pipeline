@@ -89,9 +89,14 @@ COLOR_DIAMETER_LABEL_TEXT = QColor(255, 255, 255, 240)
 # Линии БЕЗ Ду постоянным цветом не красим: в начале работы без Ду весь
 # лист, и заливка на 100% объектов не несёт информации (решение Максима
 # 26.08 — красную подсветку «без Ду» не возвращать).
-COLOR_DIAMETER_OK = QColor(39, 174, 96, 200)            # #27AE60
-COLOR_DIAMETER_CONFLICT = QColor(230, 126, 34, 220)     # #E67E22
-COLOR_DIAMETER_CONFLICT_BG = QColor(230, 126, 34, 200)
+# ⛔ Цвет и толщина выбраны ПРОТИВ базового ребра, а не «просто красиво».
+# Базовое ребро здесь — `COLOR_EDGE` бирюзовое (0,255,220) ШИРИНОЙ 5, и оператор
+# может сменить его на своё. Прежний зелёный шириной 3 поверх бирюзового читался
+# как «подсветка не работает»: тоньше базового и того же семейства.
+# Фиолетовый — исторический цвет диаметра в этом редакторе, от бирюзы далёк.
+COLOR_DIAMETER_OK = QColor(155, 89, 182, 210)           # #9B59B6
+COLOR_DIAMETER_CONFLICT = QColor(231, 76, 60, 230)      # #E74C3C
+COLOR_DIAMETER_CONFLICT_BG = QColor(231, 76, 60, 210)
 # «Ду не требуется» — импульсный тупик к прибору, на чертеже он не
 # подписан. Серым пунктиром: оператору важно видеть, что линию можно
 # пропустить, но она не должна спорить за внимание с рабочими.
@@ -259,7 +264,7 @@ class OcrBindingEditor(QGraphicsView):
     CLICK_THRESHOLD = 25
     EDGE_HIT_THRESHOLD = 25
     TEXT_FONT_SIZE = 9
-    DIAMETER_LINE_W = 3          # толщина подсветки линии с Ду
+    DIAMETER_LINE_W = 8          # толще базового ребра (5), иначе не видно
     # Порог различия клик/drag для Ctrl+ЛКМ по блоку (px) —
     # синхронно с OcrBindHandler.OCR_CLICK_MOVE_THRESHOLD.
     OCR_CLICK_MOVE_THRESHOLD = 4.0
@@ -376,7 +381,6 @@ class OcrBindingEditor(QGraphicsView):
         self._diam_by_edge: dict = {}            # edge_idx -> поля Ду ребра
         self._diam_conflicts: dict = {}          # line_idx -> [значения-претенденты]
         self._diam_current_line = None           # линия под обходом (О-1)
-        self._diam_entry = ""                    # набираемое число в обходе
         self._diam_last_value = None             # последнее значение (О-3)
         self._diam_rules_error = ""              # почему Ду выключены, для оператора
         self._diam_hidden_boxes: set = set()      # боксы, спрятанные привязкой Ду
@@ -1568,13 +1572,11 @@ class OcrBindingEditor(QGraphicsView):
         if self._diam_current_line in pending:
             i = pending.index(self._diam_current_line)
             nxt = pending[(i + 1) % len(pending)]
-        self._diam_entry = ""
         self.set_current_diameter_line(nxt)
         self._center_on_line(nxt)
-        left = len(pending)
-        hint = (" · Enter = %d" % self._diam_last_value) if self._diam_last_value else ""
         self.status_message.emit(
-            "Линия без Ду: осталось %d · наберите число и Enter%s" % (left, hint))
+            "Линия без Ду: осталось %d · Enter — ввести, Пробел — следующая"
+            % len(pending))
         return True
 
     def _center_on_line(self, line_idx: int):
@@ -1586,23 +1588,37 @@ class OcrBindingEditor(QGraphicsView):
         cx = sum(p[1] for p in pts) / len(pts)
         self.centerOn(cx, cy)
 
-    def _commit_diameter_entry(self) -> bool:
-        """Enter в обходе: поставить набранное (или прошлое) значение."""
+    def _ask_diameter_for_current_line(self) -> bool:
+        """Enter в обходе: открыть окно ввода для текущей линии.
+
+        Ввод — в НАСТОЯЩЕМ окне, а не набором в строку состояния: там работает
+        привычная правка (Backspace, выделение, вставка), и оператор видит, что
+        именно набрал. Поле заранее заполнено прошлым значением — Ду на листе
+        повторяются, и чаще всего достаточно нажать Enter второй раз.
+
+        ⛔ Само по себе подтверждение НИКУДА не прыгает: шаг по линиям — только
+        Пробел/F3. Прыжок «за компанию» с вводом оператор назвал ошибкой.
+        """
         if self._diam_current_line is None or self._diameter_lines is None:
-            return False
-        raw = self._diam_entry.strip()
-        value = int(raw) if raw.isdigit() and int(raw) > 0 else self._diam_last_value
-        if not value:
-            self.status_message.emit("Наберите число — прошлого значения ещё нет")
             return False
         group = self._diameter_lines.edges_of_line[self._diam_current_line]
         if not group:
             return False
+        new_val, ok = QInputDialog.getText(
+            self, "Диаметр линии", "Ду (число):",
+            text=str(self._diam_last_value or ""))
+        if not ok:
+            return False
+        value = _first_number(_clean_text(new_val))
+        if value is None:
+            self.status_message.emit("Не число: «%s»" % new_val.strip()[:20])
+            return False
         if not self._add_diameter_mark(group[0], value, "manual", str(value)):
             return False
         self._diam_last_value = value
-        self._diam_entry = ""
-        self.goto_next_line_without_diameter()
+        left = len(self.lines_without_diameter())
+        self.status_message.emit(
+            "Ду %d поставлен · Пробел — следующая (осталось %d)" % (value, left))
         return True
 
     def set_current_diameter_line(self, line_idx):
@@ -3080,22 +3096,14 @@ class OcrBindingEditor(QGraphicsView):
             return False
 
         if key == Qt.Key.Key_Escape:
-            self._diam_entry = ""
             self.set_current_diameter_line(None)
             self.status_message.emit("Обход линий без Ду закончен")
             return True
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            self._commit_diameter_entry()
+            self._ask_diameter_for_current_line()
             return True
-        if key == Qt.Key.Key_Backspace:
-            self._diam_entry = self._diam_entry[:-1]
-            self.status_message.emit("Ду: %s" % (self._diam_entry or "—"))
-            return True
-        text = event.text()
-        if text.isdigit():
-            self._diam_entry = (self._diam_entry + text)[:5]
-            self.status_message.emit("Ду: %s · Enter — поставить" % self._diam_entry)
-            return True
+        # Цифры и Backspace вкладке не перехватываем: набор идёт в окне ввода,
+        # где привычная правка работает сама.
         return False
 
     def mouseDoubleClickEvent(self, event):
