@@ -831,6 +831,9 @@ _TEXT_VERTICAL_RATIO = 1.3
 # Кегль шрифта ≈ короткой стороне блока (перпендикуляр к направлению чтения).
 _TEXT_FONT_RATIO = 0.9
 _TEXT_COLOR = "#000000"
+# Ширина коробки переноса ПРИВЯЗАННОЙ подписи, px (решение Максима 2026-08-26).
+# У свободного блока коробка как была — его собственная рамка.
+BOUND_TEXT_WRAPPING = 80.0
 
 
 class TextStyle(NamedTuple):
@@ -883,7 +886,7 @@ def build_node_kks_map(graph_data: dict) -> dict:
     return kks_map
 
 
-def generate_fxml_text(block: dict):
+def generate_fxml_text(block: dict, wrapping_width: float = None):
     """Непривязанный OCR-блок → <Text>.
 
     Сам блок остаётся на месте (bbox из редактора не меняется) — задаётся только
@@ -900,6 +903,11 @@ def generate_fxml_text(block: dict):
     другого семейства символ шире, и подпись уезжала по X тем сильнее, чем
     длиннее строка. ⚠ `textAlignment` стоял в выгрузке и раньше, но для
     однострочного `<Text>` без `wrappingWidth` он мёртв — потому и жила оценка.
+
+    `wrapping_width` — фиксированная ширина коробки вместо ширины рамки
+    (привязанные подписи, `BOUND_TEXT_WRAPPING`). Коробка центрируется на
+    рамке, поэтому подпись остаётся там, где её привязали. Без параметра
+    формулы дают ровно прежние числа: `cx - w/2 == x1`, `cy + h/2 == y2`.
     """
     bbox = block.get('bbox')
     if not bbox or len(bbox) != 4:
@@ -925,15 +933,15 @@ def generate_fxml_text(block: dict):
         # `wrappingWidth`. Берём W = высоте рамки и сажаем нижний конец на её
         # нижнюю грань: строка ложится ровно вдоль рамки и центрируется в ней
         # средствами формата. Толщина строки центрируется кеглем, не оценкой.
+        wrapping = wrapping_width or h
         layout_x = cx - font_size / 2.0
-        layout_y = y2
-        wrapping = h
+        layout_y = cy + wrapping / 2.0
     else:
         # Горизонтальный: строка занимает всю ширину рамки от её левого края,
         # центрируется внутри неё; по Y — центр рамки минус половина кегля.
-        layout_x = x1
+        wrapping = wrapping_width or w
+        layout_x = cx - wrapping / 2.0
         layout_y = cy - font_size / 2.0
-        wrapping = w
 
     head = (f'        <Text layoutX="{max(0.0, layout_x):.1f}"'
             f' layoutY="{max(0.0, layout_y):.1f}"'

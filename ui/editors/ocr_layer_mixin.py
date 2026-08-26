@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
     QGraphicsRectItem, QGraphicsSimpleTextItem, QGraphicsLineItem,
 )
 
-from modules.graph_to_fxml import TEXT_STYLES
 from ui.editors.mode_handlers.base_handler import ModeHandler
 
 
@@ -38,15 +37,14 @@ _COLOR_TEXT_BG = QColor(0, 0, 0, 140)         # подложка под текс
 _NODE_CENTROID = QColor(52, 152, 219, 230)    # синий центроид (COLOR_CENTROID)
 _NODE_EQUIP_GREY = QColor(235, 235, 235, 245) # серый bbox оборудования (COLOR_EQUIP_GREY)
 _NODE_CONNECTOR = QColor(150, 150, 150, 200)  # серый коннектор (COLOR_CONNECTOR)
-# Кегль подписи текст-блока — из общей таблицы стилей: то же число, которое
-# уйдёт в `<Text>` выгрузки (решение Максима 2026-08-25 №3). Пиксельный размер,
-# а не пунктовый, и ⛔ БЕЗ `_ocr_vis_scale()`: кегль FXML — это em в
-# координатах ХОЛСТА, ровно тех, в которых живёт сцена. Домножение на
-# вписывание растра снова развело бы экран с файлом — а именно оно и стояло
-# здесь: при `_bg_scale` ≈ 0.22 боевого листа подпись на экране шла ~2 px
-# против 40 в файле. Семейство остаётся экранным: Tahoma в клиент не бандлим
-# (решение №7), общий у экрана и выгрузки только кегль.
-_LABEL_PX = int(TEXT_STYLES['text_block'].size)
+# Кегль ФЛАЖКА над блоком — чистый визуал, к выгрузке отношения не имеет
+# (решение Максима 2026-08-26). То же число и та же пропорция, что во вкладке
+# «Привязка текста» (`OcrBindingEditor.TEXT_FONT_SIZE`): там сцена — растр,
+# блок ~50x20 px и подпись меньше блока. В холсте блок ужат в `_bg_scale`
+# (~15x6 px), поэтому кегль домножается на `_ocr_vis_scale()` — как рамка
+# блока ниже. Прежние 18 px из `TEXT_STYLES` держали кегль равным файловому,
+# но в холсте флажок выходил втрое выше своего блока и читаться перестал.
+_LABEL_PT = 9.0
 
 _MIN_BLOCK_SIZE = 5.0
 _BLOCK_Z = 50.0
@@ -195,7 +193,7 @@ class OcrLayerMixin:
         bg = None
         if text:
             font = QFont("DejaVu Sans")
-            font.setPixelSize(_LABEL_PX)
+            font.setPointSizeF(max(1.0, _LABEL_PT * self._ocr_vis_scale()))
             fm = QFontMetricsF(font)
             th = fm.height()
             tw = fm.horizontalAdvance(text)
@@ -655,7 +653,7 @@ class OcrLayerMixin:
             return []
         x1, y1, x2, y2 = [float(v) for v in bbox]
         font = QFont("DejaVu Sans")
-        font.setPixelSize(_LABEL_PX)
+        font.setPointSizeF(max(1.0, _LABEL_PT * self._ocr_vis_scale()))
         fm = QFontMetricsF(font)
         th = fm.height()
         tw = fm.horizontalAdvance(text)
