@@ -71,7 +71,7 @@ BaseGraphEditor          — рендеринг, zoom, hit testing, selection, e
 - **Grid:** `toggle_grid()`, `snap_to_grid()`, `_compute_grid_size()` (по медиане ширины bbox'ов)
 - **Auto-fix:** `auto_fix()` → `auto_fix_graph()` — выравнивание узлов по H/V цепочкам, снимок SnapshotCommand
 - **KKS:** hover tooltip по bbox; `_open_kks_edit_dialog()` с нормализацией через `KksMatcher`; toggle KKS labels
-- **Diameter:** `_open_diameter_edit_dialog()` → `_propagate_all_diameters()` через `TextBinder`
+- **Diameter:** ⛔ правки Ду в «Ручной правке» НЕТ (решение заказчика 26.08.2026). Она писала Ду в холст, а холст уходит в `graph_canvas`, тогда как `.prtx` собирается из `graph_validated` и назад холст не пишется — до расчётной схемы правка не доезжала. Диаметр правится только во вкладке «Привязка текста» (`modules/binding/diameter_lines.py`). На холсте он лишь ПОКАЗЫВАЕТСЯ подписью (`_create_edge_label`, видна в состоянии `'ocr'`).
 
 Переопределяет хуки Base: `_get_edge_color()` (цвет по перпендикулярности/диаметру), `_get_equipment_brush()` (KKS bound → зелёный, no KKS → красный), `_get_edge_pen()` (утолщение для bad edges), `_before_draw_all_edges()` / `_before_edge_draw()` (perp scores), `_reset_scene_state()` (очистка Advanced dict'ов), `_after_statistics_update()` (multi-select visuals), `_on_ctrl_lmb_click()` (делегация в handler), `_start_ctrl_drag()` / `_update_ctrl_drag()` / `_end_ctrl_drag()` (node drag), `_ctrl_right_click_delete()` (с batch delete если элемент в выделении).
 

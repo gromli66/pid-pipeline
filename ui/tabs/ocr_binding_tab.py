@@ -108,6 +108,50 @@ _ARTIFACTS = (
 # Sub-tab toolbar widget (shared toolbar template)
 # =====================================================================
 
+#: Инструкция по диаметрам: tooltip кнопки и текст окна — один и тот же,
+#: чтобы подсказка на наведении и по клику не разъезжались.
+DIAMETER_HELP = """Диаметры (Ду) — как проставить
+
+Подписью с чертежа:
+• Ctrl+drag подписи на трубу — Ду встаёт на ВСЮ линию сразу;
+• «Ду50», «Dy150», «0y50» берутся без вопроса;
+• «VTB-107», «РОУ.С 25/13» — спросим, какое число диаметр;
+• ответ «не диаметр» — к трубе не привяжется ничего;
+• привязанный бокс исчезает, число остаётся квадратом на трубе.
+
+Вручную:
+• Ctrl+2×клик по трубе — ввести число;
+• Ctrl+2×клик по квадрату с числом — поправить;
+• пустое значение при правке — снять Ду.
+
+Обход линий без Ду:
+• Пробел или F3 — следующая линия, от самой длинной;
+• Enter — окно ввода, поле уже с прошлым числом;
+• Enter в окне — поставить и сразу шагнуть дальше;
+• Esc — выйти из обхода.
+
+Снять:
+• Ctrl+ПКМ по линии — снять метку, бокс вернётся на своё место;
+• Ctrl+Z — отменить последнее действие.
+
+Цвета:
+• фиолетовая линия и квадрат — Ду есть (одинаково, как бы ни привязали);
+• красный квадрат — на линию привязаны РАЗНЫЕ Ду, клик по нему — выбрать;
+• серый пунктир — Ду не требуется;
+• жёлтая линия — та, на которой стоит обход."""
+
+#: Что значат цифры счётчика покрытия.
+STATS_HELP = """Покрытие диаметрами.
+
+• линии N/M — у скольких линий из требующих Ду он уже есть;
+• длина % — какая доля ДЛИНЫ труб закрыта: одна длинная магистраль
+  весит больше десятка коротких перемычек, поэтому смотреть надо сюда;
+• не требуется — линии, которым Ду не нужен по классу (дренажи и т.п.).
+
+Линия — это цепочка труб между развилками и арматурой: один Ду
+закрывает её целиком."""
+
+
 class _SubTabToolbar(QWidget):
     """Панель OCR: Добавить бокс | Распознать | ...инструкция... | Отменить | Сохранить | Подтвердить."""
 
@@ -236,7 +280,6 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
         self._kks_config = None
         self._cls_to_kks_config = None
         self._diameter_matcher = None
-        self._auto_bind_diameters_data = None
         self._retry_count = 0
 
         #: артефакты, чью серверную копию прочитать не удалось: запись в них
@@ -245,7 +288,6 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
 
         # Confirmation flags per sub-tab
         self._kks_confirmed = False
-        self._diam_confirmed = False
 
         # Block ownership: idx → subtab name
         self._block_subtab: dict[int, str] = {}  # "kks"/"diameter"/"other"
@@ -292,10 +334,22 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
         self.btn_recognize.clicked.connect(self._run_recognize)
         toolbar.addWidget(self.btn_recognize)
 
+        # Жесты Ду нигде не подписаны, а их десяток: без этой подсказки
+        # оператор узнаёт их только из чужого рассказа. Кнопка ФИКТИВНАЯ —
+        # ничего не вызывает, живёт ради tooltip'а (решение оператора 26.08):
+        # лишнее окно в тулбаре не нужно, а место для наведения — нужно.
+        # `NoFocus` обязателен: сфокусированная кнопка перехватила бы Пробел и
+        # Enter, а это клавиши обхода линий без Ду.
+        self.btn_diam_help = QPushButton("Ø")
+        self.btn_diam_help.setToolTip(DIAMETER_HELP)
+        self.btn_diam_help.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        toolbar.addWidget(self.btn_diam_help)
+
         toolbar.addStretch()
 
         self.stats_label = QLabel("")
         self.stats_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        self.stats_label.setToolTip(STATS_HELP)
         toolbar.addWidget(self.stats_label)
 
         self.btn_undo = QPushButton("Undo")
@@ -358,39 +412,17 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
         # П3: подвкладка KKS убрана
         # self.sub_tabs.addTab(self.kks_toolbar, "🏷 KKS")
 
-        # === Sub-tab 2: Diameter ===
-        # Родитель и `hide()` — по той же причине, что у `kks_toolbar` выше.
-        self.diam_toolbar = _SubTabToolbar(self)
-        self.diam_toolbar.hide()
-        self.diam_toolbar.hint_label.setText(
-            "Ctrl+drag: привязка к ребру | Ctrl+ПКМ: отвязка | Ctrl+2×клик: текст"
-        )
-        self.btn_auto_bind_diam = QPushButton("🔗 Авто-привязка Ø")
-        self.btn_auto_bind_diam.setToolTip("Привязать диаметры к рёбрам графа автоматически")
-        self.btn_auto_bind_diam.clicked.connect(self._run_auto_bind_diameters)
-        self.diam_toolbar.custom_layout.addWidget(self.btn_auto_bind_diam)
-
-        self.btn_confirm_diam = QPushButton("✅ Подтвердить Ø")
-        self.btn_confirm_diam.setToolTip("Подтвердить привязку диаметров")
-        self.btn_confirm_diam.setStyleSheet(
-            "QPushButton { background-color: #2E86C1; color: white; "
-            "font-weight: bold; padding: 4px 12px; border-radius: 3px; }"
-            "QPushButton:hover { background-color: #2874A6; }"
-        )
-        self.btn_confirm_diam.clicked.connect(self._confirm_diam_step)
-        self.diam_toolbar.custom_layout.addWidget(self.btn_confirm_diam)
-
-        self.btn_clear_diam = QPushButton("🗑 Очистить Ø")
-        self.btn_clear_diam.setToolTip("Очистить все привязки диаметров")
-        self.btn_clear_diam.clicked.connect(self._clear_diam_bindings)
-        self.diam_toolbar.custom_layout.addWidget(self.btn_clear_diam)
-
-        self.diam_toolbar.add_clicked.connect(lambda: self._toggle_add_mode(self.diam_toolbar))
-        self.diam_toolbar.delete_clicked.connect(lambda: self._toggle_del_mode(self.diam_toolbar))
-        self.diam_toolbar.move_clicked.connect(lambda: self._toggle_move_mode(self.diam_toolbar))
-        self.diam_toolbar.undo_clicked.connect(self._undo)
-        # П3: подвкладка Диаметр убрана
-        # self.sub_tabs.addTab(self.diam_toolbar, "Ø Диаметр")
+        # ⛔ Тулбар «Ø Диаметр» СНЯТ (решение Максима 26.08.2026: подвкладок
+        # не делаем). Он висел сиротой: `sub_tabs` в коде нет, оба `addTab`
+        # закомментированы, в раскладку он не попадал никогда. Вместе с ним ушли
+        # «Авто-привязка Ø» (решение №1 — авто-привязки не будет, а живая кнопка
+        # под выключенным решением зальёт лист автоматикой), «Подтвердить Ø»
+        # (`pass`, статус диаграммы не двигала) и «Очистить Ø» (решение 26.08:
+        # не нужна, отмена — Ctrl+ПКМ и Undo).
+        #
+        # Ду теперь живёт в жестах редактора: Ctrl+drag подписи на ребро,
+        # Ctrl+2×клик — ввод/правка, Ctrl+ПКМ — снять с линии
+        # (`ui/editors/ocr_binding_editor.py`, `modules/binding/diameter_lines.py`).
 
         # kks/diam-тулбары создаются выше (не показываются) — тулбар OCR построен в начале _setup_ui
 
@@ -402,6 +434,7 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
         self.editor.binding_changed.connect(self._on_binding_changed)
         self.editor.blocks_changed.connect(self._on_blocks_changed)
         self.editor.status_message.connect(self._on_editor_status)
+        self.editor.diameter_stats_changed.connect(self._update_current_stats)
         self.editor.mode_changed.connect(self._on_mode_changed)
         self.editor.validation_exit_requested.connect(self._on_validation_esc)
         if self._project_config_path:
@@ -612,20 +645,64 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
             status += " | ✅ Подтверждено"
         self.kks_toolbar.stats_label.setText(status)
 
-    def _update_diam_stats(self):
-        diam_total = len(self._diameter_indices)
-        diam_bound = len(self.editor.get_diameter_bindings()) if self.editor.isVisible() else 0
-        status = f"Диаметров: {diam_total} | Привязано: {diam_bound}"
-        if self._diam_confirmed:
-            status += " | ✅ Подтверждено"
-        self.diam_toolbar.stats_label.setText(status)
+    def _confirm_diameter_conflicts(self) -> bool:
+        """Замок: не выпускать схему с неразрешёнными конфликтами Ду.
+
+        Конфликт — линия, на которой висят два разных диаметра. Она уедет
+        проставленной ЧАСТИЧНО: залиты только помеченные рёбра, остальные
+        пустые, а пустое ребро в расчётной схеме — заводские 0.3 м, то есть
+        честный Ду300 в САПФИР. Ошибка молчаливая и дорогая, а снимается одним
+        кликом по красному квадрату, поэтому дверь закрыта наглухо: сначала
+        разрешить, потом подтверждать.
+        """
+        conflicts = self.editor.diameter_conflicts()
+        if not conflicts:
+            return True
+        where = ", ".join("Ø" + "/".join(str(v) for v in vals)
+                          for _li, vals in conflicts[:5])
+        if len(conflicts) > 5:
+            where += ", …"
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Разные Ду на одной линии")
+        box.setText("Линий с двумя разными диаметрами: %d (%s)."
+                    % (len(conflicts), where))
+        box.setInformativeText(
+            "Такая линия уедет проставленной наполовину, а пустое ребро в "
+            "расчётной схеме превращается в заводской Ду300. Кликните по "
+            "красному квадрату на линии, выберите нужное значение — и "
+            "подтвердите снова.")
+        box.exec()
+        self.status_label.setText(
+            "Подтверждение остановлено: линий с разными Ду — %d" % len(conflicts))
+        return False
+
+    def _update_diameter_stats(self):
+        """Строка покрытия Ду в общем `stats_label` (О-8).
+
+        Подвкладок нет (решение 26.08), отдельной панели тоже: счётчик живёт в
+        той же строке, что и остальные. Список непокрытых линий не нужен —
+        режим обхода И ЕСТЬ этот список, только без прокрутки глазами.
+        """
+        c = self.editor.diameter_coverage()
+        if not c["lines_need"]:
+            self._diam_stats_text = ""
+            return
+        pct = 100.0 * c["len_done"] / c["len_need"] if c["len_need"] else 0.0
+        parts = ["Ду: линии %d/%d" % (c["lines_done"], c["lines_need"]),
+                 "длина %.0f%%" % pct]
+        if c["lines_skip"]:
+            parts.append("не требуется %d" % c["lines_skip"])
+        self._diam_stats_text = " · ".join(parts)
 
     def _update_other_stats(self):
         other_total = len(self._other_indices)
         bound = len(self._bindings)
-        self.stats_label.setText(
-            f"Прочих блоков: {other_total} | Привязок: {bound}"
-        )
+        self._update_diameter_stats()
+        text = f"Прочих блоков: {other_total} | Привязок: {bound}"
+        if getattr(self, "_diam_stats_text", ""):
+            text += " | " + self._diam_stats_text
+        self.stats_label.setText(text)
 
     # =================================================================
     # Editor callbacks
@@ -863,6 +940,13 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
                 node_contours=node_contours,
             )
             self.apply_saved_appearance()
+
+            # Метки Ду (и KKS) живут в самом графе — поднять их сразу после
+            # загрузки. ⛔ Вызов был снят вместе с подвкладками 2026-07-01 и
+            # не вернулся: без него вкладка открывалась пустой, а следующее
+            # сохранение сносило Ду с сервера (`_stamp_diameters` без меток
+            # чистит своё). Замер редтима: сеанс 2 уезжал на сервер с `[{}, {}]`.
+            self._restore_bindings_from_graph()
 
             # П3: авто-классификация KKS/диаметр и цветовая валидация убраны
             self.loading_label.setVisible(False)
@@ -1106,185 +1190,12 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
     # Diameter sub-tab actions
     # =================================================================
 
-    def _run_auto_bind_diameters(self):
-        """Привязать диаметры к рёбрам графа."""
-        if not self._ocr_blocks:
-            QMessageBox.warning(self, "Привязка Ø", "Нет OCR-блоков для привязки диаметров")
-            return
-        self._auto_bind_diameters_data = None
-        self._auto_bind_diameters()
+    # ⛔ `_run_auto_bind_diameters` / `_auto_bind_diameters` сняты: авто-привязка
+    # Ø выключена решением заказчика, а её единственная кнопка жила в
+    # тулбаре-сироте. Вместе с ними осиротел `TextBinder` целиком.
+    # `_confirm_diam_step` был `pass` — статус диаграммы он не двигал, этап
+    # подтверждает `_on_confirm` на главном тулбаре.
 
-        if self._auto_bind_diameters_data:
-            d, p, c = self._auto_bind_diameters_data
-            self.editor.set_diameter_bindings(d, p, c)
-            self._auto_bind_diameters_data = None
-            self._saved = False
-            self._update_diam_stats()
-
-    def _auto_bind_diameters(self):
-        """Автоматическая привязка диаметров OCR к рёбрам графа через TextBinder."""
-        edges = self._graph_data.get("links", [])
-        if not edges or not self._ocr_blocks:
-            return
-
-        try:
-            from modules.text_binding.config import TextRecognitionConfig
-            from modules.text_binding.binder import TextBinder
-            from modules.text_binding.matcher import DiameterMatcher
-
-            if self._project_config_path:
-                try:
-                    cfg = TextRecognitionConfig.from_project_yaml(self._project_config_path)
-                except Exception as exc:
-                    logger.warning("Failed to load config from %s: %s — using defaults",
-                                   self._project_config_path, exc)
-                    cfg = TextRecognitionConfig()
-            else:
-                logger.warning("No project_config_path — using default TextRecognitionConfig (no patterns)")
-                cfg = TextRecognitionConfig()
-
-            # domain_profile (v2.0) может содержать ⌀/Ø паттерны
-            # которых нет в legacy text_recognition
-            bcfg = getattr(self, '_domain_binding_config', None)
-
-            if not cfg.diameter.patterns and not bcfg:
-                logger.info("No diameter patterns configured, skipping auto-bind")
-                return
-
-            binder = TextBinder(cfg)
-
-            # Override diameter matcher если domain_profile имеет свои паттерны
-            if bcfg and "diameter" in bcfg.code_types:
-                domain_diam_matcher = DiameterMatcher(bcfg)
-                binder._diameter_matcher = domain_diam_matcher
-                logger.info("Using diameter patterns from domain_profile")
-
-            report = binder.bind_diameters(self._ocr_blocks, edges)
-
-            self.editor._text_binder = binder
-            self.editor._diameter_matcher = binder._diameter_matcher
-            self._diameter_matcher = binder._diameter_matcher
-
-            if report.bindings:
-                import re as _re
-                diameter_dicts = []
-                split_happened = False
-
-                real_blocks = [
-                    self._ocr_blocks[d.ocr_block_idx]
-                    for d in report.bindings
-                    if d.ocr_block_idx < len(self._ocr_blocks)
-                ]
-                if real_blocks:
-                    avg_w = sum(b["bbox"][2] - b["bbox"][0] for b in real_blocks) / len(real_blocks)
-                    avg_h = sum(b["bbox"][3] - b["bbox"][1] for b in real_blocks) / len(real_blocks)
-                else:
-                    avg_w, avg_h = 60, 25
-                avg_w = max(avg_w, 40)
-                avg_h = max(avg_h, 20)
-
-                for db in report.bindings:
-                    ocr_idx = db.ocr_block_idx
-                    block = self._ocr_blocks[ocr_idx]
-                    full_text = block.get("text", "").strip()
-
-                    esc_prefix = _re.escape(db.prefix)
-                    esc_suffix = _re.escape(db.suffix) if db.suffix else ""
-                    remove_pat = esc_prefix + r'\s*' + str(db.diameter) + (r'\s*' + esc_suffix if esc_suffix else '')
-                    remaining = _re.sub(remove_pat, '', full_text, count=1, flags=_re.IGNORECASE).strip()
-                    remaining = _re.sub(r'^[\s,;.\-]+|[\s,;.\-]+$', '', remaining)
-
-                    diam_ocr_idx = ocr_idx  # по умолчанию — исходный блок
-                    if remaining:
-                        block["text"] = remaining
-                        bbox = block.get("bbox", [0, 0, 0, 0])
-                        bx2 = bbox[2]
-                        by1 = bbox[1]
-                        new_bbox = [bx2 + 2, by1, bx2 + 2 + avg_w, by1 + avg_h]
-                        new_idx = len(self._ocr_blocks)
-                        self._ocr_blocks.append({
-                            "bbox": new_bbox, "text": db.text,
-                            "confidence": db.confidence,
-                        })
-                        # Новый блок → diameter subtab
-                        self._block_subtab[new_idx] = "diameter"
-                        split_happened = True
-                        diam_ocr_idx = new_idx
-                        logger.info("Auto-split OCR[%d]: '%s' → '%s' + '%s'",
-                                    ocr_idx, full_text, remaining, db.text)
-
-                    diameter_dicts.append({
-                        "ocr_block_idx": diam_ocr_idx,
-                        "edge_idx": db.edge_idx,
-                        "edge_id": db.edge_id,
-                        "edge_key": _sorted_edge_key(db.edge_key),
-                        "text": db.text,
-                        "prefix": db.prefix,
-                        "diameter": db.diameter,
-                        "suffix": db.suffix,
-                        "confidence": db.confidence,
-                    })
-
-                if split_happened:
-                    self.editor._ocr_blocks = self._ocr_blocks
-                    for items_dict in (self.editor._ocr_items, self.editor._ocr_text_items,
-                                       self.editor._ocr_text_bg_items, self.editor._ocr_inner_text_items):
-                        for item in items_dict.values():
-                            self.editor.scene.removeItem(item)
-                        items_dict.clear()
-                    self.editor._draw_ocr_blocks()
-                    self.editor._redraw_all_colors()
-                    # Rebuild indices after split
-                    self._rebuild_indices_from_subtab()
-                    logger.info("Editor notified about split blocks")
-
-                nodes = self._graph_data.get("nodes", [])
-                prop_report = binder.propagate_diameters(nodes, edges, report.bindings)
-
-                propagated_dicts = []
-                for pd in prop_report.propagated:
-                    propagated_dicts.append({
-                        "edge_idx": pd.edge_idx,
-                        "edge_id": pd.edge_id,
-                        "edge_key": _sorted_edge_key(pd.edge_key),
-                        "text": pd.text,
-                        "prefix": pd.prefix,
-                        "diameter": pd.diameter,
-                        "suffix": pd.suffix,
-                        "confidence": pd.confidence,
-                        "propagated": True,
-                    })
-
-                conflict_dicts = []
-                for cf in prop_report.conflicts:
-                    conflict_dicts.append({
-                        "edge_idx": cf.edge_idx,
-                        "edge_id": cf.edge_id,
-                        "edge_key": _sorted_edge_key(cf.edge_key),
-                        "candidates": cf.candidates,
-                    })
-
-                self._auto_bind_diameters_data = (diameter_dicts, propagated_dicts, conflict_dicts)
-                conflicts_msg = f", {len(conflict_dicts)} конфликтов" if conflict_dicts else ""
-                self.status_label.setText(
-                    f"Диаметры: {report.bound_count} OCR + "
-                    f"{len(prop_report.propagated)} распространено{conflicts_msg}"
-                )
-            else:
-                logger.info("Diameter auto-bind: no bindings found")
-
-        except ImportError as exc:
-            logger.warning("text_binding module not available: %s", exc)
-        except Exception as exc:
-            logger.error("Diameter auto-bind failed: %s", exc, exc_info=True)
-
-    def _confirm_diam_step(self):
-        """Подтвердить привязку диаметров, перейти к «Другое»."""
-        self._diam_confirmed = True
-        self._saved = False
-        self._update_diam_stats()
-        self.status_label.setText("✅ Привязка диаметров подтверждена")
-        pass  # (подвкладки убраны)
 
     # =================================================================
     # Other sub-tab / clear / modes
@@ -1304,21 +1215,6 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
                 self.editor.set_kks_bindings([])
             self._update_current_stats()
 
-    def _clear_diam_bindings(self):
-        """Очистить только привязки диаметров."""
-        reply = QMessageBox.question(
-            self, "Очистка Ø",
-            "Удалить все привязки диаметров?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            self._auto_bind_diameters_data = None
-            self._diam_confirmed = False
-            self._saved = False
-            if self.editor.isVisible():
-                self.editor.set_diameter_bindings([], [])
-            self._update_current_stats()
-
     def _clear_other_bindings(self):
         """Очистить прочие привязки (text→node)."""
         reply = QMessageBox.question(
@@ -1335,7 +1231,7 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
 
     def _reset_all_modes(self):
         """Сброс всех режимов → idle (pan)."""
-        for tb in (self.kks_toolbar, self.diam_toolbar):
+        for tb in (self.kks_toolbar,):
             tb.reset_modes()
         self.btn_add.setChecked(False)
         self.editor._add_mode = False
@@ -1403,15 +1299,21 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
 
         # --- KKS ---
         kks_dicts = []
+        guessed = 0
         for node in nodes:
             kks_full = node.get("kks_full")
             if not kks_full:
                 continue
             node_id = node.get("id", "")
+            # ⛔ Восстанавливаем ТОЛЬКО записанную связь. Прежде здесь стоял
+            # `_find_ocr_near_node` — поиск ближайшего блока в 100 px, — и он
+            # при открытии вкладки СОЗДАВАЛ привязки, которых оператор не делал.
+            # Это не восстановление, а авто-привязка по догадке, а её решением
+            # заказчика быть не должно. Если граф не помнит, какой блок дал KKS,
+            # связь не выдумываем: сам `kks_full` на узле при этом цел.
             ocr_idx = node.get("kks_ocr_block_idx", -1)
-            if ocr_idx < 0 or ocr_idx >= n_blocks:
-                ocr_idx = self._find_ocr_near_node(node, ocr_blocks)
-            if ocr_idx is None or ocr_idx < 0:
+            if not isinstance(ocr_idx, int) or ocr_idx < 0 or ocr_idx >= n_blocks:
+                guessed += 1
                 continue
             kks_dicts.append({
                 "ocr_block_idx": ocr_idx,
@@ -1427,126 +1329,94 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
 
         if kks_dicts:
             self.editor.set_kks_bindings(kks_dicts)
-            logger.info("Restored %d KKS bindings from graph", len(kks_dicts))
+            logger.info("Восстановлено KKS-привязок из графа: %d", len(kks_dicts))
+        if guessed:
+            logger.info("Узлов с KKS без записанного блока: %d — связь не "
+                        "восстановлена (угадывать блок нельзя)", guessed)
 
         # --- Диаметры ---
-        diameter_dicts = []
-        seen_edge_keys = set()
-        for edge_idx, edge in enumerate(edges):
-            diam_text = edge.get("diameter_text")
-            if not diam_text:
-                continue
-            src, tgt = edge.get("source", ""), edge.get("target", "")
-            edge_key = f"{min(src, tgt)}|{max(src, tgt)}"
-            if edge_key in seen_edge_keys:
-                continue
-            seen_edge_keys.add(edge_key)
+        # Хранилище меток одно — сам граф. Второго (записи в `ocr_binding.json`)
+        # сознательно нет: два ответа на вопрос «что показать при открытии»
+        # дают дубли и расхождения.
+        #
+        # Поток (`diameter_source == "line"`) метками не считается и не
+        # восстанавливается — он пересчитывается по правилу линии. Хранить его
+        # было нельзя: после правки графа он устаревал молча.
+        #
+        # Связь метки с ОКР-блоком (`ocr_block_idx`) при перезагрузке не
+        # восстанавливается: угадывать блок по тексту и расстоянию значит иногда
+        # погасить ЧУЖОЙ блок. Цена — после открытия исходный текст показан в
+        # полную силу, что оператору скорее на пользу.
+        from modules.binding.diameter_lines import marks_from_edges
 
-            # Найти OCR-блок соответствующий этому диаметру
-            ocr_block_idx = self._find_diameter_ocr_block(
-                edge, diam_text, edge.get("diameter_value", 0), ocr_blocks
-            )
+        marks = marks_from_edges(edges)
+        if marks:
+            self.editor.set_diameter_marks(marks)
+            logger.info("Восстановлено меток Ду из графа: %d", len(marks))
 
-            diameter_dicts.append({
-                "edge_idx": edge_idx,
-                "edge_id": edge.get("id", ""),
-                "edge_key": edge_key,
-                "text": diam_text,
-                "prefix": edge.get("diameter_prefix", ""),
-                "diameter": edge.get("diameter_value", 0),
-                "suffix": edge.get("diameter_suffix", ""),
-                "confidence": edge.get("diameter_confidence", 1.0),
-                "propagated": edge.get("diameter_propagated", False),
-                "ocr_block_idx": ocr_block_idx,
-            })
 
-        if diameter_dicts:
-            direct = [d for d in diameter_dicts if not d.get("propagated")]
-            propagated = [d for d in diameter_dicts if d.get("propagated")]
-            self.editor.set_diameter_bindings(direct, propagated)
-            logger.info("Restored %d diameter bindings from graph (%d direct, %d propagated)",
-                        len(diameter_dicts), len(direct), len(propagated))
+    # ⛔ `_find_ocr_near_node` снят: он искал «ближайший блок в 100 px» и
+    # создавал этим KKS-привязки, которых оператор не делал. Восстановление
+    # работает только по ЗАПИСАННОЙ связи (`kks_ocr_block_idx`).
 
-    def _find_ocr_near_node(self, node: dict, ocr_blocks: list) -> Optional[int]:
-        """Fallback: найти ближайший OCR-блок к узлу."""
-        import re as _re
-        _diam_re = _re.compile(r'^(Dy|DN|Ду|ДУ)\s*\d', _re.IGNORECASE)
-        node_bbox = node.get("bbox")
-        if not node_bbox or len(node_bbox) != 4:
-            return None
-        best_idx = None
-        best_dist = 100
-        for idx, block in enumerate(ocr_blocks):
-            if block.get("merged_into") is not None:
-                continue
-            text = block.get("text", "").strip()
-            if len(text) < 3:
-                continue
-            if _diam_re.match(text):
-                continue
-            bbox = block.get("bbox")
-            if not bbox or len(bbox) != 4:
-                continue
-            dist = _bbox_to_bbox_dist(bbox, node_bbox)
-            if dist < best_dist:
-                best_dist = dist
-                best_idx = idx
-        return best_idx
 
-    def _find_diameter_ocr_block(self, edge: dict, diam_text: str,
-                                  diam_value: int, ocr_blocks: list) -> Optional[int]:
-        """Найти OCR-блок диаметра, соответствующий ребру.
+    #: Сколько линий уехало на сервер с конфликтом Ду — для строки состояния.
+    _diameter_conflicts = 0
 
-        Ищет блок с текстом, содержащим значение диаметра (например 'Dy100'),
-        ближайший к середине ребра.
+    def _stamp_diameters(self) -> int:
+        """Записать Ду в рёбра графа: метки оператора + поток по линиям.
+
+        Разбиение считается ЗАНОВО от того графа, который сейчас уходит на диск,
+        а не берётся готовым у редактора: `Lines` держит индексы рёбер, и если
+        списки успели разойтись, Ду лёг бы на чужие рёбра. Расхождение поймал бы
+        отпечаток (`LinesOutOfDateError`), но дешевле его не создавать.
+
+        Чужие записи Ду (источник не наш) не трогаются — ни при записи, ни при
+        очистке: снести диаметр, которого мы не ставили, значит молча стереть
+        чью-то работу.
         """
-        import re as _re
+        from modules.binding.diameter_lines import (
+            apply_marks, build_lines, clear_diameters,
+        )
 
-        # Середина ребра
-        sp = edge.get("source_point")
-        tp = edge.get("target_point")
-        if not sp or not tp:
-            return None
-        wps = edge.get("waypoints", [])
-        if wps:
-            mid = wps[len(wps) // 2]
-            emx, emy = mid[1], mid[0]
-        else:
-            emx = (sp[1] + tp[1]) / 2
-            emy = (sp[0] + tp[0]) / 2
+        edges = self._graph_data.get("links") or []
+        nodes = self._graph_data.get("nodes") or []
+        if not edges or not getattr(self.editor, "_graph_edges", None):
+            # Редактор не загружен — своего мнения о диаметрах у нас нет,
+            # и чистить чужую разметку не за что.
+            return 0
 
-        # Паттерн для поиска: текст содержит число диаметра
-        diam_str = str(diam_value) if diam_value else ""
-        best_idx = None
-        best_dist = float("inf")
+        marks = self.editor.get_diameter_marks()
+        if not marks:
+            kept = clear_diameters(edges)
+            if kept:
+                logger.info("Ду: своих меток нет, чужих записей оставлено %d", kept)
+            return 0
 
-        for idx, block in enumerate(ocr_blocks):
-            if block.get("merged_into") is not None:
-                continue
-            text = block.get("text", "").strip()
-            if not text:
-                continue
-            # Текст должен содержать значение диаметра
-            if diam_str and diam_str not in text:
-                continue
-            # Текст должен быть похож на диаметр (Dy/DN/Ду/Dv + число)
-            if not _re.search(r'(?:Dy|DN|Ду|ДУ|Dv)\s*\d', text, _re.IGNORECASE):
-                continue
-            bbox = block.get("bbox")
-            if not bbox or len(bbox) != 4:
-                continue
-            bcx = (bbox[0] + bbox[2]) / 2
-            bcy = (bbox[1] + bbox[3]) / 2
-            dist = ((bcx - emx) ** 2 + (bcy - emy) ** 2) ** 0.5
-            if dist < best_dist:
-                best_dist = dist
-                best_idx = idx
+        rules = self.editor._diameter_line_rules()
+        if rules is None:
+            logger.error("Ду: таблица классов не прочитана — диаметры НЕ записаны, "
+                         "чтобы не сохранить их по неверному правилу")
+            return 0
 
-        return best_idx
+        lines_ = build_lines(nodes, edges, rules)
+        report = apply_marks(edges, lines_, marks, nodes)
 
-    # =================================================================
-    # Config helpers
-    # =================================================================
+        self._diameter_conflicts = len(report.conflicts)
+        if report.conflicts:
+            logger.warning("Ду: линий с двумя разными значениями: %d %s",
+                           len(report.conflicts), report.conflicts[:5])
+        if report.orphan_marks:
+            logger.warning("Ду: меток на исчезнувших рёбрах: %d %s",
+                           len(report.orphan_marks), report.orphan_marks[:5])
+        if report.ineffective_marks:
+            logger.warning("Ду: метки ничего не изменили (линия занята чужой "
+                           "записью): %s", report.ineffective_marks[:5])
+        logger.info("Ду: меток %d -> линий %d, рёбер %d (чужих оставлено %d)",
+                    len(marks), report.lines_covered, report.edges_stamped,
+                    report.kept_foreign_edges)
+        return report.edges_stamped
+
 
     def _try_load_domain_binding_config(self):
         """Попробовать загрузить DomainBindingConfig из domain_profile.yaml.
@@ -1749,38 +1619,8 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
             self.api_client.save_ocr_binding(self.uid, binding_path)
 
             # === 3. Записать диаметры в рёбра графа ===
-            diameter_bindings = self.editor.get_diameter_bindings()
-            propagated = self.editor._propagated_diameters
-            diameter_count = 0
-            if self._graph_data.get("links"):
-                diam_by_edge_key = {}
-                for db in (diameter_bindings or []):
-                    ek = db.get("edge_key")
-                    if ek:
-                        diam_by_edge_key[ek] = db
-                for pd in (propagated or []):
-                    ek = pd.get("edge_key")
-                    if ek and ek not in diam_by_edge_key:
-                        diam_by_edge_key[ek] = pd
+            diameter_count = self._stamp_diameters()
 
-                for edge in self._graph_data["links"]:
-                    src, tgt = edge.get("source", ""), edge.get("target", "")
-                    ek = f"{min(src, tgt)}|{max(src, tgt)}"
-                    if ek in diam_by_edge_key:
-                        db = diam_by_edge_key[ek]
-                        edge["diameter_text"] = db.get("text", "")
-                        edge["diameter_value"] = db.get("diameter", 0)
-                        edge["diameter_prefix"] = db.get("prefix", "")
-                        edge["diameter_suffix"] = db.get("suffix", "")
-                        edge["diameter_confidence"] = db.get("confidence", 1.0)
-                        edge["diameter_propagated"] = bool(db.get("propagated", False))
-                        edge.pop("diameter_ocr_block_idx", None)
-                        diameter_count += 1
-                    else:
-                        for key in ("diameter_text", "diameter_value",
-                                    "diameter_prefix", "diameter_suffix",
-                                    "diameter_confidence", "diameter_propagated"):
-                            edge.pop(key, None)
 
             # === 4. Записать KKS в узлы графа ===
             kks_bindings = self.editor.get_kks_bindings()
@@ -1860,6 +1700,12 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
                 parts.append(f"{diameter_count} диаметров")
             if kks_count:
                 parts.append(f"{kks_count} KKS")
+            # Конфликт Ду уезжает на сервер как есть (каждое помеченное ребро
+            # при своём значении), и оператор обязан это увидеть: линия с двумя
+            # диаметрами превращается в расчётной схеме в канал БЕЗ диаметра,
+            # то есть в заводские 0.3 м = Ду300.
+            if self._diameter_conflicts:
+                parts.append(f"⚠ {self._diameter_conflicts} линий с двумя Ду")
             self.status_label.setText(f"✅ Сохранено: {', '.join(parts)}")
             return True
 
@@ -1890,6 +1736,8 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
     @Slot()
     def _on_confirm(self):
         """Финальное подтверждение: сохранить + применить к графу + emit confirmed."""
+        if not self._confirm_diameter_conflicts():
+            return
         if not self._save_binding():
             return
 
@@ -1929,10 +1777,10 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
     # Public accessors
     # =================================================================
 
-    def get_propagated_diameters(self) -> list[dict]:
-        if self.editor.isVisible():
-            return self.editor._propagated_diameters or []
-        return []
+    # ⛔ `get_propagated_diameters` снят вместе со свойством, которое он читал:
+    # вызывающих не было ни одного. Поток по линии больше не хранится — он
+    # вычисляется при каждой правке, и «отдать его наружу» значило бы отдать
+    # снимок, устаревающий на следующем жесте.
 
     # =================================================================
     # Cleanup

@@ -39,6 +39,31 @@ LICENSE_KEY_FILE = ".S$lk$.bin"
 _lock = threading.Lock()
 
 
+def _box_stamp() -> dict:
+    """Версия коробки, из которой собран образ: `box.commit` кладёт build.ps1.
+
+    Отдаётся в /health, чтобы по работающему сервису можно было установить,
+    какой конвертер внутри. Файла может не быть — образ, собранный до этой
+    правки, тогда честно скажет пустое, а не соврёт.
+    """
+    out: dict = {}
+    try:
+        # utf-8-sig: Set-Content -Encoding utf8 в Windows PowerShell 5.1
+        # пишет BOM, и без этого первый ключ приехал бы с ним склеенным.
+        with open("/opt/box/box.commit", encoding="utf-8-sig") as f:
+            for line in f:
+                key, _, value = line.strip().partition("=")
+                if key:
+                    out[key] = value
+    except OSError:
+        pass
+    return out
+
+
+#: Считается один раз: файл в образе неизменен.
+BOX = _box_stamp()
+
+
 class BuildError(Exception):
     """Не собрали .prtx. `code` — HTTP-статус ответа."""
 
@@ -158,7 +183,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802 — имя диктует BaseHTTPRequestHandler
         if self.path == "/health":
-            self._reply(200, {"ok": True, "busy": _lock.locked()})
+            self._reply(200, {"ok": True, "busy": _lock.locked(), "box": BOX})
         else:
             self._reply(404, {"error": "not found"})
 
