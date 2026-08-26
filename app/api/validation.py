@@ -1212,6 +1212,7 @@ async def save_canvas_graph(
 @router.post("/{uid}/graph/complete")
 async def complete_graph_validation(
     uid: UUID,
+    bridge_gap: float | None = None,
     db: AsyncSession = Depends(get_async_db),
 ):
     """
@@ -1220,6 +1221,12 @@ async def complete_graph_validation(
     Проверяет наличие GRAPH_VALIDATED артефакта.
     Переводит VALIDATING_GRAPH → VALIDATED_GRAPH.
     Автоматически запускает генерацию FXML.
+
+    bridge_gap (query) — ширина разрыва мостов из настроек клиента;
+    None = дефолт конвертера. ⛔ Голый `None` вместо `Query(default=None)`
+    намеренно: FastAPI и так читает скаляр из query, а с `Query(...)` прямой
+    вызов корутины (все серверные наборы зовут её так) получал бы дефолтом
+    объект `Query`, и в Celery уезжал бы он, а не число.
     """
     result = await db.execute(select(Diagram).where(Diagram.uid == uid))
     diagram = result.scalar_one_or_none()
@@ -1292,10 +1299,15 @@ async def complete_graph_validation(
     if returned_after_contours:
         await dispatch_layout(uid, db)
 
-    # Auto-dispatch FXML generation
+    # Auto-dispatch FXML generation.
+    # Ширина разрыва мостов — регулятор «Ручной правки»: он живёт в настройках
+    # клиента, поэтому приходит параметром отсюда. Без этого авто-сборка после
+    # «Подтвердить» всегда считала разрывы на дефолте, а настройку оператора
+    # применяла только кнопка «Пересобрать чертёж» (`/graph/{uid}/generate-fxml`).
     task_id = await async_safe_dispatch(
         "worker.tasks.graph.task_generate_fxml",
         args=[str(uid)],
+        task_kwargs=({"bridge_gap": bridge_gap} if bridge_gap is not None else None),
     )
     if task_id is None:
         # Путь «после контуров» — второй тупик пункта: `generating_fxml` не лежит

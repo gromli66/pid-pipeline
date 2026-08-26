@@ -665,14 +665,22 @@ class APIClient:
                 timeout=120.0,
             )
 
-    def complete_graph_validation(self, uid: str) -> Dict[str, Any]:
+    def complete_graph_validation(self, uid: str,
+                                   bridge_gap: float = None) -> Dict[str, Any]:
         """
         Завершить валидацию графа.
 
         Проверяет наличие graph_validated, переводит в VALIDATED_GRAPH,
         автоматически запускает генерацию FXML.
+
+        bridge_gap: ширина разрыва мостов из настроек диаграммы — та же, что
+        уходит в `generate_fxml`; None — дефолт конвертера.
         """
-        return self._request("POST", f"/api/validation/{uid}/graph/complete")
+        params = {}
+        if bridge_gap is not None:
+            params["bridge_gap"] = bridge_gap
+        return self._request("POST", f"/api/validation/{uid}/graph/complete",
+                             params=params)
 
     def generate_fxml(self, uid: str, page_size: str = None, bridge_gap: float = None) -> Dict[str, Any]:
         """

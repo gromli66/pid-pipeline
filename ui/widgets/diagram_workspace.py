@@ -2368,6 +2368,15 @@ class DiagramWorkspace(QWidget):
         else:
             self._regenerate_fxml(with_prtx=True)
 
+    def _bridge_gap_setting(self):
+        """Ширина разрыва мостов этой диаграммы (None — дефолт конвертера)."""
+        try:
+            from ui.services.ui_settings import UISettings
+            _bg = UISettings.instance().get_appearance(self._uid, "bridge_gap_factor", None)
+            return float(_bg) if _bg is not None else None
+        except Exception:
+            return None
+
     def _regenerate_fxml(self, with_prtx: bool):
         """Запустить генерацию чертежа.
 
@@ -2381,14 +2390,7 @@ class DiagramWorkspace(QWidget):
         счёта и повторное чтение ключа лицензии, о которых не просили.
         """
         # Разрыв моста — из настроек редактора этой диаграммы (если задан пользователем)
-        bridge_gap = None
-        try:
-            from ui.services.ui_settings import UISettings
-            _bg = UISettings.instance().get_appearance(self._uid, "bridge_gap_factor", None)
-            if _bg is not None:
-                bridge_gap = float(_bg)
-        except Exception:
-            bridge_gap = None
+        bridge_gap = self._bridge_gap_setting()
 
         try:
             self._prtx_skip_next = not with_prtx
@@ -3082,7 +3084,8 @@ class DiagramWorkspace(QWidget):
         """Граф подтверждён (Advanced) → complete_graph_validation → auto FXML."""
         logger.info("Graph confirmed via signal")
         try:
-            self.api_client.complete_graph_validation(self._uid)
+            self.api_client.complete_graph_validation(
+                self._uid, bridge_gap=self._bridge_gap_setting())
             self.status_message.emit(
                 "✅ Валидация графа завершена → генерация FXML запущена", 5000,
             )
