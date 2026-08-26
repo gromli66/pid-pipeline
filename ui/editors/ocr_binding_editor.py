@@ -92,6 +92,12 @@ COLOR_DIAMETER_LABEL_TEXT = QColor(255, 255, 255, 240)
 COLOR_DIAMETER_OK = QColor(39, 174, 96, 200)            # #27AE60
 COLOR_DIAMETER_CONFLICT = QColor(230, 126, 34, 220)     # #E67E22
 COLOR_DIAMETER_CONFLICT_BG = QColor(230, 126, 34, 200)
+# «Ду не требуется» — импульсный тупик к прибору, на чертеже он не
+# подписан. Серым пунктиром: оператору важно видеть, что линию можно
+# пропустить, но она не должна спорить за внимание с рабочими.
+COLOR_DIAMETER_SKIP = QColor(130, 130, 130, 150)
+# Линия под обходом — то, что оператор правит прямо сейчас.
+COLOR_DIAMETER_CURRENT = QColor(241, 196, 15, 230)      # #F1C40F
 DIAMETER_BORDER_WIDTH = 1.5
 
 # Conflict edge colors
@@ -238,6 +244,7 @@ class OcrBindingEditor(QGraphicsView):
     status_message = Signal(str)
     mode_changed = Signal(str)  # "idle", "add", "del", "move"
     validation_exit_requested = Signal()  # Esc в режиме валидации
+    diameter_stats_changed = Signal()    # покрытие Ду изменилось (О-8)
 
     # Два радиуса узла разведены намеренно (зеркало П0 в base_graph_editor).
     # NODE_RADIUS — ГЕОМЕТРИЧЕСКИЙ: цель привязки у узла без bbox
@@ -368,6 +375,9 @@ class OcrBindingEditor(QGraphicsView):
         self._diameter_rules = None              # LineRules из YAML проекта
         self._diam_by_edge: dict = {}            # edge_idx -> поля Ду ребра
         self._diam_conflicts: dict = {}          # line_idx -> [значения-претенденты]
+        self._diam_current_line = None           # линия под обходом (О-1)
+        self._diam_entry = ""                    # набираемое число в обходе
+        self._diam_last_value = None             # последнее значение (О-3)
         self._diameter_items: list = []  # visual items (lines, labels, rects)
         self._diameter_label_rects: list[tuple] = []  # [(x1,y1,x2,y2, line_idx, edge_idx)]
         self._diameter_matcher = None  # DiameterMatcher, set from tab
@@ -408,8 +418,12 @@ class OcrBindingEditor(QGraphicsView):
         self._coco_data = coco_data or {}
         self._node_contours = node_contours or {}
         self._rebuild_bound_indices()
-        # Граф сменился — всё про диаметры от прошлого листа выбросить.
+        # Граф сменился — всё про диаметры от прошлого листа выбросить и
+        # посчитать разбиение заново: от него зависят счётчик покрытия и обход,
+        # а они нужны ОПЕРАТОРУ ещё до первой метки. Замер: весь корпус из 25
+        # листов размечается за 0.15 с, один лист не заметен.
         self.reset_diameter_state()
+        self._rebuild_diameter_lines()
 
         img = QImage(image_path)
         if img.isNull():
@@ -486,6 +500,7 @@ class OcrBindingEditor(QGraphicsView):
         self._diameter_lines = None
         self._diam_by_edge = {}
         self._diam_conflicts = {}
+        self._diam_current_line = None
         self._diameter_items = []
         self._diameter_label_rects = []
 
@@ -970,6 +985,7 @@ class OcrBindingEditor(QGraphicsView):
                     e.pop(k, None)
                 e.update(was)
 
+        self.diameter_stats_changed.emit()
         if report.orphan_marks:
             logger.warning("Метки Ду на исчезнувших рёбрах: %d (%s)",
                            len(report.orphan_marks), report.orphan_marks[:5])
@@ -1373,7 +1389,29 @@ class OcrBindingEditor(QGraphicsView):
             for oidx, item in items.items():
                 item.setOpacity(0.35 if oidx in dim else 1.0)
 
-        if self._bind_mode == "kks" or not self._diam_by_edge:
+        if self._bind_mode == "kks":
+            return
+
+        # «Ду не требуется» — серым пунктиром, под всем остальным.
+        if self._diameter_lines is not None:
+            skip_pen = QPen(COLOR_DIAMETER_SKIP, max(1, self.DIAMETER_LINE_W - 1),
+                            Qt.PenStyle.DashLine)
+            for li, group in enumerate(self._diameter_lines.edges_of_line):
+                if self._diameter_lines.requires_diameter[li]:
+                    continue
+                for eidx in group:
+                    self._draw_line_segments(eidx, skip_pen, z=12)
+
+        # Линия под обходом — поверх «не требуется», под линиями с Ду:
+        # оператор должен видеть, ЧТО он сейчас правит, даже если Ду там ещё нет.
+        if self._diam_current_line is not None and self._diameter_lines is not None \
+                and 0 <= self._diam_current_line < len(self._diameter_lines):
+            cur_pen = QPen(COLOR_DIAMETER_CURRENT, self.DIAMETER_LINE_W + 3)
+            cur_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            for eidx in self._diameter_lines.edges_of_line[self._diam_current_line]:
+                self._draw_line_segments(eidx, cur_pen, z=13)
+
+        if not self._diam_by_edge:
             return
 
         font = QFont("DejaVu Sans", self.TEXT_FONT_SIZE + 1)
@@ -1395,12 +1433,9 @@ class OcrBindingEditor(QGraphicsView):
                 pts = self._edge_points(eidx)
                 if len(pts) < 2:
                     continue
-                total = 0.0
-                for a, b in zip(pts, pts[1:]):
-                    total += math.hypot(b[0] - a[0], b[1] - a[1])
-                    seg = self.scene.addLine(a[1], a[0], b[1], b[0], pen)
-                    seg.setZValue(14)
-                    self._diameter_items.append(seg)
+                total = sum(math.hypot(b[0] - a[0], b[1] - a[1])
+                            for a, b in zip(pts, pts[1:]))
+                self._draw_line_segments(eidx, pen, z=14)
                 if total > longest_len:
                     longest, longest_len = eidx, total
 
@@ -1439,6 +1474,120 @@ class OcrBindingEditor(QGraphicsView):
         # OCR-бокс метки не прячем, а гасим до контура (см. выше): спрятанный
         # бокс лишает оператора источника — числа с чертежа, по которому он и
         # проверяет Ду.
+
+    def _draw_line_segments(self, edge_idx: int, pen, z: float):
+        """Нарисовать ребро заданным пером. Точки графа — `[y, x]`."""
+        pts = self._edge_points(edge_idx)
+        for a, b in zip(pts, pts[1:]):
+            seg = self.scene.addLine(a[1], a[0], b[1], b[0], pen)
+            seg.setZValue(z)
+            self._diameter_items.append(seg)
+
+    def diameter_coverage(self) -> dict:
+        """Покрытие Ду: линии, рёбра и ДЛИНА.
+
+        Длина — не украшение. На корпусе top-10% самых длинных линий держат 54%
+        общей длины и 26% рёбер: оператор, идущий сверху вниз, закрывает половину
+        схемы за первую десятую часть работы, и счётчик «линий 12/105» этого не
+        покажет — он покажет отчаяние.
+        """
+        out = {"lines_need": 0, "lines_done": 0, "lines_skip": 0,
+               "edges_need": 0, "edges_done": 0, "len_need": 0.0, "len_done": 0.0}
+        if self._diameter_lines is None:
+            self._rebuild_diameter_lines()
+        if self._diameter_lines is None:
+            return out
+        for li, group in enumerate(self._diameter_lines.edges_of_line):
+            if not self._diameter_lines.requires_diameter[li]:
+                out["lines_skip"] += 1
+                continue
+            done = any(i in self._diam_by_edge for i in group)
+            length = sum(self._edge_length(i) for i in group)
+            out["lines_need"] += 1
+            out["edges_need"] += len(group)
+            out["len_need"] += length
+            if done:
+                out["lines_done"] += 1
+                out["edges_done"] += len(group)
+                out["len_done"] += length
+        return out
+
+    def _edge_length(self, edge_idx: int) -> float:
+        pts = self._edge_points(edge_idx)
+        return sum(math.hypot(b[0] - a[0], b[1] - a[1])
+                   for a, b in zip(pts, pts[1:]))
+
+    def lines_without_diameter(self) -> list:
+        """Номера линий без Ду, от САМОЙ ДЛИННОЙ к короткой (О-2)."""
+        if self._diameter_lines is None:
+            self._rebuild_diameter_lines()
+        if self._diameter_lines is None:
+            return []
+        out = []
+        for li, group in enumerate(self._diameter_lines.edges_of_line):
+            if not self._diameter_lines.requires_diameter[li]:
+                continue
+            if any(i in self._diam_by_edge for i in group):
+                continue
+            out.append((sum(self._edge_length(i) for i in group), li))
+        out.sort(key=lambda p: (-p[0], p[1]))
+        return [li for _len, li in out]
+
+    def goto_next_line_without_diameter(self) -> bool:
+        """Встать на следующую линию без Ду и подвести к ней камеру (О-1)."""
+        pending = self.lines_without_diameter()
+        if not pending:
+            self.set_current_diameter_line(None)
+            self.status_message.emit("Все линии закрыты — Ду проставлен везде")
+            return False
+        # По кругу: следующая за текущей, иначе самая длинная.
+        nxt = pending[0]
+        if self._diam_current_line in pending:
+            i = pending.index(self._diam_current_line)
+            nxt = pending[(i + 1) % len(pending)]
+        self._diam_entry = ""
+        self.set_current_diameter_line(nxt)
+        self._center_on_line(nxt)
+        left = len(pending)
+        hint = (" · Enter = %d" % self._diam_last_value) if self._diam_last_value else ""
+        self.status_message.emit(
+            "Линия без Ду: осталось %d · наберите число и Enter%s" % (left, hint))
+        return True
+
+    def _center_on_line(self, line_idx: int):
+        pts = [p for i in self._diameter_lines.edges_of_line[line_idx]
+               for p in self._edge_points(i)]
+        if not pts:
+            return
+        cy = sum(p[0] for p in pts) / len(pts)
+        cx = sum(p[1] for p in pts) / len(pts)
+        self.centerOn(cx, cy)
+
+    def _commit_diameter_entry(self) -> bool:
+        """Enter в обходе: поставить набранное (или прошлое) значение."""
+        if self._diam_current_line is None or self._diameter_lines is None:
+            return False
+        raw = self._diam_entry.strip()
+        value = int(raw) if raw.isdigit() and int(raw) > 0 else self._diam_last_value
+        if not value:
+            self.status_message.emit("Наберите число — прошлого значения ещё нет")
+            return False
+        group = self._diameter_lines.edges_of_line[self._diam_current_line]
+        if not group:
+            return False
+        if not self._add_diameter_mark(group[0], value, "manual", str(value)):
+            return False
+        self._diam_last_value = value
+        self._diam_entry = ""
+        self.goto_next_line_without_diameter()
+        return True
+
+    def set_current_diameter_line(self, line_idx):
+        """Подсветить линию, на которой стоит обход (О-1). None — снять."""
+        if line_idx == self._diam_current_line:
+            return
+        self._diam_current_line = line_idx
+        self._redraw_diameter_bindings()
 
     def _edge_points(self, edge_idx: int) -> list:
         """Точки ребра в координатах сцены, [y, x] как в графе."""
@@ -2828,6 +2977,8 @@ class OcrBindingEditor(QGraphicsView):
         return self._add_mode or self._del_mode or self._move_mode
 
     def keyPressEvent(self, event):
+        if self._handle_diameter_key(event):
+            return
         if event.key() == Qt.Key.Key_Control:
             self.ctrl_pressed = True
             if not self._any_mode_active():
@@ -2879,6 +3030,44 @@ class OcrBindingEditor(QGraphicsView):
                 self.setCursor(Qt.CursorShape.ArrowCursor)
         else:
             super().keyReleaseEvent(event)
+
+    def _handle_diameter_key(self, event) -> bool:
+        """Клавиатура режима обхода (О-1). True — событие съедено.
+
+        Цикл оператора: Tab → камера на следующую линию без Ду, набрал число,
+        Enter → поставлено и сразу прыжок на следующую. Ноль движений мышью и
+        ноль поиска глазами; на листе это 36 действий вместо 118 рёбер.
+        """
+        key = event.key()
+        mods = event.modifiers()
+        if mods & (Qt.KeyboardModifier.ControlModifier
+                   | Qt.KeyboardModifier.AltModifier):
+            return False
+
+        if key in (Qt.Key.Key_Tab, Qt.Key.Key_Space):
+            self.goto_next_line_without_diameter()
+            return True
+        if self._diam_current_line is None:
+            return False
+
+        if key == Qt.Key.Key_Escape:
+            self._diam_entry = ""
+            self.set_current_diameter_line(None)
+            self.status_message.emit("Обход линий без Ду закончен")
+            return True
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self._commit_diameter_entry()
+            return True
+        if key == Qt.Key.Key_Backspace:
+            self._diam_entry = self._diam_entry[:-1]
+            self.status_message.emit("Ду: %s" % (self._diam_entry or "—"))
+            return True
+        text = event.text()
+        if text.isdigit():
+            self._diam_entry = (self._diam_entry + text)[:5]
+            self.status_message.emit("Ду: %s · Enter — поставить" % self._diam_entry)
+            return True
+        return False
 
     def mouseDoubleClickEvent(self, event):
         # B6.1: DoubleClick без Ctrl для редактирования (унификация с graph_editor)

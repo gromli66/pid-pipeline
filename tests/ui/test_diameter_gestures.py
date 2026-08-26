@@ -331,3 +331,100 @@ def test_vybor_operatora_pobezhdaet_chuzhuyu_zapis(ed, monkeypatch):
 
     assert ed._diam_conflicts == {}, "конфликт не решился"
     assert {ed._diam_by_edge[i]["value"] for i in _painted(ed)} == {300}
+
+
+# ── блок 6: счётчик покрытия и режим обхода ────────────────────────────────
+
+from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtGui import QKeyEvent  # noqa: E402
+
+
+def _key(ed, key, text=""):
+    ev = QKeyEvent(QKeyEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier, text)
+    ed.keyPressEvent(ev)
+
+
+def test_pokrytie_schitaet_linii_rebra_i_dlinu(ed):
+    """Длина — главное число: top-10% линий держат 54% длины корпуса."""
+    c = ed.diameter_coverage()
+    assert c["lines_need"] == 3 and c["lines_done"] == 0
+    assert c["len_need"] > 0 and c["len_done"] == 0
+
+    ed._bind_to_edge(0, 0)
+
+    c = ed.diameter_coverage()
+    assert c["lines_done"] == 1
+    assert 0 < c["len_done"] < c["len_need"]
+
+
+def test_obhod_idet_ot_samoi_dlinnoi_linii(ed):
+    """О-2: порядок по длине, а не по номеру."""
+    order = ed.lines_without_diameter()
+    lengths = [sum(ed._edge_length(i)
+                   for i in ed._diameter_lines.edges_of_line[li]) for li in order]
+    assert lengths == sorted(lengths, reverse=True)
+
+
+def test_tab_vstaet_na_liniyu_bez_du(ed):
+    _key(ed, Qt.Key.Key_Tab)
+    assert ed._diam_current_line == ed.lines_without_diameter()[0]
+
+
+def test_cikl_nabral_enter_prygnul_dalshe(ed):
+    """Главный цикл оператора: Tab, цифры, Enter — и сразу следующая линия."""
+    _key(ed, Qt.Key.Key_Tab)
+    first = ed._diam_current_line
+
+    for ch in "300":
+        _key(ed, getattr(Qt.Key, "Key_%s" % ch), ch)
+    _key(ed, Qt.Key.Key_Return)
+
+    assert [m.value for m in ed.get_diameter_marks()] == [300]
+    assert ed._diam_current_line != first, "обход не шагнул дальше"
+    assert first not in ed.lines_without_diameter()
+
+
+def test_enter_bez_nabora_beret_proshloe_znachenie(ed):
+    """О-3: Ду на листе повторяются — Enter повторяет прошлое значение."""
+    _key(ed, Qt.Key.Key_Tab)
+    for ch in "250":
+        _key(ed, getattr(Qt.Key, "Key_%s" % ch), ch)
+    _key(ed, Qt.Key.Key_Return)
+
+    _key(ed, Qt.Key.Key_Return)          # ничего не набирали
+
+    assert sorted(m.value for m in ed.get_diameter_marks()) == [250, 250]
+
+
+def test_backspace_pravit_nabor(ed):
+    _key(ed, Qt.Key.Key_Tab)
+    for ch in "329":
+        _key(ed, getattr(Qt.Key, "Key_%s" % ch), ch)
+    _key(ed, Qt.Key.Key_Backspace)
+    _key(ed, Qt.Key.Key_Return)
+    assert [m.value for m in ed.get_diameter_marks()] == [32]
+
+
+def test_esc_vyhodit_iz_obhoda(ed):
+    _key(ed, Qt.Key.Key_Tab)
+    assert ed._diam_current_line is not None
+    _key(ed, Qt.Key.Key_Escape)
+    assert ed._diam_current_line is None
+
+
+def test_kogda_vse_zakryto_obhod_soobschaet_ob_etom(ed):
+    seen = _statuses(ed)
+    for li in list(ed.lines_without_diameter()):
+        group = ed._diameter_lines.edges_of_line[li]
+        ed._add_diameter_mark(group[0], 100, "manual", "100")
+
+    assert ed.lines_without_diameter() == []
+    assert ed.goto_next_line_without_diameter() is False
+    assert any("закрыты" in s for s in seen), seen
+
+
+def test_cifry_vne_obhoda_ne_perehvatyvayutsya(ed):
+    """Пока обход не начат, клавиатура принадлежит остальной вкладке."""
+    assert ed._diam_current_line is None
+    _key(ed, Qt.Key.Key_3, "3")
+    assert ed._diam_entry == ""

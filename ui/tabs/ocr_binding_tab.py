@@ -378,6 +378,7 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
         self.editor.binding_changed.connect(self._on_binding_changed)
         self.editor.blocks_changed.connect(self._on_blocks_changed)
         self.editor.status_message.connect(self._on_editor_status)
+        self.editor.diameter_stats_changed.connect(self._update_current_stats)
         self.editor.mode_changed.connect(self._on_mode_changed)
         self.editor.validation_exit_requested.connect(self._on_validation_esc)
         if self._project_config_path:
@@ -588,12 +589,32 @@ class OcrBindingTab(BlindOverwriteGuard, NonInteractiveSaveMixin,
             status += " | ✅ Подтверждено"
         self.kks_toolbar.stats_label.setText(status)
 
+    def _update_diameter_stats(self):
+        """Строка покрытия Ду в общем `stats_label` (О-8).
+
+        Подвкладок нет (решение 26.08), отдельной панели тоже: счётчик живёт в
+        той же строке, что и остальные. Список непокрытых линий не нужен —
+        режим обхода И ЕСТЬ этот список, только без прокрутки глазами.
+        """
+        c = self.editor.diameter_coverage()
+        if not c["lines_need"]:
+            self._diam_stats_text = ""
+            return
+        pct = 100.0 * c["len_done"] / c["len_need"] if c["len_need"] else 0.0
+        parts = ["Ду: линии %d/%d" % (c["lines_done"], c["lines_need"]),
+                 "длина %.0f%%" % pct]
+        if c["lines_skip"]:
+            parts.append("не требуется %d" % c["lines_skip"])
+        self._diam_stats_text = " · ".join(parts)
+
     def _update_other_stats(self):
         other_total = len(self._other_indices)
         bound = len(self._bindings)
-        self.stats_label.setText(
-            f"Прочих блоков: {other_total} | Привязок: {bound}"
-        )
+        self._update_diameter_stats()
+        text = f"Прочих блоков: {other_total} | Привязок: {bound}"
+        if getattr(self, "_diam_stats_text", ""):
+            text += " | " + self._diam_stats_text
+        self.stats_label.setText(text)
 
     # =================================================================
     # Editor callbacks
