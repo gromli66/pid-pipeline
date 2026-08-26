@@ -1350,3 +1350,34 @@ def test_stale_running_row_does_not_block_the_junction_dispatch(dispatched, ocr_
     assert GRAPH_TASK in [c["name"] for c in dispatched]
     assert result["message"] == (
         "Junction validation completed, graph build started, OCR started")
+
+# ── ширина разрыва мостов доезжает до задачи FXML (2026-08-26) ───────────
+
+def test_bridge_gap_rides_to_the_fxml_task(dispatched, ocr_enabled, no_layout):
+    """Регулятор «Ручной правки» уходит в задачу параметром, а не теряется.
+
+    Замер дефекта: лист, выгруженный после «Подтвердить» при настройке 7,
+    совпал байт в байт с генерацией на дефолте `BRIDGE_GAP_STROKE_FACTOR`
+    (разрывы 6 px вместо 14) — параметр читала только кнопка «Пересобрать
+    чертёж». Клиентская нога пути заперта в
+    `tests/test_bridge_gap_reaches_export.py`.
+    """
+    db = FakeDB(_diagram(DiagramStatus.VALIDATING_GRAPH))
+    result = asyncio.run(complete_graph_validation(UID, bridge_gap=7.0, db=db))
+
+    assert result["task_id"] == "task-0001"
+    fxml = [c for c in dispatched
+            if c["name"] == "worker.tasks.graph.task_generate_fxml"]
+    assert len(fxml) == 1
+    assert fxml[0]["kwargs"] == {"bridge_gap": 7.0}
+
+
+def test_no_bridge_gap_calls_the_task_as_before(dispatched, ocr_enabled, no_layout):
+    """Настройки нет — задача зовётся без ключа, конвертер на своём дефолте."""
+    db = FakeDB(_diagram(DiagramStatus.VALIDATING_GRAPH))
+    asyncio.run(complete_graph_validation(UID, db=db))
+
+    fxml = [c for c in dispatched
+            if c["name"] == "worker.tasks.graph.task_generate_fxml"]
+    assert len(fxml) == 1
+    assert fxml[0]["kwargs"] == {}
