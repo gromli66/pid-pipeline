@@ -101,58 +101,39 @@ def test_podpis_du_privyazyvaetsya_bez_voprosov(ed, monkeypatch):
     assert ed._bindings == [], "подпись Ду ушла ещё и в текстовые привязки"
 
 
-def test_nomer_linii_ne_stanovitsya_diametrom_molcha(qapp, tmp_path, monkeypatch):
-    """⛔ `IITB-56` — номер линии, а не Ду56.
+def test_lyuboe_chislo_v_tekste_stanovitsya_diametrom_bez_voprosa(qapp, tmp_path,
+                                                                monkeypatch):
+    """⛔ Решение оператора 26.08: подтверждающего диалога при привязке НЕТ.
 
-    Замер редтима: 1616 OCR-блоков корпуса из 2331 содержат ровно одно число,
-    и это сплошь номера и позиции. Прежнее правило «одно число = диаметр»
-    превращало каждый в Ду молча и отнимало возможность привязать его к ребру
-    как текст.
+    «Легче исправить, чем чаще подтверждать»: вопрос платится на КАЖДОЙ подписи,
+    а их на листе десятки, тогда как ошибка снимается одним Ctrl+ПКМ.
+
+    Цена решения названа прямо и заперта тестом: подпись-тег с числом
+    (`IITB-56`) станет Ду56 и текстом к ребру уже не привяжется.
     """
     ed = _editor(qapp, tmp_path, [TAG_LABEL], monkeypatch)
     try:
         asked = []
-
-        def _decline(self):
-            asked.append(self.text())
-            # «не диаметр» — кнопка с ролью Reject
-            for btn in self.buttons():
-                if self.buttonRole(btn) == QMessageBox.ButtonRole.RejectRole:
-                    self.setProperty("_clicked", btn)
-            return 0
-
-        monkeypatch.setattr(QMessageBox, "exec", _decline)
-        monkeypatch.setattr(QMessageBox, "clickedButton",
-                            lambda self: self.property("_clicked"))
+        monkeypatch.setattr(QMessageBox, "exec", lambda self: asked.append(1))
 
         ed._bind_to_edge(0, 0)
 
-        assert asked, "оператора не спросили"
-        assert "IITB-56" in asked[0]
-        assert ed.get_diameter_marks() == []
-        assert len(ed._bindings) == 1, "обычная привязка текста не состоялась"
-        assert ed._bindings[0]["text"] == "IITB-56"
+        assert asked == [], "оператора спросили, хотя диалог снят"
+        assert [m.value for m in ed.get_diameter_marks()] == [56]
+        assert ed._bindings == []
     finally:
         ed.deleteLater()
 
 
-def test_operator_mozhet_podtverdit_chto_eto_diametr(qapp, tmp_path, monkeypatch):
-    """Тот же текст, но оператор говорит «да, 56»."""
-    ed = _editor(qapp, tmp_path, [TAG_LABEL], monkeypatch)
+def test_tekst_bez_chisel_privyazyvaetsya_kak_tekst(qapp, tmp_path, monkeypatch):
+    """Чисел нет — обычная привязка текста к ребру, как было."""
+    label = {"bbox": [90.0, 40.0, 150.0, 60.0], "text": "тёплый ящик",
+             "confidence": 0.9}
+    ed = _editor(qapp, tmp_path, [label], monkeypatch)
     try:
-        def _accept(self):
-            for btn in self.buttons():
-                if self.buttonRole(btn) == QMessageBox.ButtonRole.ActionRole:
-                    self.setProperty("_clicked", btn)
-                    break
-            return 0
-
-        monkeypatch.setattr(QMessageBox, "exec", _accept)
-        monkeypatch.setattr(QMessageBox, "clickedButton",
-                            lambda self: self.property("_clicked"))
-
         ed._bind_to_edge(0, 0)
-        assert [m.value for m in ed.get_diameter_marks()] == [56]
+        assert ed.get_diameter_marks() == []
+        assert len(ed._bindings) == 1
     finally:
         ed.deleteLater()
 
@@ -191,7 +172,7 @@ def test_otmena_dialoga_nichego_ne_menyaet(ed, monkeypatch):
 
 # ── Ctrl+ПКМ: снять Ду с линии ─────────────────────────────────────────────
 
-def test_snyatie_gasit_vsyu_liniyu(ed, monkeypatch):
+def test_snyatie_edinstvennoi_metki_gasit_liniyu(ed):
     ed._bind_to_edge(0, 0)
     assert _painted(ed) == [0, 1]
 
@@ -201,14 +182,57 @@ def test_snyatie_gasit_vsyu_liniyu(ed, monkeypatch):
     assert _painted(ed) == []
 
 
-def test_snyatie_vozvraschaet_yarkost_ocr_boksa(ed):
-    """Гашение до 35% обязано быть обратимым — иначе блок тусклый навсегда."""
-    ed._bind_to_edge(0, 0)
-    dimmed = [it.opacity() for it in ed._ocr_text_items.values()]
-    assert dimmed and max(dimmed) < 0.5
+def test_snyatie_odnoi_iz_dvuh_metok_pereschityvaet_liniyu(ed):
+    """⛔ Решение оператора 26.08: снимается ОДНА метка, а не все на линии.
+
+    Раньше клик сносил все метки линии разом — работа терялась целиком.
+    Теперь оставшаяся метка перекрашивает линию своим значением.
+    """
+    ed._add_diameter_mark(0, 300, "manual", "300")
+    ed._add_diameter_mark(1, 300, "manual", "300")
+    assert len(ed.get_diameter_marks()) == 2
+
+    ed._unbind_diameter_at(0)          # сняли метку с первого ребра
+
+    marks = ed.get_diameter_marks()
+    assert len(marks) == 1 and marks[0].edge_id == "e2"
+    assert _painted(ed) == [0, 1], "линия не пересчиталась по оставшейся метке"
+    assert {ed._diam_by_edge[i]["value"] for i in _painted(ed)} == {300}
+
+
+def test_snyatie_metki_menyaet_du_na_ostavsheesya(ed):
+    """Две метки с разным Ду: сняли одну — линия берёт значение второй."""
+    ed._add_diameter_mark(0, 300, "manual", "300")
+    ed._add_diameter_mark(1, 250, "manual", "250")
+    line = ed._diameter_lines.line_for(0)
+    assert line in ed._diam_conflicts        # пока обе — конфликт
 
     ed._unbind_diameter_at(0)
-    assert min(it.opacity() for it in ed._ocr_text_items.values()) == 1.0
+
+    assert ed._diam_conflicts == {}
+    assert {ed._diam_by_edge[i]["value"] for i in _painted(ed)} == {250}
+
+
+def test_privyazka_pryachet_boks_a_otvyazka_vozvraschaet(ed):
+    """Решение оператора 26.08: бокс исчезает, остаётся квадрат с числом.
+
+    Скрытие обязано быть обратимым — иначе снятая метка оставляла бы свой блок
+    невидимым навсегда, и оператор терял бы число с чертежа.
+    """
+    ed._bind_to_edge(0, 0)
+    assert all(not it.isVisible() for it in ed._ocr_text_items.values())
+
+    ed._unbind_diameter_at(0)
+    assert all(it.isVisible() for it in ed._ocr_text_items.values())
+
+
+def test_boks_ne_pereezzhaet_k_rebru(ed):
+    """Он не двигается — поэтому и «возвращается на своё место» сам собой."""
+    before = list(ed._ocr_blocks[0]["bbox"])
+    ed._bind_to_edge(0, 0)
+    assert ed._ocr_blocks[0]["bbox"] == before
+    ed._unbind_diameter_at(0)
+    assert ed._ocr_blocks[0]["bbox"] == before
 
 
 def test_snyatie_na_rebre_bez_du_ne_vrjot(ed):
