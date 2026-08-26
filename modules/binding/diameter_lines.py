@@ -41,8 +41,6 @@ import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import yaml
-
 logger = logging.getLogger(__name__)
 
 # Классы, которых нет в `classes:` YOLO-проекта, но которые законно встречаются
@@ -102,6 +100,12 @@ class LineRules:
                 класс в обоих списках, или в таблице есть имя, которого нет
                 среди классов проекта.
         """
+        # ⛔ `yaml` импортируется ЗДЕСЬ, а не на уровне модуля: у клиентского
+        # окружения PyYAML может не быть, и тогда импорт модуля ронял бы всю
+        # вкладку привязки — `load_data` падал `ModuleNotFoundError` ещё до
+        # первой метки. Разбиение на линии и раскладка меток в yaml не нуждаются.
+        import yaml
+
         path = Path(yaml_path)
         with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}

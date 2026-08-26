@@ -378,6 +378,7 @@ class OcrBindingEditor(QGraphicsView):
         self._diam_current_line = None           # линия под обходом (О-1)
         self._diam_entry = ""                    # набираемое число в обходе
         self._diam_last_value = None             # последнее значение (О-3)
+        self._diam_rules_error = ""              # почему Ду выключены, для оператора
         self._diameter_items: list = []  # visual items (lines, labels, rects)
         self._diameter_label_rects: list[tuple] = []  # [(x1,y1,x2,y2, line_idx, edge_idx)]
         self._diameter_matcher = None  # DiameterMatcher, set from tab
@@ -896,7 +897,12 @@ class OcrBindingEditor(QGraphicsView):
         if self._diameter_rules is not None:
             return self._diameter_rules
         from pathlib import Path as _P
-        from modules.binding.diameter_lines import LineRules
+        try:
+            from modules.binding.diameter_lines import LineRules
+        except Exception as exc:      # нет зависимости — Ду выключен, вкладка жива
+            logger.error("Правило линии Ду недоступно (%s) — диаметры выключены", exc)
+            self._diam_rules_error = str(exc)
+            return None
         cfg_dir = _P(self._project_config_dir) if self._project_config_dir else None
         last_error = "каталог конфигов проекта не задан"
         if cfg_dir:
@@ -912,18 +918,25 @@ class OcrBindingEditor(QGraphicsView):
                     # не должно. Жалоба одна — если не подошёл НИ ОДИН.
                     last_error = exc
         if self._diameter_rules is None:
+            self._diam_rules_error = str(last_error)
             logger.error("Таблица классов Ду не прочитана (%s) — Ду не ставится",
                          last_error)
         return self._diameter_rules
 
     def _rebuild_diameter_lines(self):
         """Пересчитать разбиение на линии. Звать после правки ГРАФА, не меток."""
+        self._diameter_lines = None
         rules = self._diameter_line_rules()
         if rules is None or not self._graph_edges:
-            self._diameter_lines = None
             return
-        from modules.binding.diameter_lines import build_lines
-        self._diameter_lines = build_lines(self._graph_nodes, self._graph_edges, rules)
+        # Разбиение не имеет права ронять загрузку вкладки: без него не работают
+        # только диаметры, а без вкладки — вся привязка текста.
+        try:
+            from modules.binding.diameter_lines import build_lines
+            self._diameter_lines = build_lines(
+                self._graph_nodes, self._graph_edges, rules)
+        except Exception as exc:      # noqa: BLE001 — вкладка важнее диаметров
+            logger.error("Разбиение на линии Ду не построено (%s)", exc)
 
     def _repropagate_diameters(self):
         """Разложить метки по линиям и обновить, что рисовать.
@@ -2477,8 +2490,9 @@ class OcrBindingEditor(QGraphicsView):
             # Иначе метка ставится, статус зелёный, а `_stamp_diameters` молча
             # вернёт 0: работа целого сеанса испаряется без единого признака.
             self.status_message.emit(
-                "Таблица классов Ду не прочитана — диаметр не сохранится. "
-                "Проверьте конфиг проекта")
+                "Диаметры выключены: %s"
+                % (getattr(self, "_diam_rules_error", "") or
+                   "таблица классов Ду не прочитана"))
             return False
         self._push_undo()
         self._diameter_marks = [m for m in self._diameter_marks

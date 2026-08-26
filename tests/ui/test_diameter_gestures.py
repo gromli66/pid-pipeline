@@ -299,7 +299,9 @@ def test_bez_tablicy_klassov_metka_ne_stavitsya(qapp, tmp_path, monkeypatch):
         ed._bind_to_edge(0, 0)
 
         assert ed.get_diameter_marks() == []
-        assert any("не прочитана" in s for s in seen), seen
+        assert any("Диаметры выключены" in s for s in seen), seen
+        # причина обязана дойти до оператора, а не остаться в логе
+        assert any("конфиг" in s.lower() for s in seen), seen
     finally:
         ed.deleteLater()
 
@@ -451,3 +453,38 @@ def test_tab_ne_perehvatyvaetsya_on_prinadlezhit_fokusu(ed):
 def test_f3_takzhe_vedet_obhod(ed):
     _key(ed, Qt.Key.Key_F3)
     assert ed._diam_current_line == ed.lines_without_diameter()[0]
+
+
+def test_bez_pyyaml_vkladka_otkryvaetsya(qapp, tmp_path, monkeypatch):
+    """⛔ Клиентское окружение может быть БЕЗ PyYAML — вкладка обязана жить.
+
+    Замер на боевом клиенте (`.venv311`): PySide6 есть, `yaml` нет. Модуль
+    правила линии импортировал `yaml` на верхнем уровне, и `load_data` падал
+    `ModuleNotFoundError` — вместе со всей привязкой текста, а не только с Ду.
+    """
+    import builtins
+
+    from ui.editors.ocr_binding_editor import OcrBindingEditor
+
+    real = builtins.__import__
+
+    def no_yaml(name, *a, **kw):
+        if name == "yaml" or name.startswith("yaml."):
+            raise ModuleNotFoundError("No module named 'yaml'")
+        return real(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", no_yaml)
+
+    img = tmp_path / "noyaml.png"
+    QImage(200, 200, QImage.Format.Format_RGB32).save(str(img))
+    ed = OcrBindingEditor()
+    try:
+        ed._project_config_dir = str(PROJECT_YAML.parent)
+        ed.load_data(str(img), [], _graph(), [])      # не должно упасть
+
+        seen = _statuses(ed)
+        ed._add_diameter_mark(0, 300, "manual", "300")
+        assert ed.get_diameter_marks() == []
+        assert any("yaml" in s for s in seen), seen
+    finally:
+        ed.deleteLater()
