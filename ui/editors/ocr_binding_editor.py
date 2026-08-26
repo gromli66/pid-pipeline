@@ -14,6 +14,7 @@ Ctrl + двойной клик = редактирование текста.
 
 import logging
 import math
+import re as _re_module
 from typing import Optional
 
 from PySide6.QtWidgets import (
@@ -122,6 +123,27 @@ COLOR_KKS_NODE_UNBOUND = QColor(200, 50, 50, 80)          # красный — �
 COLOR_KKS_NODE_UNBOUND_BORDER = QColor(200, 50, 50, 200)
 COLOR_KKS_NODE_BOUND = QColor(50, 180, 50, 80)            # зелёный — есть KKS
 COLOR_KKS_NODE_BOUND_BORDER = QColor(50, 180, 50, 200)
+
+
+_NUM_RE = _re_module.compile(r"\d{1,4}")
+
+
+def _first_number(text: str):
+    """Первое целое число из текста: «Ду300» -> 300, «РОУ.С 25/13» -> 25.
+
+    Из привязанного к ребру текста берётся ТОЛЬКО цифра (решение заказчика):
+    проверять значение по ряду Ду не нужно, источник истины — чертёж и оператор.
+    """
+    m = _NUM_RE.search(text or "")
+    if not m:
+        return None
+    value = int(m.group(0))
+    return value if value > 0 else None
+
+
+def _all_numbers(text: str) -> list:
+    """Все числа текста — чтобы спросить оператора, если их несколько."""
+    return [int(v) for v in _NUM_RE.findall(text or "") if int(v) > 0]
 
 
 def _clean_text(text: str) -> str:
@@ -1989,6 +2011,24 @@ class OcrBindingEditor(QGraphicsView):
         self.status_message.emit(f"Привязано → узел {cls}")
 
     def _bind_to_edge(self, ocr_idx, edge_idx):
+        # Если в тексте есть число — это Ду, и он красит всю ЛИНИЮ ребра.
+        # Чисел несколько («РОУ.С 25/13») — спрашиваем; чисел нет — обычная
+        # привязка текста к ребру, как было.
+        text_raw = _clean_text(self._ocr_blocks[ocr_idx].get("text", ""))
+        numbers = _all_numbers(text_raw)
+        if numbers:
+            value = numbers[0] if len(numbers) == 1 \
+                else self._ask_which_number(numbers, text_raw)
+            if value is not None:
+                self._push_undo()
+                if self._add_diameter_mark(edge_idx, value, "ocr", str(value),
+                                           ocr_block_idx=ocr_idx):
+                    n = len(self._diameter_line_edges(edge_idx))
+                    self.status_message.emit(
+                        "Ду %d → линия (%d %s)"
+                        % (value, n, "ребро" if n == 1 else "рёбер"))
+                    return
+
         # П3: простая привязка текст->ребро (как у узла, без диаметра/потока).
         # Блок автоматически встаёт у midpoint'а ребра (сторона — от
         # исходного положения блока).
@@ -2009,6 +2049,21 @@ class OcrBindingEditor(QGraphicsView):
         })
         self._after_change()
         self.status_message.emit("Привязано → ребро")
+
+    def _ask_which_number(self, numbers: list, text: str):
+        """Чисел в тексте несколько — какое из них диаметр (или ни одно)."""
+        from PySide6.QtWidgets import QMessageBox
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Какое число — диаметр?")
+        msg.setText("«%s»" % text[:40])
+        buttons = [(msg.addButton(str(v), QMessageBox.ButtonRole.ActionRole), v)
+                   for v in numbers]
+        not_diam = msg.addButton("не диаметр", QMessageBox.ButtonRole.RejectRole)
+        msg.exec()
+        clicked = msg.clickedButton()
+        if clicked is None or clicked is not_diam:
+            return None
+        return next((v for btn, v in buttons if btn is clicked), None)
 
     def _unbind(self, ocr_idx):
         self._push_undo()
@@ -2777,6 +2832,12 @@ class OcrBindingEditor(QGraphicsView):
             # П3: редактирование текста только по Ctrl+2ЛКМ
             if idx is not None and self.ctrl_pressed:
                 self._edit_text(idx)
+            elif idx is None and self.ctrl_pressed:
+                # По метке-числу — правка Ду линии; по голому ребру — ввод.
+                if not self._edit_diameter_label_at(x, y):
+                    eidx = self._find_edge_at(x, y)
+                    if eidx is not None:
+                        self._create_diameter_on_edge(x, y, eidx)
             self.ctrl_pressed = False
             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
             self.setCursor(Qt.CursorShape.ArrowCursor)
@@ -3134,7 +3195,9 @@ class OcrBindingEditor(QGraphicsView):
                 else:
                     self._delete_ocr_block(idx)
             else:
-                self.status_message.emit("Нет блока под курсором")
+                eidx = self._find_edge_at(x, y)
+                if eidx is None or not self._unbind_diameter_at(eidx):
+                    self.status_message.emit("Нет блока под курсором")
             event.accept()
             return
 

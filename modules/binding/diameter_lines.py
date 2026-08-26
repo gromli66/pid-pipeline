@@ -498,8 +498,22 @@ LEGACY_DIAMETER_FIELDS = (
 SOURCE_OCR = "ocr"          # оператор перетащил распознанную подпись
 SOURCE_MANUAL = "manual"    # оператор набрал число
 SOURCE_LINE = "line"        # поток по линии от метки оператора
-SOURCE_EDITOR = "editor"    # правка в «Ручной правке» — она главнее (решение
-                            # заказчика 26.08): вкладка привязки её не трогает
+
+#: Источники, которые ставим МЫ. Всё остальное — чужая запись.
+#:
+#: Правка Ду живёт только во вкладке привязки текста (решение заказчика 26.08):
+#: «Ручная правка» пишет в `graph_canvas`, а `.prtx` собирается из
+#: `graph_validated` (`app/api/graph.py:562`) и назад холст не пишется
+#: (`app/models/artifact.py:61`) — Ду оттуда просто не доехал бы до расчётной
+#: схемы. Но чужую запись мы всё равно не трогаем: снести Ду, которого мы не
+#: ставили, значит молча стереть чью-то работу.
+OWN_SOURCES = (SOURCE_OCR, SOURCE_MANUAL, SOURCE_LINE)
+
+
+def is_foreign(edge: dict) -> bool:
+    """Ду на ребре есть, а источник не наш — чужая запись, не наше дело."""
+    return bool(edge.get("diameter_value") or edge.get("diameter_text")) \
+        and edge.get("diameter_source") not in OWN_SOURCES
 
 
 @dataclass(frozen=True)
@@ -538,9 +552,9 @@ class ApplyReport:
     lines_covered: int = 0
     conflicts: list[tuple[int, list[int]]] = field(default_factory=list)
     orphan_marks: list[str] = field(default_factory=list)
-    kept_editor_edges: int = 0
+    kept_foreign_edges: int = 0
     ineffective_marks: list[str] = field(default_factory=list)
-    """Метки, не давшие ни одного ребра: линия целиком занята правкой редактора.
+    """Метки, не давшие ни одного ребра: линия целиком занята чужой записью.
 
     Без этого списка «ничего не произошло» выглядело бы как успех: оператор
     нажал, отчёт зелёный, на диске пусто.
@@ -551,41 +565,27 @@ class ApplyReport:
         return not (self.conflicts or self.orphan_marks or self.ineffective_marks)
 
 
-OWN_SOURCES = (SOURCE_OCR, SOURCE_MANUAL, SOURCE_LINE)
-
-
-def clear_diameters(edges: list[dict], *,
-                    keep_sources: tuple[str, ...] = (SOURCE_EDITOR,)) -> int:
+def clear_diameters(edges: list[dict]) -> int:
     """Снять поля Ду с рёбер, которые проставили МЫ. Чужое не трогать.
 
-    Вкладка привязки управляет только своим. Чужое — это и явная правка
-    редактора (`diameter_source` из `keep_sources`), и ребро с диаметром, но
-    БЕЗ источника: так пишет старый поток и «Ручная правка», которая
-    `diameter_source` пока не ставит вовсе. Снести такое ребро означало бы
-    молча стереть работу оператора — ровно тот отказ, против которого правило
-    «ручная правка главнее» и вводилось.
+    Возвращает число чужих записей, которые оставлены как есть.
     """
     kept = 0
     for e in edges:
-        src = e.get("diameter_source")
-        if src in keep_sources:
+        if is_foreign(e):
             kept += 1
-            continue
-        if src is None and any(e.get(k) for k in
-                               ("diameter_value", "diameter_text")):
-            kept += 1          # чужая запись без источника — не наша, не трогаем
             continue
         for k in DIAMETER_FIELDS + LEGACY_DIAMETER_FIELDS:
             e.pop(k, None)
     return kept
 
 
-def apply_marks(edges: list[dict], lines: Lines, marks: list[DiameterMark], *,
-                keep_sources: tuple[str, ...] = (SOURCE_EDITOR,)) -> ApplyReport:
+def apply_marks(edges: list[dict], lines: Lines,
+                marks: list[DiameterMark]) -> ApplyReport:
     """Разложить метки по линиям и проставить Ду в рёбра.
 
-    Ду метки красит ВСЮ линию её ребра и ничего кроме. Рёбра, чей Ду поставлен
-    в «Ручной правке», не перезаписываются: они главнее.
+    Ду метки красит ВСЮ линию её ребра и ничего кроме. Рёбра с чужой записью
+    Ду (`is_foreign`) не перезаписываются.
 
     Две метки с разными значениями на одной линии — конфликт: линия не
     заливается, каждое помеченное ребро остаётся при своём значении, конфликт
@@ -599,7 +599,7 @@ def apply_marks(edges: list[dict], lines: Lines, marks: list[DiameterMark], *,
         )
 
     report = ApplyReport()
-    report.kept_editor_edges = clear_diameters(edges, keep_sources=keep_sources)
+    report.kept_foreign_edges = clear_diameters(edges)
 
     by_id = {}
     for i, e in enumerate(edges):
@@ -622,20 +622,19 @@ def apply_marks(edges: list[dict], lines: Lines, marks: list[DiameterMark], *,
     for li, items in sorted(per_line.items()):
         group = lines.edges_of_line[li] if li >= 0 else [items[0][0]]
 
-        # Значения-претенденты на линию: метки оператора И то, что уже стоит на
-        # линии от «Ручной правки». Её Ду мы не перезаписываем, а значит
+        # Значения-претенденты на линию: метки оператора И чужие записи, уже
+        # лежащие на этой линии. Чужое мы не перезаписываем, а значит
         # расхождение с меткой — такой же конфликт, а не «победила метка».
         values = {int(m.value) for _idx, m in items}
         for i in group:
-            if edges[i].get("diameter_source") in keep_sources \
-                    and edges[i].get("diameter_value"):
+            if is_foreign(edges[i]) and edges[i].get("diameter_value"):
                 values.add(int(edges[i]["diameter_value"]))
 
         if len(values) > 1:
             report.conflicts.append((li, sorted(values)))
             for idx, m in items:
-                if edges[idx].get("diameter_source") in keep_sources:
-                    continue          # правка редактора главнее и в конфликте
+                if is_foreign(edges[idx]):
+                    continue          # чужая запись не перезаписывается
                 _stamp(edges[idx], m.value, m.as_text(), m.kind, li)
                 report.edges_stamped += 1
             continue
@@ -644,8 +643,8 @@ def apply_marks(edges: list[dict], lines: Lines, marks: list[DiameterMark], *,
         marked = {idx for idx, _ in items}
         covered = False
         for i in group:
-            if edges[i].get("diameter_source") in keep_sources:
-                continue                      # правка редактора главнее
+            if is_foreign(edges[i]):
+                continue                      # чужая запись не перезаписывается
             src = m.kind if i in marked else SOURCE_LINE
             _stamp(edges[i], m.value, m.as_text(), src, li)
             report.edges_stamped += 1
@@ -694,7 +693,7 @@ def marks_from_edges(edges: list[dict]) -> list[DiameterMark]:
     out = []
     for e in edges:
         src = e.get("diameter_source")
-        if src in (None, SOURCE_LINE):
+        if src not in (SOURCE_OCR, SOURCE_MANUAL):
             continue
         value = e.get("diameter_value")
         if not value:

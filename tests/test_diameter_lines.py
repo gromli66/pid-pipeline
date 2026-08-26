@@ -350,7 +350,6 @@ def test_konfig_proekta_gruzitsya_i_pokryvaet_vse_klassy():
 from modules.binding.diameter_lines import (  # noqa: E402
     DIAMETER_FIELDS,
     LEGACY_DIAMETER_FIELDS,
-    SOURCE_EDITOR,
     SOURCE_LINE,
     SOURCE_MANUAL,
     SOURCE_OCR,
@@ -443,26 +442,26 @@ def test_parallelnye_rebra_mezhdu_tranzitami_odna_liniya():
     assert len(lines) == 1
 
 
-def test_ruchnaya_pravka_glavnee_privyazki():
-    """Ду из «Ручной правки» вкладка привязки не перезаписывает и не стирает."""
+def test_chuzhaya_zapis_ne_perezapisyvaetsya():
+    """Ду, поставленный не нами, вкладка привязки не трогает."""
     nodes, edges = _magistral_s_otvodom()
     edges[1]["diameter_value"] = 250
-    edges[1]["diameter_source"] = SOURCE_EDITOR
+    edges[1]["diameter_source"] = "chuzhoi"
     lines = build_lines(nodes, edges, rules())
 
     rep = apply_marks(edges, lines, [DiameterMark("e1", 300, SOURCE_OCR)])
     assert edges[0]["diameter_value"] == 300
     assert edges[1]["diameter_value"] == 250          # правка редактора цела
-    assert edges[1]["diameter_source"] == SOURCE_EDITOR
-    assert rep.kept_editor_edges == 1
+    assert edges[1]["diameter_source"] == "chuzhoi"
+    assert rep.kept_foreign_edges == 1
 
 
-def test_ochistka_ne_trogaet_pravku_redaktora():
+def test_ochistka_ne_trogaet_chuzhuyu_zapis():
     nodes, edges = _magistral_s_otvodom()
     edges[0]["diameter_value"] = 100
     edges[0]["diameter_source"] = SOURCE_LINE
     edges[1]["diameter_value"] = 250
-    edges[1]["diameter_source"] = SOURCE_EDITOR
+    edges[1]["diameter_source"] = "chuzhoi"
 
     kept = clear_diameters(edges)
     assert kept == 1
@@ -670,36 +669,36 @@ def test_ukorochennoe_razbienie_ne_vyklyuchaet_pravilo_molcha():
         apply_marks(edges[:2], lines, [DiameterMark("e1", 300)])
 
 
-def test_konflikt_ne_zatiraet_pravku_redaktora():
+def test_konflikt_ne_zatiraet_chuzhuyu_zapis():
     nodes, edges = _magistral_s_otvodom()
     edges[1]["diameter_value"] = 250
-    edges[1]["diameter_source"] = SOURCE_EDITOR
+    edges[1]["diameter_source"] = "chuzhoi"
     lines = build_lines(nodes, edges, rules())
     rep = apply_marks(edges, lines, [
         DiameterMark("e1", 400, SOURCE_OCR), DiameterMark("e2", 300, SOURCE_MANUAL),
     ])
     assert not rep.ok and rep.conflicts
     assert edges[1]["diameter_value"] == 250
-    assert edges[1]["diameter_source"] == SOURCE_EDITOR
+    assert edges[1]["diameter_source"] == "chuzhoi"
 
 
-def test_metka_protiv_pravki_redaktora_eto_konflikt():
+def test_metka_protiv_chuzhoi_zapisi_eto_konflikt():
     """Иначе на линии два разных Ду, а отчёт зелёный — и в prtx уедет пустота."""
     nodes, edges = _magistral_s_otvodom()
     edges[0]["diameter_value"] = 250
-    edges[0]["diameter_source"] = SOURCE_EDITOR
+    edges[0]["diameter_source"] = "chuzhoi"
     lines = build_lines(nodes, edges, rules())
     rep = apply_marks(edges, lines, [DiameterMark("e1", 300, SOURCE_OCR)])
     assert rep.conflicts and rep.conflicts[0][1] == [250, 300]
     assert edges[0]["diameter_value"] == 250
 
 
-def test_liniya_celikom_iz_pravki_redaktora_metka_ne_srabotala():
+def test_liniya_celikom_iz_chuzhih_zapisei_metka_ne_srabotala():
     """«Ничего не произошло» не должно выглядеть как успех."""
     nodes, edges = _magistral_s_otvodom()
     for i in (0, 1):
         edges[i]["diameter_value"] = 300
-        edges[i]["diameter_source"] = SOURCE_EDITOR
+        edges[i]["diameter_source"] = "chuzhoi"
     lines = build_lines(nodes, edges, rules())
     rep = apply_marks(edges, lines, [DiameterMark("e1", 300, SOURCE_OCR)])
     assert rep.edges_stamped == 0 and rep.lines_covered == 0
@@ -725,15 +724,15 @@ def test_celoe_v_vide_float_prinimaetsya():
     assert isinstance(edges[0]["diameter_value"], int)
 
 
-def test_krug_s_metkoi_redaktora_ne_teryaet_ee():
+def test_krug_s_chuzhoi_zapisyu_ne_teryaet_ee():
     nodes, edges = _magistral_s_otvodom()
     edges[1]["diameter_value"] = 250
-    edges[1]["diameter_source"] = SOURCE_EDITOR
+    edges[1]["diameter_source"] = "chuzhoi"
     lines = build_lines(nodes, edges, rules())
     for _ in range(3):
         apply_marks(edges, lines, marks_from_edges(edges))
     assert edges[1]["diameter_value"] == 250
-    assert edges[1]["diameter_source"] == SOURCE_EDITOR
+    assert edges[1]["diameter_source"] == "chuzhoi"
 
 
 def test_du_ne_trebuetsya_ne_dayut_kusku_magistrali():
