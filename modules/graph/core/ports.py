@@ -413,21 +413,40 @@ def side_slots(node, side, k, rect=None, pitch=None):
     return [(center + o, y2, 0.0, 1.0, False) for o in offs]
 
 
-def nearest_port(node, x, y, radius):
-    """Ближайший порт узла (ручной или кандидат) в радиусе, иначе None."""
+def nearest_port(node, x, y, radius, rect=None):
+    """Ближайший порт узла (ручной или кандидат) в радиусе, иначе None.
+
+    rect — переопределение рамки посадки (редактор передаёт bbox: «символ
+    тянется на рамку», и порт-талия клапана считается от неё же)."""
     best, best_d = None, float(radius)
-    for p in all_ports(node):
+    for p in all_ports(node, rect):
         d = math.hypot(p[0] - x, p[1] - y)
         if d <= best_d:
             best, best_d = p, d
     return best
 
 
-def is_on_port(node, x, y, tol=PORT_MATCH_TOL):
-    return nearest_port(node, x, y, tol) is not None
+def is_on_port(node, x, y, tol=PORT_MATCH_TOL, rect=None):
+    return nearest_port(node, x, y, tol, rect) is not None
 
 
 # ────────────────────────── выбор порта ──────────────────────────
+
+_SIDE_BY_NORMAL = {(1.0, 0.0): "R", (-1.0, 0.0): "L",
+                   (0.0, -1.0): "T", (0.0, 1.0): "B"}
+
+
+def _calibrated(node, rect):
+    """Грани с выверенным портом (осевые грани клапана): {'L','R'} | {'T','B'}
+    | пустое. При равном числе колен такой порт предпочтительнее обычной
+    грани: талия смещена от середины, и по одной длине маршрута вход мог
+    перескочить на грань привода (репро: перенос клапана в «Ручной правке»)."""
+    from modules.graph.core import seating
+
+    if rect is None:
+        rect = seating._anchor_rect(node)
+    return set(contact.face_refs(node, rect) or ())
+
 
 def _l1(p, rx, ry):
     return abs(rx - p[0]) + abs(ry - p[1])
@@ -497,11 +516,14 @@ def choose_port_entry(node, cur_xy, ref_xy, snap_threshold, rect=None):
     ux, uy = rx - cx, ry - cy
     ul = math.hypot(ux, uy) or 1.0
     ux, uy = ux / ul, uy / ul
+    hard = _calibrated(node, rect)
 
     def _key(p):
-        # колени → длина → нормаль по доминирующему направлению → координаты
-        return (_bends(p, rx, ry), _l1(p, rx, ry),
-                -(p[2] * ux + p[3] * uy), p[0], p[1])
+        # колени → выверенный порт → длина → нормаль по доминирующему
+        # направлению → координаты
+        return (_bends(p, rx, ry),
+                0 if _SIDE_BY_NORMAL.get((p[2], p[3])) in hard else 1,
+                _l1(p, rx, ry), -(p[2] * ux + p[3] * uy), p[0], p[1])
 
     pool = [p for p in ports if not _backside(p, rx, ry)] or ports
     best = min(pool, key=_key)

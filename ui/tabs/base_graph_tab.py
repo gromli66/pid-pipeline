@@ -168,6 +168,23 @@ def _stub_pierces_foreign(byid, e, a_yx, b_yx) -> bool:
     return False
 
 
+def _in_slot(node, p, slot_faces) -> bool:
+    """Конец сидит на грани, которую модель развела СЛОТАМИ.
+
+    Слот — не порт (порт один на грань), и конкурс портов ниже стащил бы все
+    трубы такой грани в опорную точку, положив их друг на друга (репро
+    51b339ab: три трубы стрелка направления -> арматура)."""
+    from modules.graph.core import seating
+
+    if not slot_faces:
+        return False
+    rect = seating._anchor_rect(node)
+    if rect is None:
+        return False
+    side = seating._end_side(rect, float(p[1]), float(p[0]))
+    return side is not None and (node.get("id"), side) in slot_faces
+
+
 def _migrate_stub_end(e, end_key, node, byid, snap=8.0) -> bool:
     """Этап A: конец С waypoints и перпендикулярным стабом -> порт узла
     ВМЕСТЕ с осевым сдвигом смежного waypoint (координата wp вдоль грани
@@ -489,6 +506,10 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
                     e[end_key] = [pin[1], pin[0]]
 
     _apply_pins()
+    # Грани, где модель развела НЕСКОЛЬКО труб слотами (правило заказчика
+    # «на равном удалении от точки прикрепления»): их концы ниже не трогаем.
+    from modules.graph.core.seating import slot_faces as _slot_faces
+    slot_faces = _slot_faces(canvas, byid)
     moved = 0
     for e, (sp0, tp0, wp0) in zip(edges_list, snap):
         if e.get("_manual_route"):
@@ -537,6 +558,8 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
                 continue
             if port_model.is_on_port(node, p[1], p[0]):
                 continue
+            if _in_slot(node, p, slot_faces):
+                continue        # грань со слотами: конец уже посажен моделью
             ref = _end_ref(e, end_key)
             aligned = ref is not None and (abs(p[0] - ref[0]) <= 0.5
                                            or abs(p[1] - ref[1]) <= 0.5)

@@ -64,8 +64,6 @@ BUDGET = 22.0        # px: максимум «чуть сдвинуть». Вы�
                      # корпусе из 20 холстов: 16px -> ступенек 96->51,
                      # 22px -> 96->40, побочных ухудшений нет в обоих.
 STEP_MAX = 24.0      # px: длиннее — это осмысленный изгиб, а не ступенька
-FACE_MARGIN = 6.0    # px: конец не подходит к углу грани ближе (C2: угол
-                     # непредставим) — как VERTEX_MARGIN у контуров
 OCCUPIED_TOL = 2.0   # px: ближе — считается занятым соседним концом
 CANVAS_W, CANVAS_H = 1920.0, 1080.0
 MAX_ROUNDS = 4       # проходов жадного цикла (сходится за 2-4 по замеру)
@@ -198,24 +196,6 @@ def end_kind(node, e):
     if ec._rect_seated(node):
         return "rect"
     return "none"
-
-
-def _face_of(node, pt):
-    """Грань рамки, на которой лежит точка: ('L'|'R', x) / ('T'|'B', y)."""
-    r = ec.seat_rect(node)
-    if not r:
-        return None
-    x, y = pt
-    tol = 1.0
-    if abs(x - r[0]) <= tol:
-        return ("L", r[1], r[3])
-    if abs(x - r[2]) <= tol:
-        return ("R", r[1], r[3])
-    if abs(y - r[1]) <= tol:
-        return ("T", r[0], r[2])
-    if abs(y - r[3]) <= tol:
-        return ("B", r[0], r[2])
-    return None
 
 
 def _neighbour_ends(graph, node_id, skip_edge):
@@ -368,17 +348,24 @@ def drop_collinear(e, tol=ec.DIAG_TOL):
 
 
 def _slide_end(graph, e, role, axis, delta):
-    """Лекарство 2: сдвинуть КОНЕЦ вдоль его грани/участка на delta.
+    """Лекарство 2: сдвинуть КОНЕЦ вдоль его участка контура на delta.
 
     Возвращает новую точку (x, y) или None, если скользить нельзя: якорь,
-    коннектор (у него конец — центроид), уход за грань, занятая позиция.
+    коннектор (у него конец — центроид), РАМОЧНЫЙ узел, уход за участок,
+    занятая позиция.
+
+    Рамочный конец (бокс, скин) не скользит с 2026-09-22 (модель точек
+    прикрепления): он живёт в опорной точке грани — выверенном порту клапана
+    или середине с допуском MID_SNAP, — и увод входа вдоль грани сделал бы
+    холст неверным ещё до выгрузки. Ступеньку лечит сдвиг узла или
+    коннектора (лекарства 1 и 3), а не увод входа.
     """
     byid = nodes_by_id(graph)
     key = "source_point" if role == "s" else "target_point"
     nid = e.get("source") if role == "s" else e.get("target")
     node = byid.get(nid)
     kind = end_kind(node, e)
-    if kind in ("anchor", "connector", "none"):
+    if kind in ("anchor", "connector", "none", "rect"):
         return None
     p = e.get(key)
     if not p:
@@ -386,50 +373,37 @@ def _slide_end(graph, e, role, axis, delta):
     x, y = float(p[1]), float(p[0])
     nx, ny = (x, y + delta) if axis == "y" else (x + delta, y)
 
-    if kind == "rect":
-        face = _face_of(node, (x, y))
-        if face is None:
-            return None
-        side, lo, hi = face
-        # скользить можно только ВДОЛЬ грани: у боковых — по y, у верх/низ — по x
-        if side in ("L", "R") and axis != "y":
-            return None
-        if side in ("T", "B") and axis != "x":
-            return None
-        v = ny if axis == "y" else nx
-        if not (lo + FACE_MARGIN <= v <= hi - FACE_MARGIN):
-            return None
-    else:                                   # контурный участок
-        # poly_runs ждёт ПЛОСКИЙ список координат (как в данных узла), а
-        # ec.poly_contour отдаёт список точек — берём сырую segmentation
-        seg = node.get("segmentation")
-        if not (seg and isinstance(seg, list) and len(seg) >= 6):
-            return None
-        runs = port_model.poly_runs(seg)
-        on = None
-        for (ax, ay, bx, by, rnx, rny) in runs:
-            L2 = (bx - ax) ** 2 + (by - ay) ** 2
-            if L2 <= 1e-9:
-                continue
-            t = ((x - ax) * (bx - ax) + (y - ay) * (by - ay)) / L2
-            if -0.01 <= t <= 1.01:
-                px, py = ax + t * (bx - ax), ay + t * (by - ay)
-                if math.hypot(x - px, y - py) <= 0.75:
-                    on = (ax, ay, bx, by, math.hypot(bx - ax, by - ay))
-                    break
-        if on is None:
-            return None
-        ax, ay, bx, by, L = on
-        # участок должен идти вдоль оси сдвига
-        if axis == "y" and abs(bx - ax) > ec.DIAG_TOL:
-            return None
-        if axis == "x" and abs(by - ay) > ec.DIAG_TOL:
-            return None
-        lo_v, hi_v = ((min(ay, by), max(ay, by)) if axis == "y"
-                      else (min(ax, bx), max(ax, bx)))
-        v = ny if axis == "y" else nx
-        if not (lo_v + ec.CLEARANCE <= v <= hi_v - ec.CLEARANCE):
-            return None
+    # контурный участок: poly_runs ждёт ПЛОСКИЙ список координат (как в
+    # данных узла), а ec.poly_contour отдаёт список точек — берём сырую
+    # segmentation
+    seg = node.get("segmentation")
+    if not (seg and isinstance(seg, list) and len(seg) >= 6):
+        return None
+    runs = port_model.poly_runs(seg)
+    on = None
+    for (ax, ay, bx, by, rnx, rny) in runs:
+        L2 = (bx - ax) ** 2 + (by - ay) ** 2
+        if L2 <= 1e-9:
+            continue
+        t = ((x - ax) * (bx - ax) + (y - ay) * (by - ay)) / L2
+        if -0.01 <= t <= 1.01:
+            px, py = ax + t * (bx - ax), ay + t * (by - ay)
+            if math.hypot(x - px, y - py) <= 0.75:
+                on = (ax, ay, bx, by, math.hypot(bx - ax, by - ay))
+                break
+    if on is None:
+        return None
+    ax, ay, bx, by, L = on
+    # участок должен идти вдоль оси сдвига
+    if axis == "y" and abs(bx - ax) > ec.DIAG_TOL:
+        return None
+    if axis == "x" and abs(by - ay) > ec.DIAG_TOL:
+        return None
+    lo_v, hi_v = ((min(ay, by), max(ay, by)) if axis == "y"
+                  else (min(ax, bx), max(ax, bx)))
+    v = ny if axis == "y" else nx
+    if not (lo_v + ec.CLEARANCE <= v <= hi_v - ec.CLEARANCE):
+        return None
 
     for qx, qy in _neighbour_ends(graph, nid, e):
         if math.hypot(qx - nx, qy - ny) < OCCUPIED_TOL:

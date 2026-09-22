@@ -22,9 +22,11 @@ WYSIWYG не годится.
     fallback по подключениям обязателен;
   * развороты: датчики всегда HORIZONTAL; REVERSE_VERTICAL_CLASSES в вертикали
     → VERTICAL_REVERSE; swap W/H на вертикали — контракт OrientationService;
-  * поправка талии (SKIN_CONTACT_OFFSET) ПРИМЕНЯЕТСЯ — осознанное отступление
-    от пиксельного 1:1: в САПР талия скина обязана лечь на трубу, поэтому
-    скины с приводом уезжают поперёк трубы на калиброванную долю;
+  * поправки талии НЕТ (снята 2026-09-22, решение «порт выверенный, если скин
+    есть»): труба приходит в талию ещё на холсте — конец сидит в выверенном
+    порту клапана, а бокс поставлен так, что талия лежит на линии трубы
+    (`modules/graph/core/contact.py`, `pretransform.apply_fixed_sizes`).
+    Выгрузка снова пиксельно 1:1 с холстом;
   * мосты «— | —» ищутся геометрией и режут более толстую трубу;
   * авто-датчик расхода у шайбы без датчика — но в родном размере холста
     (FIXED_SIZES['datchik']), без деления на 3.
@@ -74,7 +76,6 @@ from modules.graph_to_fxml import (
     TEXT_STYLES,
     SkinGeometry,
     _infer_napravlenie_direction,
-    apply_contact_offset,
     build_node_kks_map,
     compute_bridge_cuts,
     generate_fxml_line,
@@ -128,8 +129,12 @@ def generate_canvas_control(node, node_id: str, connections, kks=None,
 
     Вертикаль: swap W/H + пересчёт layout — контракт библиотеки скинов
     (OrientationService применяет rotate(90) к горизонтальной рамке).
-    Поправка талии — после, от итоговой ориентации (VERTICAL_REVERSE
-    инвертирует знак).
+
+    Поправки талии здесь НЕТ (снята 2026-09-22): труба приходит в талию
+    ещё на холсте — конец сажается в выверенный порт клапана
+    (`contact.face_refs`, модель точек прикрепления), а бокс поставлен так,
+    что талия лежит на линии трубы (`pretransform.apply_fixed_sizes`).
+    Сдвигать контрол теперь означало бы сдвинуть его ОТ трубы.
     """
     skin_info = _skin_info(node)
     if not skin_info:
@@ -153,11 +158,6 @@ def generate_canvas_control(node, node_id: str, connections, kks=None,
         layout_x = b['x1'] + (width - height) / 2
         layout_y = b['y1'] + (height - width) / 2
         width, height = height, width
-
-    # Талия «бабочки» на трубу (13+) — единственное осознанное отступление
-    # от пиксельного 1:1 (см. докстринг модуля).
-    layout_x, layout_y = apply_contact_offset(
-        skin_type, emit_orientation, layout_x, layout_y, height)
 
     attrs = [
         f'fx:id="{escape(str(node_id))}"',

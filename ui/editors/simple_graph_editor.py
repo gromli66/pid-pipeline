@@ -480,6 +480,17 @@ class SimpleGraphEditor(BaseGraphEditor):
         x1, y1, x2, y2 = new_bbox
         node['centroid'] = [(y1 + y2) / 2, (x1 + x2) / 2]
         node['area'] = (x2 - x1) * (y2 - y1)
+        # У клапана холста центроид — точка талии, а не центр рамки (та же
+        # модель, что при сборке холста): по центроидам ведут ряды раскладки
+        # и авто-выравнивание, иначе после resize они повели бы по центру и
+        # стащили трубу с талии.
+        from modules.graph.core import contact
+        refs = contact.face_refs(node, tuple(new_bbox))
+        if refs:
+            if 'L' in refs:
+                node['centroid'][0] = refs['L']
+            else:
+                node['centroid'][1] = refs['T']
 
         # Э5: пины концов инцидентных рёбер — локальные смещения от
         # центроида; при resize масштабируются вместе с рамкой.

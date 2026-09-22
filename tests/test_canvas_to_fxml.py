@@ -3,7 +3,8 @@
 
 Проверяется утверждённая спецификация (память fxml-1to1-canvas-export):
 identity-геометрия из bbox, приоритет осей, VERTICAL-swap, разворот
-REVERSE-классов, поправка талии (13+), датчик горизонтален и БЕЗ /3, KKS из
+REVERSE-классов, БЕЗ поправки талии (снята 2026-09-22 — труба приходит в
+талию на холсте), датчик горизонтален и БЕЗ /3, KKS из
 bindings с константным кеглем, линии без B2-проекции, пунктир, терминальные
 рёбра выпадают, мосты рвут линию, авто-датчик шайбы 30x30, оба порядка слоёв.
 """
@@ -98,13 +99,17 @@ def test_identity_geometry_horizontal_skin():
     assert 'orientation="HORIZONTAL"' in xml.split('fx:id="p1"')[1].split('/>')[0]
 
 
-def test_vertical_swap_reverse_and_contact_offset():
-    """V-арматура: swap W/H, VERTICAL_REVERSE, талия ELECTRIC_VLV (0.20)."""
+def test_vertical_swap_without_contact_offset():
+    """V-арматура: swap W/H, VERTICAL_REVERSE и БЕЗ поправки талии.
+
+    ПЕРЕОБЪЯВЛЕН 2026-09-22 (модель точек прикрепления): контрол больше не
+    уезжает поперёк трубы — труба приходит в талию ещё на холсте, а бокс
+    стоит так, что талия на её линии. Было layoutX 290.3 (297.9 − 7.56).
+    """
     xml = _fxml()
     v1 = xml.split('fx:id="v1"')[1].split('/>')[0]
-    # bbox w=37.8 h=42: layout_x = 300+(37.8-42)/2 = 297.9, минус талия
-    # 0.20*37.8 = 7.56 (REVERSE инвертирует знак) -> 290.3
-    assert 'layoutX="290.3"' in v1
+    # bbox w=37.8 h=42: layout_x = 300 + (37.8-42)/2 = 297.9 — identity
+    assert 'layoutX="297.9"' in v1
     assert 'layoutY="202.1"' in v1
     assert 'prefWidth="42.0"' in v1 and 'prefHeight="37.8"' in v1
     assert 'orientation="VERTICAL_REVERSE"' in v1

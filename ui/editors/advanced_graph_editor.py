@@ -42,7 +42,6 @@ from ui.editors.graph_geometry import (
     bbox_exit_side, closest_bbox_side,
     project_point_to_bbox_border, project_point_to_polygon_border,
     get_node_geometry, compute_edge_perpendicularity,
-    node_orientation_by_edges,
 )
 from ui.editors.edge_routing import route_edge as route_edge_v2, segment_intersects_bbox
 from ui.editors.autofix_chains import auto_fix_graph
@@ -3727,7 +3726,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             if pin is not None:
                 pins.append((cx + float(pin['dx']), cy + float(pin['dy']),
                              0.0, 0.0, True))
-        for px, py, _nx, _ny, manual in pins + port_model.all_ports(node):
+        from modules.graph.core.edit_checks import seat_rect
+        for px, py, _nx, _ny, manual in pins + port_model.all_ports(
+                node, seat_rect(node)):
             color = QColor(255, 152, 0) if manual else QColor(0, 188, 212)
             m = QGraphicsEllipseItem(px - r, py - r, r * 2, r * 2)
             m.setPen(QPen(color, 1.5))
@@ -3839,8 +3840,12 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         # мимо портов — свободное скольжение по границе, отпускание там
         # создаст постоянный ручной порт (_end_endpoint_drag).
         from ui.editors import port_model
-        snap_p = port_model.nearest_port(self.nodes.get(node_id) or {},
-                                         x, y, float(self.snap_threshold))
+        from modules.graph.core.edit_checks import seat_rect
+        _n = self.nodes.get(node_id) or {}
+        # рамка посадки — редакторская (bbox, «символ тянется на рамку»):
+        # от неё же считается выверенный порт клапана
+        snap_p = port_model.nearest_port(_n, x, y, float(self.snap_threshold),
+                                         rect=seat_rect(_n))
         if snap_p is not None:
             px, py = snap_p[0], snap_p[1]
         self._ep_on_port = snap_p is not None
@@ -4953,10 +4958,11 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         bb = node.get('bbox')
         cur_w = (bb[2] - bb[0]) if (bb and len(bb) == 4) else 0
         cur_h = (bb[3] - bb[1]) if (bb and len(bb) == 4) else 0
-        # Ориентация по рёбрам (Часть 1); рёбер нет → по текущему размеру.
+        # Ориентация — та же, что у скина и выгрузки; узла нет → по текущему
+        # размеру. REVERSE — только разворот графики, ось та же.
         orient = self._node_orientation(node.get('id')) or (
             'VERTICAL' if cur_h >= cur_w else 'HORIZONTAL')
-        if orient == 'HORIZONTAL':   # длинная сторона вдоль потока → по ширине
+        if orient.startswith('HORIZONTAL'):  # длинная сторона вдоль потока
             new_w, new_h = long_, short
         else:                        # вертикальный/квадрат → длинная по высоте
             new_w, new_h = short, long_
@@ -5242,22 +5248,53 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         item.setPos(x1, y1)
 
     def _node_orientation(self, node_id):
-        """Ориентация узла для скина/размера — по рёбрам (Часть 1).
+        """Ориентация узла для скина/размера — тем же правилом, что выгрузка
+        (`contact.orientation`): `_axis` холста > стороны подключения рёбер >
+        пропорции bbox; датчик всегда горизонтальный; вертикальная арматура
+        разворачивается (VERTICAL_REVERSE).
 
-        Датчик всегда горизонтальный (как FORCE_HORIZONTAL в FXML).
-        None → рёбер нет; вызывающий код решает по размеру бокса.
+        Прежде ориентация считалась по рёбрам своей функцией и разворота не
+        знала: на шести классах привод рисовался справа, а в САПФИР он слева
+        — нарисованная талия оказывалась по другую сторону от трубы (промах
+        6-30 px). None → узла нет.
         """
         node = self.nodes.get(node_id)
-        if node is not None and node.get('class_name') == 'datchik':
-            return 'HORIZONTAL'
-        return node_orientation_by_edges(node_id, self.nodes, self.edges_data)
+        if node is None:
+            return None
+        from modules.graph.core import contact
+        from modules.graph.core import seating
+        rect = seating._anchor_rect(node)
+        sides = set()
+        if rect is not None:
+            nid = node.get('id')
+            for e in self.edges_data:
+                for role, key in (('source', 'source_point'),
+                                  ('target', 'target_point')):
+                    if e.get(role) != nid:
+                        continue
+                    p = e.get(key)
+                    if p:
+                        s = seating._end_side(rect, float(p[1]), float(p[0]))
+                        if s:
+                            sides.add(s)
+        return contact.orientation(node, sides)[1]
 
     def _oriented_skin_pixmap(self, base_pm: QPixmap, orientation: str) -> QPixmap:
-        """База PNG — вертикальная (кол.1). Горизонталь → поворот −90° CCW (кол.3)."""
-        if orientation == 'HORIZONTAL':
-            return base_pm.transformed(QTransform().rotate(-90),
-                                       Qt.TransformationMode.SmoothTransformation)
-        return base_pm
+        """База PNG — вертикальная, привод справа (кол.1).
+
+        VERTICAL — как есть; VERTICAL_REVERSE — разворот на 180° (привод
+        слева, как в САПФИР); HORIZONTAL — поворот −90° CCW (кол.3);
+        HORIZONTAL_REVERSE — он же плюс 180°.
+        """
+        t = QTransform()
+        if orientation.startswith('HORIZONTAL'):
+            t.rotate(-90)
+        if orientation.endswith('REVERSE'):
+            t.rotate(180)
+        if t.isIdentity():
+            return base_pm
+        return base_pm.transformed(t,
+                                   Qt.TransformationMode.SmoothTransformation)
 
     def _apply_skin_geometry(self, node_id: str):
         """Обновить ориентацию/вписывание скина под текущий bbox."""

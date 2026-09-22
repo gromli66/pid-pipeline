@@ -484,24 +484,19 @@ def _face_groups(graph, byid):
     противоположный конец) на ось грани — порядок слотов, как у движка
     редактора (`edit_engine._slot_seat`): стабилен и без пересечений.
 
-    Прямые (без waypoints) дубли одной пары узлов — дефект сборки графа
-    (дедупа пар нет; решение заказчика «дублей не бывает»): на грани они
-    считаются ОДНОЙ трубой, иначе слоты развели бы один и тот же отрезок
-    в две ступеньки."""
+    Кратные рёбра одной пары узлов (в корпусе такие есть: стрелка
+    направления и арматура, два параллельных стояка) — РАЗНЫЕ трубы и
+    занимают разные слоты: правило заказчика «несколько линий в одну грань —
+    на равном удалении от точки прикрепления» не различает, сколько у них
+    общих концов."""
     from .ports import pinned_on_node
 
     groups = {}
-    seen_pairs = set()
     for e in edges(graph):
         s, t = edge_ends(e)
         wps = e.get("waypoints") or []
         if e.get("_slack") and not wps:
             continue                      # вынужденная прямая — не в слоты
-        if not wps:
-            pair = (s, t) if str(s) <= str(t) else (t, s)
-            if pair in seen_pairs:
-                continue                  # прямой дубль пары — одна труба
-            seen_pairs.add(pair)
         for nid, pkey, other_key in ((s, "source_point", "target_point"),
                                      (t, "target_point", "source_point")):
             node = byid.get(nid)
