@@ -54,18 +54,16 @@ from pathlib import Path
 from typing import Optional
 from xml.sax.saxutils import escape
 
+from modules.graph.core import contact
 from modules.graph_to_fxml import (
     BOUND_TEXT_WRAPPING,
     BRIDGE_GAP_STROKE_FACTOR,
     CLASS_COLORS,
-    CLASS_NAME_TO_SKIN,
     DEFAULT_COLOR,
     DEFAULT_LINE_COLOR,
     DETECTOR_DEFAULT_KKS,
     DETECTOR_DEFAULT_PARAM,
     DETECTOR_DEFAULT_UNIT,
-    DIRECTION_ORIENT_CLASSES,
-    DIRECTION_TO_ORIENTATION,
     FLOW_DETECTOR_GAP_FACTOR,
     FLOW_DETECTOR_PARAM,
     FLOW_DETECTOR_UNIT,
@@ -73,11 +71,8 @@ from modules.graph_to_fxml import (
     LINE_STROKE_WIDTH,
     NAPRAVLENIE_CLASS_NAME,
     PANE_BACKGROUND,
-    REVERSE_VERTICAL_CLASSES,
-    SKIP_CLASS_NAMES,
     TEXT_STYLES,
     SkinGeometry,
-    _DIRECTION_TO_AXIS,
     _infer_napravlenie_direction,
     apply_contact_offset,
     build_node_kks_map,
@@ -112,38 +107,19 @@ def _detector_size() -> tuple:
 def _skin_info(node):
     """Скин по class_name. Без легаси-fallback по class_id (решение «2−»):
     на холсте class_name есть у всех узлов."""
-    cn = node.get('class_name', '')
-    if cn in SKIP_CLASS_NAMES:
-        return None
-    return CLASS_NAME_TO_SKIN.get(cn)
+    return contact.skin_info(node)
 
 
 def _axis_and_orientation(node, connections):
-    """Ось ('H'|'V') и orientation для эмита.
+    """Ось ('H'|'V') и orientation для эмита — общее правило
+    `contact.orientation` (им же сажаются концы труб, иначе порт-талия
+    посадки и талия контрола в файле разъедутся).
 
-    Приоритет: направление классификатора (nasos/шайба) > `_axis` холста >
-    стороны подключения рёбер > пропорции bbox. REVERSE-разворот вертикальной
-    арматуры — поверх (только графика, ось не меняет).
+    Приоритет: датчик всегда H > направление классификатора (nasos/шайба) >
+    `_axis` холста > стороны подключения рёбер > пропорции bbox.
+    REVERSE-разворот вертикальной арматуры — поверх (только графика).
     """
-    cn = node.get('class_name')
-    d = node.get('direction') or node.get('flow_direction')
-    if cn in DIRECTION_ORIENT_CLASSES and d in DIRECTION_TO_ORIENTATION:
-        axis = 'V' if _DIRECTION_TO_AXIS[d] == 'VERTICAL' else 'H'
-        return axis, DIRECTION_TO_ORIENTATION[d]
-
-    axis = node.get('_axis')
-    if axis not in ('H', 'V'):
-        sides = {c.side for c in connections}
-        if sides:
-            axis = 'H' if ({'LEFT', 'RIGHT'} & sides) else 'V'
-        else:
-            b = parse_bbox(node.get('bbox'))
-            axis = 'H' if (not b or b['width'] >= b['height']) else 'V'
-
-    emit = 'HORIZONTAL' if axis == 'H' else 'VERTICAL'
-    if axis == 'V' and cn in REVERSE_VERTICAL_CLASSES:
-        emit = 'VERTICAL_REVERSE'
-    return axis, emit
+    return contact.orientation(node, {c.side for c in connections})
 
 
 def generate_canvas_control(node, node_id: str, connections, kks=None,

@@ -95,12 +95,12 @@ def _load_skin_aspect():
 
 
 def _class_to_skin():
-    """class_name -> skinType (для aspect по 0-осям). Мягкий импорт."""
-    try:
-        from modules.graph_to_fxml import CLASS_NAME_TO_SKIN
-        return {c: spec[1] for c, spec in CLASS_NAME_TO_SKIN.items()}
-    except Exception:
-        return {}
+    """class_name -> skinType (для aspect по 0-осям и `_skin_content_rect`).
+
+    Таблица — в лёгком `contact` (прежде мягкий импорт экспортёра с
+    молчаливым `except -> {}` без него тихо отключал аспекты)."""
+    from .contact import CLASS_NAME_TO_SKIN
+    return {c: spec[1] for c, spec in CLASS_NAME_TO_SKIN.items()}
 
 
 _SKIN_ASPECT = _load_skin_aspect()
