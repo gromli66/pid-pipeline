@@ -169,9 +169,19 @@ def test_non_valves_have_no_ports():
     for cn in ('nasos', 'teploobmen', 'datchik', 'output', 'unknow',
                'connector'):
         assert face_refs({'class_name': cn, '_axis': 'H'}, rect) is None
-    assert face_refs({'class_name': 'armatura_electro'}, None) is None
-    assert face_refs({'class_name': 'armatura_electro'},
+    assert face_refs({'class_name': 'armatura_electro', '_axis': 'H'},
+                     None) is None
+    assert face_refs({'class_name': 'armatura_electro', '_axis': 'H'},
                      (0.0, 0.0, 0.0, 10.0)) is None
+
+
+def test_raster_valve_without_axis_has_no_port():
+    """Узел растра («Проверка схемы») — без `_axis`: бокс детекции, талия
+    к нему не приложима — середина, как прежде."""
+    rect = (0.0, 0.0, 42.0, 37.8)
+    assert face_refs({'class_name': 'armatura_electro'}, rect) is None
+    assert face_ref({'class_name': 'armatura_electro'}, rect, 'L') \
+        == (18.9, False)
 
 
 def test_face_ref_hard_only_on_axis_faces():

@@ -29,37 +29,13 @@ from __future__ import annotations
 
 import math
 
+from . import contact
 from . import ports as port_model
 from . import seating
-
-VERTEX_MARGIN = 6.0   # px: конец не ближе к вершине контура (реш. 2026-08-01)
-INK_GAP = 4.0         # px: чистый зазор между КРАЯМИ линий в слотах
-INK_DEFAULT = 2.0     # px: толщина линии без render_width
-
-
-def _ink_w(e) -> float:
-    """Толщина чернил ребра (render_width, иначе дефолт)."""
-    try:
-        return float(e.get("render_width") or INK_DEFAULT)
-    except (TypeError, ValueError):
-        return INK_DEFAULT
-
-
-def _ink_pitch(widths, length, k) -> float:
-    """Шаг слотов с учётом чернил (реш. заказчика «смена толщины =
-    пересчёт», репро 2026-08-01 «после ресайза ребра наслаиваются»):
-    зазор между краями соседних линий >= INK_GAP для двух самых толстых
-    участников. При дефолтной толщине бит-равен прежнему
-    min(SLOT_PITCH, length/(k+1))."""
-    top = sorted(widths, reverse=True)[:2]
-    need = (sum(top) / 2.0 if len(top) == 2 else top[0]) + INK_GAP
-    base = min(port_model.SLOT_PITCH, length / (k + 1))
-    if need <= base:
-        return base                          # тонкие линии — бит-в-бит
-    # чернилам тесно в «третях» грани: разрешаем шире, но крайние слоты
-    # держат отступ 6px от углов (VERTEX_MARGIN)
-    pitch_max = max(base, (length - 2 * VERTEX_MARGIN) / max(k - 1, 1))
-    return min(need, pitch_max)
+# шаг «по чернилам» живёт в ports (им же слотирует серверная посадка);
+# имена остаются здесь — их читают тесты и редактор
+from .ports import INK_DEFAULT, INK_GAP, VERTEX_MARGIN  # noqa: F401
+from .ports import _ink_pitch, _ink_w
 
 
 _NORMAL_SIDE = {(1.0, 0.0): "R", (-1.0, 0.0): "L",
@@ -157,6 +133,17 @@ def _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y,
     length = (x2 - x1) if horiz else (y2 - y1)
     slots = port_model.side_slots(node, side, k, rect=rect,
                                   pitch=_ink_pitch(widths, length, k))
+    if k == 1 and not (edge_data.get("waypoints") or []):
+        # Допуск середины (решение заказчика 2026-09-22 «порт выверенный,
+        # если скин есть, и допуск, если скина нет»): одиночная прямая
+        # труба на невыверенной грани уходит от середины ради прямизны не
+        # дальше MID_SNAP; выверенный порт клапана не уступает.
+        mid, hard = contact.face_ref(node, rect, side)
+        want = ref_x if horiz else ref_y
+        lo, hi = (x1, x2) if horiz else (y1, y2)
+        if not hard and abs(want - mid) <= contact.MID_SNAP \
+                and lo <= want <= hi:
+            return (want, slots[0][1]) if horiz else (slots[0][0], want)
     coords = [s[1 if not horiz else 0] for s in slots]
     order = sorted(range(k), key=lambda j: (abs(j - idx), j))
     for j in order:

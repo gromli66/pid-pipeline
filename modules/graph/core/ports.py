@@ -13,6 +13,9 @@ ConnectionPoints — §6.1 EDITOR_AFTER_LAYOUT_PLAN):
   * ПОРТЫ-КАНДИДАТЫ — производные, НЕ хранятся (`candidate_ports`):
       бокс / словарный скин  → центры четырёх граней прямоугольника посадки
                                (`seating._anchor_rect`: у скина content-rect);
+      клапан холста          → на двух гранях вдоль оси трубы — выверенный
+                               порт «талии» (`contact.face_refs`, 2026-09-22),
+                               на остальных — центры граней;
       полигон без скина      → середины ПРЯМЫХ участков контура длиной
                                >= MIN_POLY_EDGE (перпендикулярный вход);
       коннектор              → центроид (единственный порт).
@@ -27,13 +30,14 @@ ConnectionPoints — §6.1 EDITOR_AFTER_LAYOUT_PLAN):
     выигрывает РАДИКАЛЬНО (короче на >= RADICAL_LEN_FACTOR * snap_threshold
     И не больше колен). Порог смены >> порога «остаться» — порт не хлопает.
 
-Канон `modules/graph/core/seating` НЕ меняется (сервер на нём, бит-эталон):
-порт решает, КУДА сажать, канон — КАК конец лежит на форме.
+Порт решает, КУДА сажать, канон `seating` — КАК конец лежит на форме.
 Чистый python (stdlib) без Qt и shapely.
 """
 from __future__ import annotations
 
 import math
+
+from . import contact
 
 MIN_POLY_EDGE = 16.0      # px: минимальная длина прямого участка контура
 SLOT_PITCH = 18.0         # px: шаг слотов вокруг середины грани (Э2b)
@@ -42,6 +46,38 @@ BACKSIDE_EPS = 0.5        # px: допуск изнанки (dot нормали 
 RADICAL_LEN_FACTOR = 1.5  # выигрыш длины (в snap_threshold) для смены порта
 STRAIGHT_TOL = 3.0        # px: соосность порт—ref => маршрут без колен
 _COLLINEAR_SIN = 0.02     # слияние почти-коллинеарных рёбер контура (~1.15°)
+VERTEX_MARGIN = 6.0       # px: конец не ближе к вершине/углу (реш. 2026-08-01)
+INK_GAP = 4.0             # px: чистый зазор между КРАЯМИ линий в слотах
+INK_DEFAULT = 2.0         # px: толщина линии без render_width
+
+
+def _ink_w(e) -> float:
+    """Толщина чернил ребра (render_width, иначе дефолт)."""
+    try:
+        return float(e.get("render_width") or INK_DEFAULT)
+    except (TypeError, ValueError):
+        return INK_DEFAULT
+
+
+def _ink_pitch(widths, length, k) -> float:
+    """Шаг слотов с учётом чернил (реш. заказчика «смена толщины =
+    пересчёт», репро 2026-08-01 «после ресайза ребра наслаиваются»):
+    зазор между краями соседних линий >= INK_GAP для двух самых толстых
+    участников. При дефолтной толщине бит-равен прежнему
+    min(SLOT_PITCH, length/(k+1)).
+
+    Живёт здесь, а не в движке редактора: слоты раскладывает и серверная
+    посадка (`seating.seat_slots`), а `seating` не может импортировать
+    `edit_engine` (тот импортирует `seating`)."""
+    top = sorted(widths, reverse=True)[:2]
+    need = (sum(top) / 2.0 if len(top) == 2 else top[0]) + INK_GAP
+    base = min(SLOT_PITCH, length / (k + 1))
+    if need <= base:
+        return base                          # тонкие линии — бит-в-бит
+    # чернилам тесно в «третях» грани: разрешаем шире, но крайние слоты
+    # держат отступ 6px от углов (VERTEX_MARGIN)
+    pitch_max = max(base, (length - 2 * VERTEX_MARGIN) / max(k - 1, 1))
+    return min(need, pitch_max)
 
 
 # ────────────────────────── геометрия узла ──────────────────────────
@@ -145,7 +181,10 @@ def candidate_ports(node, rect=None):
     (nx, ny) — наружная нормаль грани/участка; (0, 0) — точечный порт
     (коннектор/фолбэк на центроид). rect — переопределение рамки посадки
     (редактор с 2026-08-01 передаёт bbox: «символ тянется на рамку»);
-    None — серверный канон `seating._anchor_rect` (бит-эталон)."""
+    None — серверный канон `seating._anchor_rect`.
+
+    Клапан холста на гранях вдоль оси трубы — выверенный порт талии
+    (`contact.face_refs`); у прочих узлов порты бит-в-бит прежние."""
     from modules.graph.core import seating
     from modules.graph.core.graph_access import is_connector
 
@@ -162,8 +201,11 @@ def candidate_ports(node, rect=None):
     if rect is not None:
         x1, y1, x2, y2 = rect
         cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-        return [(x2, cy, 1.0, 0.0, False), (x1, cy, -1.0, 0.0, False),
-                (cx, y1, 0.0, -1.0, False), (cx, y2, 0.0, 1.0, False)]
+        refs = contact.face_refs(node, rect) or {}
+        return [(x2, refs.get("R", cy), 1.0, 0.0, False),
+                (x1, refs.get("L", cy), -1.0, 0.0, False),
+                (refs.get("T", cx), y1, 0.0, -1.0, False),
+                (refs.get("B", cx), y2, 0.0, 1.0, False)]
     cx, cy = _node_cxy(node)
     return [(cx, cy, 0.0, 0.0, False)]
 
@@ -329,14 +371,17 @@ def rescale_edge_pins(node, edges, old_bbox, new_bbox):
 
 
 def side_slots(node, side, k, rect=None, pitch=None):
-    """k слотов на грани рамки посадки, симметрично вокруг середины (Э2b).
+    """k слотов на грани рамки посадки, симметрично вокруг ОПОРНОЙ ТОЧКИ.
 
-    Решение заказчика 2026-07-31: одна труба в грань — ровно середина
+    Решение заказчика 2026-07-31: одна труба в грань — ровно опорная точка
     (k=1 бит-равен candidate_ports), несколько — равномерные слоты вокруг
-    середины, шаг min(SLOT_PITCH, длина_грани/(k+1)) — крайние слоты не
-    доходят до углов по построению. side из {'L','R','T','B'}; порядок —
-    по возрастанию координаты вдоль грани. rect — переопределение рамки
-    (редактор: bbox). [(x, y, nx, ny, False), ...]."""
+    неё, шаг min(SLOT_PITCH, длина_грани/(k+1)) — крайние слоты не
+    доходят до углов по построению. Опорная точка — середина грани, у
+    клапана холста на осевой грани — выверенный порт талии (2026-09-22):
+    он смещён от середины, и шаг дополнительно зажимается так, чтобы
+    крайние слоты держали VERTEX_MARGIN от угла. side из {'L','R','T','B'};
+    порядок — по возрастанию координаты вдоль грани. rect —
+    переопределение рамки (редактор: bbox). [(x, y, nx, ny, False), ...]."""
     from modules.graph.core import seating
 
     if rect is None:
@@ -347,11 +392,17 @@ def side_slots(node, side, k, rect=None, pitch=None):
     horiz = side in ("T", "B")               # ось грани — x
     lo, hi = (x1, x2) if horiz else (y1, y2)
     center = (lo + hi) / 2.0
+    ref = (contact.face_refs(node, rect) or {}).get(side)
     if k == 1:
         pitch = 0.0
     elif pitch is None:
         pitch = min(SLOT_PITCH, (hi - lo) / (k + 1))
     # pitch задан вызывающим (движок: шаг «по чернилам», Э10-лайт)
+    if ref is not None:
+        center = ref
+        if k > 1:
+            half = min(center - lo, hi - center) - VERTEX_MARGIN
+            pitch = max(0.0, min(pitch, 2.0 * half / (k - 1)))
     offs = [(j - (k - 1) / 2.0) * pitch for j in range(k)]
     if side == "L":
         return [(x1, center + o, -1.0, 0.0, False) for o in offs]

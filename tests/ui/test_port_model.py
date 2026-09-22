@@ -619,9 +619,34 @@ def test_open_keeps_end_on_candidate_port(tmp_path):
     assert g["links"][0]["source_point"] == [100.0, 120.0]
 
 
-def test_open_straightness_beats_port(tmp_path):
-    """Соосные пары продолжают давать прямые: канон посадил конец строгой
-    прямой к ref — прямизна важнее порта (конец уезжает с центра грани)."""
+def test_open_straightness_beats_port_within_mid_snap(tmp_path):
+    """ПЕРЕОБЪЯВЛЕН 2026-09-22 (модель точек прикрепления, решение заказчика
+    «допуск, если скина нет»): середина бокса уступает прямой НЕ ДАЛЬШЕ
+    `contact.MID_SNAP` (3 px). Коннектор на 2 px ниже середины — прямая,
+    конец уезжает с центра грани на 2 px."""
+    from ui.tabs.base_graph_tab import _reseat_canvas_endpoints
+
+    nodes = [
+        {"id": "a", "type": "equipment", "class_name": "unknow",
+         "centroid": [100.0, 100.0], "bbox": [80.0, 80.0, 120.0, 120.0]},
+        {"id": "b", "type": "connector", "class_name": "connector",
+         "centroid": [102.0, 300.0], "bbox": None},
+    ]
+    links = [{"id": "e1", "source": "a", "target": "b",
+              "source_point": [100.0, 120.0], "target_point": [102.0, 300.0],
+              "waypoints": []}]
+    p = _open_canvas(tmp_path, nodes, links)
+
+    assert _reseat_canvas_endpoints(p)
+    g = json.loads(p.read_text(encoding="utf-8"))
+    assert g["links"][0]["source_point"] == [102.0, 120.0], \
+        "ось конна в пределах допуска середины — строгая прямая"
+
+
+def test_open_middle_holds_beyond_mid_snap(tmp_path):
+    """Коннектор на 10 px ниже середины бокса — дальше допуска: конец остаётся
+    в середине грани (прежде канон уводил его к оси конна «куда-то»);
+    ступеньку разводит маршрут. Файл не переписывается — чинить нечего."""
     from ui.tabs.base_graph_tab import _reseat_canvas_endpoints
 
     nodes = [
@@ -635,10 +660,9 @@ def test_open_straightness_beats_port(tmp_path):
               "waypoints": []}]
     p = _open_canvas(tmp_path, nodes, links)
 
-    assert _reseat_canvas_endpoints(p)
+    assert not _reseat_canvas_endpoints(p)
     g = json.loads(p.read_text(encoding="utf-8"))
-    assert g["links"][0]["source_point"] == [110.0, 120.0], \
-        "ось конна накрыта гранью — канон обязан дать строгую прямую"
+    assert g["links"][0]["source_point"] == [100.0, 120.0]
 
 
 def test_open_keeps_end_on_manual_port(tmp_path):

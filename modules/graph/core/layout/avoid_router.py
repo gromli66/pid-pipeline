@@ -48,7 +48,7 @@ from .params import LayoutParams
 from ..graph_access import edge_ends, edge_polyline, edges, is_connector, \
     nodes_by_id
 from ..pretransform import FIXED_SIZES
-from ..seating import _anchor_rect, reseat_edge
+from ..seating import _anchor_rect, _end_side, reseat_edge, slot_faces
 
 log = logging.getLogger(__name__)
 
@@ -309,6 +309,10 @@ def _route_pass(graph, byid, geoms, edge_list, p, force_ports):
 
     conns = []          # (edge_id, edge, ConnRef, pin_xy, straight_exempt)
     pin_class = 100
+    # грани, где сидят >= 2 концов, разложены слотами (seating.seat_slots):
+    # пин такого конца — его слот, порт-судья увёл бы его в опорную точку
+    # и свёл с соседом в одну
+    busy = slot_faces(graph, byid)
     for e in edge_list:
         eid = e.get("id")
         sp, tp = e.get("source_point"), e.get("target_point")
@@ -330,9 +334,12 @@ def _route_pass(graph, byid, geoms, edge_list, p, force_ports):
                 ox, oy = float(other[1]), float(other[0])
                 straight = abs(x - ox) <= STRAIGHT_EPS \
                     or abs(y - oy) <= STRAIGHT_EPS
+                rect = _anchor_rect(node)
+                on_slot = rect is not None and \
+                    (nid, _end_side(rect, x, y)) in busy
                 if straight and not force_ports:
                     exempt = True
-                else:
+                elif not on_slot:
                     x, y = _pin_port(node, (x, y), (ox, oy))
                 pin_xy.append((x, y))
                 ref, (bx1, by1), bb = shape_refs[nid]
@@ -472,7 +479,7 @@ def apply_routing(graph, orig, base_v16, params=None, legal=None):
         # прямого портового маршрута (без waypoints) концы уже в портах,
         # пересаживать не по чему — прямизну судит _ortho ниже.
         if e["waypoints"]:
-            reseat_edge(byid, e)
+            reseat_edge(byid, e, model=True)
         # посадка не имеет права ни скосить подводящий сегмент, ни увести
         # конец на другую грань (пин с ConnDirAll может выйти не той
         # стороной — судья `_side_changed` такое режет, откатываем адресно)

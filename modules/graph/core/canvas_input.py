@@ -41,8 +41,9 @@ def to_canvas(validated_graph, image_hw=None):
 
     Здесь лежат ЧИСЛА, а не геометрия: `canvas_input` тянет `text_import`, а
     тот идёт в UI, где shapely нет. Пары считает слой раскладки
-    (`layout/_shapes.py`), центроиды к тому моменту те же — `apply_fixed_sizes`
-    двигает только bbox.
+    (`layout/_shapes.py`) по этим габаритам. `apply_fixed_sizes` двигает bbox
+    и — у клапанов — центроид: он встаёт в точку талии на линии трубы
+    (решение заказчика 2026-09-22), остальные центроиды те же.
     """
     g = deepcopy(validated_graph)
     if image_hw is None:

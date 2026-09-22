@@ -34,6 +34,8 @@ from collections import defaultdict
 from copy import deepcopy
 from pathlib import Path
 
+from . import contact
+
 # --- Целевой холст ---
 TARGET_W = 1920.0
 TARGET_H = 1080.0
@@ -99,8 +101,7 @@ def _class_to_skin():
 
     Таблица — в лёгком `contact` (прежде мягкий импорт экспортёра с
     молчаливым `except -> {}` без него тихо отключал аспекты)."""
-    from .contact import CLASS_NAME_TO_SKIN
-    return {c: spec[1] for c, spec in CLASS_NAME_TO_SKIN.items()}
+    return {c: spec[1] for c, spec in contact.CLASS_NAME_TO_SKIN.items()}
 
 
 _SKIN_ASPECT = _load_skin_aspect()
@@ -202,10 +203,49 @@ def _fixed_wh(class_name, axis):
     return float(w), float(h)
 
 
+def _pipe_line(node, adj, axis):
+    """Поперечная координата трубы через узел по растру: среднее по точкам
+    подключения на ОСЕВЫХ гранях (ось H — y точек слева/справа от центроида,
+    V — x точек сверху/снизу); прочие подключения (третий порт, привод) не
+    в счёт. None — осевых точек нет."""
+    c = node.get("centroid")
+    if not c:
+        return None
+    cy, cx = c[0], c[1]
+    vals = []
+    for _eid, (py, px) in adj.get(node["id"], []):
+        horiz = abs(px - cx) >= abs(py - cy)
+        if axis == "H" and horiz:
+            vals.append(py)
+        elif axis == "V" and not horiz:
+            vals.append(px)
+    return sum(vals) / len(vals) if vals else None
+
+
+def _waist_offset(node, axis, w, h):
+    """Смещение выверенного порта клапана от центра фикс-бокса поперёк
+    трубы (px): +вниз для H, +вправо для V; 0 — не клапан/симметричный."""
+    probe = dict(node)
+    probe["_axis"] = axis
+    refs = contact.face_refs(probe, (0.0, 0.0, w, h))
+    if not refs:
+        return 0.0
+    return (refs["L"] - h / 2.0) if axis == "H" else (refs["T"] - w / 2.0)
+
+
 def apply_fixed_sizes(graph, adj):
     """Скин-классам задать bbox = фикс-размер вокруг центроида. In-place.
 
     Ориентацию (H/V) кладём в node['_axis'] для downstream (throat, экспорт).
+
+    Клапан (выверенный порт, `contact.face_refs`) ставится на трубу ТАЛИЕЙ
+    (решение заказчика 2026-09-22): поперечная координата центроида — линия
+    трубы по растру (`_pipe_line`), бокс сдвинут так, что талия лежит на ней,
+    то есть у клапана центроид — точка талии, а не центр бокса. Всё, что
+    дальше работает по центроидам (ряды раскладки, раздвигание, судьи,
+    канон посадки), само держит талию на линии трубы. Нет осевых точек или
+    линия дальше половины поперечника бокса — линией трубы считается
+    поперечная координата детектированного центроида.
 
     У узла ровно ОДНА форма, и выбирается она по наличию класса в таблице
     (решение заказчика 2026-07-28, §3.7 плана AUTO_LAYOUT_INTEGRATION.md):
@@ -225,7 +265,23 @@ def apply_fixed_sizes(graph, adj):
         axis = _node_axis(n, adj)
         w, h = _fixed_wh(cn, axis)
         cy, cx = c[0], c[1]
-        n["bbox"] = [cx - w / 2.0, cy - h / 2.0, cx + w / 2.0, cy + h / 2.0]
+        by, bx = cy, cx                      # центр бокса
+        if contact.is_valve(n):
+            off = _waist_offset(n, axis, w, h)
+            line = _pipe_line(n, adj, axis)
+            cross = cy if axis == "H" else cx
+            half = (h if axis == "H" else w) / 2.0
+            if line is None or abs(line - cross) > half:
+                # линии трубы по растру нет (или она вне бокса): лучшая её
+                # оценка — поперечная координата детектированного центроида;
+                # талия садится на неё, как и в основной ветке
+                line = cross
+            if axis == "H":
+                cy, by = line, line - off
+            else:
+                cx, bx = line, line - off
+            n["centroid"] = [cy, cx]
+        n["bbox"] = [bx - w / 2.0, by - h / 2.0, bx + w / 2.0, by + h / 2.0]
         n["_axis"] = axis
         if n.get("segmentation"):
             n["segmentation"] = None
@@ -487,13 +543,17 @@ def seat_edge_endpoints(graph):
     Импорт внутри функции: `seating` сам берёт отсюда `FIXED_SIZES` и
     `project_ray_to_polygon`, на уровне модуля вышел бы цикл.
 
+    Посадка — по модели точек прикрепления (решение заказчика 2026-09-22):
+    выверенный порт клапана, середина рамки с допуском MID_SNAP, слоты
+    вокруг опорной точки (`seating`, `model=True`).
+
     Возвращает число сдвинутых концов (для статистики pretransform).
     """
     from .seating import reseat_all_endpoints
 
     before = [(e.get("source_point"), e.get("target_point"))
               for e in _edges(graph)]
-    reseat_all_endpoints(graph)
+    reseat_all_endpoints(graph, model=True, slots=True)
     fixed = 0
     for (sp0, tp0), e in zip(before, _edges(graph)):
         fixed += (e.get("source_point") != sp0) + (e.get("target_point") != tp0)

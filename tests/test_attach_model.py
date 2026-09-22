@@ -1,0 +1,312 @@
+# -*- coding: utf-8 -*-
+"""Модель точек прикрепления (решение заказчика 2026-09-22) в ядре посадки.
+
+  * клапан холста — выверенный порт «талии» (жёсткий: ради прямой не уступает);
+  * середина прочей рамки — уступает ради прямой не дальше MID_SNAP (3 px);
+  * конец без замка оси — в опорную точку грани, а не «куда-то»;
+  * несколько концов на грани — слоты вокруг опорной точки;
+  * пин оператора — истина;
+  * канон (`model=False`) — прежний: внутренние стадии раскладки и растр.
+Координаты: точки данных [y, x], bbox [x1, y1, x2, y2].
+"""
+from __future__ import annotations
+
+import pytest
+
+from modules.graph.core import contact, edit_engine, ports, seating
+from modules.graph.core.graph_access import nodes_by_id
+
+# armatura_electro по оси H: бокс 42x37.8, талия ниже центра на 8.3916
+VALVE_H = {"id": "v", "type": "equipment", "class_name": "armatura_electro",
+           "_axis": "H", "centroid": [100.0, 200.0],
+           "bbox": [179.0, 81.1, 221.0, 118.9]}
+WAIST_Y = 100.0 + 0.222 * 37.8           # 108.3916
+
+
+def _box(nid, cx, cy, w=40.0, h=40.0, cn="unknow"):
+    return {"id": nid, "type": "equipment", "class_name": cn,
+            "centroid": [cy, cx],
+            "bbox": [cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2]}
+
+
+def _conn(nid, cx, cy):
+    return {"id": nid, "type": "connector", "class_name": "connector",
+            "centroid": [cy, cx], "bbox": None}
+
+
+def _edge(eid, s, t, sp=None, tp=None, wps=None):
+    return {"id": eid, "source": s, "target": t,
+            "source_point": sp, "target_point": tp,
+            "waypoints": list(wps or [])}
+
+
+def _graph(nodes, links):
+    return {"nodes": nodes, "links": links, "graph": {}}
+
+
+# ─────────────────────────────── порты ───────────────────────────────
+
+def test_candidate_ports_of_valve_sit_in_waist():
+    got = ports.candidate_ports(VALVE_H)
+    right, left, top, bottom = got
+    assert right[:2] == (221.0, pytest.approx(WAIST_Y))
+    assert left[:2] == (179.0, pytest.approx(WAIST_Y))
+    # неосевые грани — середина
+    assert top[:2] == (200.0, 81.1) and bottom[:2] == (200.0, 118.9)
+
+
+def test_candidate_ports_of_box_unchanged():
+    b = _box("b", 100.0, 100.0)
+    assert ports.candidate_ports(b) == [
+        (120.0, 100.0, 1.0, 0.0, False), (80.0, 100.0, -1.0, 0.0, False),
+        (100.0, 80.0, 0.0, -1.0, False), (100.0, 120.0, 0.0, 1.0, False)]
+
+
+def test_raster_valve_ports_unchanged():
+    """Клапан без `_axis` (растр) — порты в центрах граней, как прежде."""
+    v = dict(VALVE_H)
+    v.pop("_axis")
+    assert ports.candidate_ports(v)[0][:2] == (221.0, pytest.approx(100.0))
+
+
+def test_side_slots_center_on_waist_and_keep_corner_margin():
+    one = ports.side_slots(VALVE_H, "R", 1)
+    assert one[0][:2] == (221.0, pytest.approx(WAIST_Y))
+    two = ports.side_slots(VALVE_H, "R", 2)
+    ys = [s[1] for s in two]
+    assert sum(ys) / 2 == pytest.approx(WAIST_Y)       # симметрично талии
+    # до нижнего угла 10.5 px, отступ 6 => шаг не больше 9
+    assert max(ys) <= 118.9 - ports.VERTEX_MARGIN + 1e-9
+
+
+def test_side_slots_of_box_bit_identical():
+    b = _box("b", 100.0, 100.0)
+    s = ports.side_slots(b, "R", 3)                   # min(18, 40/4) = 10
+    assert [p[1] for p in s] == [90.0, 100.0, 110.0]
+
+
+# ─────────────────────────── канон и модель ───────────────────────────
+
+def test_legacy_canon_unchanged_by_default():
+    """Бокс и коннектор на 10 px ниже середины: канон — прямая «куда-то»."""
+    g = _graph([_box("a", 100.0, 100.0), _conn("c", 300.0, 110.0)],
+               [_edge("e", "a", "c")])
+    seating.reseat_all_endpoints(g)
+    assert g["links"][0]["source_point"] == [110.0, 120.0]
+
+
+def test_model_middle_yields_within_mid_snap_only():
+    g = _graph([_box("a", 100.0, 100.0), _conn("c", 300.0, 102.0)],
+               [_edge("e", "a", "c")])
+    seating.reseat_all_endpoints(g, model=True)
+    assert g["links"][0]["source_point"] == [102.0, 120.0]   # прямая
+
+    g = _graph([_box("a", 100.0, 100.0), _conn("c", 300.0, 110.0)],
+               [_edge("e", "a", "c")])
+    seating.reseat_all_endpoints(g, model=True)
+    assert g["links"][0]["source_point"] == [100.0, 120.0]   # середина
+
+
+def test_model_valve_port_is_hard_and_neighbour_aligns_to_it():
+    """Бокс напротив талии (в пределах своего допуска) выравнивается на
+    линию талии; сам клапан из талии не уходит."""
+    box = _box("b", 320.0, WAIST_Y - 2.0)             # середина на 2 px выше
+    g = _graph([dict(VALVE_H), box], [_edge("e", "v", "b")])
+    seating.reseat_all_endpoints(g, model=True)
+    sp, tp = g["links"][0]["source_point"], g["links"][0]["target_point"]
+    assert sp == [pytest.approx(WAIST_Y), 221.0]
+    assert tp == [pytest.approx(WAIST_Y), 300.0]
+
+
+def test_model_valve_port_does_not_yield_to_connector():
+    """Коннектор на центральной линии бокса клапана (а не на талии): порт
+    не уступает — конец в талии, ступеньку разводит маршрут."""
+    g = _graph([dict(VALVE_H), _conn("c", 400.0, 100.0)],
+               [_edge("e", "v", "c")])
+    seating.reseat_all_endpoints(g, model=True)
+    assert g["links"][0]["source_point"] == [pytest.approx(WAIST_Y), 221.0]
+
+
+def test_model_anchor_without_lock_is_the_port_not_the_neighbour():
+    """Сосед далеко по диагонали: канон зажал бы его координату в грань,
+    модель ставит конец в опорную точку."""
+    b = _box("a", 100.0, 100.0)
+    assert seating.node_anchor(b, 400.0, 115.0) == (120.0, 115.0)
+    assert seating.node_anchor(b, 400.0, 115.0, model=True) == (120.0, 100.0)
+    assert seating.node_anchor(VALVE_H, 400.0, 90.0, model=True) \
+        == (221.0, pytest.approx(WAIST_Y))
+
+
+def test_model_pin_is_truth():
+    e = _edge("e", "a", "c")
+    e["pin_source"] = {"dx": 20.0, "dy": -12.0}         # правая грань, выше
+    g = _graph([_box("a", 100.0, 100.0), _conn("c", 300.0, 100.0)], [e])
+    seating.reseat_all_endpoints(g, model=True)
+    assert g["links"][0]["source_point"] == [88.0, 120.0]
+
+
+# ─────────────────────────────── слоты ───────────────────────────────
+
+def test_server_slots_around_waist_ordered_by_far_ends():
+    far_hi = _box("u", 400.0, 60.0)                     # выше
+    far_lo = _box("d", 400.0, 160.0)                    # ниже
+    g = _graph([dict(VALVE_H), far_hi, far_lo],
+               [_edge("e1", "v", "d"), _edge("e2", "v", "u")])
+    seating.reseat_all_endpoints(g, model=True, slots=True)
+    ys = {e["id"]: e["source_point"][0] for e in g["links"]}
+    assert ys["e2"] < ys["e1"]                          # порядок по дальним
+    assert (ys["e1"] + ys["e2"]) / 2 == pytest.approx(WAIST_Y)
+    assert all(e["source_point"][1] == 221.0 for e in g["links"])
+
+
+def test_server_slots_partner_follows_when_it_can_yield():
+    """Две прямые трубы из одной грани бокса в два бокса напротив: концы
+    разъехались слотами, партнёры (середины в пределах допуска) доехали на
+    те же линии — трубы остались прямыми."""
+    a = _box("a", 100.0, 100.0, h=60.0)
+    p = _box("p", 300.0, 100.0, h=60.0)
+    q = _box("q", 300.0, 100.0, h=60.0)
+    q["id"] = "q"
+    g = _graph([a, p, q], [_edge("e1", "a", "p"), _edge("e2", "a", "q")])
+    seating.reseat_all_endpoints(g, model=True, slots=True)
+    for e in g["links"]:
+        assert e["source_point"][0] != 100.0            # слот, не середина
+    # слоты симметричны середине a
+    ys = sorted(e["source_point"][0] for e in g["links"])
+    assert (ys[0] + ys[1]) / 2 == pytest.approx(100.0)
+
+
+def test_slot_faces_counts_only_shared_faces():
+    g = _graph([dict(VALVE_H), _box("u", 400.0, 60.0), _box("d", 400.0, 160.0)],
+               [_edge("e1", "v", "d"), _edge("e2", "v", "u")])
+    seating.reseat_all_endpoints(g, model=True, slots=True)
+    assert seating.slot_faces(g) == {("v", "R")}
+
+
+# ───────────────────────── страховка прямизны ─────────────────────────
+
+def test_straighten_unrouted_uses_full_face_for_boxes():
+    """Ступенька 10 px без маршрута: страховка выпрямляет, середина бокса
+    уступает на всю грань."""
+    g = _graph([_box("a", 100.0, 100.0), _conn("c", 300.0, 110.0)],
+               [_edge("e", "a", "c", sp=[100.0, 120.0], tp=[110.0, 300.0])])
+    assert seating.straighten_unrouted(g) == 1
+    assert g["links"][0]["source_point"] == [110.0, 120.0]
+
+
+def test_straighten_unrouted_box_yields_before_valve_port():
+    """Сначала уступает середина бокса (на всю грань) — порт клапана держится;
+    ребро помечается `_slack=1`, и повторная посадка держит его прямым."""
+    box = _box("b", 320.0, 100.0)                      # середина бокса 100
+    g = _graph([dict(VALVE_H), box],
+               [_edge("e", "v", "b", sp=[WAIST_Y, 221.0], tp=[100.0, 300.0])])
+    stats = {}
+    assert seating.straighten_unrouted(g, stats=stats) == 1
+    e = g["links"][0]
+    assert e["source_point"] == [pytest.approx(WAIST_Y), 221.0]
+    assert e["target_point"] == [pytest.approx(WAIST_Y), 300.0]
+    assert e["_slack"] == 1 and stats["ports_yielded"] == 0
+    seating.reseat_all_endpoints(g, model=True, slots=True)
+    assert e["target_point"] == [pytest.approx(WAIST_Y), 300.0]
+
+
+def test_straighten_unrouted_last_resort_yields_valve_port():
+    """Обе точки жёсткие (порт клапана и коннектор) и разошлись, маршрута нет:
+    последний рубеж — порт уступает, труба прямая, а не косая; `_slack=2`,
+    счётчик ports_yielded."""
+    g = _graph([dict(VALVE_H), _conn("c", 400.0, 100.0)],
+               [_edge("e", "v", "c", sp=[WAIST_Y, 221.0], tp=[100.0, 400.0])])
+    stats = {}
+    assert seating.straighten_unrouted(g, stats=stats) == 1
+    e = g["links"][0]
+    assert e["source_point"] == [100.0, 221.0]
+    assert e["_slack"] == 2 and stats["ports_yielded"] == 1
+    seating.reseat_all_endpoints(g, model=True, slots=True)
+    assert e["source_point"] == [100.0, 221.0]          # повтор не ломает
+
+
+# ─────────────── сборка холста: клапан на ряд линией талии ───────────────
+
+def _fixed(node, pts):
+    """apply_fixed_sizes над одним узлом с точками подключения pts [(y, x)]."""
+    from modules.graph.core import pretransform
+    g = {"nodes": [node], "links": []}
+    adj = {node["id"]: [(f"e{i}", p) for i, p in enumerate(pts)]}
+    pretransform.apply_fixed_sizes(g, adj)
+    return g["nodes"][0]
+
+
+def test_valve_centroid_goes_to_raster_pipe_line_and_box_to_its_waist():
+    """Горизонтальный electro-клапан: труба по растру на 5 px ниже центроида
+    детекции — центроид встаёт на линию трубы, бокс так, что талия на ней."""
+    n = _fixed({"id": "v", "class_name": "armatura_electro",
+                "centroid": [100.0, 200.0]},
+               [(105.0, 170.0), (105.0, 230.0)])
+    assert n["_axis"] == "H"
+    assert n["centroid"] == [105.0, 200.0]
+    x1, y1, x2, y2 = n["bbox"]
+    assert (y2 - y1) == pytest.approx(37.8)
+    port = contact.face_refs(n, tuple(n["bbox"]))["L"]
+    assert port == pytest.approx(105.0)                   # талия на трубе
+    assert (y1 + y2) / 2 == pytest.approx(105.0 - 0.222 * 37.8)
+
+
+def test_valve_without_axis_points_puts_waist_on_detected_centre():
+    """Точек на осевых гранях нет (синтетика, точки в центроиде) — линией
+    трубы считается центроид детекции, талия садится на неё."""
+    n = _fixed({"id": "v", "class_name": "armatura_seroprivod",
+                "centroid": [100.0, 200.0]},
+               [(100.0, 200.0)])
+    port = contact.face_refs(n, tuple(n["bbox"]))
+    side = "L" if n["_axis"] == "H" else "T"
+    along = n["centroid"][0] if n["_axis"] == "H" else n["centroid"][1]
+    assert port[side] == pytest.approx(along)
+    assert along == pytest.approx(100.0 if n["_axis"] == "H" else 200.0)
+
+
+def test_valve_pipe_line_outside_box_falls_back_to_centre():
+    n = _fixed({"id": "v", "class_name": "armatura_electro",
+                "centroid": [100.0, 200.0]},
+               [(125.0, 100.0), (125.0, 300.0)])     # 25 px ниже — вне бокса
+    assert n["_axis"] == "H"
+    assert n["centroid"][0] == pytest.approx(100.0)
+    assert contact.face_refs(n, tuple(n["bbox"]))["L"] == pytest.approx(100.0)
+
+
+def test_non_valve_skin_box_stays_centred():
+    n = _fixed({"id": "p", "class_name": "nasos",
+                "centroid": [100.0, 200.0]},
+               [(104.0, 170.0), (104.0, 230.0)])
+    assert n["centroid"] == [100.0, 200.0]
+    x1, y1, x2, y2 = n["bbox"]
+    assert ((x1 + x2) / 2, (y1 + y2) / 2) == (200.0, 100.0)
+
+
+# ─────────────────────── движок редактора (seat_end) ───────────────────────
+
+def _seat(node, other, e, role="s"):
+    byid = nodes_by_id({"nodes": [node, other]})
+    ref = other["centroid"]
+    return edit_engine.seat_end(byid[node["id"]], byid[other["id"]], e, role,
+                                None, ref[1], ref[0], True, 8.0,
+                                node_edges=[e])
+
+
+def test_editor_seats_valve_end_in_waist():
+    other = _box("b", 400.0, 100.0)
+    e = _edge("e", "v", "b")
+    x, y = _seat(dict(VALVE_H), other, e)
+    assert (x, y) == (221.0, pytest.approx(WAIST_Y))
+
+
+def test_editor_box_end_yields_within_mid_snap():
+    near = _conn("c", 400.0, 102.5)
+    e = _edge("e", "a", "c", sp=[100.0, 120.0], tp=[102.5, 400.0])
+    assert _seat(_box("a", 100.0, 100.0), near, e) == (120.0, 102.5)
+    far = _conn("c", 400.0, 108.0)
+    e = _edge("e", "a", "c", sp=[100.0, 120.0], tp=[108.0, 400.0])
+    assert _seat(_box("a", 100.0, 100.0), far, e) == (120.0, 100.0)
+
+
+def test_mid_snap_constant():
+    assert contact.MID_SNAP == 3.0

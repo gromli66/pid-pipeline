@@ -18,12 +18,27 @@
 Вызывать reseat_all_endpoints(graph) ПОСЛЕ расстановки узлов. Прямизна: если
 ребро без waypoints и концы почти на одной оси — конец сажается на общую ось.
 
+МОДЕЛЬ ТОЧЕК ПРИКРЕПЛЕНИЯ (`model=True`, решение заказчика 2026-09-22) —
+посадка холста: сборка (`pretransform.seat_edge_endpoints`), финальная посадка
+раскладки, роутинг, открытие холста. Отличия от канона (`model=False`, по
+умолчанию — внутренние стадии раскладки, растровые вкладки):
+  * выверенный порт клапана (`contact.face_refs`) — ЖЁСТКАЯ точка общей оси,
+    как центроид коннектора: сосед выравнивается на линию талии;
+  * середина прочей рамки уступает ради прямой не дальше `contact.MID_SNAP`;
+  * конец без замка оси садится в опорную точку грани (порт/середину), а не
+    в зажатую координату соседа («куда-то»);
+  * пин оператора (`ports.pinned_port`) — истина;
+  * `reseat_all_endpoints(..., slots=True)` раскладывает несколько концов на
+    одной грани слотами вокруг опорной точки (`seat_slots`).
+Полигоны и коннекторы — как в каноне.
+
 Лежит рядом с pretransform, а не в пакете layout: посадка одна на всю систему
 (§3.4 плана), а импорт подмодуля layout тянул бы shapely, которого в
 requirements/ui.txt нет.
 """
 from __future__ import annotations
 
+from . import contact
 from .pretransform import (
     FIXED_SIZES,
     _skin_content_rect,
@@ -33,6 +48,7 @@ from .graph_access import (edge_ends, edges, is_connector, node_cxy,
                            nodes_by_id)
 
 STRAIGHT_TOL = 3.0   # px: концы почти на оси -> строгая прямая
+_SIDE_TOL = 1.5      # px: «конец лежит на грани рамки»
 
 
 def _anchor_rect(node):
@@ -70,10 +86,23 @@ def _poly_hit(node, seg, toward_x, toward_y, lock):
     return project_ray_to_polygon(seg, cx, cy, toward_x, toward_y)
 
 
-def node_anchor(node, toward_x, toward_y, lock=None):
+def _is_poly_node(node):
+    """Узел сажается на контур (полигон без скина) — ветка `node_anchor`."""
+    seg = node.get("segmentation")
+    return (bool(seg) and isinstance(seg, list) and len(seg) >= 6
+            and node.get("class_name") not in FIXED_SIZES
+            and not node.get("_axis"))
+
+
+def node_anchor(node, toward_x, toward_y, lock=None, model=False, cur=None):
     """Точка подключения на форме узла, обращённая к (toward_x, toward_y).
 
     lock: None | ('H', y) | ('V', x) — посадить на общую ось, если возможно.
+    model: без замка рамочный конец садится в опорную точку грани
+    (выверенный порт клапана или середину), а не в зажатую координату соседа.
+    cur: (x, y) текущего конца — в модели без замка грань берётся та, на
+    которой он уже сидит (её выбрали стадии раскладки по исходной схеме;
+    выбор заново по направлению к соседу уводил вход на чужую сторону).
     Возвращает (x, y).
     """
     if is_connector(node):
@@ -107,6 +136,29 @@ def node_anchor(node, toward_x, toward_y, lock=None):
         return (x, y2 if toward_y >= cy else y1)
 
     dx, dy = toward_x - cx, toward_y - cy
+    if model:
+        refs = contact.face_refs(node, rect) or {}
+        by_dir = ("R" if dx > 0 else "L") if abs(dx) >= abs(dy) \
+            else ("B" if dy > 0 else "T")
+        on = _end_sides(rect, cur[0], cur[1]) if cur else ()
+        if len(on) == 1:
+            side = on[0]
+        elif len(on) == 2:
+            # конец в углу — на двух гранях сразу: из них та, что смотрит
+            # на соседа (иначе порядок L,R,T,B увёл бы вход «вбок»)
+            hor = [s for s in on if s in ("L", "R")]
+            ver = [s for s in on if s in ("T", "B")]
+            side = hor[0] if abs(dx) >= abs(dy) and hor else \
+                (ver[0] if ver else hor[0])
+        else:
+            side = by_dir
+        if side == "R":
+            return (x2, refs.get("R", cy))
+        if side == "L":
+            return (x1, refs.get("L", cy))
+        if side == "B":
+            return (refs.get("B", cx), y2)
+        return (refs.get("T", cx), y1)
     if abs(dx) >= abs(dy):
         return (x2 if dx > 0 else x1, min(max(toward_y, y1), y2))
     return (min(max(toward_x, x1), x2), y2 if dy > 0 else y1)
@@ -156,8 +208,14 @@ def _poly_even_seat(node, e, key, ref, tol=1.5):
     return poly_station_port(node, side, frac)
 
 
-def _axis_range(node):
-    """Диапазон, в котором может лежать общая ось через узел: (y1,y2,x1,x2)."""
+def _axis_range(node, model=False, snap=None):
+    """Диапазон, в котором может лежать общая ось через узел: (y1,y2,x1,x2).
+
+    Канон: коннектор — точка (центроид), прочие — рамка посадки.
+    model: выверенный порт клапана на осевой грани — точка (жёсткая);
+    середина прочей рамки — ± snap (по умолчанию `contact.MID_SNAP`,
+    inf — вся грань); полигон — рамка, как в каноне.
+    """
     if is_connector(node):
         cx, cy = node_cxy(node)
         return (cy, cy, cx, cx)
@@ -166,15 +224,63 @@ def _axis_range(node):
         cx, cy = node_cxy(node)
         return (cy, cy, cx, cx)
     x1, y1, x2, y2 = rect
-    return (y1, y2, x1, x2)
+    if not model or _is_poly_node(node):
+        return (y1, y2, x1, x2)
+    if snap is None:
+        snap = contact.MID_SNAP
+    refs = contact.face_refs(node, rect) or {}
+    if "L" in refs:
+        ylo = yhi = refs["L"]
+    else:
+        my = (y1 + y2) / 2.0
+        ylo, yhi = max(y1, my - snap), min(y2, my + snap)
+    if "T" in refs:
+        xlo = xhi = refs["T"]
+    else:
+        mx = (x1 + x2) / 2.0
+        xlo, xhi = max(x1, mx - snap), min(x2, mx + snap)
+    return (ylo, yhi, xlo, xhi)
 
 
-def reseat_edge(byid, e, straight_tol=STRAIGHT_TOL):
+def _hard_val(node, axis, model):
+    """Жёсткая координата общей оси через узел или None.
+
+    Канон: только центроид коннектора. model: ещё выверенный порт клапана —
+    на оси вдоль его трубы (H — порт граней L/R, V — граней T/B)."""
+    if is_connector(node):
+        cx, cy = node_cxy(node)
+        return cy if axis == "H" else cx
+    if not model:
+        return None
+    rect = _anchor_rect(node)
+    refs = contact.face_refs(node, rect) if rect else None
+    if not refs:
+        return None
+    return refs.get("L" if axis == "H" else "T")
+
+
+def _pref_val(node, axis, model):
+    """Опорная координата узла на оси: жёсткая, иначе центроид."""
+    hard = _hard_val(node, axis, model)
+    if hard is not None:
+        return hard
+    cx, cy = node_cxy(node)
+    return cy if axis == "H" else cx
+
+
+def reseat_edge(byid, e, straight_tol=STRAIGHT_TOL, model=False, snap=None):
     src = byid.get(e.get("source") or e.get("from"))
     tgt = byid.get(e.get("target") or e.get("to"))
     if not src or not tgt:
         return
     wps = e.get("waypoints") or []
+    if model and not wps and e.get("_slack"):
+        # вынужденная прямая (`straighten_unrouted`): ступеньке, которой
+        # требует модель, не нашлось места у роутера — повторная посадка
+        # (открытие холста, пересадка) держит трубу прямой, а не косой
+        snap = float("inf")
+        if e.get("_slack") == 2:
+            model = False                   # порт клапана уже уступил
     scx, scy = node_cxy(src)
     tcx, tcy = node_cxy(tgt)
 
@@ -184,20 +290,27 @@ def reseat_edge(byid, e, straight_tol=STRAIGHT_TOL):
 
     s_lock = t_lock = None
     if not wps:
-        sy1, sy2, sx1, sx2 = _axis_range(src)
-        ty1, ty2, tx1, tx2 = _axis_range(tgt)
+        sy1, sy2, sx1, sx2 = _axis_range(src, model, snap)
+        ty1, ty2, tx1, tx2 = _axis_range(tgt, model, snap)
+        # близость пары — по опорным координатам (в каноне это центроиды;
+        # в модели у клапана — порт талии, иначе он стоит поодаль от своего
+        # центра и пара с соседом на линии талии не считалась бы соосной)
+        spy, tpy = (_pref_val(src, "H", True), _pref_val(tgt, "H", True)) \
+            if model else (scy, tcy)
+        spx, tpx = (_pref_val(src, "V", True), _pref_val(tgt, "V", True)) \
+            if model else (scx, tcx)
         # H-прямая: диапазоны Y пересекаются (с допуском)
         ylo, yhi = max(sy1, ty1), min(sy2, ty2)
         xlo, xhi = max(sx1, tx1), min(sx2, tx2)
         h_lock = v_lock = None
-        if ylo - yhi <= straight_tol and abs(scy - tcy) <= \
+        if ylo - yhi <= straight_tol and abs(spy - tpy) <= \
                 (sy2 - sy1) / 2 + (ty2 - ty1) / 2 + straight_tol:
-            y = _pick_axis_coord(src, tgt, ylo, yhi, axis="H")
+            y = _pick_axis_coord(src, tgt, ylo, yhi, axis="H", model=model)
             if y is not None:
                 h_lock = ("H", y)
-        if xlo - xhi <= straight_tol and abs(scx - tcx) <= \
+        if xlo - xhi <= straight_tol and abs(spx - tpx) <= \
                 (sx2 - sx1) / 2 + (tx2 - tx1) / 2 + straight_tol:
-            x = _pick_axis_coord(src, tgt, xlo, xhi, axis="V")
+            x = _pick_axis_coord(src, tgt, xlo, xhi, axis="V", model=model)
             if x is not None:
                 v_lock = ("V", x)
         # Э2: ось — от реальной геометрии связи, не от порядка веток.
@@ -226,27 +339,45 @@ def reseat_edge(byid, e, straight_tol=STRAIGHT_TOL):
 
     sp2 = _poly_even_seat(src, e, "s", s_ref)
     tp2 = _poly_even_seat(tgt, e, "t", t_ref)
-    sx, sy = sp2 if sp2 else node_anchor(src, s_ref[0], s_ref[1], s_lock)
-    tx, ty = tp2 if tp2 else node_anchor(tgt, t_ref[0], t_ref[1], t_lock)
+    s_cur = t_cur = None
+    if model:
+        sp0, tp0 = e.get("source_point"), e.get("target_point")
+        s_cur = (float(sp0[1]), float(sp0[0])) if sp0 else None
+        t_cur = (float(tp0[1]), float(tp0[0])) if tp0 else None
+    sx, sy = sp2 if sp2 else node_anchor(src, s_ref[0], s_ref[1], s_lock,
+                                         model=model, cur=s_cur)
+    tx, ty = tp2 if tp2 else node_anchor(tgt, t_ref[0], t_ref[1], t_lock,
+                                         model=model, cur=t_cur)
+    if model:
+        # ручной вход оператора — истина (модель «пин на ребре», Э5)
+        from .ports import pinned_port
+        pin = pinned_port(src, e)
+        if pin is not None:
+            sx, sy = pin[0], pin[1]
+        pin = pinned_port(tgt, e)
+        if pin is not None:
+            tx, ty = pin[0], pin[1]
     e["source_point"] = [sy, sx]
     e["target_point"] = [ty, tx]
     if "waypoints" not in e or e["waypoints"] is None:
         e["waypoints"] = []
 
 
-def _pick_axis_coord(src, tgt, lo, hi, axis):
-    """Координата общей оси. Центроид коннектора — жёсткая точка."""
-    s_conn, t_conn = is_connector(src), is_connector(tgt)
+def _pick_axis_coord(src, tgt, lo, hi, axis, model=False):
+    """Координата общей оси. Жёсткая точка (центроид коннектора; в модели —
+    ещё выверенный порт клапана) не сдвигается: ось проходит через неё."""
+    s_hard = _hard_val(src, axis, model)
+    t_hard = _hard_val(tgt, axis, model)
     scx, scy = node_cxy(src)
     tcx, tcy = node_cxy(tgt)
     s_val = scy if axis == "H" else scx
     t_val = tcy if axis == "H" else tcx
-    if s_conn and t_conn:
-        return s_val if abs(s_val - t_val) <= 0.75 else None
-    if s_conn:
-        return s_val if lo - 0.75 <= s_val <= hi + 0.75 else None
-    if t_conn:
-        return t_val if lo - 0.75 <= t_val <= hi + 0.75 else None
+    if s_hard is not None and t_hard is not None:
+        return s_hard if abs(s_hard - t_hard) <= 0.75 else None
+    if s_hard is not None:
+        return s_hard if lo - 0.75 <= s_hard <= hi + 0.75 else None
+    if t_hard is not None:
+        return t_hard if lo - 0.75 <= t_hard <= hi + 0.75 else None
     if lo > hi:
         return None
     mid = (s_val + t_val) / 2.0
@@ -303,7 +434,266 @@ def straight_slack_lock(src, tgt, anchor_x, anchor_y, straight_tol=STRAIGHT_TOL)
     return None
 
 
-def reseat_all_endpoints(graph, straight_tol=STRAIGHT_TOL):
+def reseat_all_endpoints(graph, straight_tol=STRAIGHT_TOL, model=False,
+                         slots=False):
     byid = nodes_by_id(graph)
     for e in edges(graph):
-        reseat_edge(byid, e, straight_tol)
+        reseat_edge(byid, e, straight_tol, model=model)
+    if slots:
+        seat_slots(graph, byid)
+
+
+# ─────────────── слоты вокруг опорной точки (модель, 2026-09-22) ───────────────
+
+def _end_sides(rect, px, py, tol=_SIDE_TOL):
+    """Все грани рамки, на которых лежит точка (в углу — две)."""
+    x1, y1, x2, y2 = rect
+    out = []
+    if y1 - tol <= py <= y2 + tol:
+        if abs(px - x1) <= tol:
+            out.append("L")
+        elif abs(px - x2) <= tol:
+            out.append("R")
+    if x1 - tol <= px <= x2 + tol:
+        if abs(py - y1) <= tol:
+            out.append("T")
+        elif abs(py - y2) <= tol:
+            out.append("B")
+    return tuple(out)
+
+
+def _end_side(rect, px, py, tol=_SIDE_TOL):
+    """Грань рамки, на которой лежит точка: 'L'|'R'|'T'|'B'|None."""
+    x1, y1, x2, y2 = rect
+    if abs(px - x1) <= tol and y1 - tol <= py <= y2 + tol:
+        return "L"
+    if abs(px - x2) <= tol and y1 - tol <= py <= y2 + tol:
+        return "R"
+    if abs(py - y1) <= tol and x1 - tol <= px <= x2 + tol:
+        return "T"
+    if abs(py - y2) <= tol and x1 - tol <= px <= x2 + tol:
+        return "B"
+    return None
+
+
+def _face_groups(graph, byid):
+    """(node_id, side) -> [(along, edge_id, edge, pkey, other_key), ...].
+
+    Концы на гранях рамочных узлов: без коннекторов, полигонов и пинов.
+    along — проекция ДАЛЬНЕГО ориентира ребра (смежный waypoint, иначе
+    противоположный конец) на ось грани — порядок слотов, как у движка
+    редактора (`edit_engine._slot_seat`): стабилен и без пересечений.
+
+    Прямые (без waypoints) дубли одной пары узлов — дефект сборки графа
+    (дедупа пар нет; решение заказчика «дублей не бывает»): на грани они
+    считаются ОДНОЙ трубой, иначе слоты развели бы один и тот же отрезок
+    в две ступеньки."""
+    from .ports import pinned_on_node
+
+    groups = {}
+    seen_pairs = set()
+    for e in edges(graph):
+        s, t = edge_ends(e)
+        wps = e.get("waypoints") or []
+        if e.get("_slack") and not wps:
+            continue                      # вынужденная прямая — не в слоты
+        if not wps:
+            pair = (s, t) if str(s) <= str(t) else (t, s)
+            if pair in seen_pairs:
+                continue                  # прямой дубль пары — одна труба
+            seen_pairs.add(pair)
+        for nid, pkey, other_key in ((s, "source_point", "target_point"),
+                                     (t, "target_point", "source_point")):
+            node = byid.get(nid)
+            if node is None or is_connector(node) or _is_poly_node(node):
+                continue
+            if pinned_on_node(node, e) is not None:
+                continue
+            rect = _anchor_rect(node)
+            p = e.get(pkey)
+            if rect is None or not p:
+                continue
+            side = _end_side(rect, float(p[1]), float(p[0]))
+            if side is None:
+                continue
+            refp = (wps[0] if pkey == "source_point" else wps[-1]) if wps \
+                else e.get(other_key)
+            if not refp:
+                continue
+            along = float(refp[1]) if side in ("T", "B") else float(refp[0])
+            groups.setdefault((nid, side), []).append(
+                (along, str(e.get("id")), e, pkey, other_key))
+    return groups
+
+
+def slot_faces(graph, byid=None):
+    """Грани, на которых сидят >= 2 концов: {(node_id, side), ...}."""
+    byid = byid or nodes_by_id(graph)
+    return {key for key, ends in _face_groups(graph, byid).items()
+            if len(ends) >= 2}
+
+
+def _follow_partner(byid, e, other_key, side, sx, sy, busy):
+    """Прямая труба без waypoints: конец уехал в слот — партнёр, который
+    может уступить (середина рамки в пределах MID_SNAP), доезжает на ту же
+    линию. Жёсткий партнёр (порт клапана, коннектор, пин), полигон и конец
+    на грани со слотами не двигаются — ступеньку разводит роутер."""
+    from .ports import pinned_on_node
+
+    s, t = edge_ends(e)
+    other_id = t if other_key == "target_point" else s
+    other = byid.get(other_id)
+    q = e.get(other_key)
+    if other is None or not q or is_connector(other) or _is_poly_node(other):
+        return
+    if pinned_on_node(other, e) is not None:
+        return
+    rect = _anchor_rect(other)
+    if rect is None:
+        return
+    oside = _end_side(rect, float(q[1]), float(q[0]))
+    if oside is None or (other_id, oside) in busy:
+        return
+    horiz_face = side in ("T", "B")          # слот двигает конец по x
+    if horiz_face != (oside in ("T", "B")):
+        return                               # партнёр на поперечной грани
+    mid, hard = contact.face_ref(other, rect, oside)
+    want = sx if horiz_face else sy
+    x1, y1, x2, y2 = rect
+    lo, hi = (x1, x2) if horiz_face else (y1, y2)
+    if hard or abs(want - mid) > contact.MID_SNAP or not lo <= want <= hi:
+        return
+    if horiz_face:
+        e[other_key] = [float(q[0]), float(want)]
+    else:
+        e[other_key] = [float(want), float(q[1])]
+
+
+def seat_slots(graph, byid=None):
+    """Несколько концов на одной грани рамочного узла — слоты: равный шаг,
+    симметрично вокруг опорной точки (`ports.side_slots`: середина или
+    выверенный порт клапана), шаг адаптивен к числу и толщине линий
+    (`ports._ink_pitch`). Одна реализация с редактором. -> число концов,
+    сдвинутых в слоты."""
+    from . import ports
+
+    byid = byid or nodes_by_id(graph)
+    groups = _face_groups(graph, byid)
+    busy = {key for key, ends in groups.items() if len(ends) >= 2}
+    moved = 0
+    for (nid, side), ends in sorted(groups.items(),
+                                    key=lambda kv: (str(kv[0][0]), kv[0][1])):
+        k = len(ends)
+        if k < 2:
+            continue
+        node = byid[nid]
+        rect = _anchor_rect(node)
+        x1, y1, x2, y2 = rect
+        length = (x2 - x1) if side in ("T", "B") else (y2 - y1)
+        widths = [ports._ink_w(t[2]) for t in ends]
+        slots = ports.side_slots(node, side, k, rect=rect,
+                                 pitch=ports._ink_pitch(widths, length, k))
+        ends.sort(key=lambda t: (t[0], t[1]))
+        for (_along, _eid, e, pkey, other_key), (sx, sy, _nx, _ny, _m) \
+                in zip(ends, slots):
+            old = e.get(pkey)
+            new = [float(sy), float(sx)]
+            if abs(old[0] - new[0]) <= 1e-9 and abs(old[1] - new[1]) <= 1e-9:
+                continue
+            e[pkey] = new
+            moved += 1
+            wps = e.get("waypoints") or []
+            if not wps:
+                _follow_partner(byid, e, other_key, side, sx, sy, busy)
+            else:
+                _follow_knee(wps, pkey, side, old, new)
+    return moved
+
+
+def _follow_knee(wps, pkey, side, old, new):
+    """Конец уехал вдоль грани в слот — смежное колено едет с ним, и стаб
+    остаётся перпендикулярным грани (зеркало `edit_engine._shift_rect_stub`:
+    только если стаб был перпендикулярен и сдвиг слотового масштаба)."""
+    from .ports import SLOT_PITCH
+
+    adj = wps[0] if pkey == "source_point" else wps[-1]
+    along = 1 if side in ("T", "B") else 0       # индекс [y, x] вдоль грани
+    d = float(new[along]) - float(old[along])
+    if abs(d) > 2 * SLOT_PITCH \
+            or abs(float(adj[along]) - float(old[along])) > 1.0:
+        return
+    adj[along] = float(adj[along]) + d
+
+
+def straighten_unrouted(graph, straight_tol=STRAIGHT_TOL, stats=None):
+    """Страховка после роутинга: труба без waypoints, чьи концы разошлись
+    (посадка в опорные точки дала ступеньку, а роутер её не развёл),
+    выпрямляется слабиной канона — середина рамки уступает на всю грань;
+    выверенный порт, коннектор и пин по-прежнему жёсткие. Лучше прямая с
+    концом не в середине, чем косая: конец, стоявший в слоте, может его
+    покинуть (редкий случай «вторая труба на осевой грани клапана»), если
+    не садится ближе 2 px к соседнему концу той же грани.
+
+    Последний рубеж — только если иначе труба осталась бы КОСОЙ: пара
+    жёстких точек (порт клапана и коннектор) разошлась, роутер ступеньку не
+    построил — порт клапана уступает, труба ложится прямой каноном.
+    Такие случаи считаются отдельно (`stats['ports_yielded']`).
+
+    Выпрямленное ребро помечается `_slack` (1 — уступила середина, 2 — и
+    порт клапана): повторная посадка по модели (открытие холста) держит его
+    прямым, иначе снова развалила бы в косую. Ключ вне sha-проекции холста.
+    -> число выпрямленных рёбер."""
+    byid = nodes_by_id(graph)
+    groups = _face_groups(graph, byid)
+    fixed = yielded = 0
+    for e in edges(graph):
+        if e.get("waypoints"):
+            continue
+        sp, tp = e.get("source_point"), e.get("target_point")
+        if not sp or not tp:
+            continue
+        if abs(sp[0] - tp[0]) <= 0.5 or abs(sp[1] - tp[1]) <= 0.5:
+            continue                        # уже прямая (H или V)
+        done = False
+        for model in (True, False):
+            probe = dict(e)
+            probe["waypoints"] = []
+            reseat_edge(byid, probe, straight_tol, model=model,
+                        snap=float("inf"))
+            nsp, ntp = probe["source_point"], probe["target_point"]
+            if not (abs(nsp[0] - ntp[0]) <= 0.5
+                    or abs(nsp[1] - ntp[1]) <= 0.5):
+                continue
+            if _crowds_face(byid, groups, e, (nsp, ntp)):
+                continue
+            e["source_point"], e["target_point"] = nsp, ntp
+            e["_slack"] = 1 if model else 2
+            fixed += 1
+            yielded += 0 if model else 1
+            done = True
+            break
+        if not done:
+            continue
+    if stats is not None:
+        stats["ports_yielded"] = yielded
+    return fixed
+
+
+def _crowds_face(byid, groups, e, new_pts):
+    """Новый конец сел ближе 2 px к другому концу той же грани?"""
+    s, t = edge_ends(e)
+    for nid, p in zip((s, t), new_pts):
+        node = byid.get(nid)
+        rect = _anchor_rect(node) if node is not None else None
+        if rect is None:
+            continue
+        side = _end_side(rect, float(p[1]), float(p[0]))
+        horiz = side in ("T", "B")
+        for _a, _id, oe, pkey, _ok in groups.get((nid, side), ()):
+            if oe is e:
+                continue
+            q = oe.get(pkey)
+            if q and abs((float(q[1]) - float(p[1])) if horiz
+                         else (float(q[0]) - float(p[0]))) < 2.0:
+                return True
+    return False

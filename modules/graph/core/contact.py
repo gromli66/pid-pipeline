@@ -249,8 +249,13 @@ def face_refs(node, rect, sides=None):
     Знак — из того же источника, что сдвиг выгрузки: порт минус центр рамки
     == минус сдвиг `apply_contact_offset` (контрол едет, чтобы талия легла
     на трубу; здесь наоборот — труба входит в талию).
+
+    Только узел ХОЛСТА: клапан с `_axis` (его ставит `apply_fixed_sizes`,
+    бокс — габарит графики скина). В координатах растра («Проверка схемы»)
+    бокс — детекция, и доля талии к нему не приложима: там портов нет.
     """
-    if rect is None or not is_valve(node):
+    if rect is None or not is_valve(node) \
+            or node.get('_axis') not in ('H', 'V'):
         return None
     x1, y1, x2, y2 = rect
     w, h = x2 - x1, y2 - y1

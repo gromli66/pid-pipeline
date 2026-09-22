@@ -26,7 +26,7 @@ from . import _shapes, axial, spread
 from ..graph_access import edges, nodes_by_id
 from ._avoid_binding import avoid_available
 from .params import LayoutParams
-from ..seating import reseat_all_endpoints
+from ..seating import reseat_all_endpoints, straighten_unrouted
 
 __all__ = ["layout", "LayoutParams"]
 
@@ -118,6 +118,7 @@ def place(graph, params=None, shapes=_AUTO):
         e["waypoints"] = []
         if "path" in e:
             e["path"] = []
+        e.pop("_slack", None)      # метка вынужденной прямой прошлого прогона
     stats = axial.place(graph, canvas=tuple(p.canvas), fill=p.fill,
                         inset=float(p.margin), shapes=shapes, bands=bands)
     reseat_all_endpoints(graph)
@@ -161,7 +162,11 @@ def layout(graph, params=None, stages=None):
         base_v16=base_v16, band=p.band, unlock_zero=p.unlock_zero,
         compound=p.compound, comp_push=p.comp_push,
         legal=shapes.legal if shapes is not None else None)
-    reseat_all_endpoints(graph)
+    # Финальная посадка — по модели точек прикрепления (решение заказчика
+    # 2026-09-22): выверенный порт клапана, середина рамки с допуском,
+    # слоты вокруг опорной точки. Внутренние стадии (расстановка, пробы
+    # раздвигания) сажают каноном со слабиной — раскладка не теряет ходов.
+    reseat_all_endpoints(graph, model=True, slots=True)
 
     # Э7-b: этап роутинга — обход чужих форм libavoid. Только waypoints рёбер,
     # узлы не двигаются; хуже входа — полный откат внутри apply_routing.
@@ -173,7 +178,30 @@ def layout(graph, params=None, stages=None):
             graph, orig, base_v16, p,
             legal=shapes.legal if shapes is not None else None)
 
+    # Роутер переводит часть концов в порты других граней, страховка
+    # выпрямляет неразведённые ступеньки (и выводит их из слотов): занятость
+    # граней меняется, разложенные слоты устаревают. Посадка по модели
+    # (рёбра с маршрутом — по осям своих стабов, колено едет за слотом) и
+    # страховка по кругу, пока страховке нечего выпрямлять — итог неподвижен
+    # для той же посадки при открытии холста (`seat_edge_endpoints`).
+    # Страховка: ступенька, которую роутер не развёл, выпрямляется, а не
+    # остаётся косой (середина рамки уступает на всю грань; порт клапана —
+    # только последним рубежом, счётчик ports_yielded).
+    straight_stats = {}
+    straightened = yielded = 0
+    for _round in range(3):
+        if routing_stats is not None or _round:
+            reseat_all_endpoints(graph, model=True, slots=True)
+        step = {}
+        n = straighten_unrouted(graph, stats=step)
+        straightened += n
+        yielded += step.get("ports_yielded", 0)
+        if not n:
+            break
+    straight_stats["ports_yielded"] = yielded
+
     after = len(spread.defects(graph, nodes_by_id(graph), p.floor))
     return graph, {"defects_before": before, "defects_after": after,
                    "axial": axial_stats, "spread": spread_stats,
-                   "routing": routing_stats}
+                   "routing": routing_stats, "straightened": straightened,
+                   "ports_yielded": straight_stats.get("ports_yielded", 0)}
