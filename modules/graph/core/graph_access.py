@@ -66,6 +66,33 @@ def move_node(node, dx, dy):
             seg[i + 1] += dy
 
 
+def box_hits(graph_or_nodes, nid, bbox, margin=0.0):
+    """Пересекает ли рамка `bbox` [x1, y1, x2, y2], раздутая на `margin`,
+    рамку другого узла (площадь пересечения > 0; касание — нет).
+
+    Один судья «упирается в соседа» для редактора и сервера. Узел `nid`
+    и узлы без рамки (коннекторы) не считаются. `graph_or_nodes` — граф
+    (`nodes`), словарь {id: node} или список узлов.
+    """
+    src = graph_or_nodes
+    if isinstance(src, dict) and isinstance(src.get("nodes"), list):
+        src = src["nodes"]
+    items = src.items() if isinstance(src, dict) \
+        else ((n.get("id"), n) for n in src)
+    x1, y1 = bbox[0] - margin, bbox[1] - margin
+    x2, y2 = bbox[2] + margin, bbox[3] + margin
+    for oid, n in items:
+        if str(oid) == str(nid):
+            continue
+        bb = n.get("bbox")
+        if not bb or len(bb) != 4:
+            continue
+        if min(x2, bb[2]) - max(x1, bb[0]) > 0 \
+                and min(y2, bb[3]) - max(y1, bb[1]) > 0:
+            return True
+    return False
+
+
 def edge_polyline(e):
     """Полилиния ребра [(x, y), ...]: source_point -> path|waypoints -> target_point.
 

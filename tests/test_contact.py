@@ -198,3 +198,56 @@ def test_table_sign_convention_documented():
     """h — талия НИЖЕ центра, v — REVERSE правее / VERTICAL левее: у всех
     доли положительны (иначе знаки в face_refs врут)."""
     assert all(h >= 0 and v >= 0 for h, v in SKIN_CONTACT_OFFSET.values())
+
+
+# ───────── геометрия талии как функции ядра (блок 1, К1) ─────────
+# Литералы по оси H — armatura_electro (0.222, таблица Р6 его не меняет);
+# по оси V — ELECTRIC_VLV v=0.20: литерал ПЕРЕСНИМАЕТСЯ в блоке 2 (Р6: 0.222).
+
+def test_waist_offset_in_canvas_px():
+    node = {'class_name': 'armatura_electro'}           # оси на узле нет
+    assert contact.waist_offset(node, 'H', 42, 28) == pytest.approx(6.216)
+    # REVERSE-класс по V: талия ПРАВЕЕ центра (блок 2 переснимет: 6.216)
+    assert contact.waist_offset(node, 'V', 28, 42) == pytest.approx(5.6)
+    assert 'axis' not in node and '_axis' not in node   # узел не тронут
+    assert contact.waist_offset({'class_name': 'armatura_ruchn'},
+                                'H', 42, 21) == 0.0
+    assert contact.waist_offset({'class_name': 'nasos'}, 'H', 45, 45) == 0.0
+
+
+def test_waist_centroid_is_waist_for_canvas_valve_only():
+    bb = [479.0, 286.0, 521.0, 314.0]                   # 42x28
+    valve = {'class_name': 'armatura_electro', '_axis': 'H'}
+    assert contact.waist_centroid(valve, bb) == [pytest.approx(306.216),
+                                                 500.0]
+    # растр (без _axis), не клапан, симметричный клапан — центр рамки
+    assert contact.waist_centroid({'class_name': 'armatura_electro'}, bb) \
+        == [300.0, 500.0]
+    assert contact.waist_centroid({'class_name': 'unknow'}, bb) \
+        == [300.0, 500.0]
+    assert contact.waist_centroid({'class_name': 'armatura_ruchn',
+                                   '_axis': 'H'}, bb) == [300.0, 500.0]
+    vv = {'class_name': 'armatura_electro', '_axis': 'V'}
+    assert contact.waist_centroid(vv, [485.4, 279.0, 513.4, 321.0]) \
+        == [300.0, pytest.approx(505.0)]
+
+
+def test_box_around_waist_is_inverse_of_waist_centroid():
+    valve = {'class_name': 'armatura_electro', '_axis': 'H'}
+    assert contact.box_around_waist(valve, [306.216, 500.0], 42, 28) \
+        == pytest.approx([479.0, 286.0, 521.0, 314.0])
+    vv = {'class_name': 'armatura_electro', '_axis': 'V'}
+    assert contact.box_around_waist(vv, [300.0, 505.0], 28, 42) \
+        == pytest.approx([485.4, 279.0, 513.4, 321.0])
+    # «Размеры»: другой размер вокруг той же талии — талия на месте
+    for node, c in ((valve, [306.216, 500.0]), (vv, [300.0, 505.0])):
+        for w, h in ((42, 63), (63, 42), (30, 30)):
+            bb = contact.box_around_waist(node, c, w, h)
+            assert bb[2] - bb[0] == pytest.approx(w)
+            assert bb[3] - bb[1] == pytest.approx(h)
+            assert contact.waist_centroid(node, bb) == pytest.approx(c)
+    # не клапан / растр — рамка вокруг центроида
+    for node in ({'class_name': 'unknow'},
+                 {'class_name': 'armatura_electro'}):
+        assert contact.box_around_waist(node, [300.0, 500.0], 42, 28) \
+            == [479.0, 286.0, 521.0, 314.0]

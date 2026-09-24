@@ -476,10 +476,13 @@ def _end_side(rect, px, py, tol=_SIDE_TOL):
     return None
 
 
-def _face_groups(graph, byid):
+def _face_groups(graph, byid, only=None, rect_of=None):
     """(node_id, side) -> [(along, edge_id, edge, pkey, other_key), ...].
 
     Концы на гранях рамочных узлов: без коннекторов, полигонов и пинов.
+    `only` — множество id узлов, чьи грани собирать (None — все);
+    `rect_of(node)` — рамка граней (по умолчанию `_anchor_rect`, как на
+    сервере; редактор передаёт свою).
     along — проекция ДАЛЬНЕГО ориентира ребра (смежный waypoint, иначе
     противоположный конец) на ось грани — порядок слотов, как у движка
     редактора (`edit_engine._slot_seat`): стабилен и без пересечений.
@@ -491,6 +494,7 @@ def _face_groups(graph, byid):
     общих концов."""
     from .ports import pinned_on_node
 
+    rect_of = rect_of or _anchor_rect
     groups = {}
     for e in edges(graph):
         s, t = edge_ends(e)
@@ -499,12 +503,14 @@ def _face_groups(graph, byid):
             continue                      # вынужденная прямая — не в слоты
         for nid, pkey, other_key in ((s, "source_point", "target_point"),
                                      (t, "target_point", "source_point")):
+            if only is not None and nid not in only:
+                continue
             node = byid.get(nid)
             if node is None or is_connector(node) or _is_poly_node(node):
                 continue
             if pinned_on_node(node, e) is not None:
                 continue
-            rect = _anchor_rect(node)
+            rect = rect_of(node)
             p = e.get(pkey)
             if rect is None or not p:
                 continue
@@ -528,7 +534,7 @@ def slot_faces(graph, byid=None):
             if len(ends) >= 2}
 
 
-def _follow_partner(byid, e, other_key, side, sx, sy, busy):
+def _follow_partner(byid, e, other_key, side, sx, sy, busy, rect_of=None):
     """Прямая труба без waypoints: конец уехал в слот — партнёр, который
     может уступить (середина рамки в пределах MID_SNAP), доезжает на ту же
     линию. Жёсткий партнёр (порт клапана, коннектор, пин), полигон и конец
@@ -543,7 +549,7 @@ def _follow_partner(byid, e, other_key, side, sx, sy, busy):
         return
     if pinned_on_node(other, e) is not None:
         return
-    rect = _anchor_rect(other)
+    rect = (rect_of or _anchor_rect)(other)
     if rect is None:
         return
     oside = _end_side(rect, float(q[1]), float(q[0]))
@@ -570,39 +576,71 @@ def seat_slots(graph, byid=None):
     выверенный порт клапана), шаг адаптивен к числу и толщине линий
     (`ports._ink_pitch`). Одна реализация с редактором. -> число концов,
     сдвинутых в слоты."""
-    from . import ports
-
     byid = byid or nodes_by_id(graph)
     groups = _face_groups(graph, byid)
     busy = {key for key, ends in groups.items() if len(ends) >= 2}
     moved = 0
     for (nid, side), ends in sorted(groups.items(),
                                     key=lambda kv: (str(kv[0][0]), kv[0][1])):
-        k = len(ends)
-        if k < 2:
+        if len(ends) < 2:
             continue
         node = byid[nid]
-        rect = _anchor_rect(node)
-        x1, y1, x2, y2 = rect
-        length = (x2 - x1) if side in ("T", "B") else (y2 - y1)
-        widths = [ports._ink_w(t[2]) for t in ends]
-        slots = ports.side_slots(node, side, k, rect=rect,
-                                 pitch=ports._ink_pitch(widths, length, k))
-        ends.sort(key=lambda t: (t[0], t[1]))
-        for (_along, _eid, e, pkey, other_key), (sx, sy, _nx, _ny, _m) \
-                in zip(ends, slots):
-            old = e.get(pkey)
-            new = [float(sy), float(sx)]
-            if abs(old[0] - new[0]) <= 1e-9 and abs(old[1] - new[1]) <= 1e-9:
-                continue
-            e[pkey] = new
-            moved += 1
-            wps = e.get("waypoints") or []
-            if not wps:
-                _follow_partner(byid, e, other_key, side, sx, sy, busy)
-            else:
-                _follow_knee(wps, pkey, side, old, new)
+        moved += len(_seat_group(byid, node, side, ends, _anchor_rect(node),
+                                 busy))
     return moved
+
+
+def _seat_group(byid, node, side, ends, rect, busy, rect_of=None):
+    """Разложить концы `ends` одной грани `side` рамки `rect` слотами
+    (`ports.side_slots`); смежные колени и мягкие партнёры — следом.
+    -> [(edge, pkey), ...] сдвинутых концов."""
+    from . import ports
+
+    k = len(ends)
+    x1, y1, x2, y2 = rect
+    length = (x2 - x1) if side in ("T", "B") else (y2 - y1)
+    widths = [ports._ink_w(t[2]) for t in ends]
+    slots = ports.side_slots(node, side, k, rect=rect,
+                             pitch=ports._ink_pitch(widths, length, k))
+    ends.sort(key=lambda t: (t[0], t[1]))
+    moved = []
+    for (_along, _eid, e, pkey, other_key), (sx, sy, _nx, _ny, _m) \
+            in zip(ends, slots):
+        old = e.get(pkey)
+        new = [float(sy), float(sx)]
+        if abs(old[0] - new[0]) <= 1e-9 and abs(old[1] - new[1]) <= 1e-9:
+            continue
+        e[pkey] = new
+        moved.append((e, pkey))
+        wps = e.get("waypoints") or []
+        if not wps:
+            _follow_partner(byid, e, other_key, side, sx, sy, busy, rect_of)
+        else:
+            _follow_knee(wps, pkey, side, old, new)
+    return moved
+
+
+def seat_face(graph, byid, nid, side, rect_of=None):
+    """Слоты ОДНОЙ грани (nid, side) — та же раскладка, что `seat_slots`,
+    но только этой грани (редактор: ребро добавлено — чужие грани и их
+    маршруты не трогаются). `rect_of(node)` — рамка граней (по умолчанию
+    `_anchor_rect`); ею же судятся мягкие партнёры. Меньше двух концов на
+    грани — ничего. -> [(edge, pkey), ...] сдвинутых концов."""
+    rect_of = rect_of or _anchor_rect
+    ends = _face_groups(graph, byid, only={nid},
+                        rect_of=rect_of).get((nid, side)) or []
+    if len(ends) < 2:
+        return []
+    # партнёр на грани со слотами не уступает (`_follow_partner`): грани
+    # собираются только у партнёров этой грани — не по всему графу
+    partners = {edge_ends(t[2])[1 if t[3] == "source_point" else 0]
+                for t in ends}
+    busy = {key for key, grp in _face_groups(graph, byid, only=partners,
+                                             rect_of=rect_of).items()
+            if len(grp) >= 2}
+    busy.add((nid, side))
+    node = byid[nid]
+    return _seat_group(byid, node, side, ends, rect_of(node), busy, rect_of)
 
 
 def _follow_knee(wps, pkey, side, old, new):

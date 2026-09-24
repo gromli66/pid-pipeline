@@ -310,3 +310,77 @@ def test_editor_box_end_yields_within_mid_snap():
 
 def test_mid_snap_constant():
     assert contact.MID_SNAP == 3.0
+
+
+# ─────────────────── одна грань слотами (блок 1, К1) ───────────────────
+
+def _two_faces_graph():
+    """Две грани по две трубы: R клапана `v` и R бокса `a`; концы стоят
+    не в слотах (все в опорной точке грани)."""
+    a = _box("a", 100.0, 300.0)                         # R-грань x=120
+    g = _graph([dict(VALVE_H), a, _box("u", 400.0, 60.0),
+                _box("d", 400.0, 160.0), _conn("c1", 300.0, 290.0),
+                _conn("c2", 300.0, 310.0)],
+               [_edge("e1", "v", "d", sp=[WAIST_Y, 221.0], tp=[160.0, 380.0],
+                      wps=[[WAIST_Y, 300.0], [160.0, 300.0]]),
+                _edge("e2", "v", "u", sp=[WAIST_Y, 221.0], tp=[60.0, 380.0],
+                      wps=[[WAIST_Y, 300.0], [60.0, 300.0]]),
+                _edge("e3", "a", "c1", sp=[300.0, 120.0], tp=[290.0, 300.0],
+                      wps=[[300.0, 200.0], [290.0, 200.0]]),
+                _edge("e4", "a", "c2", sp=[300.0, 120.0], tp=[310.0, 300.0],
+                      wps=[[300.0, 200.0], [310.0, 200.0]])])
+    return g
+
+
+def test_seat_face_slots_only_its_face_like_seat_slots():
+    import copy
+    full, one = _two_faces_graph(), _two_faces_graph()
+    before = copy.deepcopy(one)
+    assert seating.seat_slots(full) == 4
+    moved = seating.seat_face(one, nodes_by_id(one), "v", "R")
+    assert sorted(e["id"] for e, _k in moved) == ["e1", "e2"]
+    L = {e["id"]: e for e in one["links"]}
+    F = {e["id"]: e for e in full["links"]}
+    B = {e["id"]: e for e in before["links"]}
+    for eid in ("e1", "e2"):                            # как у seat_slots
+        assert L[eid]["source_point"] == F[eid]["source_point"]
+        assert L[eid]["waypoints"] == F[eid]["waypoints"]
+        assert L[eid]["source_point"] != B[eid]["source_point"]
+    for eid in ("e3", "e4"):                            # чужая грань цела
+        assert L[eid] == B[eid]
+        assert F[eid]["source_point"] != B[eid]["source_point"]
+    assert seating.seat_face(one, nodes_by_id(one), "a", "L") == []
+
+
+def test_seat_face_uses_given_rect():
+    """`rect_of` — рамка граней редактора: концы на грани чужой рамки
+    (x=240) рамкой по умолчанию не видны, переданной — раскладываются."""
+    g = _two_faces_graph()
+    for e in g["links"][:2]:
+        e["source_point"] = [WAIST_Y, 240.0]
+    byid = nodes_by_id(g)
+    assert seating.seat_face(g, byid, "v", "R") == []
+    wide = lambda n: [179.0, 81.1, 240.0, 118.9] if n["id"] == "v" \
+        else seating._anchor_rect(n)
+    moved = seating.seat_face(g, byid, "v", "R", rect_of=wide)
+    ys = sorted(e["source_point"][0] for e, _k in moved)
+    assert len(ys) == 2 and ys[0] < WAIST_Y < ys[1]
+    assert all(e["source_point"][1] == 240.0 for e, _k in moved)
+
+
+# ─────────────────── судья «упирается в соседа» (К1) ───────────────────
+
+def test_box_hits_neighbour_frames():
+    from modules.graph.core.graph_access import box_hits
+    g = _graph([_box("a", 100.0, 100.0), _box("b", 200.0, 100.0),
+                _conn("c", 150.0, 100.0)], [])
+    # b: [180, 80, 220, 120]
+    assert box_hits(g, "a", [170.0, 90.0, 190.0, 110.0])        # налезла
+    assert not box_hits(g, "a", [160.0, 90.0, 180.0, 110.0])    # касание
+    assert box_hits(g, "a", [160.0, 90.0, 180.0, 110.0], margin=0.5)
+    assert not box_hits(g, "b", [170.0, 90.0, 190.0, 110.0])    # сам себя
+    assert not box_hits(g, "a", [140.0, 95.0, 160.0, 105.0])    # коннектор
+    # тот же ответ по словарю {id: node} и по списку узлов
+    assert box_hits(nodes_by_id(g), "a", [170.0, 90.0, 190.0, 110.0])
+    assert box_hits(g["nodes"], "a", [170.0, 90.0, 190.0, 110.0])
+    assert not box_hits(nodes_by_id(g), "b", [170.0, 90.0, 190.0, 110.0])

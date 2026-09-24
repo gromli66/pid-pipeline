@@ -222,17 +222,6 @@ def _pipe_line(node, adj, axis):
     return sum(vals) / len(vals) if vals else None
 
 
-def _waist_offset(node, axis, w, h):
-    """Смещение выверенного порта клапана от центра фикс-бокса поперёк
-    трубы (px): +вниз для H, +вправо для V; 0 — не клапан/симметричный."""
-    probe = dict(node)
-    probe["_axis"] = axis
-    refs = contact.face_refs(probe, (0.0, 0.0, w, h))
-    if not refs:
-        return 0.0
-    return (refs["L"] - h / 2.0) if axis == "H" else (refs["T"] - w / 2.0)
-
-
 def apply_fixed_sizes(graph, adj):
     """Скин-классам задать bbox = фикс-размер вокруг центроида. In-place.
 
@@ -267,7 +256,7 @@ def apply_fixed_sizes(graph, adj):
         cy, cx = c[0], c[1]
         by, bx = cy, cx                      # центр бокса
         if contact.is_valve(n):
-            off = _waist_offset(n, axis, w, h)
+            off = contact.waist_offset(n, axis, w, h)
             line = _pipe_line(n, adj, axis)
             cross = cy if axis == "H" else cx
             half = (h if axis == "H" else w) / 2.0

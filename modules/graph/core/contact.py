@@ -286,3 +286,57 @@ def face_ref(node, rect, side, sides=None):
     if side in ('L', 'R'):
         return (y1 + y2) / 2.0, False
     return (x1 + x2) / 2.0, False
+
+
+def waist_offset(node, axis, w, h):
+    """Смещение выверенного порта клапана от центра рамки w×h поперёк
+    трубы (px): +вниз для H, +вправо для V; 0 — не клапан/симметричный.
+
+    Ось задаётся явно (`axis`), узел не меняется: так её зовут и сборка
+    холста (`pretransform.apply_fixed_sizes`, ось ещё не записана), и
+    редактор (рамка другого размера / повёрнутая).
+    """
+    probe = dict(node)
+    probe["_axis"] = axis
+    refs = face_refs(probe, (0.0, 0.0, w, h))
+    if not refs:
+        return 0.0
+    return (refs["L"] - h / 2.0) if axis == "H" else (refs["T"] - w / 2.0)
+
+
+def waist_centroid(node, bbox):
+    """Рамка задана -> центроид узла [y, x].
+
+    Центр рамки; у клапана холста (`face_refs` не None: клапан с `_axis`)
+    поперечная координата — точка талии: центроид клапана холста — талия,
+    а не центр рамки (модель `apply_fixed_sizes`). Прочие узлы и растр —
+    центр рамки.
+    """
+    x1, y1, x2, y2 = bbox
+    c = [(y1 + y2) / 2, (x1 + x2) / 2]
+    refs = face_refs(node, tuple(bbox))
+    if refs:
+        if 'L' in refs:
+            c[0] = refs['L']
+        else:
+            c[1] = refs['T']
+    return c
+
+
+def box_around_waist(node, centroid, w, h):
+    """Центроид = талия -> рамка w×h [x1, y1, x2, y2] (обратное к
+    `waist_centroid`).
+
+    Вдоль оси центр рамки = центроид, поперёк — центроид минус
+    `waist_offset`. Не клапан или нет `_axis` — рамка вокруг центроида.
+    """
+    cy, cx = centroid
+    by, bx = cy, cx
+    axis = node.get('_axis')
+    if is_valve(node) and axis in ('H', 'V'):
+        off = waist_offset(node, axis, w, h)
+        if axis == 'H':
+            by = cy - off
+        else:
+            bx = cx - off
+    return [bx - w / 2.0, by - h / 2.0, bx + w / 2.0, by + h / 2.0]
