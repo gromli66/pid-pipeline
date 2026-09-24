@@ -304,3 +304,47 @@ def test_route_flags_are_stripped_on_open(tmp_path):
     assert e2.get("pin_source") == {"dx": 20.0, "dy": 0.0}, \
         "точка оператора закреплена пином ребра"
     assert not _reseat_canvas_endpoints(path)  # идемпотентно
+
+
+def test_two_pipes_without_flag_share_face_by_slots(tmp_path):
+    """Пара к test_route_flags_are_stripped_on_open (блок 1, К2): та же
+    грань R бокса и две трубы, но БЕЗ `_manual_route` — обе живые и
+    расходятся слотами симметрично середине (100 ± 6.667), колени едут за
+    концами; второй прогон — no-op. Концы не слиплись (100 и 104), чтобы
+    слоты давала посадка по модели (`seating._face_groups`), а не развод
+    стопок `_spread_stacked_ends`. С флагом вторая труба — будущий пин и
+    в слоты не входит: первая остаётся в середине, колено цело."""
+    from ui.tabs.base_graph_tab import _reseat_canvas_endpoints
+
+    g = {
+        "directed": False, "multigraph": False,
+        "graph": {"image_size": [1080, 1920]},
+        "nodes": [
+            {"id": "a", "type": "equipment", "class_name": "unknow",
+             "centroid": [100.0, 100.0], "bbox": [80, 80, 120, 120]},
+            {"id": "b", "type": "connector", "class_name": "connector",
+             "centroid": [200.0, 300.0], "bbox": None},
+        ],
+        "links": [
+            {"id": "e1", "source": "a", "target": "b",
+             "source_point": [100.0, 120.0], "target_point": [200.0, 300.0],
+             "waypoints": [[100.0, 300.0]]},
+            {"id": "e2", "source": "a", "target": "b",
+             "source_point": [104.0, 120.0], "target_point": [200.0, 300.0],
+             "waypoints": [[104.0, 200.0], [200.0, 200.0]]},
+        ],
+        "text_blocks": [], "bindings": [],
+    }
+    path = tmp_path / "graph_canvas.json"
+    path.write_text(json.dumps(g), encoding="utf-8")
+
+    assert _reseat_canvas_endpoints(path)
+    g2 = json.loads(path.read_text(encoding="utf-8"))
+    e1 = next(e for e in g2["links"] if e["id"] == "e1")
+    e2 = next(e for e in g2["links"] if e["id"] == "e2")
+    assert e1["source_point"] == [pytest.approx(93.3333), 120.0]
+    assert e2["source_point"] == [pytest.approx(106.6667), 120.0]
+    assert e1["waypoints"] == [[pytest.approx(93.3333), 300.0]]
+    assert e2["waypoints"] == [[pytest.approx(106.6667), 200.0],
+                               [200.0, 200.0]]
+    assert not _reseat_canvas_endpoints(path)  # идемпотентно

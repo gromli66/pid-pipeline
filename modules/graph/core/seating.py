@@ -480,6 +480,10 @@ def _face_groups(graph, byid, only=None, rect_of=None):
     """(node_id, side) -> [(along, edge_id, edge, pkey, other_key), ...].
 
     Концы на гранях рамочных узлов: без коннекторов, полигонов и пинов.
+    Ребро под легаси-заморозкой `_manual_route` не входит целиком (как в
+    `edit_engine._slot_seat`): открытие холста переводит его концы в пины
+    (`base_graph_tab._reseat_canvas_endpoints`, Э5b), а пин в слоты не
+    входит — иначе он раздвигал бы соседей по грани раньше, чем стал пином.
     `only` — множество id узлов, чьи грани собирать (None — все);
     `rect_of(node)` — рамка граней (по умолчанию `_anchor_rect`, как на
     сервере; редактор передаёт свою).
@@ -501,6 +505,8 @@ def _face_groups(graph, byid, only=None, rect_of=None):
         wps = e.get("waypoints") or []
         if e.get("_slack") and not wps:
             continue                      # вынужденная прямая — не в слоты
+        if e.get("_manual_route"):
+            continue                      # будущий пин — не в слоты
         for nid, pkey, other_key in ((s, "source_point", "target_point"),
                                      (t, "target_point", "source_point")):
             if only is not None and nid not in only:
