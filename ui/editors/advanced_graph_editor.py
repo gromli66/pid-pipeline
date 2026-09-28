@@ -753,6 +753,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         поперечное поворачивает и сдвигает клапан на трубу
         (`_first_edge_turn`/`_first_edge_shift`); ребро, поворот и сдвиг —
         один шаг отмены (`SnapshotCommand`, `_commit_new_edge`).
+
+        К5: конец пришёл в грань, где уже есть концы, — вся грань
+        раскладывается слотами (`_seat_face_after_add`), тем же шагом отмены.
         """
         if node_a == node_b:
             self.update_status("Нельзя соединить узел с самим собой")
@@ -815,7 +818,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             node_b: ID конечного узла
             waypoints: список [[y, x], ...] промежуточных точек
 
-        Р3 — как в `add_edge`; линия трубы для сдвига нового клапана —
+        Р3 и К5 — как в `add_edge`; линия трубы для сдвига нового клапана —
         смежный waypoint оператора (сами waypoints не трогаются).
         """
         if node_a == node_b:
@@ -5043,12 +5046,8 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             return None, []
         from modules.graph.core import contact, edit_engine, ports
         from modules.graph.core.edit_checks import seat_rect
-        from ui.editors.undo_manager import SnapshotCommand
 
-        self.drop_uncommitted_preview()      # точка возврата — без превью
-        cmd = SnapshotCommand(self.model, self._redraw_all)
-        cmd.execute()
-        cmd.description = f"Добавить ребро {node_a}—{node_b}"
+        cmd = self._open_add_edge_snapshot(node_a, node_b)
         turned = []
         for nid in free:
             node = self.nodes[nid]
@@ -5104,23 +5103,123 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self._shift_bound_blocks(nid, dx, dy)
         return True
 
+    def _open_add_edge_snapshot(self, node_a: str, node_b: str):
+        """Точка возврата добавления ребра с побочными эффектами (поворот
+        Р3, слоты грани К5): `SnapshotCommand` ДО мутаций модели, без
+        незафиксированного превью «Размеров» (см. `drop_uncommitted_preview`)."""
+        from ui.editors.undo_manager import SnapshotCommand
+
+        self.drop_uncommitted_preview()      # точка возврата — без превью
+        cmd = SnapshotCommand(self.model, self._redraw_all)
+        cmd.execute()
+        cmd.description = f"Добавить ребро {node_a}—{node_b}"
+        return cmd
+
     def _commit_new_edge(self, snap_cmd, node_a: str, node_b: str,
                          edge_data: dict):
         """Ребро — в модель и на сцену. Без снимка — `AddEdgeCommand`, как
-        прежде; со снимком Р3 (`_first_edge_turn`) — то же добавление внутри
-        `SnapshotCommand`: поворот/сдвиг клапана, снятие `_axis_free` и ребро
-        отменяются и возвращаются одним Ctrl+Z / Ctrl+Y."""
+        прежде; со снимком Р3 (`_first_edge_turn`) или если на грани нового
+        конца уже есть концы (К5, `_new_edge_faces`) — то же добавление
+        внутри `SnapshotCommand`: поворот/сдвиг клапана, снятие `_axis_free`,
+        раскладка грани (`_seat_face_after_add`) и ребро отменяются и
+        возвращаются одним Ctrl+Z / Ctrl+Y."""
         from ui.editors.commands.simple_commands import AddEdgeCommand
 
+        faces = self._new_edge_faces(edge_data)
+        if faces and snap_cmd is None:
+            snap_cmd = self._open_add_edge_snapshot(node_a, node_b)
         add = AddEdgeCommand(self.model, self, node_a, node_b, edge_data)
         if snap_cmd is None:
             self.undo_mgr.execute(add)
             return
         add.execute()
+        for nid, side in faces:
+            self._seat_face_after_add(nid, side)
         for nid in (node_a, node_b):
             self._refresh_node_visual(nid)   # рамка, маркер, стороны, скин
         snap_cmd.finalize()
         self.undo_mgr.push_executed(snap_cmd)
+
+    def _new_edge_faces(self, edge_data: dict) -> list:
+        """К5: грани (node_id, side) рамочных концов нового ребра, на которых
+        УЖЕ сидят концы других рёбер — их надо разложить слотами целиком.
+
+        Только по модели (`_waist_model()`); рамка граней — редакторская
+        `seat_rect` (bbox; сервер до блока 2 судит по `_anchor_rect`).
+        Членство — `seating._face_groups` (без коннекторов, полигонов, пинов,
+        `_manual_route` и прямых под `_slack`). Зовётся ДО добавления ребра.
+        """
+        if not self._waist_model():
+            return []
+        from modules.graph.core import seating
+        from modules.graph.core.edit_checks import seat_rect
+
+        faces = []
+        for pkey, nkey in (('source_point', 'source'),
+                           ('target_point', 'target')):
+            nid = edge_data.get(nkey)
+            node = self.nodes.get(nid)
+            p = edge_data.get(pkey)
+            rect = seat_rect(node) if node is not None else None
+            if rect is None or not p:
+                continue
+            side = seating._end_side(rect, float(p[1]), float(p[0]))
+            if side is None:
+                continue
+            groups = seating._face_groups(self.model.graph_data, self.nodes,
+                                          only={nid}, rect_of=seat_rect)
+            if groups.get((nid, side)):
+                faces.append((nid, side))
+        return faces
+
+    def _seat_face_after_add(self, nid: str, side: str):
+        """К5: ребро добавлено в грань (nid, side), где уже были концы, —
+        все концы грани раскладываются слотами симметрично вокруг опорной
+        точки (`seating.seat_face`: та же раскладка, что у сервера и при
+        открытии холста, поэтому открытие потом ничего не двигает). Смежные
+        колени и мягкие партнёры едут следом; чужие грани и маршруты других
+        рёбер узла не трогаются (мини-жест `_reseat_after_resize` здесь не
+        годится: он перекладывает все маршруты узла).
+
+        Гейт «не хуже входа» (как в `_reseat_after_resize`): ребро грани,
+        которое было ортогональным и от сдвига в слот стало косым,
+        прокладывается одиночно (`_route_orthogonal`); не вышло — ВСЯ грань
+        откатывается (новое ребро остаётся в своём слоте `_slot_seat`,
+        асимметрия честнее косой)."""
+        from modules.graph.core import seating
+        from modules.graph.core.edit_checks import seat_rect
+
+        ends = seating._face_groups(self.model.graph_data, self.nodes,
+                                    only={nid}, rect_of=seat_rect
+                                    ).get((nid, side)) or []
+        bak = [(e, self._edge_is_ortho(e),
+                (list(e.get('source_point') or []),
+                 list(e.get('target_point') or []),
+                 [list(w) for w in e.get('waypoints') or []],
+                 bool(e.get('_route_defect'))))
+               for e in {id(t[2]): t[2] for t in ends}.values()]
+        moved = {id(e) for e, _pkey in seating.seat_face(
+            self.model.graph_data, self.nodes, nid, side, rect_of=seat_rect)}
+        if not moved:
+            return
+        ok = True
+        for e, was_ortho, _b in bak:
+            if id(e) in moved and was_ortho and not self._edge_is_ortho(e):
+                self._route_orthogonal(e, alive=bool(e.get('waypoints')))
+                if not self._edge_is_ortho(e):
+                    ok = False
+                    break
+        for e, _was_ortho, (sp0, tp0, wp0, defect0) in bak:
+            if not ok:
+                e['source_point'], e['target_point'] = sp0, tp0
+                e['waypoints'] = wp0
+                if defect0:
+                    e['_route_defect'] = True
+                else:
+                    e.pop('_route_defect', None)
+            if id(e) in moved:
+                self._update_edge_path(self.model.edge_key(e['source'],
+                                                           e['target']))
 
     def _resize_node_poly(self, node: dict, scale: float):
         """Масштабировать полигон вокруг центроида с сохранением формы."""

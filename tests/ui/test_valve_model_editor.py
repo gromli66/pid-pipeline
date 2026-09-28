@@ -603,3 +603,173 @@ def test_pipe_line_off_the_turned_face_turns_without_a_jump(make_editor):
     assert e["source_point"][1] == pytest.approx(500.0, abs=0.01)
     assert e["target_point"] == [150.0, 510.0]
     assert ed._edge_is_ortho(e)
+
+
+# ── К5: слоты всей гранью после добавления ребра ──────────────────────
+#
+# Ребро пришло в грань, где уже сидят концы, — ВСЕ концы грани
+# раскладываются слотами симметрично вокруг опорной точки (середина рамки,
+# у клапана — талия), той же раскладкой, что у сервера: открытие холста
+# после этого ничего не двигает. До правки новый конец брал свободный слот
+# среди k+1, а соседи стояли в слотах для k (асимметрия, которую открытие
+# потом перекладывало). Чужие грани и маршруты не трогаются.
+
+BOX_BBOX = [80.0, 80.0, 120.0, 120.0]            # unknow 40×40, без скина
+
+
+def _box():
+    return {"id": "b", "type": "equipment", "class_id": 99,
+            "class_name": "unknow", "centroid": [100.0, 100.0],
+            "bbox": list(BOX_BBOX), "segmentation": None, "degree": 0}
+
+
+def _end_at(e, nid):
+    return e["source_point"] if e["source"] == nid else e["target_point"]
+
+
+def _face_ys(ed, nid, x):
+    """{партнёр: y конца у nid} для концов на вертикальной грани x."""
+    return {(e["target"] if e["source"] == nid else e["source"]):
+            _end_at(e, nid)[0] for e in ed.edges_data
+            if nid in (e["source"], e["target"])
+            and abs(_end_at(e, nid)[1] - x) <= 0.01}
+
+
+def _reopen_moves(ed, tmp_path):
+    """Сохранить и открыть холст: True — открытие что-то пересадило."""
+    from ui.tabs.base_graph_tab import _reseat_canvas_endpoints
+
+    p = tmp_path / f"reopen{len(list(tmp_path.glob('reopen*')))}.json"
+    assert ed.save_graph(str(p))
+    return _reseat_canvas_endpoints(p)
+
+
+def _box_sheet():
+    return _sheet(_box(), _conn("kb", 300.0, 100.0), _conn("k1", 100.0, 300.0),
+                  _conn("k2", 60.0, 300.0), _conn("k3", 140.0, 300.0))
+
+
+def test_new_pipe_spreads_the_whole_box_face(make_editor, tmp_path):
+    """Бокс без скина: вторая труба в R-грань — обе в слотах 100∓6.667
+    (прямая соседка уходит маршрутом, не косой), третья — 90/100/110.
+    Труба в нижней грани бит-в-бит; открытие холста ничего не двигает."""
+    ed = make_editor(_box_sheet())
+    assert ed.add_edge("b", "kb") and ed.add_edge("b", "k1")
+    foreign = copy.deepcopy(ed.edges_data[0])
+    assert _face_ys(ed, "b", 120.0) == {"k1": 100.0}
+
+    assert ed.add_edge("b", "k2")
+    assert _face_ys(ed, "b", 120.0) == pytest.approx(
+        {"k2": 100.0 - 20.0 / 3.0, "k1": 100.0 + 20.0 / 3.0}, abs=1e-6)
+    assert all(ed._edge_is_ortho(e) for e in ed.edges_data), "косая"
+    assert not _reopen_moves(ed, tmp_path), "открытие переложило грань"
+
+    assert ed.add_edge("b", "k3")
+    assert _face_ys(ed, "b", 120.0) == pytest.approx(
+        {"k2": 90.0, "k1": 100.0, "k3": 110.0}, abs=1e-6)
+    assert all(ed._edge_is_ortho(e) for e in ed.edges_data), "косая"
+    assert ed.edges_data[0] == foreign, "тронута труба чужой грани"
+    for e in ed.edges_data:                  # сцена перерисована по данным
+        p0 = ed.edge_items[ed.model.edge_key(e["source"], e["target"])] \
+            .path().elementAt(0)
+        assert [p0.y, p0.x] == pytest.approx(e["source_point"], abs=0.01)
+    assert not _reopen_moves(ed, tmp_path), "открытие переложило грань"
+
+
+def test_new_pipe_spreads_the_valve_face_around_the_waist(make_editor,
+                                                          tmp_path):
+    """Клапан холста (H, талия y=306.216): две трубы в R-грань встают
+    симметрично вокруг ТАЛИИ, а не середины рамки; третья — в талию.
+    Труба в L-грани бит-в-бит; открытие ничего не двигает.
+
+    ⚠ Слоты 304.432/308.0 — веер у смещённой талии, зажатый отступом от
+    угла (`ports.side_slots`); ПЕРЕСНЯТЬ В БЛОКЕ 2 (сдвиг веера 2b′)."""
+    ed = make_editor(_sheet(
+        {"id": "v", "type": "equipment", "class_id": 3,
+         "class_name": "armatura_electro", "_axis": "H",
+         "centroid": [WAIST_Y, 500.0], "bbox": list(VALVE_BBOX),
+         "segmentation": None, "degree": 0},
+        _conn("kl", WAIST_Y, 300.0), _conn("k1", WAIST_Y - 40.0, 700.0),
+        _conn("k2", WAIST_Y + 40.0, 700.0), _conn("k3", WAIST_Y, 700.0)))
+    assert ed.add_edge("kl", "v") and ed.add_edge("v", "k1")
+    foreign = copy.deepcopy(ed.edges_data[0])
+    assert _face_ys(ed, "v", 521.0) == pytest.approx({"k1": WAIST_Y})
+
+    assert ed.add_edge("v", "k2")
+    got = _face_ys(ed, "v", 521.0)
+    assert got == pytest.approx({"k1": 304.432, "k2": 308.0}, abs=1e-6)
+    assert (got["k1"] + got["k2"]) / 2 == pytest.approx(WAIST_Y, abs=1e-6), \
+        "веер не вокруг талии"
+    assert all(ed._edge_is_ortho(e) for e in ed.edges_data), "косая"
+    assert not _reopen_moves(ed, tmp_path), "открытие переложило грань"
+
+    assert ed.add_edge("v", "k3")
+    assert _face_ys(ed, "v", 521.0) == pytest.approx(
+        {"k1": 304.432, "k3": WAIST_Y, "k2": 308.0}, abs=1e-6)
+    assert all(ed._edge_is_ortho(e) for e in ed.edges_data), "косая"
+    assert ed.edges_data[0] == foreign, "тронута труба чужой грани"
+    assert not _reopen_moves(ed, tmp_path), "открытие переложило грань"
+
+
+def test_face_spread_after_foreign_drag_and_undo(make_editor, tmp_path):
+    """Д1: после чужого жеста (перенос коннектора соседней трубы) третья
+    труба всё так же раскладывает грань 90/100/110. Ребро и раскладка
+    соседей — ОДИН шаг отмены: Ctrl+Z возвращает соседей бит-в-бит,
+    Ctrl+Y — снова «после»; повторное добавление после отмены даёт то же."""
+    ed = make_editor(_box_sheet())
+    assert ed.add_edge("b", "k1") and ed.add_edge("b", "k2")
+    ed.start_drag_node("k2")
+    ed.drag_node_to(300.0, 50.0)
+    ed.end_drag_node()
+    assert ed.nodes["k2"]["centroid"] == pytest.approx([50.0, 300.0])
+    before = _state(ed)
+    depth = ed.undo_mgr.stack_depth
+
+    assert ed.add_edge("b", "k3")
+    assert _face_ys(ed, "b", 120.0) == pytest.approx(
+        {"k2": 90.0, "k1": 100.0, "k3": 110.0}, abs=1e-6)
+    assert all(ed._edge_is_ortho(e) for e in ed.edges_data), "косая"
+    assert ed.undo_mgr.stack_depth == depth + 1, "не один шаг отмены"
+    after = _state(ed)
+
+    ed.undo()
+    assert _state(ed) == before, "Ctrl+Z не вернул соседей грани"
+    ed.redo()
+    assert _state(ed) == after
+    ed.undo()
+    assert ed.add_edge("b", "k3")
+    again = _state(ed)
+    again[1][-1]["id"] = after[1][-1]["id"]      # счётчик id рёбер идёт вперёд
+    assert again == after
+    assert not _reopen_moves(ed, tmp_path), "открытие переложило грань"
+
+
+def test_face_spread_rolls_back_when_a_sibling_would_turn_oblique(
+        make_editor, monkeypatch):
+    """Гейт «не хуже входа»: прямая соседка, уехавшая в слот, не нашла
+    маршрута (роутер отказал) — вся грань откатывается: соседка прямая на
+    прежнем месте, новая труба в своём слоте `_slot_seat` (100−6.667)."""
+    ed = make_editor(_box_sheet())
+    assert ed.add_edge("b", "k1")
+    sibling = copy.deepcopy(ed.edges_data[0])
+    real = ed._route_orthogonal
+
+    def refuse_sibling(edge_data, alive=False):
+        if "k1" in (edge_data.get("source"), edge_data.get("target")):
+            return False
+        return real(edge_data, alive)
+
+    monkeypatch.setattr(ed, "_route_orthogonal", refuse_sibling)
+    assert ed.add_edge("b", "k2")
+    assert ed.edges_data[0] == sibling, "соседка не откатилась"
+    assert _face_ys(ed, "b", 120.0) == pytest.approx(
+        {"k1": 100.0, "k2": 100.0 - 20.0 / 3.0}, abs=1e-6)
+    assert all(ed._edge_is_ortho(e) for e in ed.edges_data), "косая"
+
+
+def test_face_spread_is_off_in_raster(make_editor):
+    """Растр («Проверка схемы») — вне модели (`_waist_model()`): соседи по
+    грани не двигаются, как до правки."""
+    ed = make_editor(_box_sheet(), canvas=False)
+    assert ed.add_edge("b", "k1") and ed.add_edge("b", "k2")
+    assert _face_ys(ed, "b", 120.0)["k1"] == 100.0
