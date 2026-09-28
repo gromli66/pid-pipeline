@@ -623,7 +623,7 @@ class SimpleGraphEditor(BaseGraphEditor):
         концов) — без отката статусная строка врёт про отмену, а порча
         остаётся без шага undo и с чистым дёрти-флагом. Откат — тем же
         снимком и тем же кодом, что у Ctrl+Z (`ResizeNodeCommand.undo`:
-        пять полей `ROUTE_KEYS`, заведённые ресайзом поля удаляются);
+        шесть полей `ROUTE_KEYS`, заведённые ресайзом поля удаляются);
         в стек undo НИЧЕГО не пишется — у отменённого жеста нет шага."""
         node_id = self._resizing_node
         start_bbox = getattr(self, '_resize_start_bbox', None)

@@ -773,3 +773,178 @@ def test_face_spread_is_off_in_raster(make_editor):
     ed = make_editor(_box_sheet(), canvas=False)
     assert ed.add_edge("b", "k1") and ed.add_edge("b", "k2")
     assert _face_ys(ed, "b", 120.0)["k1"] == 100.0
+
+
+# ── К6: метка вынужденной прямой `_slack` ───────────────────────────────
+# Сервер (`seating.straighten_unrouted`) метит прямую, которой не нашлось
+# ступеньки в талию: 2 — порт клапана уступил. Открытие держит её прямой.
+# Жест оператора, пересчитавший ребро, метку снимает (геометрия теперь его),
+# Ctrl+Z — возвращает; откат гейта «не хуже входа» к прямой — тоже.
+# Фикстура — неподвижная точка открытия: вывод `straighten_unrouted` после
+# канона (замер пробой k6/probe_sizes.py).
+
+SLACK_Y = 296.108                      # прямая в створе клапана и бокса
+SLACK_BOX = [580.0, 270.0, 620.0, 302.0]  # unknow 40×32, талия 306.216 вне
+
+
+def _slack_sheet(target_y=SLACK_Y):
+    g = _sheet(
+        {"id": "v", "type": "equipment", "class_id": 3,
+         "class_name": "armatura_electro", "_axis": "H",
+         "centroid": [WAIST_Y, 500.0], "bbox": list(VALVE_BBOX),
+         "segmentation": None, "degree": 1},
+        {"id": "b", "type": "equipment", "class_id": 99,
+         "class_name": "unknow", "centroid": [286.0, 600.0],
+         "bbox": list(SLACK_BOX), "segmentation": None, "degree": 1})
+    g["links"] = [{"id": "e1", "source": "v", "target": "b",
+                   "source_point": [SLACK_Y, 521.0],
+                   "target_point": [target_y, 580.0],
+                   "waypoints": [], "_slack": 2}]
+    return g
+
+
+def _saved_edge(ed, tmp_path):
+    p = tmp_path / f"slack{len(list(tmp_path.glob('slack*')))}.json"
+    assert ed.save_graph(str(p))
+    return json.loads(p.read_text(encoding="utf-8"))["links"][0]
+
+
+def test_open_and_save_without_gestures_keep_slack(make_editor, tmp_path):
+    """Без жестов метка живёт: запись её сохраняет, открытие не двигает."""
+    ed = make_editor(_slack_sheet())
+    assert _saved_edge(ed, tmp_path)["_slack"] == 2
+    assert not _reopen_moves(ed, tmp_path), "фикстура — не точка открытия"
+
+
+def test_drag_drops_slack_and_undo_returns_it(make_editor, tmp_path):
+    """Д1: чужой жест («Размеры» бокса другим размером) снимает метку,
+    Ctrl+Z возвращает (снимок команды). Затем перенос бокса на +5 px:
+    метки нет ни в ребре, ни в файле; Ctrl+Z — метка 2 и всё бит-в-бит;
+    Ctrl+Y — снова без метки."""
+    ed = make_editor(_slack_sheet())
+    before = _state(ed)
+    ed.set_mode("resize_objects")
+    ed.set_resize_class("unknow")
+    ed.apply_resize(width=36.0, height=44.0)
+    assert "_slack" not in ed.edges_data[0], "«Размеры» не сняли метку"
+    ed.undo()
+    assert _state(ed) == before
+    ed.set_mode("idle")
+
+    ed.start_drag_node("b")
+    ed.drag_node_to(600.0, 291.0)
+    ed.end_drag_node()
+    e = ed.edges_data[0]
+    assert ed.nodes["b"]["centroid"] == pytest.approx([291.0, 600.0])
+    assert "_slack" not in e, "перенос не снял метку"
+    assert "_slack" not in _saved_edge(ed, tmp_path)
+    after = _state(ed)
+
+    ed.undo()
+    assert ed.edges_data[0]["_slack"] == 2, "Ctrl+Z не вернул метку"
+    assert _state(ed) == before
+    ed.redo()
+    assert _state(ed) == after
+
+
+def test_sizes_rolled_back_to_the_straight_keep_slack(make_editor, tmp_path,
+                                                       monkeypatch):
+    """Гейт «не хуже входа» откатил ребро к прямой сервера (роутер
+    отказал) — метка вернулась с геометрией: без неё открытие посадило бы
+    порт в талию (306.216) и развалило прямую в косую."""
+    ed = make_editor(_slack_sheet())
+    before = copy.deepcopy(ed.edges_data[0])
+    monkeypatch.setattr(ed, "_build_avoid_session", lambda *a, **k: None)
+    monkeypatch.setattr(ed, "_route_orthogonal", lambda *a, **k: False)
+    _open_sizes(ed)
+    ed.apply_resize(width=28.0, height=42.0)
+    assert ed.edges_data[0] == before
+    assert not _reopen_moves(ed, tmp_path), "открытие развалило прямую"
+
+
+def test_overlay_resize_drops_slack_and_undo_returns_it(make_editor):
+    """Угловой оверлей (ResizeNodeCommand): метка снята, Ctrl+Z вернул её
+    через ROUTE_KEYS, Ctrl+Y — снова без метки."""
+    ed = make_editor(_slack_sheet())
+    before = _state(ed)
+    ed._start_resize("b")
+    ed._on_node_resized("b", [580.0, 266.0, 624.0, 302.0])
+    ed._commit_resize("b")
+    assert "_slack" not in ed.edges_data[0]
+    after = _state(ed)
+    ed.undo()
+    assert ed.edges_data[0]["_slack"] == 2
+    # рёбра бит-в-бит (узлу откат ResizeNodeCommand дописывает area — не К6)
+    assert _state(ed)[1] == before[1]
+    ed.redo()
+    assert _state(ed)[1] == after[1]
+
+
+def test_optimize_drops_slack_and_undo_returns_it(make_editor):
+    """«Оптимизировать» (OptimizeEdgeCommand): метка снята, Ctrl+Z вернул,
+    Ctrl+Y снова снял."""
+    ed = make_editor(_slack_sheet())
+    assert ed.optimize_edge("v", "b")
+    assert "_slack" not in ed.edges_data[0]
+    ed.undo()
+    assert ed.edges_data[0]["_slack"] == 2
+    ed.redo()
+    assert "_slack" not in ed.edges_data[0]
+
+
+def test_cycle_sides_drops_slack_and_undo_returns_it(make_editor):
+    """Цикл стороны (`_recalculate_edge` -> `_engine_finish_ends` на живом
+    ребре): метка снята, Ctrl+Z — снимок вернул."""
+    ed = make_editor(_slack_sheet())
+    before = _state(ed)
+    ed._cycle_node_sides("b")
+    assert "_slack" not in ed.edges_data[0]
+    ed.undo()
+    assert _state(ed) == before
+
+
+def test_endpoint_drag_drops_slack_and_undo_returns_it(make_editor):
+    """Перенос конца: кадр протяжки и страховка отпускания (жест в обход
+    кадров) снимают метку; Ctrl+Z — снимок жеста вернул её."""
+    from ui.editors.undo_manager import SnapshotCommand
+
+    ed = make_editor(_slack_sheet())
+    before = _state(ed)
+    key = ed.model.edge_key("v", "b")
+    ed._start_endpoint_drag((key, "target"))
+    ed._drag_endpoint_to(580.0, 280.0)
+    ed._end_endpoint_drag()
+    assert "_slack" not in ed.edges_data[0]
+    ed.undo()
+    assert _state(ed) == before
+
+    ed._dragging_endpoint = (key, "target")      # в обход кадров
+    ed._ep_drag_armed = True
+    ed._ep_on_port = False
+    ed._ep_snap_cmd = SnapshotCommand(ed.model, ed._redraw_all)
+    ed._ep_snap_cmd.execute()
+    ed._end_endpoint_drag()
+    assert "_slack" not in ed.edges_data[0]
+    ed.undo()
+    assert _state(ed) == before
+
+
+def test_smoothing_route_drops_slack(make_editor):
+    """Сглаживание проложило косое ребро коленом — метка снята; один Ctrl+Z
+    операции вернул всё, включая метку."""
+    ed = make_editor(_slack_sheet(target_y=290.0))
+    before = _state(ed)
+    stats = ed.smooth_canvas()
+    assert stats["колено"] == 1, stats
+    assert "_slack" not in ed.edges_data[0]
+    ed.undo()
+    assert _state(ed) == before
+
+
+def test_slack_is_kept_in_raster(make_editor):
+    """Растр — вне модели (`_waist_model()`): перенос метку не трогает."""
+    ed = make_editor(_slack_sheet(), canvas=False)
+    ed.start_drag_node("b")
+    ed.drag_node_to(600.0, 291.0)
+    ed.end_drag_node()
+    assert ed.edges_data[0]["_slack"] == 2

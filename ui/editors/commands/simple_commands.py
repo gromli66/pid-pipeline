@@ -339,8 +339,10 @@ class ResizeNodeCommand(Command):
 
     #: Поля ребра, которые переписывает пересадка концов после resize
     #: (замер 1.7: сравнение полных словарей рёбер до/после жеста).
+    #: `_slack` — метка вынужденной прямой сервера: пересадка жестом её
+    #: снимает (`_reseat_moved_end`), откат обязан вернуть.
     ROUTE_KEYS = ('source_point', 'target_point', 'waypoints',
-                  '_src_side', '_tgt_side')
+                  '_src_side', '_tgt_side', '_slack')
 
     def __init__(self, model: GraphDataModel, editor, node_id: str,
                  old_bbox: list, old_centroid: list, old_area: float,

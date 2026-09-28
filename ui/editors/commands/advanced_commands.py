@@ -9,7 +9,10 @@ from ui.editors.graph_data import GraphDataModel
 
 
 class OptimizeEdgeCommand(Command):
-    """Оптимизировать перпендикулярность ребра."""
+    """Оптимизировать перпендикулярность ребра.
+
+    `_slack` (метка вынужденной прямой сервера): execute/redo ставят
+    `new_slack`, undo — `old_slack`; None — поля нет."""
 
     def __init__(self, model: GraphDataModel, editor,
                  source_id: str, target_id: str,
@@ -17,7 +20,8 @@ class OptimizeEdgeCommand(Command):
                  old_target_point: list | None,
                  old_waypoints: list,
                  new_source_point: list,
-                 new_target_point: list):
+                 new_target_point: list,
+                 old_slack=None, new_slack=None):
         self._model = model
         self._editor = editor
         self._source_id = source_id
@@ -27,7 +31,16 @@ class OptimizeEdgeCommand(Command):
         self._old_wp = old_waypoints
         self._new_sp = new_source_point
         self._new_tp = new_target_point
+        self._old_slack = old_slack
+        self._new_slack = new_slack
         self._key = model.edge_key(source_id, target_id)
+
+    @staticmethod
+    def _set_slack(edge_data, value):
+        if value is None:
+            edge_data.pop('_slack', None)
+        else:
+            edge_data['_slack'] = value
 
     def execute(self):
         edge_data = self._model.find_edge_data(self._key)
@@ -35,6 +48,7 @@ class OptimizeEdgeCommand(Command):
             edge_data['source_point'] = self._new_sp
             edge_data['target_point'] = self._new_tp
             edge_data['waypoints'] = []
+            self._set_slack(edge_data, self._new_slack)
             self._editor._update_edge_path(self._key)
 
     def undo(self):
@@ -45,6 +59,7 @@ class OptimizeEdgeCommand(Command):
             if self._old_tp:
                 edge_data['target_point'] = self._old_tp
             edge_data['waypoints'] = self._old_wp
+            self._set_slack(edge_data, self._old_slack)
             self._editor._update_edge_path(self._key)
 
     @property
@@ -98,6 +113,7 @@ class DragNodeCommand(Command):
                     'waypoints': [wp.copy() for wp in edge_data.get('waypoints', [])],
                     '_src_side': edge_data.get('_src_side'),
                     '_tgt_side': edge_data.get('_tgt_side'),
+                    '_slack': edge_data.get('_slack'),
                 }
         # Текст-блоки — те же id, что сняты на старте drag (привязка блока
         # во время drag измениться не может)
@@ -141,7 +157,8 @@ class DragNodeCommand(Command):
                         edge_data['target_point'] = points['target_point'].copy()
                     if 'waypoints' in points:
                         edge_data['waypoints'] = [wp.copy() for wp in points['waypoints']]
-                    for side_key in ('_src_side', '_tgt_side'):
+                    # стороны и метка вынужденной прямой: None — поля нет
+                    for side_key in ('_src_side', '_tgt_side', '_slack'):
                         if side_key in points:
                             if points[side_key] is None:
                                 edge_data.pop(side_key, None)

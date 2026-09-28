@@ -1002,11 +1002,16 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         src_x, src_y = new_sp[1], new_sp[0]
         tgt_x, tgt_y = new_tp[1], new_tp[0]
 
+        # метка вынужденной прямой сервера: оптимизация её снимает (модель
+        # редактора), Ctrl+Z возвращает
+        old_slack = edge_data.get('_slack')
         cmd = OptimizeEdgeCommand(
             self.model, self,
             original_source_id, original_target_id,
             old_sp, old_tp, old_wp,
             new_sp, new_tp,
+            old_slack=old_slack,
+            new_slack=None if self._waist_model() else old_slack,
         )
         self.undo_mgr.execute(cmd)
 
@@ -1090,6 +1095,11 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             if live is None:
                 return False
             ok = self._route_orthogonal(live)
+            if ok and self._waist_model():
+                # ребро проложено ходом выравнивания — метка вынужденной
+                # прямой сервера снята (отклонённый ход движок откатывает
+                # целым словарём ребра, Ctrl+Z — снимок операции)
+                live.pop('_slack', None)
             self._update_edge_path(key)
             return ok
 
@@ -2309,6 +2319,10 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         node = self.nodes.get(moved_node_id)
         if node is None:
             return
+        if self._waist_model():
+            # жест оператора: вынужденная прямая сервера больше не его
+            # (Ctrl+Z возвращает метку — ROUTE_KEYS, DragNodeCommand, снимки)
+            edge_data.pop('_slack', None)
         src_id, tgt_id = edge_data['source'], edge_data['target']
         edge_key = self.model.edge_key(src_id, tgt_id)
         routable = edge_key in self._drag_routable_edges
@@ -2522,7 +2536,8 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                              (list(edge.get('source_point') or []),
                               list(edge.get('target_point') or []),
                               [list(w) for w in edge.get('waypoints') or []],
-                              bool(edge.get('_route_defect')))))
+                              bool(edge.get('_route_defect')),
+                              edge.get('_slack'))))
                 if self._avoid_session is not None and key in auto_keys:
                     alive = bool(edge.get('waypoints'))
                     self._reseat_moved_end(edge, node_id, defer_route=True)
@@ -2542,7 +2557,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             # транзакции: до неё маршрута ещё нет и судить нечего.
             for edge, key, was_ortho, bak in work:
                 if was_ortho and not self._edge_is_ortho(edge):
-                    sp0, tp0, wp0, defect0 = bak
+                    sp0, tp0, wp0, defect0, slack0 = bak
                     edge['source_point'] = sp0
                     edge['target_point'] = tp0
                     edge['waypoints'] = wp0
@@ -2550,6 +2565,10 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                         edge['_route_defect'] = True
                     else:
                         edge.pop('_route_defect', None)
+                    # откат к прямой сервера — и её метка назад: без неё
+                    # открытие посадит порт в талию и развалит прямую в косую
+                    if slack0 is not None:
+                        edge['_slack'] = slack0
                     self._update_edge_path(key)
         finally:
             self._drag_routable_edges = prev_routable
@@ -2574,7 +2593,12 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         оси — порт/слот у рамочных, отступ/развод у полигонов, центроид у
         коннектора; угол непредставим. Для инструментов (optimize,
         add_edge, recalculate), пересчитывающих ребро целиком: понятия
-        «дальний конец» здесь нет — это не жест drag."""
+        «дальний конец» здесь нет — это не жест drag.
+
+        Ребро пересчитано инструментом — метка вынужденной прямой сервера
+        (`_slack`) снимается (модель редактора, `_waist_model()`)."""
+        if self._waist_model():
+            edge_data.pop('_slack', None)
         for role, point_key, other_key, node_key in (
                 ('s', 'source_point', 'target_point', 'source'),
                 ('t', 'target_point', 'source_point', 'target')):
@@ -3250,6 +3274,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                         # вернуть и их (иначе side_kept/декор судят по лжи)
                         '_src_side': edge_data.get('_src_side'),
                         '_tgt_side': edge_data.get('_tgt_side'),
+                        # метку вынужденной прямой снимает кадр протяжки
+                        # (_reseat_moved_end) — undo возвращает и её
+                        '_slack': edge_data.get('_slack'),
                     }
                     # Э5: жест ведёт все инцидентные рёбра (waypoints — кэш;
                     # закреплён только вход с пином, его держит seat_end).
@@ -3992,6 +4019,10 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 if node is not None and pt:
                     port_model.set_edge_pin(node, edge_data, endpoint,
                                             pt[1], pt[0])
+                if self._waist_model():
+                    # вход переставлен руками — метка вынужденной прямой
+                    # сервера снята (Ctrl+Z — снапшот _ep_snap_cmd)
+                    edge_data.pop('_slack', None)
         # Итог жеста = состояние последнего кадра (тот же принцип, что у
         # переноса узла: предпросмотр честен по построению). Здесь только
         # закрытие сессии и очистка кадрового состояния — ДО finalize
