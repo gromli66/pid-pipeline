@@ -179,3 +179,52 @@ def test_horizontal_valve_skin_is_rotated_not_reversed(qapp, tmp_path):
     base = ed._skin_pixmap_for("armatura_electro")
     got = ed._oriented_skin_pixmap(base, "HORIZONTAL")
     assert got.toImage() == base.transformed(QTransform().rotate(-90)).toImage()
+
+
+def _old_canvas_42x38():
+    """Старый холст: armatura_ruchn в рамке 42x38 без _axis (сборка до
+    FIXED_SIZES по аспекту) и коннектор под ним. Конец сохранён старым
+    каноном — на letterbox-следе графики y=260.5 (поля по 8.5 px)."""
+    return {"directed": False, "multigraph": False,
+            "graph": {"image_size": [IMG_H, IMG_W]},
+            "nodes": [
+                {"id": "s", "type": "equipment", "class_id": 1,
+                 "class_name": "armatura_ruchn", "centroid": [250.0, 821.0],
+                 "bbox": [800.0, 231.0, 842.0, 269.0],
+                 "segmentation": None, "degree": 1},
+                {"id": "p", "type": "connector", "class_id": -1,
+                 "class_name": "connector", "centroid": [420.0, 821.0],
+                 "bbox": None, "segmentation": None, "degree": 1}],
+            "links": [{"id": "e", "source": "s", "target": "p",
+                       "source_point": [260.5, 821.0],
+                       "target_point": [420.0, 821.0], "waypoints": []}],
+            "text_blocks": [], "bindings": []}
+
+
+def test_server_reseat_agrees_with_editor_on_old_skin_frame(qapp, tmp_path):
+    """Д1, Р2: сторож == судья на старой рамке скина ПОСЛЕ жестов оператора.
+
+    Открытие -> оператор тянет коннектор-партнёр в сторону -> «Оптимизировать
+    ребро». Редактор сажает конец скина на нижнюю грань РАМКИ y=269; серверная
+    посадка того же состояния — туда же. До Р2 сервер уводил его на letterbox
+    y=260.5: расхождение 8.5 px, и следующая пересборка тащила трубу внутрь
+    рамки."""
+    from ui.tabs.base_graph_tab import _reseat_canvas_endpoints
+
+    p = tmp_path / "graph_canvas.json"
+    p.write_text(json.dumps(_old_canvas_42x38()), encoding="utf-8")
+    _reseat_canvas_endpoints(p)
+    ed = _editor(qapp, tmp_path, json.loads(p.read_text(encoding="utf-8")))
+
+    ed.start_drag_node("p")
+    ed.drag_node_to(830.0, 470.0)
+    ed.end_drag_node()
+    assert ed.optimize_edge("s", "p")
+    assert ed.edges_data[0]["source_point"] == [269.0, 821.0]    # [y, x]
+
+    st = {"graph": {"image_size": [IMG_H, IMG_W]},
+          "nodes": copy.deepcopy(list(ed.nodes.values())),
+          "links": copy.deepcopy(ed.edges_data)}
+    seating.reseat_all_endpoints(st, model=True, slots=True)
+    assert st["links"][0]["source_point"] == [269.0, 821.0], \
+        "серверная посадка увела конец с рамки (letterbox 260.5?)"

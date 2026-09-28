@@ -126,10 +126,10 @@ def seat_rect(node):
 
     Решение заказчика 2026-08-01 («символ тянется на рамку», репро
     graph_edited_3edge): скин рисуется растянутым на bbox, как контрол в
-    FXML/SceneBuilder, и конец трубы сидит на рамке. Letterbox-канон
-    (`seating._anchor_rect` -> _skin_content_rect) остаётся СЕРВЕРНЫМ
-    (бит-эталон раскладки); перевод сервера — отдельный этап с
-    пере-EXPECT. Возвращает (x1, y1, x2, y2) или None."""
+    FXML/SceneBuilder, и конец трубы сидит на рамке. Сервер переведён на ту же
+    рамку 2026-09-28 (Р2: `seating._anchor_rect` = bbox, letterbox
+    `_skin_content_rect` — только миграции открытия). Возвращает
+    (x1, y1, x2, y2) или None."""
     if node is None:
         return None
     bb = node.get("bbox")

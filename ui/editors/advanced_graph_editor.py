@@ -93,7 +93,7 @@ def _seg_dist2(px: float, py: float,
 def _node_poly_contour(node: dict) -> list | None:
     """Плоский контур [x, y, ...] полигонного узла БЕЗ скина, иначе None.
 
-    Та же ветка, что канон посадки (seating._anchor_rect/node_anchor):
+    Та же ветка, что канон посадки (seating.node_anchor):
     segmentation >= 3 точек, class_name вне FIXED_SIZES. У такого узла
     габарит невыпуклого контура почти вдвое больше фигуры (докстринг
     modules/graph/core/layout/_shapes.py; репро — деаэратор node_28,
@@ -737,7 +737,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
 
         Э1-хвост: прежний дубль-контракт (connect_* из graph_geometry) заменён
         каноном reseat_edge — коннектор = жёстко центроид, FIXED_SIZES-скин =
-        граница _skin_content_rect (и приоритетнее полигона), полигон = луч в
+        граница рамки bbox (Р2; и приоритетнее полигона), полигон = луч в
         контур, bbox = грань.
 
         Э6/Э7-a: если посаженное каноном ребро НЕ прямое (осевое расхождение
@@ -988,7 +988,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         # Э1: ось выравнивания и концы — от канона посадки: `reseat_edge` сам
         # выводит замок H/V из реальной геометрии пары (НЕ из старого
         # направления ребра) и сажает концы канонично (коннектор = центроид,
-        # FIXED_SIZES-скин = граница content-rect, полигон = контур).
+        # FIXED_SIZES-скин = граница рамки bbox (Р2), полигон = контур).
         # Probe без waypoints — оптимизация, как и раньше, стирает маршрут
         # (OptimizeEdgeCommand.execute ставит waypoints=[]).
         from modules.graph.core import seating
@@ -1234,7 +1234,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
 
         # Э1: посадка концов — канон `seating.reseat_edge` (коннектор = жёстко
         # центроид без виртуального bbox r=CONNECTOR_MARKER_RADIUS, FIXED_SIZES-
-        # скин = граница content-rect, полигон = контур, прямые связи — замок
+        # скин = граница рамки bbox (Р2), полигон = контур, прямые связи — замок
         # общей оси). Виртуальный bbox коннектора остаётся ниже только в
         # routing (обход препятствий) и в стороне выхода — это маршрут и
         # визуал, не посадка. Маршрут инструмент, как и раньше, строит заново.
@@ -5193,7 +5193,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         УЖЕ сидят концы других рёбер — их надо разложить слотами целиком.
 
         Только по модели (`_waist_model()`); рамка граней — редакторская
-        `seat_rect` (bbox; сервер до блока 2 судит по `_anchor_rect`).
+        `seat_rect` (bbox; серверный `_anchor_rect` с Р2 — та же рамка).
         Членство — `seating._face_groups` (без коннекторов, полигонов, пинов,
         `_manual_route` и прямых под `_slack`). Зовётся ДО добавления ребра.
         """

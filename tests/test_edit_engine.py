@@ -210,7 +210,8 @@ def test_poly_slot_collision_takes_free_slot():
 
 def test_skin_seats_on_bbox_frame():
     # решение 2026-08-01 «символ тянется на рамку»: конец скин-узла — на
-    # рамке bbox, не на letterbox-прямоугольнике серверного канона
+    # рамке bbox, не на letterbox-прямоугольнике (серверный канон сажал на
+    # него до Р2, 2026-09-28; теперь тоже на рамку)
     from modules.graph.core.pretransform import FIXED_SIZES
     cls = sorted(FIXED_SIZES)[0]
     n = {"id": "s", "type": "equipment", "class_name": cls,

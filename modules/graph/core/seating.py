@@ -7,8 +7,10 @@
 Правила из contract-разведки (FXML + WYSIWYG-редактор):
   * connector-конец: sp/tp ДОЛЖНЫ равняться centroid коннектора
     (FXML игнорирует source_point для connector-концов и берёт центроид).
-  * узел из FIXED_SIZES (скин): конец на границе _skin_content_rect
-    (letterbox-след графики внутри bbox), поперечная координата в пределах рамки.
+  * узел из FIXED_SIZES (скин): конец на границе рамки bbox — скин тянется
+    на рамку, как контрол FXML (решение 2026-08-01; сервер переведён с
+    letterbox `_skin_content_rect` на bbox в блоке 2, Р2, 2026-09-28),
+    поперечная координата в пределах рамки.
   * узел с сегментацией без скина: конец на контуре. Луч идёт ВДОЛЬ оси
     прямизны, если она задана и пересекает контур, иначе — из центроида
     (см. `_poly_hit`).
@@ -41,7 +43,6 @@ from __future__ import annotations
 from . import contact
 from .pretransform import (
     FIXED_SIZES,
-    _skin_content_rect,
     project_ray_to_polygon,
 )
 from .graph_access import (edge_ends, edges, is_connector, node_cxy,
@@ -52,13 +53,14 @@ _SIDE_TOL = 1.5      # px: «конец лежит на грани рамки»
 
 
 def _anchor_rect(node):
-    """Прямоугольник посадки: след скина для FIXED_SIZES, иначе bbox."""
+    """Прямоугольник посадки — рамка bbox у любого узла, скин тоже (Р2).
+
+    Та же рамка, что у редактора (`edit_checks.seat_rect`) и у FXML: сторож
+    и судья смотрят в одно. Letterbox `_skin_content_rect` остался только
+    миграциям открытия старых холстов. tuple(bb), а не float: int-bbox
+    растра не должен превращаться в float в JSON."""
     bb = node.get("bbox")
-    if not bb or len(bb) != 4:
-        return None
-    if node.get("class_name") in FIXED_SIZES:
-        return _skin_content_rect(node) or tuple(bb)
-    return tuple(bb)
+    return tuple(bb) if bb and len(bb) == 4 else None
 
 
 def _poly_hit(node, seg, toward_x, toward_y, lock):

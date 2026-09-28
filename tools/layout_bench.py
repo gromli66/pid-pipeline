@@ -250,7 +250,7 @@ def text_metrics(before, after, anchor_max=ANCHOR_MAX):
 
 def _seat_kind(node):
     """Тип узла-хозяина конца — теми же ветками, что `seating.node_anchor`:
-    connector / skin (FIXED_SIZES, content-rect) / polygon (контур) / bbox."""
+    connector / skin (FIXED_SIZES, рамка bbox — Р2) / polygon (контур) / bbox."""
     if node is None:
         return "bbox"
     if is_connector(node):

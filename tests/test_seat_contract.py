@@ -120,39 +120,23 @@ ALLOWLIST = {
     ("optimize_edge", "bbox"):
         "А->В: порт (середина грани) вместо канонного слака, 20.00px",
     #
-    # «Символ тянется на рамку» (2026-08-01, репро graph_edited_3edge):
-    # редактор сажает скины на РАМКУ bbox (скин рисуется растянутым, как
-    # контрол FXML), серверный канон — letterbox _skin_content_rect.
-    # Замер фикстуры: 8.50px (половина letterbox-поля).
-    ("recalculate_edge", "skin"): "скин на рамке bbox vs letterbox, 8.50px",
-    ("optimize_edge", "skin"): "скин на рамке bbox vs letterbox, 8.50px",
-    ("add_edge", "skin"): "скин на рамке bbox vs letterbox, 8.50px",
-    ("recalculate_edge", "skin_poly"):
-        "скин на рамке bbox vs letterbox, 8.50px",
-    ("optimize_edge", "skin_poly"):
-        "скин на рамке bbox vs letterbox, 8.50px",
-    ("add_edge", "skin_poly"): "скин на рамке bbox vs letterbox, 8.50px",
-    #
-    # 2026-08-04 (репро «конец в середине арматуры» во вкладке «Проверка
-    # схемы»/SimpleGraphTab): предварительный канон get_connection_point
-    # тоже выталкивает скиновый конец на рамку (_lift_to_seat_rect) — в
-    # простом редакторе он единственная посадка, движковой доводки там нет.
-    ("get_connection_point", "skin"):
-        "скин на рамке bbox vs letterbox, 8.50px",
-    ("get_connection_point", "skin_poly"):
-        "скин на рамке bbox vs letterbox, 8.50px",
+    # Р2 (2026-09-28, блок 2 модели точек прикрепления): СОЖЖЕНЫ 9 записей
+    # «скин на рамке bbox vs letterbox, 8.50px» — recalculate_edge/
+    # optimize_edge/add_edge/get_connection_point × skin/skin_poly и
+    # simple_add_edge × skin. Редактор с 2026-08-01 сажал скин на рамку bbox,
+    # серверный канон — на letterbox _skin_content_rect; теперь канон тоже
+    # на bbox (`seating._anchor_rect`), сторож и судья смотрят в одну рамку,
+    # замер по каждой записи 0.00px.
     #
     # 2026-08-25 (блок 4 «точечных болей», решение Максима «да, как в
     # Контурах»): «Проверка схемы» сажает новое ребро диспетчером
-    # `graph_geometry.dispatch_connect` — строгая ось важнее центра. Канон
-    # seating не меняется (сервер, бит-эталон). Два расхождения, оба —
-    # заявленный контракт вкладки, а не баг:
-    ("simple_add_edge", "skin"): "скин на рамке bbox vs letterbox, 8.50px",
-    # skin_poly расходится ИНАЧЕ, чем у Advanced (там тоже 8.50): ветвление
-    # диспетчера смотрит СЫРОЙ segmentation, поэтому у скина С контуром конец
-    # садится на КОНТУР, а не на рамку. Канон в этом случае предпочитает скин.
+    # `graph_geometry.dispatch_connect` — строгая ось важнее центра. Это
+    # заявленный контракт вкладки, а не баг. Ветвление диспетчера смотрит
+    # СЫРОЙ segmentation, поэтому у скина С контуром конец садится на КОНТУР
+    # (нижняя вершина ромба y=265), а канон предпочитает скин — рамку bbox
+    # (y=269). До Р2 канон уводил на letterbox (260.5), и расхождение было 4.50px.
     ("simple_add_edge", "skin_poly"):
-        "конец на контуре (сырой seg-чек диспетчера) vs letterbox скина, 4.50px",
+        "конец на контуре (сырой seg-чек диспетчера) vs рамка скина, 4.00px",
 }
 
 
@@ -405,17 +389,20 @@ def test_fixture_preconditions():
     assert "armatura_ruchn" in FIXED_SIZES
 
     # letterbox скина существует (иначе случаи skin/skin_poly вырождаются):
-    # content-rect уже bbox по вертикали более чем на straight_tol
+    # content-rect уже bbox по вертикали более чем на straight_tol. После Р2
+    # (канон на bbox) это то, что отличает два мира: канон на рамке (269)
+    # против канона на letterbox (260.5).
     cr = _skin_content_rect(byid["skin1"])
     assert cr is not None, "нет tools/skin_geometry.json или маппинга скина"
     bb = byid["skin1"]["bbox"]
     assert cr[1] - bb[1] > 3.0 and bb[3] - cr[3] > 3.0
 
-    # запечённый канон — ручная геометрия (страховка от дрейфа фикстуры)
+    # запечённый канон — ручная геометрия (страховка от дрейфа фикстуры);
+    # скины — на нижней грани РАМКИ bbox y=269 (Р2), не letterbox 260.5
     assert baked["e_bbox"]["source_point"] == pytest.approx([270.0, 320.0])
     assert baked["e_conn"]["source_point"] == pytest.approx([520.0, 300.0])
-    assert baked["e_skin"]["source_point"] == pytest.approx([260.5, 821.0])
-    assert baked["e_skinpoly"]["source_point"] == pytest.approx([260.5, 1121.0])
+    assert baked["e_skin"]["source_point"] == pytest.approx([269.0, 821.0])
+    assert baked["e_skinpoly"]["source_point"] == pytest.approx([269.0, 1121.0])
     assert baked["e_poly"]["source_point"] == pytest.approx([225.0, 1495.0])
 
 
@@ -430,15 +417,20 @@ def test_simple_add_edge_divergences_are_the_declared_ones(results):
     segmentation и сажает конец на КОНТУР (4.50px), канон предпочитает скин
     и уводит на letterbox (8.50px).
 
+    Р2 (2026-09-28): канон сажает скин на рамку bbox — туда же, куда
+    диспетчер, поэтому у `skin` расхождения больше нет (<= TOL). Миры
+    по-прежнему отличает `skin_poly`: контур 265 против рамки 269 = 4.00px;
+    возврат `add_edge` на канон дал бы здесь 0.
+
     Числа абсолютные: тест, вычисляющий ожидание из проверяемого пути,
     остался бы зелёным при любом его поведении.
     """
     r = results["simple_add_edge"]
-    assert r["skin"][0] == pytest.approx(8.50, abs=0.01), \
-        "скиновый конец ушёл не на рамку bbox"
-    assert r["skin_poly"][0] == pytest.approx(4.50, abs=0.01), \
+    assert r["skin"][0] <= TOL, \
+        "скиновый конец ушёл не на рамку bbox (канон тоже на рамке, Р2)"
+    assert r["skin_poly"][0] == pytest.approx(4.00, abs=0.01), \
         ("у скина С контуром конец обязан сесть на КОНТУР (сырой seg-чек "
-         "диспетчера); 8.50px здесь означает возврат на канон")
+         "диспетчера); 0.00px здесь означает возврат на канон")
     for case in ("connector", "polygon", "bbox"):
         assert r[case][0] <= TOL, \
             f"{case}: новый путь разошёлся с каноном вне заявленного"

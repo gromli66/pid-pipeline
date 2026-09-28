@@ -61,7 +61,7 @@ BaseGraphEditor          — рендеринг, zoom, hit testing, selection, e
 
 **AdvancedGraphEditor** (`ui/editors/advanced_graph_editor.py`, ~1940 строк) — полный редактор для production-валидации. Добавляет:
 
-- **Создание рёбер:** переопределяет `add_edge()` — концы садит КАНОН посадки `modules/graph/core/seating.reseat_edge` (Э1: коннектор → центроид, FIXED_SIZES-скин → граница content-rect, полигон → луч в контур, bbox → грань; тот же модуль, что сажает выход раскладки). Старые `connect_bbox_bbox`/… из `graph_geometry.py` в этом классе больше не используются — их единственный живой вызывающий `contour_editor.py` (растровые координаты, канон холста там неприменим)
+- **Создание рёбер:** переопределяет `add_edge()` — концы садит КАНОН посадки `modules/graph/core/seating.reseat_edge` (Э1: коннектор → центроид, FIXED_SIZES-скин → граница рамки bbox (Р2, 2026-09-28; до него letterbox content-rect), полигон → луч в контур, bbox → грань; тот же модуль, что сажает выход раскладки). Старые `connect_bbox_bbox`/… из `graph_geometry.py` в этом классе больше не используются — их единственный живой вызывающий `contour_editor.py` (растровые координаты, канон холста там неприменим)
 - **Edge building with waypoints:** `add_edge_with_waypoints()` — ручная прокладка ломаной (Ctrl+Click промежуточных точек)
 - **Optimize:** `optimize_edge()` — концы и ось от канона `seating` (Э1); `optimize_all_edges()` — batch; конец с пином входа (`pin_source`/`pin_target`, API — `modules/graph/core/ports.py`) садится в пин первее всего; флаг `_manual_route` мёртв (до 2026-08-03, мигрируется в пины при открытии)
 - **Perpendicularity:** `edge_perp_scores` dict, `_before_edge_draw()` вычисляет score; неперпендикулярные рёбра — оранжевые, утолщённые

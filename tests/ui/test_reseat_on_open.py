@@ -227,8 +227,13 @@ def test_manual_ray_end_is_materialized_into_data(tmp_path):
 
 def test_skin_end_lifted_to_bbox_on_open(tmp_path):
     """«Символ тянется на рамку» (2026-08-01): конец на letterbox-грани
-    серверного канона при открытии поднимается на рамку bbox вдоль стаба;
-    идемпотентно."""
+    старого серверного канона при открытии поднимается на рамку bbox вдоль
+    стаба; идемпотентно.
+
+    ⚠ С Р2 (2026-09-28) канон `seating` сам сажает скин на рамку bbox, поэтому
+    тест лифт открытия (`_lift_skin_ends_to_bbox`) больше НЕ изолирует: без
+    лифта конец на рамку вернёт канон, и тест останется зелёным. Лифт теперь
+    страховка; снимать его — отдельным решением вместе с этим тестом."""
     from modules.graph.core.pretransform import (_CLASS_SKIN, _SKIN_ASPECT,
                                                  FIXED_SIZES,
                                                  _skin_content_rect)

@@ -22,7 +22,6 @@ import pytest
 from modules.graph.core import seating
 from modules.graph.core.graph_access import is_connector
 from modules.graph.core.pretransform import (FIXED_SIZES,
-                                             _skin_content_rect,
                                              point_on_polygon,
                                              reproject_edge_endpoints)
 from modules.graph.core.seating import (STRAIGHT_TOL, _pick_axis_coord,
@@ -68,16 +67,6 @@ def _graph(nodes, links):
     return {"nodes": nodes, "links": links}
 
 
-# letterbox-сценарий требует aspect_hw скина (tools/skin_geometry.json +
-# CLASS_NAME_TO_SKIN); без них канон деградирует до bbox и тест беспредметен.
-_LETTERBOX = _skin_content_rect(
-    {"class_name": "armatura_ruchn", "bbox": [100.0, 100.0, 142.0, 138.0]})
-needs_skin_geometry = pytest.mark.skipif(
-    _LETTERBOX is None,
-    reason="skin_geometry.json/CLASS_NAME_TO_SKIN недоступны — "
-           "letterbox-след скина неисчислим")
-
-
 # ---------------------------------------------------------------------------
 # 1. Коннектор -> центроид, жёстко (deg 1/2/3)
 # ---------------------------------------------------------------------------
@@ -114,38 +103,52 @@ def test_node_anchor_connector_ignores_lock():
 
 
 # ---------------------------------------------------------------------------
-# 2. FIXED_SIZES-скин -> граница _skin_content_rect (letterbox), НЕ bbox
+# 2. FIXED_SIZES-скин -> граница рамки bbox (Р2, 2026-09-28), НЕ letterbox
 # ---------------------------------------------------------------------------
+# До Р2 канон сажал скин на letterbox-след графики `_skin_content_rect`
+# ВНУТРИ bbox (у рамки ниже y=108.5), а редактор и FXML — на рамку: сторож
+# и судья смотрели в разные рамки. Теперь рамка одна. Ответ от
+# skin_geometry не зависит, маркер не нужен; различает миры рамка 42x38 при
+# aspect 0.5 (letterbox 42x21 с полями по 8.5 px).
 
 
-@needs_skin_geometry
-def test_skin_letterbox_anchor_on_content_rect_not_bbox():
-    """armatura_ruchn (aspect_hw=0.5) в боксе 42x38: графика 42x21 с полями
-    8.5px сверху/снизу. Подход сверху садится на КОНТЕНТ (y=108.5),
-    а не на бокс (y=100)."""
+def test_skin_anchor_on_bbox_not_letterbox():
+    """armatura_ruchn в боксе 42x38 без _axis: подход сверху садится на
+    РАМКУ (y=100), а не на letterbox-след графики (y=108.5)."""
     assert "armatura_ruchn" in FIXED_SIZES
     skin = _box("s", [100, 100, 142, 138], cls="armatura_ruchn")
-    assert _skin_content_rect(skin) == (100.0, 108.5, 142.0, 129.5)
 
-    # прямой вызов: подход сверху -> верхняя грань КОНТЕНТА
-    assert node_anchor(skin, 121.0, 50.0) == (121.0, 108.5)
-    # подход справа: боковые грани контента совпадают с bbox (letterbox по Y)
+    # прямой вызов: подход сверху -> верхняя грань рамки
+    assert node_anchor(skin, 121.0, 50.0) == (121.0, 100.0)
+    # подход справа: правая грань рамки
     assert node_anchor(skin, 300.0, 119.0) == (142.0, 119.0)
 
 
-@needs_skin_geometry
-def test_skin_letterbox_end_to_end_vertical_link():
+def test_skin_end_to_end_vertical_link_on_bbox():
     """Сквозной путь reseat_all_endpoints: коннектор строго над скином ->
-    V-замок -> конец на верхней грани content-rect [108.5, 121], не [100, 121]."""
+    V-замок -> конец на верхней грани рамки [100, 121], не [108.5, 121]."""
     skin = _box("s", [100, 100, 142, 138], cls="armatura_ruchn")
     g = _graph([_conn("k", 50.0, 121.0), skin],
                [{"source": "k", "target": "s"}])
     reseat_all_endpoints(g)
     e = g["links"][0]
     assert e["source_point"] == [50.0, 121.0]      # [y, x] коннектора
-    assert e["target_point"] == [108.5, 121.0]     # [y, x]: y контента
-    assert e["target_point"][0] != 100.0, \
-        "конец сел на bbox, а не на letterbox-след графики"
+    assert e["target_point"] == [100.0, 121.0]     # [y, x]: верх рамки
+
+
+def test_raster_vertical_armatura_seats_on_frame_without_lift():
+    """Растровый вертикальный узел боевого репро (node_133 c2f79462, рамка
+    детекции 42x75 портретом, без _axis, int-bbox): канон сам сажает подход
+    сверху на верхнюю грань y1=2110. До Р2 letterbox по H-аспекту ложился
+    поперёк портрета и конец падал в середину узла (y=2137) — его вытаскивал
+    лифт `BaseGraphEditor._lift_to_seat_rect`."""
+    node = {"id": "node_133", "type": "equipment",
+            "class_name": "armatura_ruchn",
+            "bbox": [2452, 2110, 2494, 2185], "centroid": [2147, 2473]}
+    byid = {"node_133": node, "k": _conn("k", 2050.0, 2473.0)}
+    e = {"source": "k", "target": "node_133", "waypoints": []}
+    seating.reseat_edge(byid, e)
+    assert e["target_point"] == [2110.0, 2473.0]   # [y, x]
 
 
 # ---------------------------------------------------------------------------

@@ -427,6 +427,10 @@ def _skin_content_rect(node):
 
     Та же формула, что _content_rect в tools/fxml_standardize.py (он этим и
     занимался, пока identity-экспорт его не отключил).
+
+    Посадку концов больше не задаёт (Р2, 2026-09-28): сервер, редактор и FXML
+    сажают на рамку bbox. Осталась только миграциям открытия старых холстов
+    (`base_graph_tab`) и растровой сверке.
     """
     ar = _SKIN_ASPECT.get(_CLASS_SKIN.get(node.get("class_name"), ""))
     bb = node.get("bbox")
@@ -590,9 +594,9 @@ def reproject_edge_endpoints(graph):
                 bb = n.get("bbox")
                 if not bb or n.get("class_name") not in FIXED_SIZES:
                     continue          # размер не менялся — концы и так на месте
-                # Сажаем на ГРАФИКУ скина, а не на бокс: скин letterbox-ится
-                # внутри бокса, и до его границы труба бы не дошла.
-                x1, y1, x2, y2 = _skin_content_rect(n) or bb
+                # Сажаем на рамку bbox (Р2, 2026-09-28): скин тянется на
+                # рамку, и после apply_fixed_sizes рамка == след графики.
+                x1, y1, x2, y2 = bb
                 cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
                 py, px = p[0], p[1]
                 dx, dy = px - cx, py - cy
