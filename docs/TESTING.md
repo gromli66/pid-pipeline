@@ -139,6 +139,19 @@ python -X utf8 tools/edit_bench.py --all --write-baseline    # Д6, отдель
 canvas-json, что и весь корпус (16 таких файлов лежат в `storage/` на машине разработки).
 Возвращать диалог в UI ради стенда не нужно, и корпус не заморожен.
 
+**Популяция `@model` (блок 3, Р1).** Холсты корпусов сняты до модели точек прикрепления и
+метки `canvas_transform.attach_model` не несут: редактор правит их по правилам 238fe6b.
+Модель стенды видят на популяции `@model` — те же файлы (отпечаток входа прежний) после
+`tools/corpus.py:as_model` (метка, талия клапана на поперечной координате центроида,
+посадка каноном сервера). `edit_bench --model` судит против своего эталона
+`bench/edit_baseline_model.json`; у `smooth_bench` популяции `raw@model` и `edited@model`
+входят в `--all`. `interactive_bench` меряет выход раскладки и всегда идёт по модели.
+
+```bash
+python -X utf8 tools/edit_bench.py tools/bench/smooth_corpus/edited/*.json --model --check
+python -X utf8 tools/smooth_bench.py --population edited@model --runs 5 --check
+```
+
 ---
 
 ## 4. Тестовые файлы

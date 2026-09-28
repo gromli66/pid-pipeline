@@ -12,6 +12,13 @@ graph_edited*.json в tools/bench/edit_corpus/ (локальные сохран�
     python -X utf8 tools/edit_bench.py tools/bench/edit_corpus/graph_edited_star.json --top 5
     python -X utf8 tools/edit_bench.py --all --write-baseline
     python -X utf8 tools/edit_bench.py --all --check        # против базы: 0 · 1 · 2
+    python -X utf8 tools/edit_bench.py --all --model --check   # популяция @model
+
+Популяция `@model` (`--model`, свой эталон `bench/edit_baseline_model.json`):
+те же файлы после `corpus.as_model` — метка модели точек прикрепления, талия
+клапана на поперечной координате центроида, посадка концов каноном сервера.
+Холсты корпуса сняты до модели и меток не несут, а статический замер модели
+не видит вовсе; `@model` судит посадку модели на тех же холстах (блок 3, Р1).
 
 Колонки-ДЕФЕКТЫ (в --check не могут расти): diag, near, along_own, along_frn,
 through, corner, corner4, conn_off, poly_off, adrift.
@@ -54,6 +61,7 @@ from modules.graph.core import edit_checks  # noqa: E402
 from tools import corpus  # noqa: E402
 
 BASELINE = REPO / "tools" / "bench" / "edit_baseline.json"
+BASELINE_MODEL = REPO / "tools" / "bench" / "edit_baseline_model.json"
 CORPUS = REPO / "tools" / "bench" / "edit_corpus"
 BASELINE_VERSION = 2
 
@@ -89,11 +97,12 @@ def _rel(path: Path) -> str:
         return str(path)
 
 
-def read_baseline() -> dict:
+def read_baseline(path: Path | None = None) -> dict:
     """Эталон или пустой словарь. Имя и форма — как у соседних стендов."""
-    if not BASELINE.exists():
+    path = path or BASELINE
+    if not path.exists():
         return {}
-    return json.loads(BASELINE.read_text(encoding="utf-8"))
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def baseline_parts(base: dict) -> tuple[dict, dict]:
@@ -168,8 +177,8 @@ def canvas_problem(graph) -> str | None:
     return None
 
 
-def measure_file(path: Path) -> dict:
-    """Счётчики и находки по холсту.
+def measure_file(path: Path, model: bool = False) -> dict:
+    """Счётчики и находки по холсту (`model` — популяция `@model`).
 
     `ValueError` — холст не годен для суда (не разобрался или не похож
     на холст); `main()` читает это как «судить нечем», см. `canvas_problem`.
@@ -178,6 +187,8 @@ def measure_file(path: Path) -> dict:
     problem = canvas_problem(graph)
     if problem is not None:
         raise ValueError(problem)
+    if model:
+        corpus.as_model(graph)
     return edit_checks.check_canvas(graph)
 
 
@@ -358,11 +369,15 @@ def main() -> int:
                     help="печатать топ-N находок по каждому файлу")
     ap.add_argument("--json", type=Path, default=None,
                     help="выгрузить counts в json")
+    ap.add_argument("--model", action="store_true",
+                    help=f"популяция @model (corpus.as_model), эталон "
+                         f"{_rel(BASELINE_MODEL)}")
     ap.add_argument("--write-baseline", action="store_true",
                     help=f"заморозить базу в {_rel(BASELINE)}")
     ap.add_argument("--check", action="store_true",
                     help="сравнить с базой, exit 1 при росте дефектов")
     args = ap.parse_args()
+    baseline = BASELINE_MODEL if args.model else BASELINE
 
     paths = [Path(f) for f in args.files]
     if args.all:
@@ -381,7 +396,8 @@ def main() -> int:
             print(f"{p}: нет файла — пропуск")
             continue
         try:
-            rows[p.name] = measure_file(p)
+            rows[p.name] = (measure_file(p, model=True) if args.model
+                            else measure_file(p))
         except (OSError, ValueError) as exc:
             # Битый холст — сломанные ДАННЫЕ, а не регресс кода: трейсбек
             # с кодом 1 говорил бы «дефекты выросли» (`PROTOCOL §5`).
@@ -405,10 +421,11 @@ def main() -> int:
             encoding="utf-8")
         print(f"\ncounts -> {args.json}")
     if args.write_baseline:
-        for name, why in input_drift(inputs, read_baseline()).items():
+        for name, why in input_drift(inputs, read_baseline(baseline)).items():
             print(f"[ВХОД НЕ ТОТ] {name}: {why}; вердикт эталона об этом "
                   "холсте к нынешним данным не относится")
-        unjudged, refused = write_blocked(rows, read_baseline(), inputs)
+        unjudged, refused = write_blocked(rows, read_baseline(baseline),
+                                          inputs)
         if unjudged_input:
             unjudged.append(
                 "судить нечем по холстам: " + "; ".join(unjudged_input)
@@ -421,17 +438,17 @@ def main() -> int:
             return 1
         if unjudged:
             return 2
-        BASELINE.parent.mkdir(parents=True, exist_ok=True)
-        BASELINE.write_text(
+        baseline.parent.mkdir(parents=True, exist_ok=True)
+        baseline.write_text(
             json.dumps({"version": BASELINE_VERSION, "files": counts_only,
                         "inputs": inputs}, ensure_ascii=False, indent=1),
             encoding="utf-8")
-        print(f"\nбаза заморожена -> {_rel(BASELINE)}")
+        print(f"\nбаза заморожена -> {_rel(baseline)}")
     if args.check:
-        if not BASELINE.exists():
+        if not baseline.exists():
             print("базы нет — сначала --write-baseline")
             return 2
-        code = _compare(rows, read_baseline(), inputs)
+        code = _compare(rows, read_baseline(baseline), inputs)
         if code == 0 and unjudged_input:
             print(f"судить нечем по холстам: {'; '.join(unjudged_input)}")
             return 2

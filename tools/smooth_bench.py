@@ -18,7 +18,7 @@
 и сам выбирает сигнатуру. Переписывать враппер в стенде нельзя: тогда стенд
 мерил бы СВОЮ кнопку, а не боевую.
 
-Две популяции, они НЕ смешиваются (решение Р-А4):
+Четыре популяции, они НЕ смешиваются (решение Р-А4):
   * `edited` — `tools/bench/smooth_corpus/edited/` (20 сохранений «Ручной
     правки», после жестов оператора). ГЛАВНАЯ: суть кнопки — прибраться
     после оператора, и патология скорости живёт только здесь;
@@ -27,6 +27,11 @@
 ⚠ `*_validated.json` из того же среза сюда НЕ входят: у них `image_size`
 раскадровки (напр. 1247x1978), а движок судит лист 1920x1080 (`CANVAS_W/H`),
 то есть это не координаты холста и не то, на чём живёт кнопка.
+  * `raw@model`, `edited@model` — те же файлы (отпечаток входа прежний) после
+    `corpus.as_model`: метка модели точек прикрепления, талия клапана на
+    поперечной координате центроида, посадка каноном сервера. Срез снят до
+    модели, меток не несёт, и после блока 3 (Р1) редактор правит `raw` и
+    `edited` по правилам 238fe6b — ходы по талии видны только здесь.
 
 ⛔ ПРОТОКОЛ НЕДЕТЕРМИНИЗМА. `_reseat_after_resize` строит libavoid-сессию на
 каждый вызов, а libavoid недетерминирован (`MEASUREMENTS §32.14-15`, `PROTOCOL`:
@@ -117,11 +122,18 @@ SCORE_KEYS = ("diag", "dev", "steps", "near", "along_own", "along_foreign",
               "through", "corner", "adrift", "conn_off", "poly_off", "w", "h")
 REMEDIES = ("колено", "излом", "скольжение", "коннектор", "узел")
 REFUSAL_KINDS = ("нет кандидата", "сверх бюджета", "лестница исчерпана")
+POPULATIONS = ("raw", "edited", "raw@model", "edited@model")
+MODEL_SUFFIX = "@model"
 
 
 # ── корпус ─────────────────────────────────────────────────────────────
 def population_paths(name: str) -> list[Path]:
-    """Файлы популяции. Пусто — популяции нет в дереве."""
+    """Файлы популяции. Пусто — популяции нет в дереве.
+
+    `<имя>@model` — те же файлы, что `<имя>`; модельный вход собирает
+    `input_graph`.
+    """
+    name = name.removesuffix(MODEL_SUFFIX)
     if name == "raw":
         return list(corpus.canvas_slice_paths().values())
     if name == "edited":
@@ -333,6 +345,12 @@ class Probe:
 
 
 # ── прогон одного холста ───────────────────────────────────────────────
+def input_graph(path: Path, model: bool) -> dict:
+    """Холст, который получит редактор: файл как есть или `@model`."""
+    graph = json.loads(path.read_text(encoding="utf-8"))
+    return corpus.as_model(graph) if model else graph
+
+
 def _raster(tmp: Path, w: int, h: int) -> Path:
     from PySide6.QtGui import QImage, QColor
     p = tmp / f"raster_{w}x{h}.png"
@@ -355,11 +373,12 @@ def _drop(editor):
     QApplication.instance().sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
-def run_once(path: Path, tmp: Path, rollback_cap: int) -> dict:
+def run_once(path: Path, tmp: Path, rollback_cap: int,
+             model: bool = False) -> dict:
     """Один боевой прогон кнопки по одному холсту -> метрики до/после."""
     from ui.editors.advanced_graph_editor import AdvancedGraphEditor
 
-    graph = json.loads(path.read_text(encoding="utf-8"))
+    graph = input_graph(path, model)
     size = (graph.get("graph") or {}).get("image_size") or [1080, 1920]
     ip = _raster(tmp, int(size[1]), int(size[0]))
     gp = tmp / "graph.json"
@@ -434,15 +453,15 @@ def summarize(runs: list[dict]) -> dict:
     return out
 
 
-def measure(paths: list[Path], runs: int, tmp: Path,
-            rollback_cap: int) -> tuple[dict, dict, list[str]]:
+def measure(paths: list[Path], runs: int, tmp: Path, rollback_cap: int,
+            model: bool = False) -> tuple[dict, dict, list[str]]:
     """-> ({файл: свод}, {файл: [прогоны]}, [почему по файлу судить нечем])."""
     summary, detail, unjudged = {}, {}, []
     for p in sorted(paths, key=lambda q: q.name):
         got = []
         for i in range(runs):
             try:
-                got.append(run_once(p, tmp, rollback_cap))
+                got.append(run_once(p, tmp, rollback_cap, model))
             except (OSError, ValueError, KeyError) as exc:
                 # Холст — ДАННЫЕ: битый файл обязан давать «судить нечем»,
                 # а не трейсбек с кодом 1 (`PROTOCOL §5`, урок 1-42).
@@ -617,9 +636,9 @@ def env_problem() -> str | None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--population", choices=("raw", "edited"), default=None,
-                    help="одна популяция вместо обеих")
-    ap.add_argument("--all", action="store_true", help="обе популяции")
+    ap.add_argument("--population", choices=POPULATIONS, default=None,
+                    help="одна популяция вместо всех")
+    ap.add_argument("--all", action="store_true", help="все четыре популяции")
     ap.add_argument("--runs", type=int, default=DEFAULT_RUNS,
                     help=f"прогонов на холст (недетерминизм libavoid), "
                          f"по умолчанию {DEFAULT_RUNS}")
@@ -636,7 +655,7 @@ def main() -> int:
 
     if not args.all and args.population is None:
         ap.error("нужна --population или --all")
-    pops = ("raw", "edited") if args.all else (args.population,)
+    pops = POPULATIONS if args.all else (args.population,)
 
     problem = env_problem()
     if problem:
@@ -665,7 +684,8 @@ def main() -> int:
                 unjudged.append(f"популяции [{pop}] нет в дереве")
                 continue
             summary, detail, bad = measure(paths, args.runs, tmp,
-                                           args.rollback_cap)
+                                           args.rollback_cap,
+                                           pop.endswith(MODEL_SUFFIX))
             unjudged += bad
             out[pop] = {"summary": summary, "detail": detail,
                         "inputs": input_fingerprints(

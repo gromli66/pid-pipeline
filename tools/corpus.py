@@ -27,6 +27,7 @@ sha256 — `tests/fixtures/graph/README.md`).
     corpus.corpus_paths(include_storage=False)   # только то, что есть в git
     corpus.canvas_slice_paths()            # {uid8: graph_canvas.json} — срез Э4
     corpus.edited_canvas_paths()           # {имя: graph_edited*.json} — срез Э4
+    corpus.as_model(graph)                 # холст среза -> популяция @model
 """
 from __future__ import annotations
 
@@ -89,6 +90,40 @@ def edited_canvas_paths() -> dict[str, Path]:
     if not edited.is_dir():
         return {}
     return {p.name: p for p in sorted(edited.glob("graph_edited*.json"))}
+
+
+def as_model(graph: dict) -> dict:
+    """Популяция `@model`: старый холст среза -> имитация пересборки сервером.
+
+    Холсты среза (`raw`, `edited`) сняты до модели точек прикрепления и метки
+    `canvas_transform.attach_model` не несут — после блока 3 (Р1) редактор
+    правит их по правилам 238fe6b, и стенд, судящий только их, модели не
+    видит. Здесь, в памяти: метка модели ставится (`contact.ATTACH_MODEL`),
+    рамка клапана с `_axis` сдвигается так, что талия ложится на поперечную
+    координату центроида (`contact.box_around_waist`: ветка «линии по растру
+    нет» `pretransform.apply_fixed_sizes`; размер рамки прежний), концы рёбер
+    садятся каноном сервера (`seat_edge_endpoints`, как при открытии).
+    Приближение: линия трубы берётся из центроида, а не из растра, раскладка
+    не повторяется. Отпечаток входа стенда — прежний файл. In-place.
+    """
+    from modules.graph.core import contact
+    from modules.graph.core.pretransform import seat_edge_endpoints
+
+    meta = graph.get("graph")
+    if not isinstance(meta, dict):
+        meta = graph["graph"] = {}
+    tr = meta.get("canvas_transform")
+    if not isinstance(tr, dict):
+        tr = meta["canvas_transform"] = {}
+    tr["attach_model"] = contact.ATTACH_MODEL
+    contact.apply_attach_mode(graph)
+    for n in graph.get("nodes") or []:
+        bb, c = n.get("bbox"), n.get("centroid")
+        if contact.is_valve(n) and n.get("_axis") in ("H", "V") and bb and c:
+            n["bbox"] = contact.box_around_waist(n, c, bb[2] - bb[0],
+                                                 bb[3] - bb[1])
+    seat_edge_endpoints(graph)
+    return graph
 
 
 def graph_path(uid8: str) -> Path | None:

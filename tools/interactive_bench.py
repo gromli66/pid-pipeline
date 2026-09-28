@@ -22,6 +22,12 @@ EDITOR_AFTER_LAYOUT_PLAN): протокол скриптовых возмуще�
      far_end_moved, node_disp_mean/max (кроме сдвинутого), side_changed
      (судья — `_gate._side_changed`: сторож == судья, не переизобретать).
 
+Модель точек прикрепления (блок 3, Р1): стенд судит только популяцию @model.
+Базовый холст — выход раскладки (путь сервера), а не сохранённый холст;
+посадка — `seat_edge_endpoints` сервера (legacy=False), ключа старого
+холста `contact.LEGACY_KEY` на узлах нет. Метка `attach_model` здесь не
+нужна: её читают только открытие, редактор и выгрузка.
+
 Координаты (CODING_GUIDE §6): centroid / source_point / target_point = [y, x],
 bbox = [x1, y1, x2, y2]. Сдвиги здесь задаются в (dx, dy) экрана.
 
