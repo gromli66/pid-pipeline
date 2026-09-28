@@ -4953,8 +4953,15 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         short — короткая ось (поле «Ширина»), long_ — длинная (поле «Высота»).
         Длинное значение кладётся на ту экранную ось, что у бокса сейчас длиннее:
         вертикальный/квадрат → long_ по высоте; горизонтальный → long_ по ширине.
+
+        У клапана холста центроид — талия, и рамка ставится вокруг талии
+        (`contact.box_around_waist`: вдоль оси центр = центроид, поперёк —
+        со смещением талии), а не центром на центроид: иначе «Размеры» тем
+        же размером сдвигали клапан на долю талии (7–14 px), а пины (смещения
+        от центроида) повисали мимо грани. Прочие узлы — рамка вокруг
+        центроида, как прежде.
         """
-        cy, cx = node['centroid'][0], node['centroid'][1]
+        from modules.graph.core import contact
         bb = node.get('bbox')
         cur_w = (bb[2] - bb[0]) if (bb and len(bb) == 4) else 0
         cur_h = (bb[3] - bb[1]) if (bb and len(bb) == 4) else 0
@@ -4966,7 +4973,8 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             new_w, new_h = long_, short
         else:                        # вертикальный/квадрат → длинная по высоте
             new_w, new_h = short, long_
-        node['bbox'] = [cx - new_w / 2, cy - new_h / 2, cx + new_w / 2, cy + new_h / 2]
+        node['bbox'] = contact.box_around_waist(node, node['centroid'],
+                                                new_w, new_h)
         node['area'] = new_w * new_h
         # Э5: пины инцидентных рёбер — локальные смещения от центроида,
         # при смене рамки масштабируются (иначе якорь уползает с грани)
@@ -5628,7 +5636,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
           • рёбра между НОВЫМИ id (маппинг old→new, сдвиг
             source_point/target_point/waypoints);
           • тексты: create_text_block + set_binding на новую цель (side/gap
-            сохраняются).
+            сохраняются);
+          • на холсте клапан без `_axis` получает ось и центроид-талию,
+            концы его рёбер пересаживаются в порт; у рёбер снят `_slack`.
         Взаимное расположение сохраняется. Вся вставка — одна SnapshotCommand,
         т.е. отменяется одним Ctrl+Z.
         """
@@ -5683,6 +5693,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             e["id"] = f"edge_manual_{self.model.manual_edge_counter}"
             e["source"], e["target"] = ns, nt
             e["manual"] = True
+            # метка вынужденной прямой — итог прогона сервера над ТЕМ
+            # ребром; копия — ребро оператора (как после жеста)
+            e.pop("_slack", None)
             for pt in (e.get("source_point"), e.get("target_point")):
                 if pt and len(pt) == 2:
                     pt[0] += dy
@@ -5695,6 +5708,24 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             for nid in (ns, nt):
                 self.model.nodes[nid]["degree"] = \
                     self.model.nodes[nid].get("degree", 0) + 1
+
+        # Клапан холста без `_axis` (скопирован с узла, созданного до модели
+        # талии) входит в модель: ось — по концам вставленных рёбер/рамке,
+        # центроид — талия, концы — в выверенный порт. `_axis_free`
+        # копируется как есть: копия свободного клапана свободна.
+        if self._waist_model():
+            from modules.graph.core import contact
+            for new_id in id_map.values():
+                node = self.model.nodes[new_id]
+                bb = node.get("bbox")
+                if not contact.is_valve(node) or node.get("_axis") \
+                        or not bb or len(bb) != 4:
+                    continue
+                orient = self._node_orientation(new_id)
+                node["_axis"] = "H" if orient.startswith("HORIZONTAL") else "V"
+                node["centroid"] = contact.waist_centroid(node, bb)
+                if node.get("degree"):
+                    self._reseat_after_resize(new_id)
 
         # Тексты: новый блок + привязка на НОВУЮ цель (side/gap сохраняются)
         n_texts = 0

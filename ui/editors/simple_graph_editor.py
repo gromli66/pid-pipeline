@@ -324,8 +324,21 @@ class SimpleGraphEditor(BaseGraphEditor):
 
         enter_resize=False — размер уже задан (узел нарисован рамкой), шаг с
         угловыми ручками пропускается.
+
+        Клапан холста (`_waist_model()`) входит в модель точек прикрепления
+        сразу: `_axis` — по пропорциям рамки, центроид — точка талии (рамка
+        стоит, где её поставил оператор), `_axis_free` — ось ещё не
+        закреплена первым ребром (кроме predohran/RELIEF_VLV). Без `_axis`
+        выверенного порта нет, и труба уходила в САПФИР мимо талии.
         """
         node = self.model.create_equipment_node(x, y, width, height, class_id, class_name)
+        if self._waist_model():
+            from modules.graph.core import contact
+            if contact.is_valve(node):
+                node['_axis'] = contact.orientation(node)[0]
+                node['centroid'] = contact.waist_centroid(node, node['bbox'])
+                if contact.skin_info(node)[1] != 'RELIEF_VLV':
+                    node['_axis_free'] = True
         cmd = AddEquipmentNodeCommand(self.model, self, node)
         self.undo_mgr.execute(cmd)
         self.update_statistics()
