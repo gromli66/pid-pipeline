@@ -22,7 +22,13 @@ def _refresh_end_skins(editor, *node_ids):
 
 
 class AddEdgeCommand(Command):
-    """Добавить ребро. execute=add+draw, undo=remove+undraw, redo=execute."""
+    """Добавить ребро. execute=add+draw, undo=remove+undraw, redo=execute.
+
+    Модель держит сам словарь ребра, и следующие жесты правят его на месте
+    (К5: вторая труба в ту же грань раскладывает слотами и первую). Поэтому
+    повтор (redo) вставляет копию ребра, каким оно было при создании, а не
+    живой словарь: иначе Ctrl+Z, Ctrl+Z, Ctrl+Y возвращал первую трубу в
+    слот раскладки на две трубы, мимо талии."""
 
     def __init__(self, model: GraphDataModel, editor, node_a: str, node_b: str, edge_data: dict):
         self._model = model
@@ -30,9 +36,14 @@ class AddEdgeCommand(Command):
         self._node_a = node_a
         self._node_b = node_b
         self._edge_data = edge_data
+        self._pristine = copy.deepcopy(edge_data)
+        self._done = False
         self._key = None
 
     def execute(self):
+        if self._done:
+            self._edge_data = copy.deepcopy(self._pristine)
+        self._done = True
         self._key = self._model.add_edge(self._node_a, self._node_b, self._edge_data)
         self._editor.create_edge_item(self._key, self._edge_data)
         self._editor.update_node_color(self._node_a)
@@ -295,15 +306,25 @@ class DeleteNodeCommand(Command):
 
 
 class AddEquipmentNodeCommand(Command):
-    """Добавить equipment-узел из списка классов."""
+    """Добавить equipment-узел из списка классов.
+
+    Повтор (redo) вставляет копию узла, каким он был при создании: первое
+    ребро правит словарь на месте (Р3: поворот клапана, снятие
+    `_axis_free`), и Ctrl+Z, Ctrl+Z, Ctrl+Y иначе возвращал клапан
+    повёрнутым и без свободной оси, но без ребра."""
 
     def __init__(self, model: GraphDataModel, editor, node: dict):
         self._model = model
         self._editor = editor
         self._node = node
+        self._pristine = copy.deepcopy(node)
+        self._done = False
         self._node_id = node['id']
 
     def execute(self):
+        if self._done:
+            self._node = copy.deepcopy(self._pristine)
+        self._done = True
         self._model.add_node(self._node)
         self._editor._draw_single_node(self._node_id)
 

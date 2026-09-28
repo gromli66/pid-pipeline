@@ -948,3 +948,161 @@ def test_slack_is_kept_in_raster(make_editor):
     ed.drag_node_to(600.0, 291.0)
     ed.end_drag_node()
     assert ed.edges_data[0]["_slack"] == 2
+
+
+# ── приёмка red-team блока 1 ────────────────────────────────────────────
+#
+# Повтор (Ctrl+Y) команд создания вставлял ЖИВОЙ словарь, который следующие
+# жесты уже поправили на месте (К5 — раскладка грани, Р3 — поворот);
+# узкий класс armatura_seroprivod (рамка сервера по оси H 28×42) получал
+# ось по пропорциям наоборот; «Размеры» и вставка обходили `_waist_model()`.
+
+def test_redo_first_pipe_returns_it_to_its_own_seat(make_editor):
+    """Труба 1 в пустую грань бокса, труба 2 в ту же грань (обе в слоты) ->
+    Ctrl+Z, Ctrl+Z, Ctrl+Y: труба 1 снова одна и стоит в середине грани, как
+    сразу после своего добавления, а не в слоте раскладки на две трубы.
+    Второй Ctrl+Y — снова обе в слотах."""
+    ed = make_editor(_box_sheet())
+    assert ed.add_edge("b", "k1")
+    one = _state(ed)
+    assert _face_ys(ed, "b", 120.0) == {"k1": 100.0}
+    assert ed.add_edge("b", "k2")
+    two = _state(ed)
+    assert _face_ys(ed, "b", 120.0)["k1"] == pytest.approx(
+        100.0 + 20.0 / 3.0, abs=1e-6), "раскладки нет — тест пуст"
+
+    ed.undo()
+    ed.undo()
+    assert ed.edges_data == []
+    ed.redo()
+    assert _state(ed) == one, "повтор вернул трубу 1 в слот раскладки"
+    ed.redo()
+    assert _state(ed) == two
+
+
+def test_redo_new_valve_returns_it_free_and_unturned(make_editor):
+    """Новый клапан -> поперечное первое ребро (поворот Р3) -> Ctrl+Z,
+    Ctrl+Z, Ctrl+Y: клапан возвращается, каким был создан (ось H, свободна,
+    рамка на месте), и следующая труба по оси H входит в талию без
+    поворота."""
+    ed = make_editor(_sheet(_conn("k", 150.0, 505.0),
+                            _conn("kl", WAIST_Y, 300.0)))
+    nid = _new_valve(ed)
+    created = _state(ed)
+    assert ed.add_edge(nid, "k")
+    assert ed.nodes[nid]["_axis"] == "V", "поворота нет — тест пуст"
+
+    ed.undo()
+    ed.undo()
+    assert nid not in ed.nodes
+    ed.redo()
+    assert _state(ed) == created, "повтор вернул клапан повёрнутым"
+    n = ed.nodes[nid]
+    assert n["_axis"] == "H" and n["_axis_free"] is True
+
+    assert ed.add_edge(nid, "kl")
+    n = ed.nodes[nid]
+    assert n["_axis"] == "H" and "_axis_free" not in n
+    assert n["bbox"] == [479.0, 286.0, 521.0, 314.0]
+    assert _end_at(ed.edges_data[0], nid) == pytest.approx(
+        [WAIST_Y, 479.0], abs=0.01), "труба мимо талии"
+
+
+def _narrow_waist_y(bbox):
+    """Талия armatura_seroprivod по оси H на рамке bbox (доля AOC_VLV —
+    из таблицы, не литерал: блок 2 её меняет)."""
+    return contact.face_refs({"class_name": "armatura_seroprivod",
+                              "_axis": "H"}, bbox)["L"]
+
+
+NARROW_BBOX = [486.0, 279.0, 514.0, 321.0]        # 28×42 — рамка сервера по H
+
+
+def test_narrow_valve_axis_follows_the_server_frame(make_editor):
+    """armatura_seroprivod нарисован рамкой сервера 28×42 -> ось H (по
+    пропорциям было бы V); родная горизонтальная труба его не поворачивает
+    и входит в талию; «Размеры» тем же размером рамку не трогают. Рамка
+    42×28 -> ось V."""
+    wy = _narrow_waist_y(NARROW_BBOX)
+    ed = make_editor(_sheet(_conn("kl", wy, 300.0)))
+    nid = ed.add_equipment_node(500.0, 300.0, 7, "armatura_seroprivod",
+                                width=28.0, height=42.0, enter_resize=False)
+    n = ed.nodes[nid]
+    assert n["_axis"] == "H", "ось узкого класса — по пропорциям наоборот"
+    assert n["bbox"] == NARROW_BBOX
+    _assert_waist_invariant(n)
+    assert n["centroid"][0] == pytest.approx(wy, abs=0.01)
+
+    ed.set_mode("resize_objects")
+    ed.set_resize_class("armatura_seroprivod")
+    assert ed._resize_sel == {nid}
+    ed.apply_resize(width=28.0, height=42.0)
+    assert ed.nodes[nid]["bbox"] == pytest.approx(NARROW_BBOX, abs=1e-9), \
+        "«Размеры» тем же размером перевернули рамку"
+    ed.undo()
+    ed.set_mode("idle")
+
+    assert ed.add_edge(nid, "kl")
+    n = ed.nodes[nid]
+    assert n["_axis"] == "H" and "_axis_free" not in n, "родная труба повернула"
+    assert n["bbox"] == NARROW_BBOX
+    e = ed.edges_data[0]
+    assert _end_at(e, nid) == pytest.approx([wy, 486.0], abs=0.01), \
+        "труба мимо талии"
+    assert not e.get("waypoints")
+
+    nid2 = ed.add_equipment_node(500.0, 700.0, 7, "armatura_seroprivod",
+                                 width=42.0, height=28.0, enter_resize=False)
+    assert ed.nodes[nid2]["_axis"] == "V"
+    _assert_waist_invariant(ed.nodes[nid2])
+
+
+def test_paste_narrow_valve_without_axis_and_edges(make_editor, monkeypatch):
+    """Вставка одиночного armatura_seroprivod 28×42 без `_axis`: ось — по
+    рамке сервера (H), а не по пропорциям."""
+    g = _sheet({"id": "w", "type": "equipment", "class_id": 7,
+                "class_name": "armatura_seroprivod",
+                "centroid": [300.0, 500.0], "bbox": list(NARROW_BBOX),
+                "segmentation": None, "degree": 0})
+    ed = make_editor(g)
+    monkeypatch.setattr(ed, "_cursor_scene_pos",
+                        lambda: QPointF(1500.0, 100.0))    # пустое место
+    ed.selected_nodes = {"w"}
+    ed._copy_selected_nodes()
+    ed._paste_node_clipboard(0.0, 200.0)
+    new = [n for n in ed.nodes.values() if n["id"] != "w"]
+    assert len(new) == 1
+    assert new[0]["_axis"] == "H"
+    _assert_waist_invariant(new[0])
+
+
+def test_sizes_and_paste_ask_the_model_switch(make_editor, monkeypatch):
+    """Модель выключена (`_waist_model()` False — так блок 3 откроет старый
+    холст): «Размеры» тем же размером ставят рамку вокруг центроида (клапан
+    старого холста, центроид в центре рамки, не сдвигается), вставка
+    сохраняет `_slack` у копии ребра."""
+    g = _canvas()
+    for n in g["nodes"]:                    # линия — по центру рамки, не талии
+        n["centroid"][0] = 300.0
+    for e in g["links"]:
+        e["source_point"][0] = e["target_point"][0] = 300.0
+    g["links"][0]["_slack"] = 1
+    ed = make_editor(g)
+    monkeypatch.setattr(ed, "_waist_model", lambda: False)
+
+    _open_sizes(ed)
+    ed.apply_resize(width=28.0, height=42.0)
+    assert ed.nodes["v"]["bbox"] == pytest.approx(VALVE_BBOX, abs=1e-9), \
+        "«Размеры» мимо переключателя сдвинули клапан старого холста"
+    assert ed.nodes["v"]["centroid"] == [300.0, 500.0]
+    ed.set_mode("idle")
+
+    monkeypatch.setattr(ed, "_cursor_scene_pos",
+                        lambda: QPointF(1500.0, 100.0))    # пустое место
+    ed.selected_nodes = {"c1", "v"}
+    ed.selected_edges = {ed.model.edge_key("c1", "v")}
+    ed._copy_selected_nodes()
+    ed._paste_node_clipboard(0.0, 300.0)
+    copies = [e for e in ed.edges_data if e["id"] not in ("e1", "e2")]
+    assert len(copies) == 1
+    assert copies[0].get("_slack") == 1, "вставка сняла `_slack` мимо переключателя"

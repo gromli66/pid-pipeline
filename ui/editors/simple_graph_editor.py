@@ -316,6 +316,28 @@ class SimpleGraphEditor(BaseGraphEditor):
         """Установить класс оборудования для следующего клика."""
         self._pending_node_class = cls
 
+    @staticmethod
+    def _narrow_frame(node) -> bool:
+        """Рамка сервера класса по оси H узкая-высокая (`FIXED_SIZES` w < h:
+        armatura_seroprivod 28×42 — труба вдоль короткой стороны)."""
+        from modules.graph.core.pretransform import FIXED_SIZES
+        w, h = FIXED_SIZES.get(node.get('class_name'), (0, 0))
+        return w < h
+
+    @classmethod
+    def _frame_axis(cls, node) -> str:
+        """Ось клапана без рёбер — по пропорциям рамки, сверенным с рамкой
+        сервера класса: обычно длинная сторона вдоль трубы (w >= h -> 'H'),
+        у узкого класса (`_narrow_frame`) — наоборот. Иначе рамка 28×42
+        armatura_seroprivod давала 'V', первая родная горизонтальная труба
+        поворачивала клапан в неканоническую рамку 42×28 и входила мимо
+        талии. Квадрат узкого класса -> 'V'."""
+        from modules.graph.core import contact
+        axis = contact.orientation(node)[0]
+        if cls._narrow_frame(node):
+            axis = 'V' if axis == 'H' else 'H'
+        return axis
+
     def add_equipment_node(self, x: float, y: float,
                            class_id: int, class_name: str,
                            width: float = 40, height: float = 40,
@@ -326,7 +348,7 @@ class SimpleGraphEditor(BaseGraphEditor):
         угловыми ручками пропускается.
 
         Клапан холста (`_waist_model()`) входит в модель точек прикрепления
-        сразу: `_axis` — по пропорциям рамки, центроид — точка талии (рамка
+        сразу: `_axis` — по рамке (`_frame_axis`), центроид — точка талии (рамка
         стоит, где её поставил оператор), `_axis_free` — ось ещё не
         закреплена первым ребром (кроме predohran/RELIEF_VLV). Без `_axis`
         выверенного порта нет, и труба уходила в САПФИР мимо талии.
@@ -335,7 +357,7 @@ class SimpleGraphEditor(BaseGraphEditor):
         if self._waist_model():
             from modules.graph.core import contact
             if contact.is_valve(node):
-                node['_axis'] = contact.orientation(node)[0]
+                node['_axis'] = self._frame_axis(node)
                 node['centroid'] = contact.waist_centroid(node, node['bbox'])
                 if contact.skin_info(node)[1] != 'RELIEF_VLV':
                     node['_axis_free'] = True

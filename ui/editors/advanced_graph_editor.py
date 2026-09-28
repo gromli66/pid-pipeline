@@ -5023,7 +5023,10 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         со смещением талии), а не центром на центроид: иначе «Размеры» тем
         же размером сдвигали клапан на долю талии (7–14 px), а пины (смещения
         от центроида) повисали мимо грани. Прочие узлы — рамка вокруг
-        центроида, как прежде.
+        центроида, как прежде. У узкого класса (`_narrow_frame`,
+        armatura_seroprivod) длинная сторона — поперёк трубы, как у рамки
+        сервера. Всё это — только по модели (`_waist_model()`); иначе рамка
+        вокруг центроида и длинная сторона вдоль потока, как до неё.
         """
         from modules.graph.core import contact
         bb = node.get('bbox')
@@ -5037,8 +5040,15 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             new_w, new_h = long_, short
         else:                        # вертикальный/квадрат → длинная по высоте
             new_w, new_h = short, long_
-        node['bbox'] = contact.box_around_waist(node, node['centroid'],
-                                                new_w, new_h)
+        if self._waist_model():
+            if self._narrow_frame(node):
+                new_w, new_h = new_h, new_w
+            node['bbox'] = contact.box_around_waist(node, node['centroid'],
+                                                    new_w, new_h)
+        else:
+            cy, cx = node['centroid']
+            node['bbox'] = [cx - new_w / 2, cy - new_h / 2,
+                            cx + new_w / 2, cy + new_h / 2]
         node['area'] = new_w * new_h
         # Э5: пины инцидентных рёбер — локальные смещения от центроида,
         # при смене рамки масштабируются (иначе якорь уползает с грани)
@@ -5964,7 +5974,8 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             e["manual"] = True
             # метка вынужденной прямой — итог прогона сервера над ТЕМ
             # ребром; копия — ребро оператора (как после жеста)
-            e.pop("_slack", None)
+            if self._waist_model():
+                e.pop("_slack", None)
             for pt in (e.get("source_point"), e.get("target_point")):
                 if pt and len(pt) == 2:
                     pt[0] += dy
@@ -5979,9 +5990,10 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                     self.model.nodes[nid].get("degree", 0) + 1
 
         # Клапан холста без `_axis` (скопирован с узла, созданного до модели
-        # талии) входит в модель: ось — по концам вставленных рёбер/рамке,
-        # центроид — талия, концы — в выверенный порт. `_axis_free`
-        # копируется как есть: копия свободного клапана свободна.
+        # талии) входит в модель: ось — по концам вставленных рёбер, без них
+        # — по рамке (`_frame_axis`), центроид — талия, концы — в выверенный
+        # порт. `_axis_free` копируется как есть: копия свободного клапана
+        # свободна.
         if self._waist_model():
             from modules.graph.core import contact
             for new_id in id_map.values():
@@ -5990,8 +6002,11 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 if not contact.is_valve(node) or node.get("_axis") \
                         or not bb or len(bb) != 4:
                     continue
-                orient = self._node_orientation(new_id)
-                node["_axis"] = "H" if orient.startswith("HORIZONTAL") else "V"
+                if node.get("degree"):
+                    orient = self._node_orientation(new_id)
+                    node["_axis"] = "H" if orient.startswith("HORIZONTAL") else "V"
+                else:
+                    node["_axis"] = self._frame_axis(node)
                 node["centroid"] = contact.waist_centroid(node, bb)
                 if node.get("degree"):
                     self._reseat_after_resize(new_id)
