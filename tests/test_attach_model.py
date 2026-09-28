@@ -74,15 +74,128 @@ def test_side_slots_center_on_waist_and_keep_corner_margin():
     assert one[0][:2] == (221.0, pytest.approx(WAIST_Y))
     two = ports.side_slots(VALVE_H, "R", 2)
     ys = [s[1] for s in two]
-    assert sum(ys) / 2 == pytest.approx(WAIST_Y)       # симметрично талии
-    # до нижнего угла 10.5 px, отступ 6 => шаг не больше 9
-    assert max(ys) <= 118.9 - ports.VERTEX_MARGIN + 1e-9
+    # К7 (блок 2): до нижнего угла от талии 10.5 px, веер с шагом
+    # min(18, 37.8/3) = 12.6 вокруг талии упёрся бы в угол — он сдвинут
+    # вверх до отступа 6 px, шаг не сжат (до К7: 9.016 вокруг талии).
+    assert ys == pytest.approx([100.3, 112.9])
+    assert max(ys) == pytest.approx(118.9 - ports.VERTEX_MARGIN)
 
 
 def test_side_slots_of_box_bit_identical():
     b = _box("b", 100.0, 100.0)
     s = ports.side_slots(b, "R", 3)                   # min(18, 40/4) = 10
     assert [p[1] for p in s] == [90.0, 100.0, 110.0]
+
+
+# ─────────── веер у смещённой талии (К7, блок 2, шаг 2b′) ───────────
+
+def _valve(cn, axis, w, h, cx=100.0, cy=100.0):
+    return {"id": cn, "type": "equipment", "class_name": cn, "_axis": axis,
+            "centroid": [cy, cx],
+            "bbox": [cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2]}
+
+
+def _along(slots, side):
+    return [s[0] if side in ("T", "B") else s[1] for s in slots]
+
+
+def _side_slots_pre_k7(node, side, k, pitch=None):
+    """Копия `ports.side_slots` до К7 (aab3642): эталон «бит-в-бит»."""
+    x1, y1, x2, y2 = node["bbox"]
+    lo, hi = (x1, x2) if side in ("T", "B") else (y1, y2)
+    center = (lo + hi) / 2.0
+    ref = (contact.face_refs(node, node["bbox"]) or {}).get(side)
+    if k == 1:
+        pitch = 0.0
+    elif pitch is None:
+        pitch = min(ports.SLOT_PITCH, (hi - lo) / (k + 1))
+    if ref is not None:
+        center = ref
+        if k > 1:
+            half = min(center - lo, hi - center) - ports.VERTEX_MARGIN
+            pitch = max(0.0, min(pitch, 2.0 * half / (k - 1)))
+    return [center + (j - (k - 1) / 2.0) * pitch for j in range(k)]
+
+
+# рабочие рамки FIXED_SIZES: regulator_electro (CTRL_VLV_ELEC, 0.314) H
+# 42x37.8 — от талии до угла 7.03 px; armatura_seroprivod (AOC_VLV, 0.341)
+# V 28x42 — 4.45 px. До К7 шаг веера сжимался до 2.06 и 0 px.
+K7_FACES = [("regulator_electro", "H", 42.0, 37.8, "L"),
+            ("regulator_electro", "H", 42.0, 37.8, "R"),
+            ("armatura_seroprivod", "V", 28.0, 42.0, "T"),
+            ("armatura_seroprivod", "V", 28.0, 42.0, "B")]
+
+
+@pytest.mark.parametrize("k", [2, 3])
+@pytest.mark.parametrize("cn,axis,w,h,side", K7_FACES)
+def test_fan_at_offset_waist_moves_inside_the_face(cn, axis, w, h, side, k):
+    """Шаг не сжимается (зазор между краями линий >= INK_GAP), веер
+    симметричен вокруг сдвинутого центра, крайний слот — ровно на отступе
+    VERTEX_MARGIN от угла, центр ближе к середине грани, чем талия."""
+    v = _valve(cn, axis, w, h)
+    x1, y1, x2, y2 = v["bbox"]
+    lo, hi = (x1, x2) if side in ("T", "B") else (y1, y2)
+    mid = (lo + hi) / 2.0
+    waist = contact.face_refs(v, v["bbox"])[side]
+    got = _along(ports.side_slots(v, side, k), side)
+    pitch = min(ports.SLOT_PITCH, (hi - lo) / (k + 1))
+    gaps = [b - a for a, b in zip(got, got[1:])]
+    assert gaps == pytest.approx([pitch] * (k - 1)), "шаг сжат"
+    assert min(gaps) - ports.INK_DEFAULT >= ports.INK_GAP, "чернила слиплись"
+    c = sum(got) / k
+    assert [a + b for a, b in zip(got, reversed(got))] \
+        == pytest.approx([2.0 * c] * k), "веер не симметричен"
+    assert abs(c - mid) < abs(waist - mid), "веер не сдвинут внутрь"
+    assert min(min(got) - lo, hi - max(got)) \
+        == pytest.approx(ports.VERTEX_MARGIN), "не упёрся в отступ"
+
+
+def test_fan_at_offset_waist_literals():
+    """Абсолютные числа (Т5 блока 1 — armatura_seroprivod V, bbox x
+    100..128, k=2 на T-грани: до К7 оба слота 123.548, шаг 0)."""
+    aoc = _valve("armatura_seroprivod", "V", 28.0, 42.0, cx=114.0)
+    assert _along(ports.side_slots(aoc, "T", 2), "T") \
+        == pytest.approx([112.667, 122.0], abs=1e-3)
+    assert _along(ports.side_slots(aoc, "B", 3), "B") \
+        == pytest.approx([108.0, 115.0, 122.0])
+    reg = _valve("regulator_electro", "H", 42.0, 37.8)        # талия 111.869
+    assert _along(ports.side_slots(reg, "R", 2), "R") \
+        == pytest.approx([100.3, 112.9])
+    assert _along(ports.side_slots(reg, "R", 3), "R") \
+        == pytest.approx([94.0, 103.45, 112.9])
+
+
+def test_fan_that_fits_around_the_waist_is_bit_identical():
+    """ELECTROMAGNETIC_VLV (0.149): веер 2 x 12.6 вокруг талии влезает —
+    центр ровно талия, выход бит-в-бит с до-К7."""
+    v = _valve("armatura_membr_electro", "H", 42.0, 37.8)
+    got = _along(ports.side_slots(v, "R", 2), "R")
+    assert got == _side_slots_pre_k7(v, "R", 2)
+    assert sum(got) / 2 == pytest.approx(contact.face_refs(v, v["bbox"])["R"])
+
+
+def test_fan_that_does_not_fit_goes_to_the_middle_and_shrinks():
+    """Шаг вызывающего 12 при k=4 на грани 37.8: веер 36 > 37.8 - 2·6 —
+    в середину грани, шаг (37.8 - 12) / 3 = 8.6, крайние на отступе."""
+    v = _valve("regulator_electro", "H", 42.0, 37.8)
+    got = _along(ports.side_slots(v, "R", 4, pitch=12.0), "R")
+    assert got == pytest.approx([87.1, 95.7, 104.3, 112.9])
+
+
+@pytest.mark.parametrize("pitch", [None, 8.0, 30.0])
+@pytest.mark.parametrize("k", [1, 2, 3, 4, 5])
+@pytest.mark.parametrize("side", ["L", "R", "T", "B"])
+@pytest.mark.parametrize("node", [
+    _box("b", 100.0, 100.0),
+    _box("n", 100.0, 100.0, w=45.0, h=45.0, cn="nasos"),
+    {k_: v_ for k_, v_ in VALVE_H.items() if k_ != "_axis"},     # растр
+    _valve("armatura_ruchn", "H", 42.0, 21.0),        # HANDLE_VLV, доля 0
+    _valve("klapan_obratn", "V", 21.0, 42.0),         # CHECK_VLV, доля 0
+], ids=["box", "nasos", "raster_valve", "handle_h", "check_v"])
+def test_side_slots_without_offset_waist_bit_identical(node, side, k, pitch):
+    """У не-клапанов и клапанов с талией в центре К7 не меняет ни бита."""
+    got = _along(ports.side_slots(node, side, k, pitch=pitch), side)
+    assert got == _side_slots_pre_k7(node, side, k, pitch=pitch)
 
 
 # ─────────────────────────── канон и модель ───────────────────────────
@@ -155,7 +268,8 @@ def test_server_slots_around_waist_ordered_by_far_ends():
     seating.reseat_all_endpoints(g, model=True, slots=True)
     ys = {e["id"]: e["source_point"][0] for e in g["links"]}
     assert ys["e2"] < ys["e1"]                          # порядок по дальним
-    assert (ys["e1"] + ys["e2"]) / 2 == pytest.approx(WAIST_Y)
+    # веер у талии 108.39 сдвинут внутрь грани (К7): 106.6 ∓ 6.3
+    assert (ys["e2"], ys["e1"]) == pytest.approx((100.3, 112.9))
     assert all(e["source_point"][1] == 221.0 for e in g["links"])
 
 

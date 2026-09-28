@@ -379,8 +379,12 @@ def side_slots(node, side, k, rect=None, pitch=None):
     неё, шаг min(SLOT_PITCH, длина_грани/(k+1)) — крайние слоты не
     доходят до углов по построению. Опорная точка — середина грани, у
     клапана холста на осевой грани — выверенный порт талии (2026-09-22):
-    он смещён от середины, и шаг дополнительно зажимается так, чтобы
-    крайние слоты держали VERTEX_MARGIN от угла. side из {'L','R','T','B'};
+    он смещён от середины. Если крайний слот веера вокруг талии ближе
+    VERTEX_MARGIN к углу, веер сдвигается внутрь грани при прежнем шаге:
+    центр = clamp(талия, lo+M+span, hi−M−span), span = (k−1)/2·шаг
+    (К7, блок 2). Если веер с этим шагом не влезает в грань с отступами,
+    он встаёт в середину грани, а шаг сжимается до (длина − 2M)/(k−1).
+    k=1 и грани без выверенного порта это не меняет. side из {'L','R','T','B'};
     порядок — по возрастанию координаты вдоль грани. rect —
     переопределение рамки (редактор: bbox). [(x, y, nx, ny, False), ...]."""
     from modules.graph.core import seating
@@ -402,8 +406,15 @@ def side_slots(node, side, k, rect=None, pitch=None):
     if ref is not None:
         center = ref
         if k > 1:
-            half = min(center - lo, hi - center) - VERTEX_MARGIN
-            pitch = max(0.0, min(pitch, 2.0 * half / (k - 1)))
+            span = (k - 1) / 2.0 * pitch
+            a = lo + VERTEX_MARGIN + span
+            b = hi - VERTEX_MARGIN - span
+            if a <= b:                       # веер влезает: сдвиг внутрь
+                center = min(max(ref, a), b)
+            else:                            # не влезает: середина, сжатие
+                center = (lo + hi) / 2.0
+                half = min(center - lo, hi - center) - VERTEX_MARGIN
+                pitch = max(0.0, 2.0 * half / (k - 1))
     offs = [(j - (k - 1) / 2.0) * pitch for j in range(k)]
     if side == "L":
         return [(x1, center + o, -1.0, 0.0, False) for o in offs]

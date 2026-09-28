@@ -727,12 +727,18 @@ def test_new_pipe_spreads_the_whole_box_face(make_editor, tmp_path):
 
 def test_new_pipe_spreads_the_valve_face_around_the_waist(make_editor,
                                                           tmp_path):
-    """Клапан холста (H, талия y=306.216): две трубы в R-грань встают
-    симметрично вокруг ТАЛИИ, а не середины рамки; третья — в талию.
-    Труба в L-грани бит-в-бит; открытие ничего не двигает.
+    """Клапан холста (H, талия y=306.216): трубы в R-грань встают веером
+    у ТАЛИИ, а не у середины рамки; порядок концов — порядок партнёров
+    (трубы не перекрещиваются). Труба в L-грани бит-в-бит; открытие
+    ничего не двигает.
 
-    ⚠ Слоты 304.432/308.0 — веер у смещённой талии, зажатый отступом от
-    угла (`ports.side_slots`); ПЕРЕСНЯТЬ В БЛОКЕ 2 (сдвиг веера 2b′)."""
+    Слоты пересняты в блоке 2 (К7, шаг 2b′). От талии до нижнего угла
+    7.78 px; веер с шагом 9.333 (k=2) или 7 (k=3) вокруг талии упёрся бы
+    в угол, поэтому он сдвинут внутрь грани до отступа 6 px, шаг не сжат.
+    До К7 было 304.432/308.0 и 304.432/306.216/308.0 — шаг 3.568 и 1.784,
+    чернила трёх труб слипались. Вторая труба (партнёр ниже) не
+    перескакивает первую, которая стоит в талии в 1.78 px от своего
+    слота (`edit_engine._slot_seat`); иначе трубы перекрещивались."""
     ed = make_editor(_sheet(
         {"id": "v", "type": "equipment", "class_id": 3,
          "class_name": "armatura_electro", "_axis": "H",
@@ -746,15 +752,14 @@ def test_new_pipe_spreads_the_valve_face_around_the_waist(make_editor,
 
     assert ed.add_edge("v", "k2")
     got = _face_ys(ed, "v", 521.0)
-    assert got == pytest.approx({"k1": 304.432, "k2": 308.0}, abs=1e-6)
-    assert (got["k1"] + got["k2"]) / 2 == pytest.approx(WAIST_Y, abs=1e-6), \
-        "веер не вокруг талии"
+    assert got["k1"] < got["k2"], "трубы перекрестились"
+    assert got == pytest.approx({"k1": 298.666667, "k2": 308.0}, abs=1e-6)
     assert all(ed._edge_is_ortho(e) for e in ed.edges_data), "косая"
     assert not _reopen_moves(ed, tmp_path), "открытие переложило грань"
 
     assert ed.add_edge("v", "k3")
     assert _face_ys(ed, "v", 521.0) == pytest.approx(
-        {"k1": 304.432, "k3": WAIST_Y, "k2": 308.0}, abs=1e-6)
+        {"k1": 294.0, "k3": 301.0, "k2": 308.0}, abs=1e-6)
     assert all(ed._edge_is_ortho(e) for e in ed.edges_data), "косая"
     assert ed.edges_data[0] == foreign, "тронута труба чужой грани"
     assert not _reopen_moves(ed, tmp_path), "открытие переложило грань"

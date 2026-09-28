@@ -84,7 +84,10 @@ def _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y,
     waypoint, иначе противоположный конец) на ось грани: при drag узла
     дальние концы неподвижны — порядок стабилен по построению, слоты не
     мерцают. Тай-брейк — id ребра. Слот, занятый концом соседа (<2px,
-    полусостояния кадра), не выдаётся — берётся свободный.
+    полусостояния кадра), не выдаётся — берётся свободный, но не по ту
+    сторону соседа, который по порядку стоит с другой стороны: иначе
+    раскладка грани (`seating.seat_face`) закрепит перестановку и трубы
+    перекрестятся (веер у смещённой талии, К7). Свободного нет — свой слот.
     Возвращает (x, y)."""
     rect = _seat_rect(node)
     nid = node.get("id")
@@ -96,7 +99,8 @@ def _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y,
             else e.get("target_point" if end_key == "source_point"
                        else "source_point")
 
-    entries = [(ref_x if horiz else ref_y, str(edge_data.get("id")), True)]
+    entries = [(ref_x if horiz else ref_y, str(edge_data.get("id")), True,
+                None)]
     widths = [_ink_w(edge_data)]
     taken = []
     for e in node_edges or []:
@@ -116,15 +120,17 @@ def _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y,
         ps = port_model.choose_port_entry(
             node, cur_sib, (float(refp[1]), float(refp[0])),
             float(snap_threshold), rect=rect)
+        here = None
         if p is not None and _port_side(rect, float(p[1]),
                                         float(p[0])) == side:
-            taken.append(float(p[1]) if horiz else float(p[0]))
+            here = float(p[1]) if horiz else float(p[0])
+            taken.append(here)
         if ps[4] or port_model.pinned_on_node(node, e):
             continue              # сосед на ручном порту/пине ребра (Э5)
         if _NORMAL_SIDE.get((ps[2], ps[3])) != side:
             continue
         entries.append((float(refp[1]) if horiz else float(refp[0]),
-                        str(e.get("id")), False))
+                        str(e.get("id")), False, here))
         widths.append(_ink_w(e))
     entries.sort(key=lambda t: (t[0], t[1]))
     idx = next(i for i, t in enumerate(entries) if t[2])
@@ -147,7 +153,10 @@ def _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y,
     coords = [s[1 if not horiz else 0] for s in slots]
     order = sorted(range(k), key=lambda j: (abs(j - idx), j))
     for j in order:
-        if all(abs(coords[j] - t) >= 2.0 for t in taken):
+        if all(abs(coords[j] - t) >= 2.0 for t in taken) and (
+                j == idx or all((i < idx) == (t[3] < coords[j])
+                                for i, t in enumerate(entries)
+                                if t[3] is not None)):
             return slots[j][0], slots[j][1]
     return slots[idx][0], slots[idx][1]
 
