@@ -261,6 +261,9 @@ def test_stamp_writes_all_fields(layout_applied):
     canvas = _canvas_from(validated, layout_applied=layout_applied)
     tr = canvas["graph"]["canvas_transform"]
     for key in ("source_sha", "layout_version", "layout_applied",
-                "operator_saved", "text_imported_sha", "text_edited"):
+                "operator_saved", "text_imported_sha", "text_edited",
+                "attach_model"):
         assert key in tr, key
     assert tr["layout_applied"] is layout_applied
+    # метка модели точек прикрепления (Р1): холст собран по модели
+    assert tr["attach_model"] == "waist-1"

@@ -43,6 +43,7 @@ from __future__ import annotations
 from . import contact
 from .pretransform import (
     FIXED_SIZES,
+    _skin_content_rect,
     project_ray_to_polygon,
 )
 from .graph_access import (edge_ends, edges, is_connector, node_cxy,
@@ -58,9 +59,17 @@ def _anchor_rect(node):
     Та же рамка, что у редактора (`edit_checks.seat_rect`) и у FXML: сторож
     и судья смотрят в одно. Letterbox `_skin_content_rect` остался только
     миграциям открытия старых холстов. tuple(bb), а не float: int-bbox
-    растра не должен превращаться в float в JSON."""
+    растра не должен превращаться в float в JSON.
+
+    Узел старого холста (`contact.LEGACY_KEY`, метки модели нет, Р1) из
+    FIXED_SIZES — letterbox, как в 238fe6b: иначе старое открытие не
+    бит-в-бит (зажим касательной и замок оси по разным рамкам)."""
     bb = node.get("bbox")
-    return tuple(bb) if bb and len(bb) == 4 else None
+    if not bb or len(bb) != 4:
+        return None
+    if node.get(contact.LEGACY_KEY) and node.get("class_name") in FIXED_SIZES:
+        return _skin_content_rect(node) or tuple(bb)
+    return tuple(bb)
 
 
 def _poly_hit(node, seg, toward_x, toward_y, lock):

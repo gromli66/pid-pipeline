@@ -55,6 +55,9 @@ def test_canvas_transform_is_recorded(run):
     assert tr["canvas"] == [1920, 1080]
     assert tr["orig_image_size"] == run["src"]["graph"]["image_size"]
     assert tr["s"] > 0
+    # метку модели прикрепления пишет только canvas_state.stamp (Р1):
+    # to_canvas + layout без stamp — холст без метки
+    assert "attach_model" not in tr
 
 
 def test_runs_in_seconds(run):

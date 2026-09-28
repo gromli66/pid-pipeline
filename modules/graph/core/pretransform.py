@@ -526,7 +526,7 @@ def project_ray_to_polygon(seg, cx, cy, px, py):
     return (cx + dx * best, cy + dy * best)
 
 
-def seat_edge_endpoints(graph):
+def seat_edge_endpoints(graph, legacy=False):
     """Посадка концов рёбер модулем `seating` — одним на всю систему (§3.4).
 
     Этим путём идёт то, что ВИДИТ ОПЕРАТОР: холст, собранный `pretransform`
@@ -540,7 +540,12 @@ def seat_edge_endpoints(graph):
 
     Посадка — по модели точек прикрепления (решение заказчика 2026-09-22):
     выверенный порт клапана, середина рамки с допуском MID_SNAP, слоты
-    вокруг опорной точки (`seating`, `model=True`).
+    вокруг опорной точки (`seating`, `model=True`). Сервер — всегда так.
+
+    `legacy=True` — открытие СТАРОГО холста (метки модели нет, Р1): канон
+    238fe6b (`model=False`, без слотов). Узлы вызывающий размечает сам
+    (`contact.apply_attach_mode`): по ключу узла `seating` берёт старую
+    рамку letterbox, а `face_refs` — середину грани.
 
     Возвращает число сдвинутых концов (для статистики pretransform).
     """
@@ -548,7 +553,7 @@ def seat_edge_endpoints(graph):
 
     before = [(e.get("source_point"), e.get("target_point"))
               for e in _edges(graph)]
-    reseat_all_endpoints(graph, model=True, slots=True)
+    reseat_all_endpoints(graph, model=not legacy, slots=not legacy)
     fixed = 0
     for (sp0, tp0), e in zip(before, _edges(graph)):
         fixed += (e.get("source_point") != sp0) + (e.get("target_point") != tp0)

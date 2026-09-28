@@ -47,7 +47,8 @@ def qapp():
 
 def _canvas():
     """Кусок серверного холста: коннектор — H-клапан — коннектор на линии
-    талии (метка раскладки есть: полнографный auto_fix заперт, как в бою)."""
+    талии (метка раскладки есть: полнографный auto_fix заперт, как в бою;
+    метка модели прикрепления есть: холст по модели, Р1)."""
     nodes = [
         {"id": "c1", "type": "connector", "class_id": -1,
          "class_name": "connector", "centroid": [WAIST_Y, 400.0],
@@ -70,7 +71,8 @@ def _canvas():
     ]
     return {"directed": False, "multigraph": False,
             "graph": {"image_size": [IMG_H, IMG_W],
-                      "canvas_transform": {"layout_applied": True}},
+                      "canvas_transform": {"layout_applied": True,
+                                           "attach_model": "waist-1"}},
             "nodes": nodes, "links": links, "text_blocks": [], "bindings": []}
 
 

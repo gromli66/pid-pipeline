@@ -65,7 +65,8 @@ def _canvas_graph() -> dict:
     return {
         "directed": False, "multigraph": False,
         "graph": {"image_size": [1080, 1920],
-                  "canvas_transform": {"s": 1.0, "offx": 0, "offy": 0}},
+                  "canvas_transform": {"s": 1.0, "offx": 0, "offy": 0,
+                                       "attach_model": "waist-1"}},
         "nodes": nodes, "links": links,
         "text_blocks": [
             {"id": 5, "text": "10KAA10AP001",

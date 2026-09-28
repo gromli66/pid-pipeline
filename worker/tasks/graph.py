@@ -702,6 +702,11 @@ def task_generate_fxml(self, diagram_uid: str, page_size: str = None, bridge_gap
                 # без масштаба и без fxml_standardize (двойной масштаб и
                 # повторная посадка горловин ломали паритет с редактором).
                 logger.info("WYSIWYG: identity-экспорт холста (canvas_to_fxml)")
+                from modules.graph.core import contact
+                logger.info(
+                    "холст: модель прикрепления %s",
+                    contact.canvas_model(graph_data)
+                    or "нет — старая поправка талии (legacy, 238fe6b)")
                 gen_kwargs = {}
                 if bridge_gap is not None:
                     gen_kwargs["bridge_gap_factor"] = bridge_gap

@@ -25,6 +25,7 @@ from __future__ import annotations
 import hashlib
 import json
 
+from . import contact
 from .pretransform import FIXED_SIZES
 
 # Версия кода раскладки. Поднимать руками, когда меняется её поведение: смена
@@ -73,6 +74,7 @@ _TRANSFORM_DEFAULTS = {
     "source_sha": None,
     "text_imported_sha": None,
     "text_edited": False,
+    "attach_model": None,
 }
 
 
@@ -177,6 +179,11 @@ def stamp(canvas_graph: dict, validated_graph: dict, *, layout_applied: bool,
     когда задача упала, и сегодняшняя пересборка при устаревании). Без флага
     гейт либо примет фолбэк за готовую раскладку, либо объявит его вечно
     устаревшим и будет терять правки оператора при каждом открытии.
+
+    `attach_model` — метка модели точек прикрепления (`contact.ATTACH_MODEL`,
+    Р1): холст собран по модели. Холст без неё — старый (открытие и выгрузка
+    по правилам 238fe6b). В `is_stale` и sha метка НЕ входит: старый холст не
+    устаревает от её отсутствия.
     """
     tr = canvas_graph.setdefault("graph", {}).setdefault("canvas_transform", {})
     tr["source_sha"] = graph_projection_sha(validated_graph)
@@ -185,6 +192,7 @@ def stamp(canvas_graph: dict, validated_graph: dict, *, layout_applied: bool,
     tr["operator_saved"] = bool(operator_saved)
     tr["text_imported_sha"] = text_imported_sha
     tr["text_edited"] = bool(text_edited)
+    tr["attach_model"] = contact.ATTACH_MODEL
     return tr
 
 

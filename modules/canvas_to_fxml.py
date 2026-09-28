@@ -26,7 +26,10 @@ WYSIWYG не годится.
     есть»): труба приходит в талию ещё на холсте — конец сидит в выверенном
     порту клапана, а бокс поставлен так, что талия лежит на линии трубы
     (`modules/graph/core/contact.py`, `pretransform.apply_fixed_sizes`).
-    Выгрузка снова пиксельно 1:1 с холстом;
+    Выгрузка снова пиксельно 1:1 с холстом. Исключение — СТАРЫЙ холст без
+    метки модели (`contact.canvas_model` is None, Р1): его трубы посажены
+    в середину грани, и контрол сдвигается старой поправкой по замороженной
+    `SKIN_CONTACT_OFFSET_LEGACY` — строка в строку как 238fe6b;
   * мосты «— | —» ищутся геометрией и режут более толстую трубу;
   * авто-датчик расхода у шайбы без датчика — но в родном размере холста
     (FIXED_SIZES['datchik']), без деления на 3.
@@ -76,6 +79,7 @@ from modules.graph_to_fxml import (
     TEXT_STYLES,
     SkinGeometry,
     _infer_napravlenie_direction,
+    apply_contact_offset,
     build_node_kks_map,
     compute_bridge_cuts,
     generate_fxml_line,
@@ -124,7 +128,8 @@ def _axis_and_orientation(node, connections):
 
 
 def generate_canvas_control(node, node_id: str, connections, kks=None,
-                            kks_visible: bool = True) -> Optional[str]:
+                            kks_visible: bool = True,
+                            legacy: bool = False) -> Optional[str]:
     """Контрол со скином: геометрия СТРОГО из bbox холста.
 
     Вертикаль: swap W/H + пересчёт layout — контракт библиотеки скинов
@@ -135,6 +140,11 @@ def generate_canvas_control(node, node_id: str, connections, kks=None,
     (`contact.face_refs`, модель точек прикрепления), а бокс поставлен так,
     что талия лежит на линии трубы (`pretransform.apply_fixed_sizes`).
     Сдвигать контрол теперь означало бы сдвинуть его ОТ трубы.
+
+    `legacy=True` — старый холст без метки модели (Р1): труба в середине
+    грани, контрол сдвигается старой поправкой (`apply_contact_offset` по
+    `SKIN_CONTACT_OFFSET_LEGACY`, после swap, от итоговой ориентации) —
+    как в 238fe6b.
     """
     skin_info = _skin_info(node)
     if not skin_info:
@@ -158,6 +168,11 @@ def generate_canvas_control(node, node_id: str, connections, kks=None,
         layout_x = b['x1'] + (width - height) / 2
         layout_y = b['y1'] + (height - width) / 2
         width, height = height, width
+
+    if legacy:
+        layout_x, layout_y = apply_contact_offset(
+            skin_type, emit_orientation, layout_x, layout_y, height,
+            table=contact.SKIN_CONTACT_OFFSET_LEGACY)
 
     attrs = [
         f'fx:id="{escape(str(node_id))}"',
@@ -320,6 +335,8 @@ def generate_canvas_fxml(graph_data: dict,
     файла холста (для приёмки №35).
     """
     graph_data = copy.deepcopy(graph_data)
+    # Старый холст (метки модели нет, Р1) — старая поправка талии контрола.
+    legacy = contact.canvas_model(graph_data) is None
 
     nodes = {n['id']: n for n in graph_data.get('nodes', [])}
     edges = graph_data.get('links', [])
@@ -380,7 +397,7 @@ def generate_canvas_fxml(graph_data: dict,
 
         fxml = generate_canvas_control(
             node, node_id, connections, kks=kks,
-            kks_visible=node_id not in kks_printed_nodes)
+            kks_visible=node_id not in kks_printed_nodes, legacy=legacy)
         if fxml:
             _put(control_elements, fxml)
             continue

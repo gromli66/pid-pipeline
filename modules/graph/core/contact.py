@@ -16,6 +16,15 @@
     прямой трубы уступает не больше `MID_SNAP`;
   * полигон — как прежде (посадка на контур), здесь не описывается.
 
+Метка модели (Р1, блок 3): холст, собранный сервером по модели, несёт
+`graph.canvas_transform.attach_model` == `ATTACH_MODEL` (пишет
+`canvas_state.stamp`). Холст без метки — СТАРЫЙ: живёт по правилам 238fe6b,
+пока его не пересоберёт сервер (открытие — канон без слотов, порты в
+середине граней; выгрузка — старая поправка контрола по
+`SKIN_CONTACT_OFFSET_LEGACY`). До `face_refs` признак доходит производным
+ключом узла `LEGACY_KEY` (`apply_attach_mode`); в файл он не пишется
+(`strip_attach_mode`).
+
 Чистый python (stdlib), без Qt и shapely.
 """
 from __future__ import annotations
@@ -201,6 +210,17 @@ SKIN_CONTACT_OFFSET_LEGACY = {
     'AOC_CTRL_VLV':     (0.15,  0.111),
 }
 
+# Метка модели точек прикрепления на холсте (Р1). Правка SKIN_CONTACT_OFFSET
+# меняет геометрию помеченных холстов, а is_stale её не видит: любая правка
+# таблицы обязана поднять метку и `ATTACH_MODEL_TABLE_SHA` (сторож —
+# tests/test_attach_mark.py).
+ATTACH_MODEL = 'waist-1'
+ATTACH_MODEL_TABLE_SHA = \
+    '36b8889dd4c197ea94d908f325338abff58959cd547b25372c30b8e2afd6dd98'
+# Производный ключ узла старого холста (метки нет): face_refs -> None.
+# Ставится при каждой загрузке из метки, в файл не пишется.
+LEGACY_KEY = '_attach_legacy'
+
 # px: на сколько конец трубы на середине грани (НЕ выверенный порт) может
 # уйти от середины ради прямой трубы. Решение заказчика 2026-09-22
 # («допуск, если скина нет»): 0 давал на корпусе +41 мелкое колено 0.75-3 px.
@@ -260,6 +280,35 @@ def orientation(node, sides=None):
     return axis, emit
 
 
+def canvas_model(graph):
+    """Метка модели холста (`attach_model` в canvas_transform) или None —
+    старый холст (Р1)."""
+    tr = (graph.get('graph') or {}).get('canvas_transform') or {}
+    return tr.get('attach_model')
+
+
+def apply_attach_mode(graph) -> bool:
+    """Разметить узлы по метке холста; вернуть True, если холст старый.
+
+    Метки нет — всем узлам `LEGACY_KEY` = True (face_refs -> None: порты в
+    середине граней, как в 238fe6b); метка есть — ключ снимается.
+    Идемпотентна: истина — метка.
+    """
+    legacy = canvas_model(graph) is None
+    for n in graph.get('nodes') or ():
+        if legacy:
+            n[LEGACY_KEY] = True
+        else:
+            n.pop(LEGACY_KEY, None)
+    return legacy
+
+
+def strip_attach_mode(nodes):
+    """Снять производный ключ старого холста перед записью файла."""
+    for n in nodes or ():
+        n.pop(LEGACY_KEY, None)
+
+
 def face_refs(node, rect, sides=None):
     """Выверенные порты клапана на гранях рамки `rect`: {side: coord} | None.
 
@@ -276,7 +325,12 @@ def face_refs(node, rect, sides=None):
     Только узел ХОЛСТА: клапан с `_axis` (его ставит `apply_fixed_sizes`,
     бокс — габарит графики скина). В координатах растра («Проверка схемы»)
     бокс — детекция, и доля талии к нему не приложима: там портов нет.
+
+    Узел старого холста (`LEGACY_KEY`, метки модели нет) — портов нет:
+    середина грани, как в 238fe6b (Р1).
     """
+    if node.get(LEGACY_KEY):
+        return None
     if rect is None or not is_valve(node) \
             or node.get('_axis') not in ('H', 'V'):
         return None
