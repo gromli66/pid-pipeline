@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Клапан «Ручной правки» по модели точек прикрепления (блок 1, К3).
+"""Клапан «Ручной правки» по модели точек прикрепления (блок 1, К3–К4).
 
 Инвариант холста: у клапана задан `_axis`, центроид — точка талии, рамка
 стоит вокруг талии. Его обязаны держать жесты, которые рамку создают или
@@ -7,10 +7,12 @@
 (`_resize_node_box`), угловой оверлей (`_on_node_resized`) и вставка
 (`_paste_node_clipboard`). До правки новый клапан шёл без `_axis` (труба в
 САПФИР мимо талии на 5–14 px), а «Размеры» тем же размером сдвигали рамку
-на долю талии.
+на долю талии. К4 (Р3): первое поперечное ребро поворачивает новый клапан
+и сдвигает его талией на трубу — одним шагом отмены.
 
 Литералы — на `armatura_electro` ТОЛЬКО по оси H (h-доля 0.222, таблицу Р6
-блок 2 не меняет) и на симметричном `armatura_ruchn`.
+блок 2 не меняет) и на симметричном `armatura_ruchn`; литералы повёрнутого
+(V) armatura_electro помечены «переснять в блоке 2».
 
 Координаты двойственны (CODING_GUIDE §6): centroid / source_point /
 target_point = [y, x]; bbox = [x1, y1, x2, y2].
@@ -333,3 +335,271 @@ def test_paste_valve_without_axis_enters_the_model(make_editor, monkeypatch):
 
     ed.undo()
     assert _state(ed) == before
+
+
+# ── Р3: первое ребро закрепляет ось нового клапана (К4) ────────────────
+#
+# Новый клапан (`_axis_free`) один раз поворачивается первым ребром,
+# пришедшим поперёк оси: рамка w↔h вокруг талии, затем сдвиг, чтобы талия
+# легла на трубу, если сдвинутая рамка не задевает соседей. Ребро, поворот
+# и сдвиг — один шаг отмены.
+#
+# ⚠ Литералы повёрнутой рамки зависят от V-доли ELECTRIC_VLV (0.20 до Р6;
+# armatura_electro — REVERSE-класс, талия правее центра на v·w) —
+# ПЕРЕСНЯТЬ В БЛОКЕ 2 (Р6 меняет v-долю на 0.222).
+
+TURNED_BBOX = [485.4, 285.216, 513.4, 327.216]   # переснять в блоке 2
+
+
+def _conn(nid, y, x):
+    return {"id": nid, "type": "connector", "class_id": -1,
+            "class_name": "connector", "centroid": [y, x], "bbox": None,
+            "segmentation": None, "degree": 0}
+
+
+def _sheet(*nodes):
+    """Пустой лист холста с заданными узлами (рёбер нет)."""
+    g = _canvas()
+    g["nodes"], g["links"] = list(nodes), []
+    return g
+
+
+def _new_valve(ed, cls="armatura_electro", class_id=3):
+    """Клапан «Ручной правки»: рамка 42×28 [479, 286, 521, 314] (ось H)."""
+    return ed.add_equipment_node(500.0, 300.0, class_id, cls, width=42.0,
+                                 height=28.0, enter_resize=False)
+
+
+def test_first_transverse_edge_turns_valve_onto_the_pipe(make_editor):
+    """Коннектор над H-клапаном со сдвигом 5 px: клапан повёрнут (V, рамка
+    28×42 вокруг талии), сдвинут на линию трубы (талия x=505), труба прямая
+    в талию, скин повёрнут. Ctrl+Z — одним шагом до «клапан свободен, ребра
+    нет»; Ctrl+Y — снова «после». Второе ребро ось не трогает."""
+    ed = make_editor(_sheet(_conn("k", 150.0, 505.0),
+                            _conn("k2", WAIST_Y, 700.0)))
+    ed.set_show_skins(True)
+    nid = _new_valve(ed)
+    before = _state(ed)
+    depth = ed.undo_mgr.stack_depth
+
+    assert ed.add_edge(nid, "k")
+    n = ed.nodes[nid]
+    assert n["_axis"] == "V" and "_axis_free" not in n
+    assert n["bbox"] == pytest.approx(TURNED_BBOX, abs=0.01)
+    assert n["centroid"] == pytest.approx([WAIST_Y, 505.0], abs=0.01)
+    _assert_waist_invariant(n)
+    e = ed.edges_data[0]
+    assert e["source_point"] == pytest.approx([TURNED_BBOX[1], 505.0],
+                                              abs=0.01), "конец не в талии"
+    assert e["target_point"] == [150.0, 505.0]
+    assert not e.get("waypoints"), "труба не прямая"
+    assert ed._node_orientation(nid) == "VERTICAL_REVERSE"
+    skin = ed._skin_items[nid][0]
+    assert skin.sceneBoundingRect().getCoords() == pytest.approx(
+        tuple(n["bbox"]), abs=0.01), "скин не вписан в повёрнутую рамку"
+    assert skin.pixmap().height() > skin.pixmap().width(), "скин не повёрнут"
+    c = ed.node_items[nid].rect().center()
+    assert (c.x(), c.y()) == pytest.approx((505.0, WAIST_Y), abs=0.01), \
+        "маркер центроида остался на старом месте"
+    assert ed.undo_mgr.stack_depth == depth + 1, "не один шаг отмены"
+    after = _state(ed)
+
+    ed.undo()
+    assert _state(ed) == before
+    assert ed.nodes[nid]["_axis_free"] is True
+    ed.redo()
+    assert _state(ed) == after
+
+    assert ed.add_edge(nid, "k2")
+    n = ed.nodes[nid]
+    assert n["_axis"] == "V", "второе ребро повернуло клапан"
+    assert n["bbox"] == after[0][-1]["bbox"]
+    assert n["centroid"] == after[0][-1]["centroid"]
+
+
+def test_first_edge_with_waypoints_turns_onto_operator_waypoint(make_editor):
+    """Ребро с изломом оператора: поворот по смежному waypoint, талия — на
+    его линии (x=503), waypoints оператора бит-в-бит; один Ctrl+Z."""
+    ed = make_editor(_sheet(_conn("k", 200.0, 700.0)))
+    nid = _new_valve(ed)
+    before = _state(ed)
+
+    assert ed.add_edge_with_waypoints(nid, "k", [[200.0, 503.0]])
+    n = ed.nodes[nid]
+    assert n["_axis"] == "V" and "_axis_free" not in n
+    assert n["centroid"] == pytest.approx([WAIST_Y, 503.0], abs=0.01)
+    _assert_waist_invariant(n)
+    e = ed.edges_data[0]
+    assert e["waypoints"] == [[200.0, 503.0]], "излом оператора тронут"
+    assert e["source_point"][1] == pytest.approx(503.0, abs=0.01)
+    assert ed._edge_is_ortho(e)
+
+    ed.undo()
+    assert _state(ed) == before
+
+
+def test_first_axial_edge_frees_nothing_but_the_flag(make_editor):
+    """Ребро вдоль оси: поворота и сдвига нет, `_axis_free` снят (второе
+    поперечное ребро клапан уже не повернёт); Ctrl+Z возвращает флаг."""
+    ed = make_editor(_sheet(_conn("k", WAIST_Y, 650.0),
+                            _conn("k2", 150.0, 505.0)))
+    nid = _new_valve(ed)
+    before = _state(ed)
+
+    assert ed.add_edge(nid, "k")
+    n = ed.nodes[nid]
+    assert n["bbox"] == [479.0, 286.0, 521.0, 314.0]
+    assert n["_axis"] == "H" and "_axis_free" not in n
+    assert ed.edges_data[0]["source_point"] == pytest.approx(
+        [WAIST_Y, 521.0], abs=0.01)
+
+    assert ed.add_edge(nid, "k2")
+    assert ed.nodes[nid]["_axis"] == "H", "поперечное ВТОРОЕ ребро повернуло"
+    assert ed.nodes[nid]["bbox"] == [479.0, 286.0, 521.0, 314.0]
+
+    ed.undo()
+    ed.undo()
+    assert _state(ed) == before
+
+
+def test_neighbour_on_the_shift_path_leaves_only_the_turn(make_editor):
+    """Сосед задевает сдвинутую рамку (`box_hits`) — клапан только повёрнут,
+    талия остаётся на x=500, труба доходит маршрутом (ортогонально)."""
+    from modules.graph.core.graph_access import box_hits
+
+    box = {"id": "b", "type": "equipment", "class_id": 99,
+           "class_name": "unknow", "centroid": [305.0, 459.0],
+           "bbox": [440.0, 290.0, 478.0, 320.0], "segmentation": None,
+           "degree": 0}
+    ed = make_editor(_sheet(_conn("k", 150.0, 495.0), box))
+    nid = _new_valve(ed)
+    assert ed.add_edge(nid, "k")
+    n = ed.nodes[nid]
+    assert n["_axis"] == "V"
+    assert n["centroid"] == pytest.approx([WAIST_Y, 500.0], abs=0.01), \
+        "клапан сдвинут в соседа"
+    assert n["bbox"] == pytest.approx(                     # переснять в блоке 2
+        [480.4, 285.216, 508.4, 327.216], abs=0.01)
+    moved = [n["bbox"][0] - 5.0, n["bbox"][1], n["bbox"][2] - 5.0,
+             n["bbox"][3]]
+    assert box_hits(ed.nodes, nid, moved), "сосед не на пути — тест пуст"
+    e = ed.edges_data[0]
+    assert e["source_point"][1] == pytest.approx(500.0, abs=0.01)
+    assert e["target_point"] == [150.0, 495.0]
+    assert ed._edge_is_ortho(e), "труба легла косой"
+    assert ed.nodes["b"]["bbox"] == [440.0, 290.0, 478.0, 320.0]
+
+
+def test_relief_valve_does_not_turn(make_editor):
+    """predohran (RELIEF_VLV) оси не освобождает: поперечное первое ребро
+    его не поворачивает и не двигает."""
+    ed = make_editor(_sheet(_conn("k", 150.0, 505.0)))
+    nid = _new_valve(ed, "predohran", 9)
+    assert ed.add_edge(nid, "k")
+    n = ed.nodes[nid]
+    assert n["_axis"] == "H"
+    assert n["bbox"] == [479.0, 286.0, 521.0, 314.0]
+
+
+def test_turn_after_foreign_sizes_undo_and_drag(make_editor):
+    """Д1: после чужих действий оператора («Размеры» тем же размером ->
+    Ctrl+Z, перенос коннектора на +5 px) первое ребро всё так же ставит
+    талию на трубу."""
+    ed = make_editor(_sheet(_conn("k", 150.0, 500.0)))
+    nid = _new_valve(ed)
+    ed.set_mode("resize_objects")
+    ed.set_resize_class("armatura_electro")
+    assert ed._resize_sel == {nid}
+    ed.apply_resize(width=28.0, height=42.0)
+    ed.undo()
+    ed.set_mode("idle")
+    assert ed.nodes[nid]["_axis_free"] is True
+
+    ed.start_drag_node("k")
+    ed.drag_node_to(505.0, 150.0)
+    ed.end_drag_node()
+    kx = ed.nodes["k"]["centroid"][1]
+    assert kx == pytest.approx(505.0, abs=0.01), "перенос не состоялся"
+
+    assert ed.add_edge(nid, "k")
+    n = ed.nodes[nid]
+    assert n["_axis"] == "V"
+    _assert_waist_invariant(n)
+    assert n["centroid"][1] == pytest.approx(kx, abs=0.01)
+    e = ed.edges_data[0]
+    assert e["source_point"][1] == pytest.approx(kx, abs=0.01)
+    assert not e.get("waypoints")
+
+
+def test_turned_valve_exports_pipe_into_the_waist(make_editor, tmp_path):
+    """Сквозной: новый клапан -> два поперечных ребра -> запись -> FXML:
+    обе трубы входят в талию контрола (промах ≤ 0.1 px). Талия считается
+    по самому контролу FXML: центр + v·prefHeight (VERTICAL_REVERSE)."""
+    import re
+    from modules.canvas_to_fxml import generate_canvas_fxml
+
+    ed = make_editor(_sheet(_conn("k", 150.0, 505.0),
+                            _conn("k2", 450.0, 505.0)))
+    nid = _new_valve(ed)
+    assert ed.add_edge(nid, "k") and ed.add_edge(nid, "k2")
+    out = tmp_path / "out.json"
+    assert ed.save_graph(str(out))
+    fx = generate_canvas_fxml(json.loads(out.read_text(encoding="utf-8")))
+
+    tag = re.search(r'<ValveControl fx:id="%s"[^>]*>' % nid, fx).group(0)
+
+    def num(k):
+        return float(re.search(k + r'="([-\d.]+)"', tag).group(1))
+
+    assert 'orientation="VERTICAL_REVERSE"' in tag
+    v_frac = contact.SKIN_CONTACT_OFFSET["ELECTRIC_VLV"][1]
+    waist_x = num("layoutX") + num("prefWidth") / 2 + v_frac * num("prefHeight")
+    xs = [float(v) for line in re.findall(r'<Line[^>]*>', fx)
+          for v in re.findall(r'(?:startX|endX)="([-\d.]+)"', line)]
+    assert len(xs) == 4
+    assert max(abs(x - waist_x) for x in xs) <= 0.1
+
+
+def test_edge_add_remove_redraws_skin_orientation(make_editor):
+    """Клапан без `_axis` (холст до модели): ориентация — по сторонам рёбер.
+    Ребро в верхнюю грань делает его вертикальным — скин обязан повернуться
+    при добавлении, отмене, возврате и удалении ребра (`AddEdgeCommand`/
+    `RemoveEdgeCommand`)."""
+    w = {"id": "w", "type": "equipment", "class_id": 3,
+         "class_name": "armatura_electro", "centroid": [300.0, 500.0],
+         "bbox": [479.0, 286.0, 521.0, 314.0], "segmentation": None,
+         "degree": 0}
+    ed = make_editor(_sheet(_conn("k", 150.0, 500.0), w))
+    ed.set_show_skins(True)
+
+    def tall():
+        pm = ed._skin_items["w"][0].pixmap()
+        return pm.height() > pm.width()
+
+    assert not tall()
+    assert ed.add_edge("w", "k")
+    assert ed._node_orientation("w") == "VERTICAL_REVERSE" and tall()
+    ed.undo()
+    assert not tall()
+    ed.redo()
+    assert tall()
+    assert ed.remove_edge("w", "k")
+    assert not tall()
+    ed.undo()
+    assert tall()
+
+
+def test_pipe_line_off_the_turned_face_turns_without_a_jump(make_editor):
+    """Линия трубы вне пролёта осевой грани повёрнутой рамки (коннектор над
+    клапаном, но правее рамки 28×42): клапан повёрнут, но не прыгает к
+    трубе — она доходит L-маршрутом в талию."""
+    ed = make_editor(_sheet(_conn("k", 150.0, 510.0)))
+    nid = _new_valve(ed)
+    assert ed.add_edge(nid, "k")
+    n = ed.nodes[nid]
+    assert n["_axis"] == "V"
+    assert n["centroid"] == pytest.approx([WAIST_Y, 500.0], abs=0.01)
+    e = ed.edges_data[0]
+    assert e["source_point"][1] == pytest.approx(500.0, abs=0.01)
+    assert e["target_point"] == [150.0, 510.0]
+    assert ed._edge_is_ortho(e)

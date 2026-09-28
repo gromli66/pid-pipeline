@@ -10,6 +10,17 @@ from ui.editors.undo_manager import Command
 from ui.editors.graph_data import GraphDataModel
 
 
+def _refresh_end_skins(editor, *node_ids):
+    """Скин концов ребра — по текущей ориентации. Она выводится из `_axis`
+    или сторон рёбер (`_node_orientation`): поворот клапана первым ребром
+    (Р3) и добавление/удаление ребра у узла без `_axis` её меняют, а скин
+    оставался в прежней. Редактор без скинов (Simple) — no-op."""
+    update = getattr(editor, '_update_node_skin', None)
+    if update is not None:
+        for nid in node_ids:
+            update(nid)
+
+
 class AddEdgeCommand(Command):
     """Добавить ребро. execute=add+draw, undo=remove+undraw, redo=execute."""
 
@@ -26,12 +37,14 @@ class AddEdgeCommand(Command):
         self._editor.create_edge_item(self._key, self._edge_data)
         self._editor.update_node_color(self._node_a)
         self._editor.update_node_color(self._node_b)
+        _refresh_end_skins(self._editor, self._node_a, self._node_b)
 
     def undo(self):
         self._model.remove_edge(self._key)
         self._editor.remove_edge_item(self._key)
         self._editor.update_node_color(self._node_a)
         self._editor.update_node_color(self._node_b)
+        _refresh_end_skins(self._editor, self._node_a, self._node_b)
 
     @property
     def description(self):
@@ -60,6 +73,7 @@ class RemoveEdgeCommand(Command):
         self._editor.remove_edge_item(self._key)
         self._editor.update_node_color(self._node_a)
         self._editor.update_node_color(self._node_b)
+        _refresh_end_skins(self._editor, self._node_a, self._node_b)
 
     def undo(self):
         if self._removed_data:
@@ -67,6 +81,7 @@ class RemoveEdgeCommand(Command):
             self._editor.create_edge_item(self._key, self._removed_data)
             self._editor.update_node_color(self._node_a)
             self._editor.update_node_color(self._node_b)
+            _refresh_end_skins(self._editor, self._node_a, self._node_b)
             for b in self._removed_bindings:
                 self._model.set_binding(b)
 

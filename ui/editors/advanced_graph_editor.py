@@ -748,6 +748,11 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         подводящего сегмента (_seg_lock), посадка остаётся каноничной
         (матрица T-B tests/test_seat_contract.py). «Минимум пересечений труб»
         здесь не реализуется — см. докстринг _route_orthogonal (Э7-b).
+
+        Р3: первое ребро нового клапана (`_axis_free`) закрепляет его ось —
+        поперечное поворачивает и сдвигает клапан на трубу
+        (`_first_edge_turn`/`_first_edge_shift`); ребро, поворот и сдвиг —
+        один шаг отмены (`SnapshotCommand`, `_commit_new_edge`).
         """
         if node_a == node_b:
             self.update_status("Нельзя соединить узел с самим собой")
@@ -760,10 +765,23 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
 
         from modules.graph.core import seating
 
-        probe = {'source': node_a, 'target': node_b,
-                 'source_point': None, 'target_point': None, 'waypoints': []}
-        seating.reseat_edge(self.nodes, probe)
-        self._engine_finish_ends(probe)          # Э2c: порт/слот, не угол
+        # Р3: первое ребро поворачивает клапан со свободной осью ДО посадки
+        snap_cmd, turned = self._first_edge_turn(node_a, node_b, None)
+
+        def _seat():
+            pr = {'source': node_a, 'target': node_b,
+                  'source_point': None, 'target_point': None, 'waypoints': []}
+            seating.reseat_edge(self.nodes, pr)
+            self._engine_finish_ends(pr)         # Э2c: порт/слот, не угол
+            return pr
+
+        probe = _seat()
+        for nid in turned:
+            # линия трубы — посаженный конец партнёра
+            other = probe['target_point'] if nid == node_a \
+                else probe['source_point']
+            if self._first_edge_shift(nid, other):
+                probe = _seat()
         if self._route_orthogonal(probe):
             # концы на осях подводящих сегментов, в портах движка
             self._engine_finish_ends(probe)
@@ -782,9 +800,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         edge_data['straight_line_distance'] = math.sqrt((tgt_x - src_x)**2 + (tgt_y - src_y)**2)
         edge_data['connection_type'] = connection_type
 
-        from ui.editors.commands.simple_commands import AddEdgeCommand
-        cmd = AddEdgeCommand(self.model, self, node_a, node_b, edge_data)
-        self.undo_mgr.execute(cmd)
+        self._commit_new_edge(snap_cmd, node_a, node_b, edge_data)
 
         self.update_statistics()
         self.update_status(f"Добавлено ребро: {node_a} — {node_b} [{connection_type}]")
@@ -798,6 +814,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             node_a: ID стартового узла
             node_b: ID конечного узла
             waypoints: список [[y, x], ...] промежуточных точек
+
+        Р3 — как в `add_edge`; линия трубы для сдвига нового клапана —
+        смежный waypoint оператора (сами waypoints не трогаются).
         """
         if node_a == node_b:
             self.update_status("Нельзя соединить узел с самим собой")
@@ -808,30 +827,43 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             self.update_status(f"Ребро уже существует: {node_a} — {node_b}")
             return False
 
-        src = self.nodes[node_a]
-        tgt = self.nodes[node_b]
+        # Р3: первое ребро поворачивает клапан со свободной осью ДО посадки
+        snap_cmd, turned = self._first_edge_turn(node_a, node_b, waypoints)
 
-        src_cx, src_cy = src['centroid'][1], src['centroid'][0]
-        tgt_cx, tgt_cy = tgt['centroid'][1], tgt['centroid'][0]
+        def _seat():
+            src = self.nodes[node_a]
+            src_cx, src_cy = src['centroid'][1], src['centroid'][0]
+            # Connection points — к первому/последнему waypoint или к target
+            if waypoints:
+                first_wp_x, first_wp_y = waypoints[0][1], waypoints[0][0]
+                last_wp_x, last_wp_y = waypoints[-1][1], waypoints[-1][0]
+                src_x, src_y = self.get_connection_point(node_a, first_wp_x, first_wp_y)
+                tgt_x, tgt_y = self.get_connection_point(node_b, last_wp_x, last_wp_y)
+            else:
+                # Без waypoints: сначала цель (по центроиду источника),
+                # потом источник (по РЕАЛЬНОЙ точке на цели)
+                tgt_x, tgt_y = self.get_connection_point(node_b, src_cx, src_cy)
+                src_x, src_y = self.get_connection_point(node_a, tgt_x, tgt_y)
+            # Э2c: канонная посадка доводится движком (порт/слот, не угол);
+            # waypoints оператора неприкосновенны — полигонная ветка сдвигает
+            # только смежное колено при перпендикулярном стабе
+            pr = {'source': node_a, 'target': node_b,
+                  'source_point': [src_y, src_x], 'target_point': [tgt_y, tgt_x],
+                  'waypoints': [wp.copy() for wp in waypoints]}
+            self._engine_finish_ends(pr)
+            return pr
 
-        # Connection points — к первому/последнему waypoint или к target
-        if waypoints:
-            first_wp_x, first_wp_y = waypoints[0][1], waypoints[0][0]
-            last_wp_x, last_wp_y = waypoints[-1][1], waypoints[-1][0]
-            src_x, src_y = self.get_connection_point(node_a, first_wp_x, first_wp_y)
-            tgt_x, tgt_y = self.get_connection_point(node_b, last_wp_x, last_wp_y)
-        else:
-            # Без waypoints: сначала цель (по центроиду источника),
-            # потом источник (по РЕАЛЬНОЙ точке на цели)
-            tgt_x, tgt_y = self.get_connection_point(node_b, src_cx, src_cy)
-            src_x, src_y = self.get_connection_point(node_a, tgt_x, tgt_y)
-        # Э2c: канонная посадка доводится движком (порт/слот, не угол);
-        # waypoints оператора неприкосновенны — полигонная ветка сдвигает
-        # только смежное колено при перпендикулярном стабе
-        probe = {'source': node_a, 'target': node_b,
-                 'source_point': [src_y, src_x], 'target_point': [tgt_y, tgt_x],
-                 'waypoints': [wp.copy() for wp in waypoints]}
-        self._engine_finish_ends(probe)
+        probe = _seat()
+        for nid in turned:
+            # линия трубы — смежный waypoint оператора, без них — посаженный
+            # конец партнёра
+            if waypoints:
+                other = waypoints[0] if nid == node_a else waypoints[-1]
+            else:
+                other = probe['target_point'] if nid == node_a \
+                    else probe['source_point']
+            if self._first_edge_shift(nid, other):
+                probe = _seat()
         src_y, src_x = probe['source_point']
         tgt_y, tgt_x = probe['target_point']
         waypoints = probe['waypoints']
@@ -847,9 +879,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         )
         edge_data['connection_type'] = "manual_waypoints"
 
-        from ui.editors.commands.simple_commands import AddEdgeCommand
-        cmd = AddEdgeCommand(self.model, self, node_a, node_b, edge_data)
-        self.undo_mgr.execute(cmd)
+        self._commit_new_edge(snap_cmd, node_a, node_b, edge_data)
 
         self.update_statistics()
         wp_count = len(waypoints)
@@ -4982,6 +5012,115 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             from ui.editors import port_model
             port_model.rescale_edge_pins(node, self.edges_data,
                                          bb, node['bbox'])
+
+    # ── Р3: первое ребро закрепляет ось нового клапана ──
+
+    def _first_edge_turn(self, node_a: str, node_b: str, waypoints):
+        """Р3: клапан со свободной осью (`_axis_free`, новый клапан «Ручной
+        правки») закрепляет ось первым ребром.
+
+        Ребро, пришедшее поперёк оси, один раз поворачивает клапан: ось
+        меняется, рамка w↔h встаёт вокруг талии (`contact.box_around_waist`,
+        центроид-талия на месте). Поперечность — по опорной точке конца
+        (смежный waypoint оператора, без них — центроид партнёра) против оси:
+        `ports.choose_port_entry` БЕЗ фильтра граней (осевой фильтр посадки
+        прятал бы поперечный вход, и поворот молча перестал бы работать).
+        Ребро вдоль оси не поворачивает. `_axis_free` снимается при ЛЮБОМ
+        первом ребре; у predohran его нет — он не поворачивается.
+
+        Если у конца есть `_axis_free`, ДО мутаций открывается
+        `SnapshotCommand`: поворот, сдвиг (`_first_edge_shift`) и само ребро
+        отменяются и возвращаются одним шагом (`_commit_new_edge`). Иначе
+        (None, []) — прежний путь `AddEdgeCommand`.
+
+        Returns: (SnapshotCommand | None, повёрнутые id: source, затем target).
+        """
+        if not self._waist_model():
+            return None, []
+        free = [n for n in (node_a, node_b)
+                if self.nodes[n].get('_axis_free')]
+        if not free:
+            return None, []
+        from modules.graph.core import contact, edit_engine, ports
+        from modules.graph.core.edit_checks import seat_rect
+        from ui.editors.undo_manager import SnapshotCommand
+
+        self.drop_uncommitted_preview()      # точка возврата — без превью
+        cmd = SnapshotCommand(self.model, self._redraw_all)
+        cmd.execute()
+        cmd.description = f"Добавить ребро {node_a}—{node_b}"
+        turned = []
+        for nid in free:
+            node = self.nodes[nid]
+            node.pop('_axis_free', None)
+            rect = seat_rect(node)
+            if not contact.is_valve(node) or rect is None \
+                    or node.get('_axis') not in ('H', 'V') \
+                    or any(nid in (e.get('source'), e.get('target'))
+                           for e in self.edges_data):
+                continue
+            if waypoints:
+                ref = waypoints[0] if nid == node_a else waypoints[-1]
+            else:
+                ref = self.nodes[node_b if nid == node_a else node_a]['centroid']
+            p = ports.choose_port_entry(node, None, (ref[1], ref[0]),
+                                        float(self.snap_threshold), rect=rect)
+            side = edit_engine._NORMAL_SIDE.get((p[2], p[3]))
+            if side is None or side in (contact.face_refs(node, rect) or {}):
+                continue                     # вдоль оси — поворота нет
+            x1, y1, x2, y2 = node['bbox']
+            node['_axis'] = 'V' if node['_axis'] == 'H' else 'H'
+            node['bbox'] = contact.box_around_waist(node, node['centroid'],
+                                                    y2 - y1, x2 - x1)
+            turned.append(nid)
+        return cmd, turned
+
+    def _first_edge_shift(self, nid: str, line_yx) -> bool:
+        """Р3: повёрнутый первым ребром клапан сдвигается поперёк оси, чтобы
+        талия легла на линию трубы `line_yx` [y, x] (смежный waypoint
+        оператора или посаженный конец партнёра).
+
+        Только если линия в пролёте осевой грани (иначе это L-маршрут —
+        клапан не прыгает), расхождение больше 0.25 px, а сдвинутая рамка не
+        задевает соседей (`graph_access.box_hits` — один судья «упирается в
+        соседа») и остаётся в холсте; иначе клапан только повёрнут. Числового
+        потолка нет. Привязанные подписи едут за клапаном."""
+        from modules.graph.core.graph_access import box_hits
+
+        node = self.nodes[nid]
+        x1, y1, x2, y2 = node['bbox']
+        vertical = node['_axis'] == 'V'
+        line = float(line_yx[1] if vertical else line_yx[0])
+        lo, hi = (x1, x2) if vertical else (y1, y2)
+        d = line - node['centroid'][1 if vertical else 0]
+        if not lo <= line <= hi or abs(d) <= 0.25:
+            return False
+        dx, dy = (d, 0.0) if vertical else (0.0, d)
+        moved = [x1 + dx, y1 + dy, x2 + dx, y2 + dy]
+        if box_hits(self.nodes, nid, moved) or moved[0] < 0 or moved[1] < 0 \
+                or moved[2] > self.canvas_w or moved[3] > self.canvas_h:
+            return False
+        self._move_node_geom(nid, dx, dy)
+        self._shift_bound_blocks(nid, dx, dy)
+        return True
+
+    def _commit_new_edge(self, snap_cmd, node_a: str, node_b: str,
+                         edge_data: dict):
+        """Ребро — в модель и на сцену. Без снимка — `AddEdgeCommand`, как
+        прежде; со снимком Р3 (`_first_edge_turn`) — то же добавление внутри
+        `SnapshotCommand`: поворот/сдвиг клапана, снятие `_axis_free` и ребро
+        отменяются и возвращаются одним Ctrl+Z / Ctrl+Y."""
+        from ui.editors.commands.simple_commands import AddEdgeCommand
+
+        add = AddEdgeCommand(self.model, self, node_a, node_b, edge_data)
+        if snap_cmd is None:
+            self.undo_mgr.execute(add)
+            return
+        add.execute()
+        for nid in (node_a, node_b):
+            self._refresh_node_visual(nid)   # рамка, маркер, стороны, скин
+        snap_cmd.finalize()
+        self.undo_mgr.push_executed(snap_cmd)
 
     def _resize_node_poly(self, node: dict, scale: float):
         """Масштабировать полигон вокруг центроида с сохранением формы."""
