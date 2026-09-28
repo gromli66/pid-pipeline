@@ -47,5 +47,10 @@
   прогон отдельным процессом со своим `PYTHONHASHSEED`, сравнение sha256 выхода `layout()`.
   Эталон `bench/determinism_baseline.json` в git; ключ `--no-routing` локализует
   недетерминизм (docs/TESTING.md §8)
+- skin_waist_probe.py + skin_probe/WaistProbe.java (Р6, блок 2 road/waist-seat) — замер талий
+  клапанов JavaFX-рендером на рабочем размере `FIXED_SIZES`: доля и px для H/V/VR; `--check`
+  сверяет с `contact.SKIN_CONTACT_OFFSET` (0 — совпало, 1 — расхождение с перечнем скинов,
+  2 — «судить нечем»: нет JDK с JavaFX, jar скинов или jar с slf4j). Jar заказчика вне git
+  (JAVA_HOME, PID_SKIN_JAR, PID_SLF4J_JAR), поэтому в CI тест в skip
 
 Для развёртывания и запуска приложения эти файлы не нужны.

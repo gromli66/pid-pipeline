@@ -20,6 +20,7 @@
 9. [polygon_editor.py — редактор полигонов unknow-узлов](#9-polygon_editorpy--редактор-полигонов-unknow-узлов)
 10. [scripts/init_db.py — инициализация БД](#10-scriptsinit_dbpy--инициализация-бд)
 11. [return_learning.py — возобновление обучения YOLO](#11-return_learningpy--возобновление-обучения-yolo)
+12. [tools/skin_waist_probe.py — замер талий клапанов](#12-toolsskin_waist_probepy--замер-талий-клапанов)
 
 ---
 
@@ -316,3 +317,17 @@ python return_learning.py
 > **Примечание:** Для возобновления прерванного обучения (resume) также можно использовать однострочник из комментария в файле: `YOLO('last.pt').train(resume=True)`.
 
 ### Размер: ~20 строк.
+
+---
+
+## 12. tools/skin_waist_probe.py — замер талий клапанов
+
+Рендерит каждый клапан (`ValveControl`) JavaFX-ом на рабочем размере `FIXED_SIZES` в H/V/VR и печатает сдвиг талии (общая вершина `#leftPoly`/`#rightPoly`) от центра рамки: долю поперечного размера и px. Источник чисел `contact.SKIN_CONTACT_OFFSET` (Р6, road/waist-seat).
+
+### Использование
+
+```bash
+python -X utf8 tools/skin_waist_probe.py --jar custom-control-skin-based-1.6.0.jar     --slf4j scenebuilder-21.0.0-all.jar [--java-home <Liberica Full>] [--check] [--tol 0.1]
+```
+
+То же из окружения: `JAVA_HOME`, `PID_SKIN_JAR`, `PID_SLF4J_JAR`. Java компилируется и запускается во временном каталоге. Выход `--check`: 0 — таблица совпала (допуск 0.1 px), 1 — расхождение (перечень скинов), 2 — «судить нечем».
