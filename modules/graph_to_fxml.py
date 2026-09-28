@@ -54,6 +54,7 @@ from modules.graph.core.contact import (  # noqa: E402  (реэкспорт)
     FORCE_HORIZONTAL_CONTROLS,
     REVERSE_VERTICAL_CLASSES,
     SKIN_CONTACT_OFFSET,
+    SKIN_CONTACT_OFFSET_LEGACY,
     SKIP_CLASS_NAMES,
     _DIRECTION_TO_AXIS,
 )
@@ -89,9 +90,17 @@ NAPRAVLENIE_CLASS_NAME = 'napravlenie'
 NAPRAVLENIE_COLOR = '#E1BEE7'
 
 
-def apply_contact_offset(skin_type, orientation, layout_x, layout_y, height):
-    """Сдвигает layout так, чтобы ось контакта скина легла на трубу."""
-    offs = SKIN_CONTACT_OFFSET.get(skin_type)
+def apply_contact_offset(skin_type, orientation, layout_x, layout_y, height,
+                         table=None):
+    """Сдвигает layout так, чтобы ось контакта скина легла на трубу.
+
+    `table` по умолчанию — замороженная `SKIN_CONTACT_OFFSET_LEGACY` (Р6):
+    растровый путь ставит контрол в рамку детекции произвольного размера,
+    доля рабочего размера (`SKIN_CONTACT_OFFSET`) к ней неприложима, и
+    растровый FXML не меняется. Холст по модели эту поправку не зовёт.
+    """
+    offs = (SKIN_CONTACT_OFFSET_LEGACY if table is None
+            else table).get(skin_type)
     if not offs:
         return layout_x, layout_y
     h_frac, v_frac = offs

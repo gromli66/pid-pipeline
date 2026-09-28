@@ -228,3 +228,65 @@ def test_server_reseat_agrees_with_editor_on_old_skin_frame(qapp, tmp_path):
     seating.reseat_all_endpoints(st, model=True, slots=True)
     assert st["links"][0]["source_point"] == [269.0, 821.0], \
         "серверная посадка увела конец с рамки (letterbox 260.5?)"
+
+
+# regulator_electro (CTRL_VLV_ELEC) по оси H на рабочей рамке 42x37.8: талия
+# ниже центра на 0.314·37.8 = 11.8692 px (Р6; по старой таблице было 5.67 —
+# промах 6.2 px). Литерал — не из таблицы.
+REG_OFF = 11.8692
+REG_BBOX = [279.0, WAIST_Y - REG_OFF - 18.9, 321.0, WAIST_Y - REG_OFF + 18.9]
+
+
+def _regulator_canvas():
+    """Тот же кусок холста с regulator_electro, концы — серверной посадкой."""
+    g = _canvas()
+    v = g["nodes"][1]
+    v["class_name"], v["class_id"], v["bbox"] = \
+        "regulator_electro", 4, list(REG_BBOX)
+    seating.reseat_all_endpoints(g, model=True, slots=True)
+    return g
+
+
+def test_measured_waist_survives_operator_gestures(qapp, tmp_path):
+    """Д1, Р6 (T7-1 блока 2): открытие -> оператор тянет клапан -> Ctrl+Z ->
+    тянет коннектор-партнёр. Оба конца в выверенном порту (талия на
+    11.8692 px ниже центра рамки, не середина и не старые 5.67), на
+    осевых гранях рамки; серверная посадка того же состояния не двигает
+    ни одного конца (сторож == судья, одна рамка и одна таблица)."""
+    from ui.tabs.base_graph_tab import _reseat_canvas_endpoints
+
+    g = _regulator_canvas()
+    assert [e["target_point"] for e in g["links"] if e["id"] == "e1"] \
+        == [[WAIST_Y, 279.0]], "сервер посадил мимо талии — вход не тот"
+    p = tmp_path / "graph_canvas.json"
+    p.write_text(json.dumps(g), encoding="utf-8")
+    assert not _reseat_canvas_endpoints(p), "открытие сдвинуло холст"
+    ed = _editor(qapp, tmp_path, json.loads(p.read_text(encoding="utf-8")))
+
+    ed.start_drag_node("v")
+    ed.drag_node_to(330.0, 240.0)
+    ed.end_drag_node()
+    ed.undo()
+    assert ed.nodes["v"]["bbox"] == pytest.approx(REG_BBOX)
+    ed.start_drag_node("c")
+    ed.drag_node_to(200.0, 230.0)
+    ed.end_drag_node()
+    assert ed.nodes["c"]["centroid"] == pytest.approx([230.0, 200.0]),         "перенос партнёра не состоялся — тест пуст"
+
+    v = ed.nodes["v"]
+    rect = seating._anchor_rect(v)
+    port = _valve_port(v)
+    assert port - (rect[1] + rect[3]) / 2 == pytest.approx(REG_OFF, abs=0.01)
+    by_id = {e["id"]: e for e in ed.edges_data}
+    assert by_id["e1"]["target_point"] == pytest.approx([port, rect[0]],
+                                                        abs=0.01)
+    assert by_id["e2"]["source_point"] == pytest.approx([port, rect[2]],
+                                                        abs=0.01)
+
+    st = {"graph": {"image_size": [IMG_H, IMG_W]},
+          "nodes": copy.deepcopy(list(ed.nodes.values())),
+          "links": copy.deepcopy(ed.edges_data)}
+    seating.reseat_all_endpoints(st, model=True, slots=True)
+    moved = [(e["id"], k) for e, o in zip(st["links"], ed.edges_data)
+             for k in ("source_point", "target_point") if e[k] != o[k]]
+    assert moved == [], f"серверная посадка сдвинула концы: {moved}"

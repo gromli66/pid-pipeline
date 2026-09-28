@@ -330,4 +330,4 @@ python return_learning.py
 python -X utf8 tools/skin_waist_probe.py --jar custom-control-skin-based-1.6.0.jar     --slf4j scenebuilder-21.0.0-all.jar [--java-home <Liberica Full>] [--check] [--tol 0.1]
 ```
 
-То же из окружения: `JAVA_HOME`, `PID_SKIN_JAR`, `PID_SLF4J_JAR`. Java компилируется и запускается во временном каталоге. Выход `--check`: 0 — таблица совпала (допуск 0.1 px), 1 — расхождение (перечень скинов), 2 — «судить нечем».
+То же из окружения: `JAVA_HOME`, `PID_SKIN_JAR`, `PID_SLF4J_JAR`. Java компилируется и запускается во временном каталоге. Выход `--check`: 0 — таблица совпала (допуск 0.1 px), 1 — расхождение (перечень скинов), 2 — «судить нечем». С шага 2b (2026-09-28) таблица холста — этот замер, `--check` даёт 0; замороженная `SKIN_CONTACT_OFFSET_LEGACY` (растровая выгрузка) пробником не сверяется.

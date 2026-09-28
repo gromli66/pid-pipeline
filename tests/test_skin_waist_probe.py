@@ -140,3 +140,11 @@ def test_old_table_diverges_on_eight_skins(rows):
         "VERTICAL", "VERTICAL_REVERSE"]
     rounded = {k: (round(v, 3), round(v, 3)) for k, v in MEASURED.items()}
     assert probe.mismatches(rows, 0.1, rounded) == []
+
+
+@needs_javafx
+def test_contact_table_matches_render(rows):
+    """Р6 (шаг 2b): таблица холста `contact.SKIN_CONTACT_OFFSET` совпадает с
+    рендером на рабочем размере (== `skin_waist_probe.py --check` exit 0)."""
+    from modules.graph.core import contact
+    assert probe.mismatches(rows, 0.1, contact.SKIN_CONTACT_OFFSET) == []

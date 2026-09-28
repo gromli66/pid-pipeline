@@ -251,6 +251,28 @@ def test_valve_centroid_goes_to_raster_pipe_line_and_box_to_its_waist():
     assert (y1 + y2) / 2 == pytest.approx(105.0 - 0.222 * 37.8)
 
 
+@pytest.mark.parametrize("cn,y1,y2", [
+    # CTRL_VLV_ELEC 0.314 (Р6; было 0.15): центр рамки ВЫШЕ трубы на 11.8692
+    ("regulator_electro", 74.2308, 112.0308),
+    # CHECK_HYDRO_VLV −0.041 (Р6; было 0.15): талия ВЫШЕ центра — центр
+    # рамки НИЖЕ трубы на 1.5498, бокс уходит вниз от трубы
+    ("klapan_obratn_seroprivod", 87.6498, 125.4498),
+    # ELECTROMAGNETIC_VLV 0.149 (Р6; строки не было — бокс стоял по центру)
+    ("armatura_membr_electro", 80.4678, 118.2678),
+])
+def test_valve_box_on_pipe_by_measured_waist(cn, y1, y2):
+    """Сборка холста (T4 блока 2): труба по растру y=105 — центроид на
+    трубе, рамка 42x37.8 стоит так, что талия по таблице Р6 на трубе.
+    Литералы абсолютные (не из таблицы)."""
+    n = _fixed({"id": "v", "class_name": cn, "centroid": [100.0, 200.0]},
+               [(105.0, 170.0), (105.0, 230.0)])
+    assert n["_axis"] == "H"
+    assert n["centroid"] == [105.0, 200.0]
+    assert n["bbox"] == pytest.approx([179.0, y1, 221.0, y2], abs=1e-9)
+    refs = contact.face_refs(n, tuple(n["bbox"]))
+    assert refs["L"] == refs["R"] == pytest.approx(105.0, abs=1e-9)
+
+
 def test_valve_without_axis_points_puts_waist_on_detected_centre():
     """Точек на осевых гранях нет (синтетика, точки в центроиде) — линией
     трубы считается центроид детекции, талия садится на неё."""

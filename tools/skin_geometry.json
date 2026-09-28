@@ -6,7 +6,7 @@
       "canvas_w/canvas_h": "native skin canvas in px (getPreferredWidth/Height)",
       "aspect_hw": "height/width ratio the skin's resize() preserves (getAspectRatio). Give the control a prefWidth:prefHeight matching this or the graphic is letterboxed inside the box -> visual offset.",
       "square": "true when aspect_hw == 1.0",
-      "contact": "[h_frac, v_frac] contact-axis (butterfly waist) offset as a fraction of the control cross-size; HORIZONTAL -> layoutY -= h_frac*height, VERTICAL -> layoutX += v_frac*height. Mirrors graph_to_fxml.apply_contact_offset.",
+      "contact": "[h_frac, v_frac] contact-axis (butterfly waist) offset as a fraction of the control cross-size; HORIZONTAL -> layoutY -= h_frac*height, VERTICAL -> layoutX += v_frac*height. LEGACY copy, not synced: the source of truth is modules/graph/core/contact.py (SKIN_CONTACT_OFFSET, measured by tools/skin_waist_probe.py; raster export uses SKIN_CONTACT_OFFSET_LEGACY).",
       "control": "owning Control class",
       "skin_class": "skin implementation in the jar"
     }
