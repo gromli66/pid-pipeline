@@ -490,6 +490,52 @@ def test_neighbour_on_the_shift_path_leaves_only_the_turn(make_editor):
     assert ed.nodes["b"]["bbox"] == [440.0, 290.0, 478.0, 320.0]
 
 
+def _box_below(y1):
+    """Бокс под H-клапаном [479, 286, 521, 314]: верх на y1."""
+    return {"id": "b", "type": "equipment", "class_id": 99,
+            "class_name": "unknow", "centroid": [y1 + 15.0, 500.0],
+            "bbox": [480.0, y1, 520.0, y1 + 30.0], "segmentation": None,
+            "degree": 0}
+
+
+def test_neighbour_in_the_turned_frame_blocks_the_turn(make_editor):
+    """Решение Максима 28.09: повёрнутая рамка (ещё до сдвига) задела бы
+    соседа — клапан НЕ поворачивается. Сосед в 1 px под нижней гранью (рамка
+    растёт вниз до 327.2): ось H и рамка по-прежнему, `_axis_free` снят,
+    ребро садится как обычно; Ctrl+Z одним шагом. Сосед далеко (y=340) —
+    поворот и сдвиг, как без соседа."""
+    from modules.graph.core.graph_access import box_hits
+
+    ed = make_editor(_sheet(_conn("k", 150.0, 505.0), _box_below(315.0)))
+    nid = _new_valve(ed)
+    frame = list(ed.nodes[nid]["bbox"])
+    assert frame == [479.0, 286.0, 521.0, 314.0]
+    assert not box_hits(ed.nodes, nid, frame), "сосед задет и без поворота"
+    assert box_hits(ed.nodes, nid, TURNED_BBOX), "поворот соседа не задел бы"
+    before = _state(ed)
+    depth = ed.undo_mgr.stack_depth
+
+    assert ed.add_edge(nid, "k")
+    n = ed.nodes[nid]
+    assert n["_axis"] == "H" and "_axis_free" not in n, "клапан повёрнут"
+    assert n["bbox"] == frame and n["centroid"] == [WAIST_Y, 500.0]
+    e = ed.edges_data[0]
+    assert e["source_point"][0] == pytest.approx(286.0, abs=0.01),         "ребро не на верхней грани"
+    assert e["target_point"] == [150.0, 505.0]
+    assert ed._edge_is_ortho(e), "труба легла косой"
+    assert ed.nodes["b"]["bbox"] == [480.0, 315.0, 520.0, 345.0]
+    assert ed.undo_mgr.stack_depth == depth + 1, "не один шаг отмены"
+    ed.undo()
+    assert _state(ed) == before
+
+    ed = make_editor(_sheet(_conn("k", 150.0, 505.0), _box_below(340.0)))
+    nid = _new_valve(ed)
+    assert ed.add_edge(nid, "k")
+    n = ed.nodes[nid]
+    assert n["_axis"] == "V", "далёкий сосед запретил поворот"
+    assert n["bbox"] == pytest.approx(TURNED_BBOX, abs=0.01)
+
+
 def test_relief_valve_does_not_turn(make_editor):
     """predohran (RELIEF_VLV) оси не освобождает: поперечное первое ребро
     его не поворачивает и не двигает."""

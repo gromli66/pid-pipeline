@@ -5069,8 +5069,11 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         (смежный waypoint оператора, без них — центроид партнёра) против оси:
         `ports.choose_port_entry` БЕЗ фильтра граней (осевой фильтр посадки
         прятал бы поперечный вход, и поворот молча перестал бы работать).
-        Ребро вдоль оси не поворачивает. `_axis_free` снимается при ЛЮБОМ
-        первом ребре; у predohran его нет — он не поворачивается.
+        Ребро вдоль оси не поворачивает. Повёрнутая рамка (ещё до сдвига)
+        задевает чужие рамки — поворота нет (решение Максима 28.09): тот же
+        судья `graph_access.box_hits`, что у сдвига и у сервера (Р5), ось
+        остаётся по рамке, ребро садится как обычно. `_axis_free` снимается
+        при ЛЮБОМ первом ребре; у predohran его нет — он не поворачивается.
 
         Если у конца есть `_axis_free`, ДО мутаций открывается
         `SnapshotCommand`: поворот, сдвиг (`_first_edge_shift`) и само ребро
@@ -5087,6 +5090,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             return None, []
         from modules.graph.core import contact, edit_engine, ports
         from modules.graph.core.edit_checks import seat_rect
+        from modules.graph.core.graph_access import box_hits
 
         cmd = self._open_add_edge_snapshot(node_a, node_b)
         turned = []
@@ -5109,9 +5113,12 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             if side is None or side in (contact.face_refs(node, rect) or {}):
                 continue                     # вдоль оси — поворота нет
             x1, y1, x2, y2 = node['bbox']
-            node['_axis'] = 'V' if node['_axis'] == 'H' else 'H'
-            node['bbox'] = contact.box_around_waist(node, node['centroid'],
-                                                    y2 - y1, x2 - x1)
+            axis = 'V' if node['_axis'] == 'H' else 'H'
+            bbox = contact.box_around_waist(dict(node, _axis=axis),
+                                            node['centroid'], y2 - y1, x2 - x1)
+            if box_hits(self.nodes, nid, bbox):
+                continue                     # повёрнутая рамка — в соседе
+            node['_axis'], node['bbox'] = axis, bbox
             turned.append(nid)
         return cmd, turned
 
