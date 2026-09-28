@@ -60,8 +60,10 @@ def _canvas():
          "source_point": [WAIST_Y, 321.0], "target_point": [WAIST_Y, 380.0],
          "waypoints": []},
     ]
+    # холст собран сервером по модели — с меткой (Р1, блок 3)
     return {"directed": False, "multigraph": False,
-            "graph": {"image_size": [IMG_H, IMG_W]},
+            "graph": {"image_size": [IMG_H, IMG_W],
+                      "canvas_transform": {"attach_model": "waist-1"}},
             "nodes": nodes, "links": links, "text_blocks": [], "bindings": []}
 
 
@@ -186,9 +188,12 @@ def test_horizontal_valve_skin_is_rotated_not_reversed(qapp, tmp_path):
 def _old_canvas_42x38():
     """Старый холст: armatura_ruchn в рамке 42x38 без _axis (сборка до
     FIXED_SIZES по аспекту) и коннектор под ним. Конец сохранён старым
-    каноном — на letterbox-следе графики y=260.5 (поля по 8.5 px)."""
+    каноном — на letterbox-следе графики y=260.5 (поля по 8.5 px). Метка
+    модели есть (Р1): проверяется одна рамка сервера и редактора (Р2); холст
+    без метки открывается по правилам 238fe6b (test_attach_mark_editor)."""
     return {"directed": False, "multigraph": False,
-            "graph": {"image_size": [IMG_H, IMG_W]},
+            "graph": {"image_size": [IMG_H, IMG_W],
+                      "canvas_transform": {"attach_model": "waist-1"}},
             "nodes": [
                 {"id": "s", "type": "equipment", "class_id": 1,
                  "class_name": "armatura_ruchn", "centroid": [250.0, 821.0],

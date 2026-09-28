@@ -139,11 +139,14 @@ def _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y,
     length = (x2 - x1) if horiz else (y2 - y1)
     slots = port_model.side_slots(node, side, k, rect=rect,
                                   pitch=_ink_pitch(widths, length, k))
-    if k == 1 and not (edge_data.get("waypoints") or []):
+    if k == 1 and not (edge_data.get("waypoints") or []) \
+            and not node.get(contact.LEGACY_KEY):
         # Допуск середины (решение заказчика 2026-09-22 «порт выверенный,
         # если скин есть, и допуск, если скина нет»): одиночная прямая
         # труба на невыверенной грани уходит от середины ради прямизны не
-        # дальше MID_SNAP; выверенный порт клапана не уступает.
+        # дальше MID_SNAP; выверенный порт клапана не уступает. Старый
+        # холст без метки модели (Р1) — середина, как в 238fe6b: на неё
+        # рассчитана старая поправка выгрузки.
         mid, hard = contact.face_ref(node, rect, side)
         want = ref_x if horiz else ref_y
         lo, hi = (x1, x2) if horiz else (y1, y2)
@@ -152,9 +155,12 @@ def _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y,
             return (want, slots[0][1]) if horiz else (slots[0][0], want)
     coords = [s[1 if not horiz else 0] for s in slots]
     order = sorted(range(k), key=lambda j: (abs(j - idx), j))
+    # Порядок соседей (К7) — часть модели (раскладка грани `seat_face`);
+    # старый холст без метки (Р1) выбирает слот как 238fe6b.
+    legacy = bool(node.get(contact.LEGACY_KEY))
     for j in order:
         if all(abs(coords[j] - t) >= 2.0 for t in taken) and (
-                j == idx or all((i < idx) == (t[3] < coords[j])
+                legacy or j == idx or all((i < idx) == (t[3] < coords[j])
                                 for i, t in enumerate(entries)
                                 if t[3] is not None)):
             return slots[j][0], slots[j][1]

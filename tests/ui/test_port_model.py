@@ -589,8 +589,12 @@ def test_polygon_vertex_edit_keeps_pin_absolute(qapp, tmp_path):
 # (5) Reseat-при-открытии: порт не срывается
 # =====================================================================
 
-def _open_canvas(tmp_path, nodes, links):
+def _open_canvas(tmp_path, nodes, links, model=True):
+    """Холст на диске. model=True — собран сервером по модели (метка
+    `attach_model`, Р1); False — старый холст (правила 238fe6b)."""
     g = _wrap(nodes, links)
+    if model:
+        g["graph"]["canvas_transform"] = {"attach_model": "waist-1"}
     p = tmp_path / "graph_canvas.json"
     p.write_text(json.dumps(g), encoding="utf-8")
     return p
@@ -663,6 +667,33 @@ def test_open_middle_holds_beyond_mid_snap(tmp_path):
     assert not _reseat_canvas_endpoints(p)
     g = json.loads(p.read_text(encoding="utf-8"))
     assert g["links"][0]["source_point"] == [100.0, 120.0]
+
+
+def test_open_old_canvas_straightness_beats_port(tmp_path):
+    """Двойник test_open_middle_holds_beyond_mid_snap на СТАРОМ холсте (без
+    метки модели, Р1) — поведение 238fe6b (там это был
+    test_open_straightness_beats_port): допуска середины нет, канон даёт
+    строгую прямую к коннектору на 10 px ниже середины; файл переписан без
+    производного ключа узла."""
+    from ui.tabs.base_graph_tab import _reseat_canvas_endpoints
+
+    nodes = [
+        {"id": "a", "type": "equipment", "class_name": "unknow",
+         "centroid": [100.0, 100.0], "bbox": [80.0, 80.0, 120.0, 120.0]},
+        {"id": "b", "type": "connector", "class_name": "connector",
+         "centroid": [110.0, 300.0], "bbox": None},
+    ]
+    links = [{"id": "e1", "source": "a", "target": "b",
+              "source_point": [100.0, 120.0], "target_point": [110.0, 300.0],
+              "waypoints": []}]
+    p = _open_canvas(tmp_path, nodes, links, model=False)
+
+    assert _reseat_canvas_endpoints(p)
+    raw = p.read_text(encoding="utf-8")
+    assert "_attach_legacy" not in raw
+    g = json.loads(raw)
+    assert g["links"][0]["source_point"] == [110.0, 120.0], \
+        "ось конна накрыта гранью — канон обязан дать строгую прямую"
 
 
 def test_open_keeps_end_on_manual_port(tmp_path):

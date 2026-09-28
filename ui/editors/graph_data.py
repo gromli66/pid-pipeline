@@ -11,6 +11,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Optional
 
+from modules.graph.core import contact
+
 _EDITOR_COMMIT: Optional[str] = None
 
 
@@ -61,6 +63,10 @@ class GraphDataModel:
         self.text_blocks: list[dict] = []
         self.bindings: list[dict] = []
         self.manual_block_counter: int = 0
+        # Холст без метки модели прикрепления (Р1): узлы несут производный
+        # ключ `contact.LEGACY_KEY`, жесты — по правилам 238fe6b. Ставит
+        # редактор при загрузке холста (`load_data`).
+        self.attach_legacy: bool = False
 
     # =================================================================
     # I/O
@@ -180,9 +186,15 @@ class GraphDataModel:
         # «какой код это писал» решается взглядом на файл, не верой.
         graph_meta['_editor_commit'] = _editor_commit()
 
+        # Производный ключ старого холста (`contact.LEGACY_KEY`) в файл не
+        # пишется: он пересчитывается из метки при каждой загрузке. Живые
+        # узлы не мутируются — пишется копия списка.
+        out = dict(self.graph_data)
+        out['nodes'] = [{k: v for k, v in n.items() if k != contact.LEGACY_KEY}
+                        for n in self.graph_data['nodes']]
         try:
             with open(path, 'w', encoding='utf-8') as f:
-                json.dump(self.graph_data, f, indent=2, ensure_ascii=False)
+                json.dump(out, f, indent=2, ensure_ascii=False)
             return True
         except Exception:
             return False
@@ -260,6 +272,11 @@ class GraphDataModel:
             node_id
         """
         node_id = node['id']
+        # узел старого холста (Р1) — без порта-талии, как все его соседи
+        if self.attach_legacy:
+            node[contact.LEGACY_KEY] = True
+        else:
+            node.pop(contact.LEGACY_KEY, None)
         self.nodes[node_id] = node
         nodes_list = self.graph_data.setdefault('nodes', [])
         # Avoid duplicate — node may already be in list after undo/redo
@@ -441,7 +458,7 @@ class GraphDataModel:
         """
         self.manual_node_counter += 1
         x1, y1 = x - width / 2, y - height / 2
-        return {
+        node = {
             "id": f"node_manual_{self.manual_node_counter}",
             "type": "equipment",
             "centroid": [y, x],
@@ -454,6 +471,10 @@ class GraphDataModel:
             "segmentation": None,
             "manual": True,
         }
+        if self.attach_legacy:
+            # старый холст (Р1): ключ — ДО расчёта оси и талии клапана
+            node[contact.LEGACY_KEY] = True
+        return node
 
     def create_edge_data(self, source: str, target: str,
                          source_point: Optional[list] = None,

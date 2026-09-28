@@ -433,9 +433,15 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
     возвращала бы «гуляние по периметру» при каждом открытии. Исключение —
     прямизна: если канон посадил конец СТРОГОЙ прямой к его ref (соосная
     пара/слабина), прямая важнее порта — «как сейчас».
+
+    Холст без метки модели прикрепления (`contact.canvas_model` is None, Р1)
+    — старый: канон 238fe6b (`seat_edge_endpoints(legacy=True)`: без слотов,
+    порты в середине граней по ключу узла `contact.LEGACY_KEY`). Ключ
+    производный — перед записью файла снимается.
     """
     from copy import deepcopy
 
+    from modules.graph.core import contact
     from modules.graph.core.graph_access import is_connector
     from modules.graph.core.pretransform import seat_edge_endpoints
     from ui.editors import port_model
@@ -446,6 +452,9 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
     except (OSError, ValueError) as exc:
         logger.warning("починка посадки концов пропущена (%s)", exc)
         return False
+    legacy = contact.apply_attach_mode(canvas)
+    if legacy:
+        logger.info("холст без метки модели — старая посадка (238fe6b)")
     edges_list = (canvas.get("links") if "links" in canvas
                   else canvas.get("edges")) or []
     byid = {n.get("id"): n for n in canvas.get("nodes") or []}
@@ -492,7 +501,7 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
 
     snap = [deepcopy((e.get("source_point"), e.get("target_point"),
                       e.get("waypoints"))) for e in edges_list]
-    seat_edge_endpoints(canvas)
+    seat_edge_endpoints(canvas, legacy=legacy)
 
     def _apply_pins():
         """ПИН ВХОДА выше канона (решение заказчика 2026-08-02): канон про
@@ -508,8 +517,9 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
     _apply_pins()
     # Грани, где модель развела НЕСКОЛЬКО труб слотами (правило заказчика
     # «на равном удалении от точки прикрепления»): их концы ниже не трогаем.
+    # На старом холсте слотов модели нет.
     from modules.graph.core.seating import slot_faces as _slot_faces
-    slot_faces = _slot_faces(canvas, byid)
+    slot_faces = set() if legacy else _slot_faces(canvas, byid)
     moved = 0
     for e, (sp0, tp0, wp0) in zip(edges_list, snap):
         if e.get("_manual_route"):
@@ -625,6 +635,7 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
     moved += flagged + unfrozen + ports_nodes
     if not moved:
         return False
+    contact.strip_attach_mode(canvas.get("nodes"))
     Path(canvas_path).write_text(json.dumps(canvas, ensure_ascii=False),
                                  encoding="utf-8")
     logger.info("посадка концов при открытии: пересажено %d концов", moved)

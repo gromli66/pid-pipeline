@@ -268,17 +268,20 @@ def test_skin_end_lifted_to_bbox_on_open(tmp_path):
     assert not _reseat_canvas_endpoints(path)    # идемпотентно
 
 
-def test_route_flags_are_stripped_on_open(tmp_path):
+@pytest.mark.parametrize("mark", [None, "waist-1"], ids=["legacy", "model"])
+def test_route_flags_are_stripped_on_open(tmp_path, mark):
     """ПЕРЕОБЪЯВЛЕН 2026-08-03 (Э5, бывший test_unsigned_zigzag_gets_auto_
     flag_on_open): флагов принадлежности маршрута больше нет — waypoints
     у всех рёбер кэш, drag ведёт любой маршрут. Открытие СТИРАЕТ
     _auto_route (в т.ч. серверную подпись avoid_router) и переводит
-    _manual_route в пины; второй прогон — no-op."""
+    _manual_route в пины; второй прогон — no-op. И на старом холсте (без
+    метки модели, Р1), и на холсте с меткой."""
     from ui.tabs.base_graph_tab import _reseat_canvas_endpoints
 
     g = {
         "directed": False, "multigraph": False,
-        "graph": {"image_size": [1080, 1920]},
+        "graph": {"image_size": [1080, 1920],
+                  "canvas_transform": {"attach_model": mark} if mark else {}},
         "nodes": [
             {"id": "a", "type": "equipment", "class_name": "unknow",
              "centroid": [100.0, 100.0], "bbox": [80, 80, 120, 120]},
@@ -318,12 +321,14 @@ def test_two_pipes_without_flag_share_face_by_slots(tmp_path):
     концами; второй прогон — no-op. Концы не слиплись (100 и 104), чтобы
     слоты давала посадка по модели (`seating._face_groups`), а не развод
     стопок `_spread_stacked_ends`. С флагом вторая труба — будущий пин и
-    в слоты не входит: первая остаётся в середине, колено цело."""
+    в слоты не входит: первая остаётся в середине, колено цело. Холст с
+    меткой модели (Р1); на старом холсте те же слоты даёт канон 238fe6b."""
     from ui.tabs.base_graph_tab import _reseat_canvas_endpoints
 
     g = {
         "directed": False, "multigraph": False,
-        "graph": {"image_size": [1080, 1920]},
+        "graph": {"image_size": [1080, 1920],
+                  "canvas_transform": {"attach_model": "waist-1"}},
         "nodes": [
             {"id": "a", "type": "equipment", "class_name": "unknow",
              "centroid": [100.0, 100.0], "bbox": [80, 80, 120, 120]},

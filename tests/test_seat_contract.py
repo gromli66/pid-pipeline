@@ -195,9 +195,12 @@ def _build_fixture():
         _edge("e_skinpoly", "skin2", "p_skin2"),
         _edge("e_poly", "poly1", "p_poly"),
     ]
+    # холст по модели — с меткой (Р1): у холста без неё редактор помечает
+    # узлы старыми, и канон копии сажает скин на letterbox 238fe6b
     g = {
         "directed": False, "multigraph": False,
-        "graph": {"image_size": [1080, 1920]},
+        "graph": {"image_size": [1080, 1920],
+                  "canvas_transform": {"attach_model": "waist-1"}},
         "nodes": nodes, "links": links,
         "text_blocks": [], "bindings": [],
     }

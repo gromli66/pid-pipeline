@@ -64,7 +64,8 @@ def make_editor(qapp, tmp_path):
         assert img.save(str(ip))
         g = {"directed": False, "multigraph": False,
              "graph": {"image_size": [IMG_H, IMG_W],
-                       "canvas_transform": {"layout_applied": True}},
+                       "canvas_transform": {"layout_applied": True,
+                                            "attach_model": "waist-1"}},
              "nodes": nodes, "links": [], "text_blocks": [], "bindings": []}
         gp = tmp_path / f"graph{len(made)}.json"
         gp.write_text(json.dumps(g), encoding="utf-8")

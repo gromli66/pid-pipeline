@@ -407,7 +407,12 @@ def test_разрывы_в_граф_не_пишутся(bridged):
     ed.set_show_skins(True)
     ed.set_show_skins(False)
     ed.set_show_skins(True)
-    assert json.dumps(ed.model.graph_data, sort_keys=True) == before
+    # производный ключ старого холста (Р1) живёт только в памяти редактора:
+    # в файл его не пишет сохранение (`GraphDataModel.save`)
+    live = dict(ed.model.graph_data)
+    live["nodes"] = [{k: v for k, v in n.items() if k != "_attach_legacy"}
+                     for n in live["nodes"]]
+    assert json.dumps(live, sort_keys=True) == before
     assert all("cuts" not in e and "bridge_cuts" not in e for e in ed.edges_data)
 
 

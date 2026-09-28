@@ -24,6 +24,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtCore import Qt, QRectF
 
+from modules.graph.core import contact
 from ui.editors.graph_data import GraphDataModel
 from ui.editors.undo_manager import UndoManager
 from ui.editors.mode_handlers.base_handler import ModeHandler
@@ -289,6 +290,11 @@ class BaseGraphEditor(QGraphicsView):
         if not self.model.load(graph_path, coco_path):
             self.update_status("Ошибка загрузки графа")
             return False
+        # Холст без метки модели прикрепления — старый (Р1): узлы размечаются
+        # ключом старого холста до сцены и первого снимка undo. Растр
+        # («Проверка схемы») не размечается.
+        self.model.attach_legacy = bool(self._canvas_mode) \
+            and contact.apply_attach_mode(self.model.graph_data)
 
         # 3. Scene
         self.setup_scene()
@@ -402,11 +408,12 @@ class BaseGraphEditor(QGraphicsView):
         клапана, 2026-09-22): ось и талия нового клапана, поворот первым
         ребром, слоты гранью, снятие `_slack`.
 
-        Один переключатель на все модельные хуки редактора. Пока — холст
-        (`_canvas_mode`): в растре («Проверка схемы») бокс — детекция, и
-        доля талии к нему не приложима.
+        Один переключатель на все модельные хуки редактора: холст
+        (`_canvas_mode`; в растре — «Проверка схемы» — бокс — детекция, и
+        доля талии к нему не приложима) с меткой модели. Старый холст без
+        метки (`model.attach_legacy`, Р1) живёт по правилам 238fe6b.
         """
-        return bool(self._canvas_mode)
+        return bool(self._canvas_mode) and not self.model.attach_legacy
 
     def setup_scene(self):
         """Настройка сцены со всеми слоями.
