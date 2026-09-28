@@ -68,6 +68,32 @@ def test_mismatches_use_h_for_horizontal_v_for_vertical():
         ("X", o) for o in probe.ORIENTS]
 
 
+def test_measure_takes_one_root_and_export_miss_is_reported():
+    """Записи двух корней: таблица — Pane, AnchorPane (корень выгрузки) — справка
+    о промахе: худший на скин и только больше допуска."""
+    fr = (30.0, 30.0, 72.0, 61.5)                        # 42 x 31.5, центр y 45.75
+    recs = []
+    for root, tip_y in (("Pane", 45.75 + 8.064), ("AnchorPane", 45.75 + 8.39)):
+        r = _rec("HORIZONTAL", fr, (51.0, tip_y))
+        r.update(skin="AOC_CTRL_VLV", root=root)
+        recs.append(r)
+    old = _rec("HORIZONTAL", fr, (51.0, 45.75))          # запись без root — Pane
+    old["skin"] = "X"
+    tg = [("regulator_seroprivod", "AOC_CTRL_VLV", 42.0, 31.5), ("c", "X", 42.0, 31.5)]
+    pane = probe.measure(recs + [old], tg)
+    assert [(r["skin"], round(r["px"], 3)) for r in pane] == [
+        ("AOC_CTRL_VLV", 8.064), ("X", 0.0)]
+    anchor = probe.measure(recs + [old], tg, "AnchorPane")
+    assert [round(r["px"], 3) for r in anchor] == [8.39]
+    table = {"AOC_CTRL_VLV": (0.256, 0.256)}
+    assert probe.mismatches(pane, 0.1, table) == []
+    over = probe.print_export(anchor, 0.1, table)
+    assert list(over) == ["AOC_CTRL_VLV"]
+    assert over["AOC_CTRL_VLV"][0] == "HORIZONTAL"
+    assert over["AOC_CTRL_VLV"][1] == pytest.approx(8.39 - 0.256 * 31.5)
+    assert probe.print_export(anchor, 0.4, table) == {}
+
+
 def test_no_environment_is_exit_2(tmp_path, monkeypatch, capsys):
     """Без JDK/jar — «судить нечем» (2), не «совпало» и не «расхождение»."""
     for k in ("JAVA_HOME", "PID_SKIN_JAR", "PID_SLF4J_JAR"):
@@ -116,8 +142,15 @@ OLD_TABLE = {
 
 
 @pytest.fixture(scope="module")
-def rows():
-    return probe.measure(probe.render(_ENV, probe.targets()), probe.targets())
+def rendered(tmp_path_factory):
+    """Один прогон рендера: записи обоих корней и каталог снятых PNG."""
+    png = tmp_path_factory.mktemp("skins")
+    return probe.render(_ENV, probe.targets(), png), png
+
+
+@pytest.fixture(scope="module")
+def rows(rendered):
+    return probe.measure(rendered[0], probe.targets())
 
 
 @needs_javafx
@@ -148,3 +181,35 @@ def test_contact_table_matches_render(rows):
     рендером на рабочем размере (== `skin_waist_probe.py --check` exit 0)."""
     from modules.graph.core import contact
     assert probe.mismatches(rows, 0.1, contact.SKIN_CONTACT_OFFSET) == []
+
+
+@needs_javafx
+def test_export_root_anchorpane_misses_the_waist_by_known_amount(rendered):
+    """Ограничение выгрузки (MEASUREMENTS §130.5): корень AnchorPane округляет
+    pref-размер вверх (31.5 -> 32, 37.8 -> 38), контрол растёт и поворачивается
+    вокруг другого центра. Промах талии против таблицы больше 0.15 px — только
+    AOC_CTRL_VLV H (+0.33) и RELIEF_VLV V/VR (−0.26, в знаке таблицы); у рамок 37.8 V/VR — 0.1."""
+    from modules.graph.core import contact
+    anchor = probe.measure(rendered[0], probe.targets(), "AnchorPane")
+    assert len(anchor) == 30
+    d = {(r["skin"], probe.SHORT[r["orient"]]):
+         r["px"] - probe.table_frac(r["skin"], r["orient"]) * r["span"] for r in anchor}
+    big = {k: round(v, 2) for k, v in d.items() if abs(v) > 0.15}
+    assert big == {("AOC_CTRL_VLV", "H"): 0.33, ("RELIEF_VLV", "V"): -0.26,
+                   ("RELIEF_VLV", "VR"): -0.26}
+    assert contact.SKIN_CONTACT_OFFSET["AOC_CTRL_VLV"] == (0.256, 0.256)
+
+
+@needs_javafx
+def test_editor_skin_pngs_are_the_probe_render(rendered):
+    """PNG-скины клапанов в ui/resources/skins — это `--png` пробника: те же
+    размеры (рабочая рамка x10) и те же пиксели (расходится > 32/255 меньше
+    0.1% пикселей — сглаживание; подпись «0%» дала бы больше)."""
+    Image = pytest.importorskip("PIL.Image")
+    np = pytest.importorskip("numpy")
+    skins = probe.ROOT / "ui" / "resources" / "skins"
+    for cn, _skin, _w, _h in probe.targets():
+        got = np.asarray(Image.open(rendered[1] / f"{cn}.png").convert("RGBA"), float)
+        have = np.asarray(Image.open(skins / f"{cn}.png").convert("RGBA"), float)
+        assert got.shape == have.shape, cn
+        assert (np.abs(got - have).max(axis=2) > 32).mean() < 1e-3, cn

@@ -5491,7 +5491,14 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                        int(cols[-1] - cols[0] + 1), int(rows[-1] - rows[0] + 1))
 
     def _skin_pixmap_for(self, class_name: str | None):
-        """QPixmap скина для класса (по имени файла) или None. Кэшируется."""
+        """QPixmap скина для класса (по имени файла) или None. Кэшируется.
+
+        Клапан рабочего размера (ValveControl из `FIXED_SIZES`) снят JavaFX-рендером
+        ровно по рамке контрола (`tools/skin_waist_probe.py --png`): прозрачные поля —
+        часть символа, как в САПФИР (у CHECK_HYDRO под бабочкой пусто ~10 px), и
+        альфой не режутся. Иначе растяжение на bbox сдвигает нарисованную талию от
+        конца трубы (до 7 px, блок 2 road/waist-seat, MEASUREMENTS §130.5).
+        """
         if class_name in self._skin_pixmaps:
             return self._skin_pixmaps[class_name]
         pm = None
@@ -5500,7 +5507,11 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             if f.is_file():
                 img = QPixmap(str(f))
                 if not img.isNull():
-                    pm = self._crop_alpha(img)
+                    from modules.graph.core import contact
+                    from modules.graph.core.pretransform import FIXED_SIZES
+                    framed = (class_name in FIXED_SIZES and contact.CLASS_NAME_TO_SKIN
+                              .get(class_name, ("",))[0] == "ValveControl")
+                    pm = img if framed else self._crop_alpha(img)
         self._skin_pixmaps[class_name] = pm
         return pm
 

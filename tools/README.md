@@ -51,6 +51,8 @@
   клапанов JavaFX-рендером на рабочем размере `FIXED_SIZES`: доля и px для H/V/VR; `--check`
   сверяет с `contact.SKIN_CONTACT_OFFSET` (0 — совпало, 1 — расхождение с перечнем скинов,
   2 — «судить нечем»: нет JDK с JavaFX, jar скинов или jar с slf4j). Jar заказчика вне git
-  (JAVA_HOME, PID_SKIN_JAR, PID_SLF4J_JAR), поэтому в CI тест в skip
+  (JAVA_HOME, PID_SKIN_JAR, PID_SLF4J_JAR), поэтому в CI тест в skip. Справкой — промах в корне
+  AnchorPane (как у выгрузки, код выхода не меняет); `--png DIR` снимает PNG-скины клапанов
+  для `ui/resources/skins`
 
 Для развёртывания и запуска приложения эти файлы не нужны.
