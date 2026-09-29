@@ -478,7 +478,7 @@ def task_Y(self, diagram_uid: str, project_code: str = "thermohydraulics"):
 
 1. Загрузка `graph_validated.json`, sha-проекция входа (`canvas_state.graph_projection_sha`).
 2. Влив выбранных SAM2-контуров (`modules/graph/core/contours_merge.py`): `polygon_validated` из `contours_validated.json` → `node["segmentation"]` (IoU bbox > 0.5, equipment-узлы), ещё в координатах растра. Строго в deepcopy графа: sha-проекция включает `segmentation`, а штамп (шаг 5) обязан считаться от исходного `graph_validated` — иначе холст рождается «устаревшим».
-3. `to_canvas` → раскладка (`modules/graph/core/layout.py`).
+3. `to_canvas` → раскладка (`modules/graph/core/layout.py`). `to_canvas` первым шагом нормализует кратные рёбра на копии (`parallel_edges.normalize_parallel_edges`, Р7: одно ребро на пару, кроме пар с `unknow`; степень пересчитывается только у затронутых узлов) — старые `graph_validated` несут кратные рёбра до пересборки графа; на графе без кратных пар шаг ничего не меняет.
 4. Две защиты перед записью: (а) `graph_validated` перечитывается — sha сменился → результат выброшен (`stale_input`); (б) `operator_saved` на существующем холсте → результат выброшен (`operator_saved`).
 5. `canvas_state.stamp` (от исходного `graph_validated`) + `stamp_contours` (метка `contours_merged_sha`), атомарная запись (`tmp + os.replace`).
 

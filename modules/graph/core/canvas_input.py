@@ -10,11 +10,16 @@
 Эталон корпуса стенда посчитан ровно на этом входе
 (`_scratch/layout_align/harness/prepare.py`), поэтому шаги и их порядок здесь
 менять нельзя — иначе бит-в-бит паритет Э2 перестаёт что-либо доказывать.
+Единственное исключение — первый шаг `normalize_parallel_edges` (кратные
+рёбра, решение Р7, модуль `parallel_edges`): на графе без кратных пар он ничего
+не меняет, поэтому паритет Э2 на git-корпусе (0 пар) сохраняется; на
+storage-графах с парами эталоны пересняты (Д6).
 """
 from __future__ import annotations
 
 from copy import deepcopy
 
+from .parallel_edges import normalize_parallel_edges
 from .pretransform import (
     _build_adjacency,
     apply_fixed_sizes,
@@ -46,6 +51,19 @@ def to_canvas(validated_graph, image_hw=None):
     (решение заказчика 2026-09-22), остальные центроиды те же.
     """
     g = deepcopy(validated_graph)
+    # кратные рёбра (Р7) на копии; степень — только у затронутых узлов: у
+    # старых graph_validated поле degree протухло, полный пересчёт сдвинул бы всё
+    par = normalize_parallel_edges(g.get("nodes", []), g.get("links", []),
+                                   keys=("source", "target"))
+    if par["nodes_touched"]:
+        deg = dict.fromkeys(par["nodes_touched"], 0)
+        for e in g["links"]:
+            for nid in (e.get("source"), e.get("target")):
+                if nid in deg:
+                    deg[nid] += 1
+        for n in g["nodes"]:
+            if n.get("id") in deg:
+                n["degree"] = deg[n["id"]]
     if image_hw is None:
         size = g.get("graph", {}).get("image_size")
         if not size:

@@ -110,10 +110,14 @@ direction_classification:
   цепляется;
 - короткие огрызки у грани (шум заливки бокса) выбрасываются.
 
-В `builder.build` (этап 5, `modules/graph/core/builder.py:374-407`) вызываются:
+В `builder.build` (этап 5, `modules/graph/core/builder.py:385-466`) вызываются:
 `annotate_direction_nodes` → `drop_degenerate_stubs` → `drop_duplicate_contact_stubs` →
-`cap_dangling_ends` → `collapse_straight_connectors` → `update_node_degrees` →
-`set_direction_pass_through`.
+`split_edges_at_corners` → `merge_straight_chains` → `stitch_dangling_into_pipe` →
+`drop_unstitched_leftovers` → `cap_dangling_ends` → `collapse_straight_connectors` →
+`dissolve_boundary_connectors` → `drop_synthetic_orphan_components` →
+`normalize_parallel_edges` (кратные рёбра, Р7: дубль удалить, вторую трубу рассечь
+`parconn_N`; строго после collapse — его антидубль снёс бы рассечённую трубу) →
+`update_node_degrees` → `set_direction_pass_through` → `flag_connector_clusters`.
 
 ## 4. Проектные решения 2026-06 (сохранены как есть)
 

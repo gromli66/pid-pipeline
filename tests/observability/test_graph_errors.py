@@ -30,6 +30,9 @@ import pytest
 np = pytest.importorskip("numpy")
 
 from app.core.errors import ArtifactMissingError, PipelineError
+# настоящий модуль кратных рёбер (Р7) грузится ДО заглушек фикстуры: его
+# зависимость direction_nodes фикстура подменяет MagicMock-ом
+from modules.graph.core import parallel_edges as _real_parallel_edges
 
 _H = _W = 8
 
@@ -172,3 +175,47 @@ def test_pipeline_error_passthrough(gb, monkeypatch, tmp_path):
 
     assert ei.value is boom
     assert ei.value.step == "trace_edges"
+
+
+# --- 5. Кратные рёбра (Р7): builder нормализует после сирот, до степеней -------
+
+def _two_pipes(cls):
+    nodes = [{"id": n, "type": "equipment", "class_name": cls, "class_id": 0,
+              "centroid": c, "bbox": None, "degree": 0}
+             for n, c in (("node_1", [100, 0]), ("node_2", [100, 200]))]
+    straight = [[100, x] for x in range(0, 201, 2)]
+    if cls == "unknow":            # дубль: концы совпадают до 0 px
+        other = [list(p) for p in straight]
+    else:                          # вторая труба обходом, у node_2 разнос 60 px
+        other = [[100 + i, 0] for i in range(60)] + [[160, x] for x in range(0, 201, 4)]
+    edges = [{"id": f"edge_{i}", "from": "node_1", "to": "node_2",
+              "source_point": list(p[0]), "target_point": list(p[-1]), "path": p}
+             for i, p in ((0, straight), (1, other))]
+    return nodes, edges
+
+
+def _build_two_pipes(gb, monkeypatch, tmp_path, cls):
+    _wire_happy(gb, monkeypatch)
+    monkeypatch.setitem(sys.modules, "modules.graph.core.parallel_edges",
+                        _real_parallel_edges)
+    nodes, edges = _two_pipes(cls)
+    monkeypatch.setattr(gb, "trace_edges_v3", lambda **k: (edges, nodes))
+    monkeypatch.setattr(gb, "filter_isolated_connectors",
+                        lambda n, e, **k: (n, e, {"removed_connectors": 0,
+                                                  "removed_edges": 0}))
+    return _build(_builder(gb), tmp_path)
+
+
+def test_build_splits_second_pipe(gb, monkeypatch, tmp_path):
+    result = _build_two_pipes(gb, monkeypatch, tmp_path, "nasos")
+    ids = sorted(e["id"] for e in result["edges"])
+    assert ids == ["edge_0", "edge_1", "edge_2"]
+    assert [n["id"] for n in result["nodes"]][-1] == "parconn_1"
+    ends = {(e["from"], e["to"]) for e in result["edges"]}
+    assert ends == {("node_1", "node_2"), ("node_1", "parconn_1"), ("parconn_1", "node_2")}
+
+
+def test_build_unknow_dup_split_not_deleted(gb, monkeypatch, tmp_path):
+    result = _build_two_pipes(gb, monkeypatch, tmp_path, "unknow")
+    assert len(result["edges"]) == 3
+    assert any(n["id"] == "parconn_1" for n in result["nodes"])

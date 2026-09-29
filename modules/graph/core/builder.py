@@ -443,6 +443,16 @@ class GraphBuilder:
             print(f"  Сирот-компонент из затычек удалено: {orph_stats['components']} "
                   f"({orph_stats['nodes_dropped']} узлов, {orph_stats['edges_dropped']} рёбер, "
                   f"{orph_stats['px_dropped']} px)")
+        # кратные рёбра (Р7): одно ребро на пару узлов — дубль удалить, вторую
+        # трубу рассечь connector'ом. Строго после collapse (его антидубль снёс
+        # бы рассечённую трубу) и до пересчёта степеней. Импорт свой, не в блоке
+        # direction_nodes: заглушка теста graph_errors проглотила бы вызов.
+        from .parallel_edges import normalize_parallel_edges
+        par_stats = normalize_parallel_edges(nodes, edges, keys=("from", "to"))
+        if self.verbose and par_stats["pairs"]:
+            print(f"  Кратных пар: {par_stats['pairs']} (удалено дублей "
+                  f"{par_stats['deleted']}, рассечено {par_stats['split']}, "
+                  f"из них дублей у unknow {par_stats['split_unknow_dup']})")
         update_node_degrees(nodes, edges, debug=self.debug)
         set_direction_pass_through(nodes, edges)
         # кластеры дублей стыков автоматически не чиним (надёжного правила из
