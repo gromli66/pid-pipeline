@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 from . import _vpsc
+from .. import contact
 from ._axes import MODE as AXIS_MODE, TOL as AXIS_TOL, build_axes
 from ..graph_access import (edge_ends, edge_polyline, edges,
                             is_connector, node_cxy, node_wh,
@@ -32,6 +33,13 @@ BAND_AREA = 30000.0  # px²: порог «крупного блока» для �
 BAND_DEG = 6         # и его степень (замер: ровно 3 узла на 8 графах)
 PIPE_MIN = 12.0   # px: минимальная длина трубы (порог заказчика, W2).
                   # 0 — требование выключено
+VALVE_PIPE = 6.0  # px: труба клапана на его оси — не короче порога видимости
+                  # (LayoutParams.floor), даже если на входе короче: там её
+                  # «входная» длина — след рамки клапана, поставленной талией
+                  # на трубу (pretransform), а не нарисованная труба
+PRUNE_SLACK = 1.0  # px: допуск ступени «только трубы клапанов»: VPSC с полом
+                   # промежутков (fit_keep) добирает ~0.1 px сверх оценки
+                   # prune_pipes; принимается выход за холст до 1 px
 _SAME = object()  # сентинел: pipe_base по умолчанию наследует gap base
                   # (None — валидное значение «без капа», поэтому не годится)
 
@@ -274,6 +282,99 @@ def pipe_specs(graph, xa, ya, by_key, pipe_min, base=None):
             for k, v in out.items()}
 
 
+def valve_pipes(graph, xa, ya):
+    """Трубы клапана НА ЕГО ОСИ: {(s, t)} рёбер вдоль `_axis` клапана
+    (`contact.is_valve`; H — концы делят ряд, V — колонку). На такой трубе
+    клапан сидит талией: без требования длины её второй конец остаётся
+    внутри рамки клапана, и раздвигание пару уже не разводит (c78e1f02 при
+    обрыве: 25 пар из 79)."""
+    byid = nodes_by_id(graph)
+    out = set()
+    for e in edges(graph):
+        s, t = edge_ends(e)
+        if ya.get(s) == ya.get(t) and xa.get(s) != xa.get(t):
+            ax = "H"
+        elif xa.get(s) == xa.get(t) and ya.get(s) != ya.get(t):
+            ax = "V"
+        else:
+            continue
+        if any(v is not None and contact.is_valve(v) and v.get("_axis") == ax
+               for v in (byid.get(s), byid.get(t))):
+            out.add((s, t))
+    return out
+
+
+def valve_floor(pipes, keep, by_key, want):
+    """Трубы клапана (`keep`) — не короче `want` px, в обход капа «не хуже
+    входа» (`pipe_specs`): их входная длина — след рамки, не труба."""
+    if want <= 0:
+        return pipes
+    return {ax: [(s, t, max(nd, by_key[s][hk] + by_key[t][hk] + want))
+                 if (s, t) in keep else (s, t, nd) for s, t, nd in pipes[ax]]
+            for ax, hk in (("x", "hw"), ("y", "hh"))}
+
+
+def prune_pipes(n, marg, seps_fixed, pipes, by_key, idx, off_key, half_key,
+                usable):
+    """Поэтапный отказ от труб одной оси, пока раскладка не влезет в `usable`.
+
+    Ширина считается левой предельной раскладкой (как `min_extent`, без пола
+    промежутков). Шаг ослабляет только трубы на КРИТИЧЕСКОМ ПУТИ — там и
+    набирается лишняя длина: сперва до касания концов, потом снимает.
+    Сепарация блок-блок (`seps_fixed`) не трогается никогда: если лишнее
+    набирает она, отказ останавливается.
+    -> (оставшиеся спеки труб, {"touch": n, "drop": n}).
+    """
+    lvl = [0] * len(pipes)              # 0 — целиком, 1 — касание, 2 — снята
+    touch = [by_key[a][half_key] + by_key[b][half_key] for a, b, _ in pipes]
+    fixed = {(i, j): g
+             for i, j, g in sep_gaps(seps_fixed, by_key, idx, off_key)}
+
+    def cur(k):
+        return pipes[k][2] if lvl[k] == 0 else touch[k]
+
+    for _ in range(2 * len(pipes) + 1):
+        arcs, who = dict(fixed), {}     # who — трубы, держащие максимум дуги
+        for k, (a, b, _need) in enumerate(pipes):
+            i, j = idx[a], idx[b]
+            if lvl[k] >= 2 or i == j:
+                continue
+            if i > j:
+                i, j, a, b = j, i, b, a
+            g = cur(k) + by_key[a][off_key] - by_key[b][off_key]
+            if g > arcs.get((i, j), float("-inf")) + 1e-9:
+                arcs[(i, j)], who[(i, j)] = g, [k]
+            elif abs(g - arcs[(i, j)]) <= 1e-9 and (i, j) in who:
+                who[(i, j)].append(k)
+        adj = {i: [(i + 1, 0.0)] for i in range(n - 1)}   # порядок осей
+        for (i, j), g in arcs.items():
+            adj.setdefault(i, []).append((j, g))
+        pos, pred = [0.0] * n, [None] * n
+        for i in range(n):
+            for j, g in adj.get(i, ()):
+                if pos[j] < pos[i] + g:
+                    pos[j], pred[j] = pos[i] + g, i
+        lo = min(pos[i] - marg[i][0] for i in range(n))
+        h = max(range(n), key=lambda i: pos[i] + marg[i][1])
+        if pos[h] + marg[h][1] - lo <= usable:
+            break
+        best, j = None, h
+        while pred[j] is not None:
+            ks = who.get((pred[j], j))
+            # дуга сжимается, только если ослабить ВСЕ трубы на её максимуме;
+            # из дуг пути берётся наименее ослабленная
+            if ks and (best is None or max(lvl[k] for k in ks) < best[0]):
+                best = (max(lvl[k] for k in ks), ks)
+            j = pred[j]
+        if best is None:
+            break
+        for k in best[1]:
+            lvl[k] += 1
+    stat = {"touch": lvl.count(1), "drop": lvl.count(2)}
+    return [(a, b, cur(k)) for k, (a, b, _n) in enumerate(pipes)
+            if lvl[k] < 2], stat
+
+
 def _axis_margins(axlist, by_key, off_key, half_key):
     """[(влево, вправо)] — на сколько бокс самого крупного члена выходит
     за координату оси. Именно эти числа и есть «габариты в ограничениях»."""
@@ -393,6 +494,10 @@ def thresholds(scale, gap, gap_min, pipe_min):
     требуется). Один коэффициент на оба порога, а не два независимых, —
     чтобы «сколько требований этот холст выдерживает» было ОДНИМ числом
     в отчёте, а не парой, которую нечем сравнить.
+    Исключение — трубы клапана на его оси: `place` держит их не короче
+    min(труба, VALVE_PIPE) при любой доле (`valve_floor`), а при scale=0
+    сперва пробует ступень «только трубы клапанов» (VALVE_PIPE), и лишь
+    потом — без труб вовсе.
     """
     return gap_min + scale * (gap - gap_min), scale * pipe_min
 
@@ -414,6 +519,10 @@ def fit_scale(graph, items, xaxes, yaxes, xa, ya, by_key, canvas, gap,
     base — кап зазора блок-блок; pipe_base — кап длины трубы. По умолчанию
     (pipe_base=_SAME) труба капается тем же base, что и зазор (v16/v22). v23c
     задаёт pipe_base=None (полный pipe_min по границам) при base=base_pos.
+
+    Оценка НЕ учитывает пол труб клапана (`valve_floor`, VALVE_PIPE),
+    который `place` накладывает в каждой попытке: спрос на листах с клапаном
+    талией на трубе занижен, и лишнее досуживает бисекция в `place`.
     """
     if pipe_base is _SAME:
         pipe_base = base
@@ -678,10 +787,23 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
           "pipe_want": pipe_min,
           "demand_x": round(demand[0], 1), "demand_y": round(demand[1], 1)}
 
-    def attempt(scale):
-        """Полный проход при доле порогов scale. -> (info, коорд. x, коорд. y)."""
+    vkeep = valve_pipes(graph, xa, ya)
+
+    def attempt(scale, valve_only=False):
+        """Полный проход при доле порогов scale. -> (info, коорд. x, коорд. y).
+
+        Трубы клапана на его оси (`vkeep`) — не короче min(pm, VALVE_PIPE).
+        valve_only — ступень перед отказом от всех труб: зазор gap_min, из
+        труб остаются только трубы клапана (VALVE_PIPE), а не влезающие в
+        холст ослабляются поэтапно по критическому пути (`prune_pipes`)."""
         g, pm = thresholds(scale, gap, gap_min, pipe_min)
+        if valve_only:
+            pm = VALVE_PIPE
         pipes = pipe_specs(graph, xa, ya, by_key, pm, pipe_base)
+        if valve_only:
+            pipes = {ax: [q for q in v if (q[0], q[1]) in vkeep]
+                     for ax, v in pipes.items()}
+        pipes = valve_floor(pipes, vkeep, by_key, min(pm, VALVE_PIPE))
         for a, c in zip(xaxes, cx0):
             a["coord"] = c
         for a, c in zip(yaxes, cy0):
@@ -694,7 +816,7 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
                "pipe_eff": round(pm, 2), "pipes_x": len(pipes["x"]),
                "pipes_y": len(pipes["y"]), "rounds": 0, "vpsc_iters": 0,
                "vpsc_splits": 0, "solver_capped": 0, "keep_x": None,
-               "keep_y": None}
+               "keep_y": None, "pruned": {}}
         residual = None
         for _r in range(rounds):
             inf["rounds"] += 1
@@ -712,9 +834,15 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
             for axis, axlist, idx, des, lim, okey, hkey, ckey, c0 in (
                     ("x", xaxes, xa, dx, canvas[0], "ox", "hw", "cx", cx0),
                     ("y", yaxes, ya, dy, canvas[1], "oy", "hh", "cy", cy0)):
+                pax = pipes[axis]
+                if valve_only:
+                    pax, inf["pruned"][axis] = prune_pipes(
+                        len(axlist), _axis_margins(axlist, by_key, okey, hkey),
+                        list(sep[axis].values()), pax, by_key, idx, okey,
+                        hkey, lim - 2 * inset - PRUNE_SLACK)
                 pos, good, sst, keff = solve_axis(
                     axlist, by_key, idx,
-                    list(sep[axis].values()) + pipes[axis], des, lim,
+                    list(sep[axis].values()) + pax, des, lim,
                     okey, hkey, c0, inset, keep,
                     bands=(bands or {}).get(axis, ()))
                 for i, a in enumerate(axlist):
@@ -788,6 +916,15 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
                 lo = mid
             else:
                 hi = mid
+    # ОБРЫВ. Ни одна доля > 0 не влезла: при pm = 0 трубы исчезают ВСЕ разом,
+    # и коннектор трубы клапана остаётся в его рамке (клапан стоит талией на
+    # трубе — они в одной колонке/ряду). Сперва ступень «только трубы
+    # клапанов» с поэтапным отказом; attempt(0.0) без труб — последний рубеж.
+    if best is None or best[0]["scale_eff"] <= 0.0:
+        pr = attempt(0.0, valve_only=True)
+        tries += 1
+        if pr[0]["over"] <= PRUNE_SLACK:
+            best = pr
     if best is None:
         inf, px, py = attempt(0.0)
         tries += 1
