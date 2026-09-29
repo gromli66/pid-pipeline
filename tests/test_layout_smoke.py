@@ -30,6 +30,25 @@ pytest.importorskip("numpy")
 FIXTURE = Path(__file__).parent / "fixtures" / "layout" / "synth_med.json"
 TIME_BUDGET_S = 60.0     # смоук, не бенчмарк: на dev-машине ~4 с
 
+# Объявленные «стороны входа» синтетики — разобраны поимённо и приняты
+# (эталон переснят в гейте блока 5 модели точек прикрепления, решение
+# Максима «не позеленеет после блока 5 — переснять», MEASUREMENTS §130.2).
+# Все концы — осевые грани клапанов, вход раскладки был в неосевую:
+# - edge_111: коннектор -> regulator_electro node_60 (степень 3), рамка
+#   вокруг талии уехала на 6.2 px (Р6, aab3642): на `placed` конец на R,
+#   на выходе в талию T, с коленом;
+# - остальные 13 — Р5 (82cc3c3): клапан степени 2 с осью V на
+#   горизонтальной трубе (armatura_ruchn node_3/5/37, klapan_obratn
+#   node_33/43/63/68) — на входе обе трубы в L, на выходе по трубе в T и B
+#   крючком (степень 2 не поворачивается). У edge_2/40/57 вход партнёра
+#   (predohran node_2, armatura_seroprivod node_44, vodostruiniy_nasos
+#   node_62) сменил грань вслед за крючком.
+# Три прогона PYTHONHASHSEED 1..3 — состав тот же. Сверх списка — регрессия.
+ACCEPTED_SIDE_CHANGED = {
+    "edge_111", "edge_2", "edge_3", "edge_4", "edge_30", "edge_31", "edge_33",
+    "edge_34", "edge_39", "edge_40", "edge_57", "edge_58", "edge_62",
+    "edge_63"}
+
 
 @pytest.fixture(scope="module")
 def run():
@@ -102,7 +121,14 @@ def test_invariants_not_worse_than_base(run):
     assert now["new_diagonals"] <= base["new_diagonals"], "новые диагонали"
     assert now["overlaps"] <= base["overlaps"], "новые наложения боксов"
     assert now["box_on_magistral"] <= 0, "бокс выехал на чужую магистраль"
-    assert now["side_changed"] == 0, "сменилась сторона входа трубы"
+    from modules.graph.core.graph_access import edges, nodes_by_id
+    oe = {e["id"]: e for e in edges(orig)}
+    pe = {e["id"]: e for e in edges(placed)}
+    ab, ob, pb = nodes_by_id(after), nodes_by_id(orig), nodes_by_id(placed)
+    side = {e["id"] for e in edges(after) if _gate.side_changed_edge(
+        e, oe.get(e["id"]), pe.get(e["id"]), ab, ob, pb)}
+    assert side <= ACCEPTED_SIDE_CHANGED, (
+        f"сменилась сторона входа трубы: {sorted(side - ACCEPTED_SIDE_CHANGED)}")
     assert now["straight_broken"] == 0, "сломана прямая"
     assert not now["connectivity_changed"], "изменилась связность"
 
