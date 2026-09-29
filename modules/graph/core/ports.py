@@ -20,6 +20,9 @@ ConnectionPoints — §6.1 EDITOR_AFTER_LAYOUT_PLAN):
       полигон без скина      → середины ПРЯМЫХ участков контура длиной
                                >= MIN_POLY_EDGE (перпендикулярный вход);
       коннектор              → центроид (единственный порт).
+    Фильтр `sides` (Р5, 2026-09-29): клапан степени 1–2 принимает трубы
+    только на осевых гранях — вызывающий передаёт грань из плана
+    `seating.axial_faces`, и судья выбирает порт только среди неё.
   * ПИН ВХОДА (Э5, 2026-08-03) — свойство КОНЦА РЕБРА:
     edge['pin_source'|'pin_target'] = {'dx','dy'} — локальное смещение от
     центроида узла (см. секцию «пины на ребре» ниже). Легаси node['_ports']
@@ -176,7 +179,7 @@ def _poly_ports(seg):
 
 # ────────────────────────── порты узла ──────────────────────────
 
-def candidate_ports(node, rect=None):
+def candidate_ports(node, rect=None, sides=None):
     """Производные порты-кандидаты [(x, y, nx, ny, manual=False), ...].
 
     (nx, ny) — наружная нормаль грани/участка; (0, 0) — точечный порт
@@ -185,7 +188,11 @@ def candidate_ports(node, rect=None):
     None — серверный канон `seating._anchor_rect` (с Р2 тоже bbox).
 
     Клапан холста на гранях вдоль оси трубы — выверенный порт талии
-    (`contact.face_refs`); у прочих узлов порты бит-в-бит прежние."""
+    (`contact.face_refs`); у прочих узлов порты бит-в-бит прежние.
+
+    sides — множество граней {'L','R','T','B'} (план `seating.axial_faces`,
+    Р5): остаются только рамочные кандидаты этих граней; коннектор и
+    полигон не фильтруются, пустой итог — без фильтра."""
     from modules.graph.core import seating
     from modules.graph.core.graph_access import is_connector
 
@@ -203,10 +210,14 @@ def candidate_ports(node, rect=None):
         x1, y1, x2, y2 = rect
         cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
         refs = contact.face_refs(node, rect) or {}
-        return [(x2, refs.get("R", cy), 1.0, 0.0, False),
-                (x1, refs.get("L", cy), -1.0, 0.0, False),
-                (refs.get("T", cx), y1, 0.0, -1.0, False),
-                (refs.get("B", cx), y2, 0.0, 1.0, False)]
+        out = [(x2, refs.get("R", cy), 1.0, 0.0, False),
+               (x1, refs.get("L", cy), -1.0, 0.0, False),
+               (refs.get("T", cx), y1, 0.0, -1.0, False),
+               (refs.get("B", cx), y2, 0.0, 1.0, False)]
+        if sides:
+            got = [p for p in out if _SIDE_BY_NORMAL[(p[2], p[3])] in sides]
+            return got or out
+        return out
     cx, cy = _node_cxy(node)
     return [(cx, cy, 0.0, 0.0, False)]
 
@@ -229,8 +240,8 @@ def manual_ports(node):
     return out
 
 
-def all_ports(node, rect=None):
-    return manual_ports(node) + candidate_ports(node, rect)
+def all_ports(node, rect=None, sides=None):
+    return manual_ports(node) + candidate_ports(node, rect, sides)
 
 
 def edge_ref(edge_data):
@@ -425,21 +436,22 @@ def side_slots(node, side, k, rect=None, pitch=None):
     return [(center + o, y2, 0.0, 1.0, False) for o in offs]
 
 
-def nearest_port(node, x, y, radius, rect=None):
+def nearest_port(node, x, y, radius, rect=None, sides=None):
     """Ближайший порт узла (ручной или кандидат) в радиусе, иначе None.
 
     rect — переопределение рамки посадки (редактор передаёт bbox: «символ
-    тянется на рамку», и порт-талия клапана считается от неё же)."""
+    тянется на рамку», и порт-талия клапана считается от неё же);
+    sides — фильтр граней кандидатов (`candidate_ports`)."""
     best, best_d = None, float(radius)
-    for p in all_ports(node, rect):
+    for p in all_ports(node, rect, sides):
         d = math.hypot(p[0] - x, p[1] - y)
         if d <= best_d:
             best, best_d = p, d
     return best
 
 
-def is_on_port(node, x, y, tol=PORT_MATCH_TOL, rect=None):
-    return nearest_port(node, x, y, tol, rect) is not None
+def is_on_port(node, x, y, tol=PORT_MATCH_TOL, rect=None, sides=None):
+    return nearest_port(node, x, y, tol, rect, sides) is not None
 
 
 # ────────────────────────── выбор порта ──────────────────────────
@@ -499,25 +511,33 @@ def lock_respected(pt, lock):
     return abs(val - coord) <= 0.51
 
 
-def choose_port(node, cur_xy, ref_xy, snap_threshold):
+def choose_port(node, cur_xy, ref_xy, snap_threshold, sides=None):
     """Порт для посадки конца, обращённого к ref_xy. Возвращает (x, y).
 
     Гистерезис: текущий порт (ближайший к cur_xy, в пределах snap_threshold)
     удерживается, пока вход через него не с изнанки и альтернатива не
     выигрывает радикально (короче на >= RADICAL_LEN_FACTOR * snap_threshold
     при не большем числе колен). cur_xy=None (нет текущего) — лучший порт.
+    sides — фильтр граней (`choose_port_entry`).
     """
-    p = choose_port_entry(node, cur_xy, ref_xy, snap_threshold)
+    p = choose_port_entry(node, cur_xy, ref_xy, snap_threshold, sides=sides)
     return p[0], p[1]
 
 
-def choose_port_entry(node, cur_xy, ref_xy, snap_threshold, rect=None):
+def choose_port_entry(node, cur_xy, ref_xy, snap_threshold, rect=None,
+                      sides=None):
     """То же, что choose_port, но возвращает ПОЛНЫЙ кортеж кандидата
     (x, y, nx, ny, manual) — движку редактора (Э2b) нужны нормаль (сторона
     грани) и признак ручного порта. Поведение выбора бит-идентично;
-    rect — переопределение рамки посадки (редактор: bbox)."""
+    rect — переопределение рамки посадки (редактор: bbox).
+
+    sides — разрешённые грани (план Р5 `seating.axial_faces`; фильтр
+    `candidate_ports`, ручные порты вне фильтра). Если текущий порт на
+    разрешённой грани и ВСЕ кандидаты с изнанки (сосед прямо над клапаном),
+    остаётся текущий — иначе L/R выбирались бы тай-брейком по x. Без sides
+    — бит-в-бит прежнее."""
     rx, ry = ref_xy
-    ports = all_ports(node, rect)
+    ports = all_ports(node, rect, sides)
     if not ports:
         cx, cy = _node_cxy(node)
         return (cx, cy, 0.0, 0.0, False)
@@ -548,6 +568,9 @@ def choose_port_entry(node, cur_xy, ref_xy, snap_threshold, rect=None):
                 <= max(float(snap_threshold), 4.0):
             cur = cand
     if cur is None or _backside(cur, rx, ry):
+        if sides and cur is not None \
+                and all(_backside(p, rx, ry) for p in ports):
+            return cur
         return best
     if _l1(cur, rx, ry) - _l1(best, rx, ry) \
             >= RADICAL_LEN_FACTOR * float(snap_threshold) \

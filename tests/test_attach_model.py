@@ -520,3 +520,134 @@ def test_box_hits_neighbour_frames():
     assert box_hits(nodes_by_id(g), "a", [170.0, 90.0, 190.0, 110.0])
     assert box_hits(g["nodes"], "a", [170.0, 90.0, 190.0, 110.0])
     assert not box_hits(nodes_by_id(g), "b", [170.0, 90.0, 190.0, 110.0])
+
+
+# ─────────── осевые входы клапана степени 1–2 (Р5, блок 5) ───────────
+
+def _deg2(extra_nodes=(), extra_links=(), valve=None):
+    """Клапан H степени 2: коннектор a слева на линии талии, c над клапаном."""
+    return _graph([dict(valve or VALVE_H), _conn("a", 100.0, WAIST_Y),
+                   _conn("c", 200.0, 20.0)] + list(extra_nodes),
+                  [_edge("ea", "a", "v"), _edge("ec", "v", "c")]
+                  + list(extra_links))
+
+
+def _pts(g):
+    return {e["id"]: (e["source_point"], e["target_point"])
+            for e in g["links"]}
+
+
+def test_degree2_side_neighbour_goes_to_free_axial_face():
+    """Сосед сверху у клапана степени 2: вход не на T (V-замок через
+    середину ±3), а в свободную осевую талию R — колено за клапаном."""
+    g = _deg2()
+    seating.reseat_all_endpoints(g, model=True, slots=True, axial=True)
+    p = _pts(g)
+    assert p["ea"][1] == [pytest.approx(WAIST_Y), 179.0]
+    assert p["ec"][0] == [pytest.approx(WAIST_Y), 221.0]
+    # без правила — прежнее: вход сверху
+    g = _deg2()
+    seating.reseat_all_endpoints(g, model=True, slots=True)
+    assert _pts(g)["ec"][0] == [81.1, 200.0]
+
+
+def test_degree3_keeps_side_entry():
+    g = _deg2([_conn("d", 200.0, 300.0)], [_edge("ed", "v", "d")])
+    seating.reseat_all_endpoints(g, model=True, slots=True, axial=True)
+    assert _pts(g)["ec"][0] == [81.1, 200.0]
+
+
+def test_relief_valve_exempt():
+    """predohran (RELIEF_VLV, угловой) — вне правила: вход сверху в середину
+    грани T."""
+    v = {"id": "v", "type": "equipment", "class_name": "predohran",
+         "_axis": "H", "centroid": [100.0, 200.0],
+         "bbox": [179.0, 84.25, 221.0, 115.75]}
+    g = _deg2(valve=v)
+    seating.reseat_all_endpoints(g, model=True, slots=True, axial=True)
+    assert _pts(g)["ec"][0] == [84.25, 200.0]
+
+
+def test_legacy_canvas_valve_untouched():
+    """Узел старого холста (`LEGACY_KEY`, Р1) — без правила, даже если
+    вызывающий попросил axial: посадка бит-в-бит как без него."""
+    v = dict(VALVE_H)
+    v[contact.LEGACY_KEY] = True
+    assert not contact.axial_only(v, 2)
+    g = _deg2(valve=v)
+    seating.reseat_all_endpoints(g, axial=True)
+    ref = _deg2(valve=v)
+    seating.reseat_all_endpoints(ref)
+    assert _pts(g) == _pts(ref)
+    rect = seating._anchor_rect(v)
+    sp = _pts(g)["ec"][0]
+    assert seating._end_side(rect, sp[1], sp[0]) == "T"
+
+
+def test_candidate_ports_sides_filter():
+    got = ports.candidate_ports(VALVE_H, sides={"L", "R"})
+    assert [p[:2] for p in got] == [(221.0, pytest.approx(WAIST_Y)),
+                                    (179.0, pytest.approx(WAIST_Y))]
+    assert len(ports.candidate_ports(VALVE_H)) == 4
+    # коннектор фильтр не трогает; пустой итог — без фильтра
+    assert ports.candidate_ports(_conn("c", 1.0, 2.0), sides={"L"}) \
+        == [(1.0, 2.0, 0.0, 0.0, False)]
+    assert len(ports.candidate_ports(VALVE_H, sides={"X"})) == 4
+
+
+def test_choose_port_sides_keeps_current_when_all_backside():
+    """Сосед прямо над клапаном, разрешены L/R: обе с изнанки — остаётся
+    текущий R, а не L тай-брейком по x."""
+    got = ports.choose_port(VALVE_H, (221.0, WAIST_Y), (200.0, 20.0), 8.0,
+                            sides={"L", "R"})
+    assert got == (221.0, pytest.approx(WAIST_Y))
+
+
+def test_straighten_does_not_turn_axial_valve_sideways():
+    """Страховка: ступенька к соседу сверху не выпрямляется входом в T."""
+    links = [_edge("ea", "a", "v", sp=[WAIST_Y, 100.0], tp=[WAIST_Y, 179.0]),
+             _edge("ec", "v", "c", sp=[WAIST_Y, 221.0], tp=[20.0, 200.0])]
+    nodes = [dict(VALVE_H), _conn("a", 100.0, WAIST_Y), _conn("c", 200.0, 20.0)]
+    g = _graph(nodes, links)
+    assert seating.straighten_unrouted(g, axial=True) == 0
+    assert _pts(g)["ec"][0] == [WAIST_Y, 221.0]
+    # без правила — прежнее: середина T уступает, труба прямая сверху
+    g = _graph([dict(n) for n in nodes], [dict(e) for e in links])
+    assert seating.straighten_unrouted(g) == 1
+    assert _pts(g)["ec"][0] == [81.1, 200.0]
+
+
+def test_pin_beats_axial_rule():
+    """Пин — истина и вне правила: вход на T держится. Пиннутый конец в
+    осевой грани L занимает её — свободный конец берёт R, хотя его сосед
+    тоже слева."""
+    g = _deg2()
+    g["links"][1]["pin_source"] = {"dx": 0.0, "dy": -18.9}      # T, середина
+    seating.reseat_all_endpoints(g, model=True, slots=True, axial=True)
+    assert _pts(g)["ec"][0] == [81.1, 200.0]
+
+    ea = _edge("ea", "a", "v", tp=[WAIST_Y, 179.0])
+    ea["pin_target"] = {"dx": -21.0, "dy": WAIST_Y - 100.0}      # L, талия
+    g = _graph([dict(VALVE_H), _conn("a", 100.0, WAIST_Y),
+                _conn("b", 60.0, 300.0)], [ea, _edge("eb", "v", "b")])
+    seating.reseat_all_endpoints(g, model=True, slots=True, axial=True)
+    assert _pts(g)["ea"][1] == [pytest.approx(WAIST_Y), 179.0]
+    assert _pts(g)["eb"][0] == [pytest.approx(WAIST_Y), 221.0]
+
+
+def test_two_pipes_to_one_partner_share_a_face():
+    """Кратные рёбра к ОДНОМУ партнёру (старые холсты): разных граней не
+    требуют — обе трубы в R, к соседу (справа снизу, без замка прямой), а
+    не одна в обход клапана."""
+    g = _graph([dict(VALVE_H), _box("b", 320.0, 200.0)],
+               [_edge("e1", "v", "b"), _edge("e2", "v", "b")])
+    seating.reseat_all_endpoints(g, model=True, slots=True, axial=True)
+    assert all(p[0][1] == 221.0 for p in _pts(g).values())
+
+
+def test_degrees_counts_multi_edges():
+    from modules.graph.core.graph_access import degrees
+    g = _graph([dict(VALVE_H), _box("u", 400.0, 100.0), _conn("c", 1.0, 1.0)],
+               [_edge("e1", "v", "u"), _edge("e2", "u", "v"),
+                _edge("e3", "v", "c")])
+    assert degrees(g) == {"v": 3, "u": 2, "c": 1}

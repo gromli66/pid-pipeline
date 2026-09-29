@@ -25,6 +25,19 @@ def edge_ends(e):
     return (e.get("source") or e.get("from"), e.get("target") or e.get("to"))
 
 
+def degrees(graph):
+    """Степень узлов ПО РЁБРАМ: {node_id: n} (поле `degree` узла врёт).
+
+    Кратные рёбра считаются каждое: это честная степень (после нормализации
+    кратных рёбер, блок 4, они остаются только на старых холстах)."""
+    out = {}
+    for e in edges(graph):
+        for nid in edge_ends(e):
+            if nid is not None:
+                out[nid] = out.get(nid, 0) + 1
+    return out
+
+
 def nodes_by_id(graph):
     return {n["id"]: n for n in graph.get("nodes", [])}
 

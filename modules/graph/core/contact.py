@@ -12,6 +12,9 @@
     труба входит в «талию бабочки» (`SKIN_CONTACT_OFFSET`; у симметричных
     клапанов сдвиг 0 — ровно центр грани). Порт жёсткий: ради прямой трубы
     не уступает;
+  * клапан степени 1–2 (Р5, `axial_only`) принимает трубы ТОЛЬКО на осевых
+    гранях (раскладка граней — `seating.axial_faces`); степень 3+ и
+    `AXIAL_EXEMPT_SKINS` (predohran) — как прочие; пин оператора — истина;
   * прочие рамочные узлы и неосевые грани клапана — середина грани; ради
     прямой трубы уступает не больше `MID_SNAP`;
   * полигон — как прежде (посадка на контур), здесь не описывается.
@@ -244,6 +247,27 @@ def is_valve(node) -> bool:
     """Клапан — узел с выверенным портом (скин `ValveControl`)."""
     info = skin_info(node)
     return bool(info) and info[0] == 'ValveControl'
+
+
+# Клапаны вне правила «только осевые входы» (Р5): предохранительный клапан
+# угловой — вход и выход у него на разных осях по построению.
+AXIAL_EXEMPT_SKINS = {'RELIEF_VLV'}
+
+
+def axial_only(node, degree) -> bool:
+    """Правило Р5: трубы клапана входят только в осевые грани (в талию).
+
+    Клапан холста (`_axis` H/V) степени 1–2 — `degree` считает вызывающий
+    ПО РЁБРАМ (`graph_access.degrees`; поле узла `degree` врёт). Степень 3+,
+    скины из `AXIAL_EXEMPT_SKINS` и узел старого холста (`LEGACY_KEY`, живёт
+    по правилам 238fe6b, Р1) — без правила."""
+    if node.get(LEGACY_KEY):
+        return False
+    if not is_valve(node) or node.get('_axis') not in ('H', 'V'):
+        return False
+    if skin_info(node)[1] in AXIAL_EXEMPT_SKINS:
+        return False
+    return 1 <= degree <= 2
 
 
 def orientation(node, sides=None):

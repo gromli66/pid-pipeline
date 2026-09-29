@@ -166,7 +166,10 @@ def layout(graph, params=None, stages=None):
     # 2026-09-22): выверенный порт клапана, середина рамки с допуском,
     # слоты вокруг опорной точки. Внутренние стадии (расстановка, пробы
     # раздвигания) сажают каноном со слабиной — раскладка не теряет ходов.
-    reseat_all_endpoints(graph, model=True, slots=True)
+    # Сервер — всегда с правилом Р5 (axial): клапан степени 1–2 принимает
+    # трубы только на осевых гранях, в талию (`seating.axial_faces`); тот же
+    # план граней у пинов роутера и у страховки.
+    reseat_all_endpoints(graph, model=True, slots=True, axial=True)
 
     # Э7-b: этап роутинга — обход чужих форм libavoid. Только waypoints рёбер,
     # узлы не двигаются; хуже входа — полный откат внутри apply_routing.
@@ -191,9 +194,9 @@ def layout(graph, params=None, stages=None):
     straightened = yielded = 0
     for _round in range(3):
         if routing_stats is not None or _round:
-            reseat_all_endpoints(graph, model=True, slots=True)
+            reseat_all_endpoints(graph, model=True, slots=True, axial=True)
         step = {}
-        n = straighten_unrouted(graph, stats=step)
+        n = straighten_unrouted(graph, stats=step, axial=True)
         straightened += n
         yielded += step.get("ports_yielded", 0)
         if not n:

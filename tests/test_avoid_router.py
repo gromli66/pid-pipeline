@@ -315,3 +315,18 @@ def test_apply_routing_clears_transit_and_keeps_nodes():
     # посадка концов — по осям подводящих сегментов (канон reseat_edge)
     pl = edge_polyline(e)
     assert min(abs(pl[1][0] - pl[0][0]), abs(pl[1][1] - pl[0][1])) <= 0.5
+
+
+def test_pin_of_degree2_valve_stays_axial():
+    """Р5: пин конца клапана степени 2 при соседе сверху — только на грани
+    из плана (`sides`), в талии; без плана конец остаётся где стоял (канон
+    уводил бы в T, фильтр сторон держит текущую точку)."""
+    from modules.graph.core.layout.avoid_router import _pin_port
+
+    v = {"id": "v", "type": "equipment", "class_name": "armatura_electro",
+         "_axis": "H", "centroid": [100.0, 200.0],
+         "bbox": [179.0, 81.1, 221.0, 118.9]}
+    waist = 100.0 + 0.222 * 37.8
+    got = _pin_port(v, (179.0, 100.0), (200.0, 20.0), sides={"L"})
+    assert got == (179.0, pytest.approx(waist))
+    assert _pin_port(v, (179.0, 100.0), (200.0, 20.0)) == (179.0, 100.0)

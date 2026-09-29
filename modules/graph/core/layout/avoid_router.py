@@ -48,7 +48,8 @@ from .params import LayoutParams
 from ..graph_access import edge_ends, edge_polyline, edges, is_connector, \
     nodes_by_id
 from ..pretransform import FIXED_SIZES
-from ..seating import _anchor_rect, _end_side, reseat_edge, slot_faces
+from ..seating import _anchor_rect, _end_side, axial_plan, reseat_edge, \
+    slot_faces
 
 log = logging.getLogger(__name__)
 
@@ -174,7 +175,7 @@ def _ortho(pts, tol=ORTHO_TOL):
                for i in range(1, len(pts)))
 
 
-def _pin_port(node, cur_xy, ref_xy):
+def _pin_port(node, cur_xy, ref_xy, sides=None):
     """Точка пина конца на узле — порт (этап A), не канон-луч.
 
     Судья тот же, что у drag в редакторе: `ports.choose_port` с гистерезисом
@@ -187,6 +188,10 @@ def _pin_port(node, cur_xy, ref_xy):
     поэтому фильтр стоит уже на выборе пина. У крупного контура это ровно
     случай «порт на дальнем прямом участке» (node_28 c2f79462): вход трубы
     не переезжает на другой бок аппарата, конец остаётся канонным.
+
+    sides — грань конца клапана степени 1–2 из плана Р5
+    (`seating.axial_plan`): пин выбирается только на ней, в талии — тот же
+    план, что у финальной посадки и страховки.
     """
     rx, ry = ref_xy
     manual = [p for p in ports.manual_ports(node)
@@ -196,7 +201,8 @@ def _pin_port(node, cur_xy, ref_xy):
                                           ports._l1(p, rx, ry)))
         cand = (best[0], best[1])
     else:
-        cand = ports.choose_port(node, cur_xy, ref_xy, PORT_SNAP)
+        cand = ports.choose_port(node, cur_xy, ref_xy, PORT_SNAP,
+                                 sides=sides)
     bb = node.get("bbox")
     if bb and len(bb) == 4:
         if not (_gate._side_set(cur_xy[0], cur_xy[1], bb)
@@ -313,6 +319,7 @@ def _route_pass(graph, byid, geoms, edge_list, p, force_ports):
     # пин такого конца — его слот, порт-судья увёл бы его в опорную точку
     # и свёл с соседом в одну
     busy = slot_faces(graph, byid)
+    faces = axial_plan(graph, byid)          # Р5: осевые грани клапанов
     for e in edge_list:
         eid = e.get("id")
         sp, tp = e.get("source_point"), e.get("target_point")
@@ -320,7 +327,8 @@ def _route_pass(graph, byid, geoms, edge_list, p, force_ports):
         ends = []
         pin_xy = []
         exempt = False
-        for nid, pt, other in ((s, sp, tp), (t, tp, sp)):
+        for nid, pt, other, role in ((s, sp, tp, "source"),
+                                     (t, tp, sp, "target")):
             node = byid.get(nid)
             if node is None:
                 break
@@ -340,7 +348,9 @@ def _route_pass(graph, byid, geoms, edge_list, p, force_ports):
                 if straight and not force_ports:
                     exempt = True
                 elif not on_slot:
-                    x, y = _pin_port(node, (x, y), (ox, oy))
+                    face = faces.get((id(e), role))
+                    x, y = _pin_port(node, (x, y), (ox, oy),
+                                     sides={face} if face else None)
                 pin_xy.append((x, y))
                 ref, (bx1, by1), bb = shape_refs[nid]
                 pin_class += 1
@@ -445,6 +455,7 @@ def apply_routing(graph, orig, base_v16, params=None, legal=None):
     orig_e = {e["id"]: e for e in edges(orig)}
     v16_e = {e["id"]: e for e in edges(base_v16)}
 
+    faces = axial_plan(graph, byid)          # Р5: посадка по стабам ниже
     ends_new = {}
     routed = route_graph(graph, p, ends_new)
     stats = {"routed": len(set(routed) | set(ends_new)),
@@ -479,7 +490,7 @@ def apply_routing(graph, orig, base_v16, params=None, legal=None):
         # прямого портового маршрута (без waypoints) концы уже в портах,
         # пересаживать не по чему — прямизну судит _ortho ниже.
         if e["waypoints"]:
-            reseat_edge(byid, e, model=True)
+            reseat_edge(byid, e, model=True, faces=faces)
         # посадка не имеет права ни скосить подводящий сегмент, ни увести
         # конец на другую грань (пин с ConnDirAll может выйти не той
         # стороной — судья `_side_changed` такое режет, откатываем адресно)
