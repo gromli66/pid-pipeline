@@ -5562,10 +5562,22 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         знала: на шести классах привод рисовался справа, а в САПФИР он слева
         — нарисованная талия оказывалась по другую сторону от трубы (промах
         6-30 px). None → узла нет.
+
+        Старый холст без метки модели (`model.attach_legacy`, Р1) — правило
+        238fe6b: по сторонам рёбер (`node_orientation_by_edges`), датчик
+        горизонтален, разворота нет; иначе «Размеры» клали длинную сторону
+        рамки на другую ось, чем база (у клапана, чья `_axis` расходится
+        с рёбрами). None → узла нет или у него нет рёбер.
         """
         node = self.nodes.get(node_id)
         if node is None:
             return None
+        if self._canvas_mode and self.model.attach_legacy:
+            if node.get('class_name') == 'datchik':
+                return 'HORIZONTAL'
+            from ui.editors.graph_geometry import node_orientation_by_edges
+            return node_orientation_by_edges(node_id, self.nodes,
+                                             self.edges_data)
         from modules.graph.core import contact
         from modules.graph.core import seating
         rect = seating._anchor_rect(node)

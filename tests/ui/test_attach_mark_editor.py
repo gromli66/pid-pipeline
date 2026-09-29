@@ -347,6 +347,42 @@ def test_old_canvas_single_pipe_holds_the_middle(qapp, tmp_path):
         assert bool(new["waypoints"]) is bent, mark
 
 
+def _axis_across_edge(mark=None):
+    """Клапан armatura_electro с `_axis` H, но труба входит СВЕРХУ: ось по
+    рёбрам (238fe6b) — VERTICAL, по `contact.orientation` (модель) —
+    HORIZONTAL. Так на фикстуре старого холста узел h2 (red-team блока 3)."""
+    g = _canvas(mark)
+    v = next(n for n in g["nodes"] if n["id"] == "v")
+    v["bbox"] = [279.0, 170.0, 321.0, 230.0]           # 42×60
+    v["degree"] = 1
+    g["nodes"][0]["centroid"] = [100.0, 300.0]
+    g["links"] = [{"id": "e1", "source": "c", "target": "v",
+                   "source_point": [100.0, 300.0],
+                   "target_point": [170.0, 300.0], "waypoints": []}]
+    return g
+
+
+def test_old_canvas_resize_orients_by_edges_as_238fe6b(qapp, tmp_path):
+    """«Размеры» на старом холсте ориентируют рамку по рёбрам, как 238fe6b:
+    труба сверху → длинная сторона по высоте, рамка 46×64 вокруг центроида
+    (литерал снят в дереве 238fe6b). С меткой — модель блока 1: ось `_axis`
+    (HORIZONTAL), длинная сторона по ширине."""
+    ed = _editor(qapp, tmp_path, _axis_across_edge())
+    assert ed._node_orientation("v") == "VERTICAL"
+    ed.set_resize_class("armatura_electro")
+    ed.apply_resize(width=46.0, height=64.0)
+    assert ed.nodes["v"]["bbox"] == [277.0, 168.0, 323.0, 232.0]
+
+    sub = tmp_path / "marked"
+    sub.mkdir()
+    ed = _editor(qapp, sub, _axis_across_edge("waist-1"))
+    assert ed._node_orientation("v") == "HORIZONTAL"
+    ed.set_resize_class("armatura_electro")
+    ed.apply_resize(width=46.0, height=64.0)
+    x1, y1, x2, y2 = ed.nodes["v"]["bbox"]
+    assert (x2 - x1, y2 - y1) == (pytest.approx(64.0), pytest.approx(46.0))
+
+
 # ───────────────────────── режим по метке ─────────────────────────
 
 def test_mode_follows_the_mark_and_the_file_keeps_it(qapp, tmp_path):
