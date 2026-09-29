@@ -16551,3 +16551,23 @@ unknow `edge_233`), `edge_manual_49`, `edge_manual_89`; объявлено `ACCE
 9 errors; против базы 238fe6b новое только известный `test_layout_smoke::
 test_invariants_not_worse_than_base`, errors — те же 9 `test_refactoring_v2`; +16 passed — новые
 тесты блока.
+
+### 132.5 Решение Максима и Д6 (HEAD 0b9f991)
+
+Решение Максима 29.09: рост второстепенных счётчиков блока (§132.3) принять как цену «одно ребро
+на пару» — Σ дефектов на 11 затронутых uid 50 → 44; выросли 8d517a35 «сторона входа» 2 → 4,
+51b339ab «бокс-на-магистрали» 1 → 2, текст на форме ca1f6ea2 +5, 54a60fd1 +2, ae30deb4 +1.
+
+Д6 (0b9f991, отдельный коммит): `layout_bench` на штатном корпусе (вход — `to_canvas` storage, со
+страховкой нормализации) тремя прогонами PYTHONHASHSEED 1..3 — счётчики бит-в-бит, состав сторон
+8d517a35 один и тот же (`edge_82`, `edge_232`, `edge_manual_49`, `edge_manual_89`). `EXPECT`:
+13d1ef5f 23→3 → 22→3, 51b339ab 289→8 → 279→8, 8d517a35 126→3 → 127→1; `ACCEPTED_SIDE`
+8d517a35 2 → 4 (правка №9 в комментарии, поимённо). a6d28736/89ca7583/6e7144d5/d74eb9f1 —
+бит-в-бит. Итог корпуса 614→23 → 604→21; прогон против новой таблицы exit 0.
+`layout_determinism --check --runs 6` на 19 uid — exit 0, регресса воспроизводимости нет:
+неповторимы 620cc50d (5/6), 8d517a35 (2/6), a5264536 (6/6); впервые воспроизводимы 8 графов
+(0aea61c0, 0fc9d04c, 302171b3, 54a60fd1, 6e7144d5, 751116c9, 8d14cf73, a6d28736) — эталон
+`determinism_baseline.json` не переснимался, метка `false` липкая (в т. ч. у 54a60fd1).
+Полный `pytest tests -q -rfE` (0b9f991): 24 failed / 5158 passed / 20 skipped / 9 errors; против
+базы 238fe6b новое только известный `test_layout_smoke::test_invariants_not_worse_than_base`
+(ждёт блок 5), errors — те же 9 `test_refactoring_v2`. Логи — `scratchpad/b4/d6/`.
