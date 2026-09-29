@@ -803,7 +803,8 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
         if valve_only:
             pipes = {ax: [q for q in v if (q[0], q[1]) in vkeep]
                      for ax, v in pipes.items()}
-        pipes = valve_floor(pipes, vkeep, by_key, min(pm, VALVE_PIPE))
+        vpm = min(pm, VALVE_PIPE)
+        pipes = valve_floor(pipes, vkeep, by_key, vpm)
         for a, c in zip(xaxes, cx0):
             a["coord"] = c
         for a, c in zip(yaxes, cy0):
@@ -813,7 +814,9 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
             it["cy"] = yaxes[ya[it["key"]]]["coord"]
         sep = {"x": {}, "y": {}}
         inf = {"scale_eff": round(scale, 3), "gap_eff": round(g, 2),
-               "pipe_eff": round(pm, 2), "pipes_x": len(pipes["x"]),
+               # ступень: прочие трубы сняты (0), пол клапана — отдельно
+               "pipe_eff": 0.0 if valve_only else round(pm, 2),
+               "valve_pipe_eff": round(vpm, 2), "pipes_x": len(pipes["x"]),
                "pipes_y": len(pipes["y"]), "rounds": 0, "vpsc_iters": 0,
                "vpsc_splits": 0, "solver_capped": 0, "keep_x": None,
                "keep_y": None, "pruned": {}}

@@ -90,6 +90,35 @@ def test_no_cliff_no_valve_only_step():
     assert y["q"] - y["P"] == pytest.approx(10.0)   # не клапан: кап входа
 
 
+def test_valve_only_step_stats_split_pipe_and_valve_floor():
+    """Статистика ступени: прочие трубы сняты (pipe_eff 0), пол клапана —
+    отдельным полем; на обычной доле pipe_eff = доля·12, пол = min(., 6)."""
+    st = axial.place(_column(200, 16), canvas=(600.0, 200.0))
+    assert (st["pipe_eff"], st["valve_pipe_eff"]) == (0.0, axial.VALVE_PIPE)
+    st = axial.place(_column(400, 60), canvas=(600.0, 400.0))
+    assert (st["pipe_eff"], st["valve_pipe_eff"]) == (12.0, axial.VALVE_PIPE)
+
+
+def test_valve_pipe_gap_not_monotone_at_step_edge():
+    """Объявленный разрыв (AUTO_LAYOUT): запас холста больше — труба клапана
+    короче. room 22 — ступень, пол VALVE_PIPE; room 23 — влезла доля > 0,
+    пол min(доля·12, 6) < 6, зато чужой коннектор q выходит на кромку P;
+    room 28 — доля 1, снова 6. Сторож: менять — только с замером корпуса."""
+    def gaps(room):
+        g = _column(200, room)
+        st = axial.place(g, canvas=(600.0, 200.0))
+        y = _ys(g)
+        return st["scale_eff"], y["c"] - y["v"] - 12.0, y["q"] - y["P"] - 10.0
+    s22, c22, q22 = gaps(22)
+    s23, c23, q23 = gaps(23)
+    s28, c28, _ = gaps(28)
+    assert s22 == 0.0 and c22 == pytest.approx(axial.VALVE_PIPE)
+    assert q22 < -1.0                      # ступень: q остаётся в рамке P
+    assert 0.0 < s23 < 1.0 and 0.0 < c23 < axial.VALVE_PIPE - 1.0
+    assert q23 == pytest.approx(0.0, abs=1e-6)
+    assert s28 == 1.0 and c28 == pytest.approx(axial.VALVE_PIPE)
+
+
 def test_valve_pipes_only_along_valve_axis():
     g = {"nodes": [{"id": "v", "class_name": VALVE, "_axis": "V"},
                    {"id": "a", "class_name": "connector"},
