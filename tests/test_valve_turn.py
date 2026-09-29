@@ -124,6 +124,7 @@ def test_turn_blocked_keeps_axis_and_hooks_into_waist():
     st = turn_single_valves(g)
     v = g["nodes"][0]
     assert (st["turned"], st["turn_blocked"]) == (0, 1)
+    assert st["blocked_ids"] == ["v"]
     assert v["_axis"] == "H" and v["bbox"] == [179.0, 89.5, 221.0, 110.5]
     reseat_all_endpoints(g, model=True, slots=True, axial=True)
     sp = g["links"][0]["source_point"]
@@ -169,3 +170,90 @@ def test_pinned_or_legacy_valve_not_turned():
     g["nodes"][0][contact.LEGACY_KEY] = True
     assert turn_single_valves(g)["turned"] == 0
     assert g["nodes"][0]["_axis"] == "H"
+
+
+# ─────────── стенд layout_bench: концы клапанов по граням (Р5) ───────────
+
+def _bench():
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location(
+        "lb_valve_ends", Path(__file__).resolve().parents[1]
+        / "tools" / "layout_bench.py")
+    lb = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(lb)
+    return lb
+
+
+def _faces_graph(valve=None):
+    """Клапан H рамка [179, 89.5, 221, 110.5], талия y = 100: e1 в талии L,
+    e2 на T (неосевая грань)."""
+    g = _g(valve=valve)
+    g["nodes"].append(_conn("a", 100.0, 100.0))
+    g["links"] = [
+        {"id": "e1", "source": "v", "target": "a", "waypoints": [],
+         "source_point": [100.0, 179.0], "target_point": [100.0, 100.0]},
+        {"id": "e2", "source": "v", "target": "c", "waypoints": [],
+         "source_point": [89.5, 200.0], "target_point": [300.0, 205.0]}]
+    return g
+
+
+def test_bench_valve_ends_by_faces():
+    """Судья стенда: неосевой конец клапана степени 1–2 назван поимённо;
+    клапан turn_blocked — в отдельном списке; пин — вне счёта; осевой конец
+    мимо талии — не «в талии», но и не неосевой; степень 3+ — отчётно;
+    predohran — свой счётчик."""
+    ve = _bench().valve_ends
+    g = _faces_graph()
+    r = ve(g)
+    assert (r["ends"], r["in_waist"], r["nonaxial_3p"], r["relief"]) \
+        == (2, 1, 0, 0)
+    assert r["nonaxial_12"] == ["v/e2"] and r["nonaxial_blocked"] == []
+    r = ve(g, {"v"})
+    assert r["nonaxial_12"] == [] and r["nonaxial_blocked"] == ["v/e2"]
+    g["links"][1]["pin_source"] = {"dx": 0.0, "dy": -10.5}   # пин на T
+    assert ve(g)["nonaxial_12"] == []
+    g = _faces_graph()
+    g["links"][0]["source_point"] = [105.0, 179.0]             # L мимо талии
+    r = ve(g)
+    assert r["in_waist"] == 0 and r["nonaxial_12"] == ["v/e2"]
+    g = _faces_graph()
+    g["nodes"].append(_conn("d", 300.0, 100.0))
+    g["links"].append({"id": "e3", "source": "v", "target": "d",
+                       "waypoints": [], "source_point": [100.0, 221.0],
+                       "target_point": [100.0, 300.0]})
+    r = ve(g)
+    assert (r["in_waist"], r["nonaxial_3p"], r["nonaxial_12"]) == (2, 1, [])
+    r = ve(_faces_graph(_valve("predohran", 42.0, 31.5)))
+    assert (r["ends"], r["relief"], r["in_waist"], r["nonaxial_12"]) \
+        == (2, 2, 0, [])
+
+
+def test_bench_check_flags_nonaxial_and_names_blocked(tmp_path, monkeypatch):
+    """check(): неосевой вход у степени 1–2 — регрессия стенда; у клапана из
+    stats valve_turn.blocked_ids (turn_blocked) — принят поимённо."""
+    import json
+    lb = _bench()
+    (tmp_path / "tiny.json").write_text(json.dumps(_g()), encoding="utf-8")
+    r = lb.check("tiny", str(tmp_path), with_text=False)
+    assert (r["turned"], r["valve_ends"], r["valve_in_waist"]) == (1, 1, 1)
+    assert r["nonaxial_12"] == [] and r["regressions"] == []
+
+    real_ve, real_layout = lb.valve_ends, lb.layout
+
+    def fake_ve(graph, exempt=()):
+        key = "nonaxial_blocked" if "v" in exempt else "nonaxial_12"
+        return dict(real_ve(graph, exempt), **{key: ["v/e"]})
+
+    monkeypatch.setattr(lb, "valve_ends", fake_ve)
+    r = lb.check("tiny", str(tmp_path), with_text=False)
+    assert r["regressions"] == ["неосевой вход клапана степени 1–2"]
+
+    def blocked_layout(g, p, stages=None):
+        out, st = real_layout(g, p, stages=stages)
+        st["valve_turn"]["blocked_ids"] = ["v"]
+        return out, st
+
+    monkeypatch.setattr(lb, "layout", blocked_layout)
+    r = lb.check("tiny", str(tmp_path), with_text=False)
+    assert r["nonaxial_blocked"] == ["v/e"] and r["regressions"] == []

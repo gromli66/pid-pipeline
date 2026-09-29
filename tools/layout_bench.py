@@ -34,9 +34,11 @@ if str(REPO) not in sys.path:
 
 from modules.graph.core.layout import LayoutParams, layout          # noqa: E402
 from modules.graph.core.layout import _gate, _shapes, spread        # noqa: E402
-from modules.graph.core.graph_access import (edge_ends,            # noqa: E402
+from modules.graph.core.graph_access import (degrees, edge_ends,   # noqa: E402
                                              edge_polyline, edges,
                                              is_connector, nodes_by_id)
+from modules.graph.core import contact, seating                     # noqa: E402
+from modules.graph.core.ports import pinned_port                    # noqa: E402
 from modules.graph.core.canvas_input import to_canvas               # noqa: E402
 from modules.graph.core import pretransform                         # noqa: E402
 from tools import corpus                                            # noqa: E402
@@ -165,7 +167,25 @@ CORPUS = {
 #      Итог 604->21 -> 415->21 (сумма «после» та же: +2 51b339ab, +2
 #      8d517a35, -3 a6d28736, -1 13d1ef5f). Регрессий по правилам стенда нет.
 #      Сняты тремя прогонами (PYTHONHASHSEED 1..3): счётчики одни и те же.
-EXPECT = {"51b339ab": (130, 10), "a6d28736": (125, 4), "8d517a35": (126, 3),
+#  11. блок 5 модели точек прикрепления — только осевые входы клапана
+#      степени 1–2 (Р5; 82cc3c3, 7c2ba45, 7a33b88). Новые столбцы: концы
+#      клапанов по граням (`valve_ends`: всего / в талии ± WAIST_TOL /
+#      неосевые у степени 1–2 без пина и без RELIEF / неосевые у 3+ / концы
+#      RELIEF), поворот turned/turn_shift_blocked/turn_blocked и
+#      ports_yielded. Неосевой вход у степени 1–2 без пина — регрессия,
+#      кроме клапанов turn_blocked (id — `valve_turn` blocked_ids; печатаются
+#      поимённо, приняты). Замер 2026-09-30, выход layout() на fe5d66d (вход
+#      блока 5) -> 7a33b88, судья тот же: концов 1376 = 1376; в талии
+#      1334 -> 1360; неосевые у 1–2 20 -> 0 (a6d28736 11, 89ca7583 6,
+#      13d1ef5f 3); у 3+ 7 = 7 (89ca7583 node_16/17/40/49/113); RELIEF 6 = 6
+#      (13d1ef5f). Мимо талии на осевой грани: a6d28736 node_245 edge_369
+#      (степень 1, у угла R, -10.5 px — порт уступил страховке, ports_yielded
+#      1), 89ca7583 node_113 (степень 4, веер). Поворот: a6d28736 2/0/5
+#      (повёрнуты node_260, node_281; turn_blocked node_173/174/175/240/282 —
+#      все концы в талии), остальные 0/0/0. Прочие столбцы бит-в-бит с
+#      7a33b88 (415 -> 21); «сторона входа» a6d28736 и 89ca7583 — от 82cc3c3,
+#      EXPECT/ACCEPTED_SIDE здесь не тронуты (Д6 в гейте блока 5).
+EXPECT ={"51b339ab": (130, 10), "a6d28736": (125, 4), "8d517a35": (126, 3),
           "89ca7583": (15, 2), "13d1ef5f": (15, 2), "6e7144d5": (4, 0),
           "5137af27": (8, 0), "d74eb9f1": (0, 0)}
 
@@ -362,6 +382,54 @@ def seat_violations(graph, tol=0.5):
             "max_px": round(worst, 2)}
 
 
+# px: конец на осевой грани в талии — вдоль грани не дальше этого от порта
+# (`contact.face_refs`); пробник scratchpad waist_hits.py брал тот же допуск.
+WAIST_TOL = 0.75
+_AXIAL = {"H": ("L", "R"), "V": ("T", "B")}
+
+
+def valve_ends(graph, exempt=()):
+    """Р5 (блок 5): концы рёбер у клапанов холста (`is_valve`, `_axis`) по
+    граням рамки посадки `seating._anchor_rect`. Степень — по рёбрам
+    (`graph_access.degrees`), правило — `contact.axial_only`.
+
+    ends — всего концов; in_waist — на осевой грани в талии (± WAIST_TOL);
+    nonaxial_12 — ["узел/ребро"] неосевых концов у клапана под правилом
+    (степень 1–2, без RELIEF и старого холста) без пина на своём конце и не
+    из `exempt`; nonaxial_blocked — такие же у клапанов из `exempt`
+    (turn_blocked раскладки, поимённо); nonaxial_3p — неосевые у степени
+    3+ (правила нет, отчётно); relief — концы у `AXIAL_EXEMPT_SKINS`.
+    """
+    byid = nodes_by_id(graph)
+    deg = degrees(graph)
+    out = {"ends": 0, "in_waist": 0, "nonaxial_12": [],
+           "nonaxial_blocked": [], "nonaxial_3p": 0, "relief": 0}
+    for e in edges(graph):
+        for nid, key in zip(edge_ends(e), ("source_point", "target_point")):
+            n = byid.get(nid)
+            if n is None or not contact.is_valve(n) \
+                    or n.get("_axis") not in _AXIAL:
+                continue
+            out["ends"] += 1
+            if contact.skin_info(n)[1] in contact.AXIAL_EXEMPT_SKINS:
+                out["relief"] += 1
+                continue
+            rect, pt = seating._anchor_rect(n), e.get(key)
+            side = (seating._end_side(rect, float(pt[1]), float(pt[0]))
+                    if pt and rect else None)
+            if side in _AXIAL[n["_axis"]]:
+                ref = (contact.face_refs(n, rect) or {}).get(side)
+                c = pt[0] if side in ("L", "R") else pt[1]
+                out["in_waist"] += ref is not None and abs(c - ref) <= WAIST_TOL
+            elif deg.get(nid, 0) >= 3:
+                out["nonaxial_3p"] += 1
+            elif contact.axial_only(n, deg.get(nid, 0)) \
+                    and pinned_port(n, e) is None:
+                out["nonaxial_blocked" if nid in exempt
+                    else "nonaxial_12"].append(f"{nid}/{e.get('id')}")
+    return out
+
+
 def _legal_leak(aft, base, pseudo_pairs):
     """Псевдолегальные пары, СТАВШИЕ наложенными после раскладки. Порог 0.
 
@@ -413,6 +481,8 @@ def check(uid8, canvas_dir=None, with_text=True):
     g16 = _gate.verify(v16, orig, v16, legal)
     gaf = _gate.verify(aft, orig, v16, legal)
 
+    vt = st.get("valve_turn") or {}
+    ve = valve_ends(aft, set(vt.get("blocked_ids") or ()))
     r = {
         "uid": uid8,
         "nodes": len(aft.get("nodes", [])),
@@ -440,11 +510,15 @@ def check(uid8, canvas_dir=None, with_text=True):
         "pen_after": round(spread.penetration_sum(aft, ab), 1),
         # Р5 (блок 5): клапаны степени 1, повёрнутые по трубе / без сдвига /
         # не повёрнутые (крючок в осевую талию); порты, уступившие страховке
-        "turned": (st.get("valve_turn") or {}).get("turned", 0),
-        "turn_shift_blocked": (st.get("valve_turn") or {}).get(
-            "turn_shift_blocked", 0),
-        "turn_blocked": (st.get("valve_turn") or {}).get("turn_blocked", 0),
+        "turned": vt.get("turned", 0),
+        "turn_shift_blocked": vt.get("turn_shift_blocked", 0),
+        "turn_blocked": vt.get("turn_blocked", 0),
         "ports_yielded": st.get("ports_yielded", 0),
+        # Р5: концы у клапанов по граням (`valve_ends`)
+        "valve_ends": ve["ends"], "valve_in_waist": ve["in_waist"],
+        "nonaxial_12": ve["nonaxial_12"],
+        "nonaxial_blocked": ve["nonaxial_blocked"],
+        "nonaxial_3p": ve["nonaxial_3p"], "relief_ends": ve["relief"],
     }
     sv = seat_violations(aft)
     r["seat_violations"] = sv["violations"]
@@ -472,6 +546,8 @@ def check(uid8, canvas_dir=None, with_text=True):
         reg.append("бокс-на-магистрали")
     if r["defects_after"] > r["defects_before"]:
         reg.append("дефекты")
+    if r["nonaxial_12"]:
+        reg.append("неосевой вход клапана степени 1–2")
     exp = EXPECT.get(uid8)
     if exp and (r["defects_before"], r["defects_after"]) != exp:
         reg.append(f"расхождение с §7 SOLUTION.md ({exp[0]} -> {exp[1]})")
@@ -527,8 +603,9 @@ def main():
         return 1
     print()
     print("| uid | узлов | дефекты | диаг | налож | утечка | стор | прям | связн | перест | "
-          "бокс-на-магистр | проникн.форм | посадка | время |")
-    print("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+          "бокс-на-магистр | проникн.форм | посадка | клапаны: концы/в талии/"
+          "неос.1–2/неос.3+/RELIEF | поворот | уступ. | время |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for r in rows:
         print(f"| {r['uid']} | {r['nodes']} | "
               f"{r['defects_before']} -> {r['defects_after']} | "
@@ -539,7 +616,12 @@ def main():
               f"{'OK' if not r['connectivity_changed'] else 'СЛОМАНА'} | "
               f"{r['order_local']} | {r['magi_before']} -> {r['magi_after']} | "
               f"{r['pen_before']} -> {r['pen_after']} | "
-              f"{r['seat_violations']} | {r['time_s']}s |")
+              f"{r['seat_violations']} | "
+              f"{r['valve_ends']}/{r['valve_in_waist']}/"
+              f"{len(r['nonaxial_12'])}+{len(r['nonaxial_blocked'])}/"
+              f"{r['nonaxial_3p']}/{r['relief_ends']} | "
+              f"{r['turned']}/{r['turn_shift_blocked']}/{r['turn_blocked']} | "
+              f"{r['ports_yielded']} | {r['time_s']}s |")
     tb = sum(r["defects_before"] for r in rows)
     ta = sum(r["defects_after"] for r in rows)
     print(f"\nИТОГО дефектов: {tb} -> {ta}")
@@ -554,6 +636,12 @@ def main():
             print(f"| {r['uid']} | {r['text_total']} | {r['text_moved_owner']} | "
                   f"{r['text_no_anchor']} | {r['text_on_shape_before']} | "
                   f"{r['text_on_shape_after']} |")
+
+    for r in rows:
+        if r["nonaxial_12"] or r["nonaxial_blocked"]:
+            print(f"\nНЕОСЕВЫЕ ВХОДЫ {r['uid']}: степень 1–2 "
+                  f"{r['nonaxial_12'] or '—'}; turn_blocked (приняты) "
+                  f"{r['nonaxial_blocked'] or '—'}")
 
     bad = [r for r in rows if r["regressions"]]
     warn = [r for r in rows if r.get("warning")]

@@ -59,12 +59,13 @@ def turn_single_valves(graph, legal=None, p=None):
 
     stats: turned (повёрнуты, со сдвигом или без), turn_shift_blocked
     (повёрнуты без сдвига — сдвиг упёрся), turn_blocked (повернуть нельзя,
-    ось прежняя — крючок), shift_px (модули принятых сдвигов).
+    ось прежняя — крючок), shift_px (модули принятых сдвигов), blocked_ids
+    (id клапанов turn_blocked — стенд `layout_bench` называет их поимённо).
     """
     floor = p.floor if p is not None else spread.FLOOR
     byid = nodes_by_id(graph)
     stats = {"turned": 0, "turn_shift_blocked": 0, "turn_blocked": 0,
-             "shift_px": []}
+             "shift_px": [], "blocked_ids": []}
     base = None
     for n, e in _candidates(graph, byid):
         s, t = edge_ends(e)
@@ -107,6 +108,7 @@ def turn_single_valves(graph, legal=None, p=None):
             n["_axis"], n["bbox"], n["centroid"] = snap
         if done is None:
             stats["turn_blocked"] += 1
+            stats["blocked_ids"].append(n["id"])
             continue
         stats["turned"] += 1
         if done == (0.0, 0.0):
