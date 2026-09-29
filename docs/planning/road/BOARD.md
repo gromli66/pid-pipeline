@@ -18592,3 +18592,12 @@ _retry_download → _on_downloaded → …`. В бою загрузка асин
 Известный красный до блока 5: test_layout_smoke::test_invariants_not_worse_than_base (side_changed 0 → 1, synth_med edge_111, regulator_electro) — ждёт Р5; не позеленеет после блока 5 — переснять эталон синтетики
 Урок: гейт по выбранному вручную набору тестов пропустил красный tests/test_geometry_guard.py (с К5 d170375) — починен стражником 090d045; гейт блоков теперь — полный pytest tests против базы, регрессии поимённо. Следующий шаг: блок 3 (метка старых холстов, Р1), база входа = road-waist-b2 + эта доска
 ```
+
+### [2026-09-29] waist-b3 — ЗАКРЫТ: метка модели для старых холстов (Р1), тег `road-waist-b3`
+```
+Пункт: waist-b3 — done; тег road-waist-b3 (аннотированный, не пушен) на ceddd39; коммиты 6c8f934 ebb90ac 1c0fc21 641b43d 2e24cab(Д6) 2021fa3 ceddd39
+Доказано: старые холсты = 238fe6b на 59 холстах × 11 выходов (649 файлов), расхождений 0, утечек ключа 0 (перемерено после 2021fa3); @model = HEAD блока 2 (as_model 38/38, edit_bench 20/20, smooth 18/18+20/20, interactive 252 строки); layout_bench 614 → 23 exit 0; детерминизм 19 uid exit 0; полный pytest 24 failed / 5142 passed — против 238fe6b новое одно (известное)
+Приёмка red-team: medium «Размеры»/скин на старом холсте ориентировались по _axis — починено 2021fa3 (по рёбрам, как 238fe6b; 40/59 холстов → 0, зонды 2/2); low smooth_bench raw/edited красные против al-0 с блока 1 (рост 10/20) — записано в MEASUREMENTS §131.2 и TESTING, эталон не переснят
+Известный красный до блока 5: test_layout_smoke::test_invariants_not_worse_than_base (side_changed 0 → 1, synth_med edge_111)
+Ждёт Максима: узаконить ли рост raw/edited smooth_bench против al-0 (кнопка на старом холсте, запрет скольжения) пересъёмом Д6 в обход отказа стенда
+```

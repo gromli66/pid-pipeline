@@ -16416,3 +16416,63 @@ test_project_loader_autodetect`, `test_canvas_gate_instead_of_fallback` ×6.
 
 **Итог.** Блок 2 закрыт; тег `road-waist-b2` — на 189a1ed (последний содержательный коммит
 блока; Д6 при закрытии не понадобился).
+
+## 131. Блок 3 плана «модель точек прикрепления» (waist-b3) — метка модели для старых холстов (Р1, 2026-09-29)
+
+Коммиты: 6c8f934 (ядро и сервер: `contact.ATTACH_MODEL = 'waist-1'`, `canvas_state.stamp`,
+`seat_edge_endpoints(legacy=...)`, выгрузка по `SKIN_CONTACT_OFFSET_LEGACY`), ebb90ac (клиент:
+открытие, `model.attach_legacy`, `_waist_model()`, ключ `_attach_legacy` не уходит в файл),
+1c0fc21 (стенды: популяции `@model`), 641b43d (ADR-009), 2e24cab (Д6: первые снимки `@model`),
+2021fa3 (приёмка red-team: ориентация «Размеров» и скина на старом холсте), ceddd39 (TESTING).
+Логи — `scratchpad/b3/gate/` (гейт на 2e24cab), `b3/fix/` (после правки), `b3/redteam/`,
+`b3/verify-0/`, `b3/verify-1/`.
+
+### 131.1 Гейт блока (HEAD 2e24cab, после падения компьютера прогнан заново целиком)
+
+| проверка | результат |
+|---|---|
+| старые холсты бит-в-бит с deploy 238fe6b (`gate/legacy/run.py`) | 59 холстов (20 storage + 18 smooth raw + 20 edited + фикстура), по 11 выходов = 649 файлов с каждой стороны: P (FXML сырого), S (посадка), A (открытие + FXML), B (перенос → Ctrl+Z → сохранение → открытие + FXML), C (перенос → сохранение). Содержательных расхождений **0**; 59 расхождений B.json — только штамп `_editor_commit`. ret открытия True 53 / False 6 с обеих сторон; утечек `attach_model`/`_attach_legacy` 0; исходники не тронуты |
+| популяции `@model` против дерева HEAD блока 2 (3376d1a) | `corpus.as_model` 38/38 sha; `edit_bench --model` 20/20 побайтно, `--check` exit 0 (diag 479, along_own 69, along_foreign 98, through 112, midpoint 1559, side 502); `interactive_bench --op reseat` 252 строки побайтно (side_changed Σ109, far_end_moved Σ50); `smooth_bench --runs 5` raw@model 18/18, edited@model 20/20 (raw@model косых 437 → 56, изломов 772 → 1003; edited@model 479 → 10, 459 → 626) |
+| бенч 8 графов `layout_bench` | exit 0, 614 → 23, «регрессий нет ни одной» |
+| детерминизм `--check --runs 6`, 19 uid | exit 0; неповторимы как в эталоне 620cc50d (4/6), 8d517a35 (2/6), a5264536 (6/6); Σ после 53 |
+| полный `pytest tests` | 24 failed / 5141 passed / 20 skipped / 9 errors; против базы новое одно — известный красный `test_layout_smoke::test_invariants_not_worse_than_base` (§130.6) |
+
+### 131.2 Приёмка red-team
+
+**medium — «Размеры» на старом холсте ориентировали рамку не как 238fe6b (исправлено 2021fa3).**
+`_node_orientation` с коммита D блока 1 брал `contact.orientation` (`_axis` > рёбра) вне
+`_waist_model()`. У клапана, чья `_axis` расходится со сторонами рёбер, длинная сторона рамки
+ложилась на другую ось (фикстура h2 armatura_electro `_axis` H, труба сверху: ветка 64×46,
+база 46×64). Red-team: 40 из 59 старых холстов, 154 узла; ось расходилась у 816 из 8488 узлов
+equipment (verify-0). Выбран вариант (а): на старом холсте (`_canvas_mode` и
+`model.attach_legacy`) — правило 238fe6b (`node_orientation_by_edges`, датчик горизонтален,
+без разворота); холст с меткой и растр — как в блоке 1. После правки (`b3/fix/v/`): рамки
+«Размеров» — 0 расхождений из 59 холстов, ось — 0 из 8488 узлов; гейт 131.1 (649 файлов)
+перемерен на 2021fa3 — содержательных расхождений 0 (`b3/fix/legacy/cmp.log`). Тест
+`test_old_canvas_resize_orients_by_edges_as_238fe6b` (литерал [277, 168, 323, 232] снят в
+дереве 238fe6b, `b3/fix/base_literal.py`); зонды 2/2 красные: правка снята → 'HORIZONTAL' ≠
+'VERTICAL'; гейт расширен на помеченный холст → двойник 'VERTICAL' ≠ 'HORIZONTAL'.
+
+**low — плоские `raw`/`edited` `smooth_bench` красные против al-0 (записано, эталон не пересъёмный).**
+После блока 3 это популяции старых холстов. Против эталона al-0 (721b7a7) рост дефектов 10 (raw)
+и 20 (edited) — и на HEAD блока 2, и на HEAD блока 3; на deploy 238fe6b — 0 (verify-1). Красный
+внесён блоком 1 (запрет скольжения рамочного конца, решение Максима: сохраняется и на старом
+холсте); ходов скольжения raw 43 → 1, edited 27 → 6; коннектор 52 → 74, 22 → 29. Блок 3
+меняет итоги кнопки на 3 из 18 raw (54a60fd1, 8d517a35, c2f79462) и 3 из 20 edited
+(graph_edited971, _222222, _line) против HEAD блока 2. Пересъём `--write-baseline` стенд
+отклоняет («пересъём узаконит рост») — узаконить рост против deploy решает Максим; до того
+кнопку на старом холсте эталон не сторожит. В TESTING.md (ceddd39) добавлено: `--check` с одной
+`--population` по конструкции exit 2, судить по строке «рост дефектов».
+
+### 131.3 Гейт после правок (HEAD ceddd39)
+
+Полный `QT_QPA_PLATFORM=offscreen python -X utf8 -m pytest tests -q -rfE`: **24 failed / 5142
+passed / 20 skipped / 9 errors**, 30 мин (`b3/fix/full/full.log`). База 238fe6b
+(`b2/fullsuite/base.log`): 23 failed / 4615 passed / 15 skipped / 9 errors. Поимённо
+(`b3/fix/full/cmp.txt`): все 23 красных базы красные и в ветке, исправленных нет; новое одно —
+известный `test_layout_smoke::test_invariants_not_worse_than_base` (ждёт блок 5); 9 errors —
+`test_refactoring_v2` (нет фикстуры `profile`), те же, что в базе. +1 passed против гейта 131.1 —
+новый тест 131.2.
+
+**Итог.** Блок 3 закрыт; тег `road-waist-b3` — на ceddd39 (последний содержательный коммит
+блока).
