@@ -438,6 +438,13 @@ def check(uid8, canvas_dir=None, with_text=True):
         "pipe_depth_after": round(spread.box_on_pipe_depth(aft, ab)[1], 1),
         "pen_before": round(spread.penetration_sum(v16, vb), 1),
         "pen_after": round(spread.penetration_sum(aft, ab), 1),
+        # Р5 (блок 5): клапаны степени 1, повёрнутые по трубе / без сдвига /
+        # не повёрнутые (крючок в осевую талию); порты, уступившие страховке
+        "turned": (st.get("valve_turn") or {}).get("turned", 0),
+        "turn_shift_blocked": (st.get("valve_turn") or {}).get(
+            "turn_shift_blocked", 0),
+        "turn_blocked": (st.get("valve_turn") or {}).get("turn_blocked", 0),
+        "ports_yielded": st.get("ports_yielded", 0),
     }
     sv = seat_violations(aft)
     r["seat_violations"] = sv["violations"]
@@ -512,6 +519,8 @@ def main():
         else:
             print(f"{uid8}: {r['defects_before']} -> {r['defects_after']}, "
                   f"{'РЕГРЕССИИ: ' + ', '.join(r['regressions']) if r['regressions'] else 'регрессий нет'}"
+                  f", поворот {r['turned']}/{r['turn_shift_blocked']}/"
+                  f"{r['turn_blocked']}, уступило портов {r['ports_yielded']}"
                   f", {r['time_s']}s", flush=True)
 
     if not rows:

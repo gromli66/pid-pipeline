@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from . import _shapes, axial, spread
+from . import _shapes, axial, spread, valve_turn
 from ..graph_access import edges, nodes_by_id
 from ._avoid_binding import avoid_available
 from .params import LayoutParams
@@ -162,6 +162,11 @@ def layout(graph, params=None, stages=None):
         base_v16=base_v16, band=p.band, unlock_zero=p.unlock_zero,
         compound=p.compound, comp_push=p.comp_push,
         legal=shapes.legal if shapes is not None else None)
+    # Р5: клапан степени 1 с трубой поперёк оси поворачивается по трубе и
+    # сдвигается талией на её линию (`valve_turn`) — до финальной посадки,
+    # чтобы она уже видела новую ось; не повернуть — крючок в осевую талию.
+    turn_stats = valve_turn.turn_single_valves(
+        graph, shapes.legal if shapes is not None else None, p)
     # Финальная посадка — по модели точек прикрепления (решение заказчика
     # 2026-09-22): выверенный порт клапана, середина рамки с допуском,
     # слоты вокруг опорной точки. Внутренние стадии (расстановка, пробы
@@ -207,4 +212,5 @@ def layout(graph, params=None, stages=None):
     return graph, {"defects_before": before, "defects_after": after,
                    "axial": axial_stats, "spread": spread_stats,
                    "routing": routing_stats, "straightened": straightened,
+                   "valve_turn": turn_stats,
                    "ports_yielded": straight_stats.get("ports_yielded", 0)}
