@@ -22,14 +22,21 @@ from collections import defaultdict
 
 from . import _gate as topo_gate
 from . import _shapes
+from .. import contact
 from ._gap import FLOOR, gap_and_seam, shape_box
-from ..graph_access import (edge_ends, edge_polyline, edges, is_connector,
-                            move_node, node_cxy, nodes_by_id)
+from ..graph_access import (degrees, edge_ends, edge_polyline, edges,
+                            is_connector, move_node, node_cxy, nodes_by_id)
 from ..seating import reseat_all_endpoints, reseat_edge
 
 logger = logging.getLogger(__name__)
 
 TARGET = 12.0     # px: желаемая длина трубы (порог заказчика)
+KNEE_CLEAR = 10.0   # px: свободная осевая грань клапана Р5 степени 2 (напротив
+                    # соседа вдоль оси) — зазор до чужого блока за ней. Через
+                    # неё колено уходит к поперечному соседу: стаб из талии
+                    # route_buffer (6) + клиренс avoid_router.WAIST_BUFFER (3)
+                    # = 9, с запасом 10. Добирается ходом блока прочь с
+                    # приёмкой try_shift (ход не прошёл — как было)
 TAIL_MAX = 12     # узлов: до этого размера сторона считается «концевой веткой»
 AXIS_TOL = 1.0    # px: допуск соосности
 AXIS_EPS = 1e-9   # px: запас на шум плавающей точки в `pts_orient`. Ребро
@@ -1068,6 +1075,65 @@ def spread(graph, orig, floor=FLOOR, target=TARGET, passes=PASSES,
                     return True
         return False
 
+    def knee_pass():
+        """Р5: запас за свободной осевой гранью клапана степени 2 с одним
+        соседом вдоль оси и одним поперёк. Блок за этой гранью ближе
+        KNEE_CLEAR уезжает прочь по оси клапана (куст, иначе один узел);
+        приёмка — та же try_shift (strict=False: дефектов не больше)."""
+        stats.setdefault("knee_cleared", 0)
+        deg = degrees(graph)
+        for vid in sorted(byid):
+            v = byid[vid]
+            if deg.get(vid) != 2 or vid in frozen \
+                    or not contact.axial_only(v, 2):
+                continue
+            cx, cy = node_cxy(v)
+            H = v["_axis"] == "H"
+            along = []
+            for k, _e2 in adj.get(vid, ()):
+                ox, oy = node_cxy(byid[k])
+                da, dc = (ox - cx, oy - cy) if H else (oy - cy, ox - cx)
+                if abs(da) >= abs(dc):
+                    along.append((k, da))
+            if len(along) != 1:
+                continue
+            sgn = -1.0 if along[0][1] > 0 else 1.0     # свободная грань
+            vb = shape_box(v)
+            axis = "X" if H else "Y"
+            for k, o in byid.items():
+                if k in (vid, along[0][0]) or k in frozen \
+                        or is_connector(o) or not o.get("bbox"):
+                    continue
+                ob = shape_box(o)
+                if H:
+                    over = min(vb[3], ob[3]) - max(vb[1], ob[1])
+                    g = ob[0] - vb[2] if sgn > 0 else vb[0] - ob[2]
+                else:
+                    over = min(vb[2], ob[2]) - max(vb[0], ob[0])
+                    g = ob[1] - vb[3] if sgn > 0 else vb[1] - ob[3]
+                if over <= 0 or g < 0 or g >= KNEE_CLEAR:
+                    continue
+                need = KNEE_CLEAR - g
+                cands = []                   # (куст, знак хода)
+                grp = group_of(k, axis, byid, adj)
+                if grp is not None and vid not in grp:
+                    cands.append((grp, sgn))
+                if solo_ok(k, axis, byid, adj):
+                    cands.append(({k}, sgn))
+                # иначе сам клапан — к соседу вдоль оси, каскадом по цепочке
+                casc = grow_cascade(vid, axis, -sgn, need, byid, adj, floor)
+                if casc is not None and k not in casc:
+                    cands.append((casc, -sgn))
+                cur2 = defects(graph, byid, floor)
+                for gk, sg in cands:
+                    if try_shift([(set(gk), *_vec(axis, sg * need))], cur2,
+                                 None, strict=False):
+                        stats["knee_cleared"] += 1
+                        stats["moves"].append({"node": vid, "how": "knee",
+                                               "axis": axis, "blocker": k,
+                                               "px": round(need, 2)})
+                        break
+
     def fix_skew(e, eid):
         """Лестница косых ходов: сначала выпрямление, потом составной ход."""
         if try_align(e, eid):
@@ -1354,6 +1420,7 @@ def spread(graph, orig, floor=FLOOR, target=TARGET, passes=PASSES,
             if band in ("post", "both") and band_pass("post") > 0:
                 continue
             break
+    knee_pass()
     return stats
 
 

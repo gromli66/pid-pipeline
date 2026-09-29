@@ -330,3 +330,67 @@ def test_pin_of_degree2_valve_stays_axial():
     got = _pin_port(v, (179.0, 100.0), (200.0, 20.0), sides={"L"})
     assert got == (179.0, pytest.approx(waist))
     assert _pin_port(v, (179.0, 100.0), (200.0, 20.0)) == (179.0, 100.0)
+
+
+@pytest.mark.parametrize("gap", [12.0, 8.0])
+def test_waist_pin_elbow_squeezes_past_transverse_neighbour(gap):
+    """Р5, отступ роутера у талии (репро 06b938ec edge_89): клапан V
+    степени 2 сидит на трубу к соседу поперёк нижней осевой гранью, сосед —
+    на зазоре 12 px (= 2 × route_buffer): коридора колену при буфере 6 нет,
+    libavoid отдаёт прямую центр–центр. Повтор с WAIST_BUFFER у клапана
+    проводит колено в коридоре; стаб из талии не короче route_buffer.
+    Зазор 8: коридор есть, только если и стенка-сосед без раздутия."""
+    v = {"id": "v", "type": "equipment", "class_name": "armatura_ruchn",
+         "_axis": "V", "centroid": [162.0, 164.5],
+         "bbox": [154.0, 141.0, 175.0, 183.0]}
+    n = _block("n", 175.0 + gap + 45.0, 162.0, w=90.0, h=90.0)
+    c = _connector("c", 164.5, 40.0)                   # вторая труба — вверх
+    g = {"nodes": [v, n, c],
+         "links": [_edge("e1", "v", "n"), _edge("e2", "c", "v")]}
+    reseat_all_endpoints(g, axial=True)
+    assert g["links"][0]["source_point"][0] == pytest.approx(183.0)  # низ
+    ends = {}
+    got = route_graph(g, ends_out=ends)
+    assert "e1" in got
+    sp, tp = ends.get("e1", (g["links"][0]["source_point"],
+                             g["links"][0]["target_point"]))
+    assert sp[0] == pytest.approx(183.0)                 # пин — в талии B
+    pts = [sp] + got["e1"] + [tp]
+    assert all(min(abs(pts[i][0] - pts[i - 1][0]),
+                   abs(pts[i][1] - pts[i - 1][1])) <= 1.5
+               for i in range(1, len(pts)))
+    assert pts[1][0] - 183.0 >= BUF - 1e-6               # стаб вниз >= 6
+    assert all(175.0 < x < 175.0 + gap                   # в коридоре
+               for _y, x in got["e1"][1:])
+
+
+def test_knee_pass_clears_blocker_behind_free_axial_face():
+    """Р5, запас за свободной осевой гранью (репро 26747a10 edge_232):
+    клапан V степени 2 — вторая труба вверх, сосед поперёк на 12 px, а за
+    свободной нижней гранью чужой блок в 1 px. Колену за клапаном выйти
+    некуда: роутер отдаёт прямую, страховка — косую. `spread.knee_pass`
+    отодвигает блок до KNEE_CLEAR, и колено проходит ортогонально."""
+    v = {"id": "v", "type": "equipment", "class_name": "armatura_ruchn",
+         "_axis": "V", "centroid": [162.0, 164.5],
+         "bbox": [154.0, 141.0, 175.0, 183.0]}
+    n = _block("n", 175.0 + 12.0 + 45.0, 162.0, w=90.0, h=90.0)
+    c = _connector("c", 164.5, 40.0)
+    b = _block("b", 164.5, 183.0 + 1.0 + 20.0)          # в 1 px под клапаном
+    g = {"nodes": [v, n, c, b],
+         "links": [_edge("e1", "v", "n"), _edge("e2", "c", "v")]}
+    reseat_all_endpoints(g)
+    st = spread.spread(g, deepcopy(g), base_v16=deepcopy(g), verbose=False)
+    assert st["knee_cleared"] == 1
+    assert b["bbox"][1] - v["bbox"][3] >= spread.KNEE_CLEAR - 1e-6
+    reseat_all_endpoints(g, axial=True)
+    ends = {}
+    got = route_graph(g, ends_out=ends)
+    assert "e1" in got
+    sp, tp = ends.get("e1", (g["links"][0]["source_point"],
+                             g["links"][0]["target_point"]))
+    assert sp[0] == pytest.approx(v["bbox"][3])          # пин — в талии B
+    pts = [sp] + got["e1"] + [tp]
+    assert all(min(abs(pts[i][0] - pts[i - 1][0]),
+                   abs(pts[i][1] - pts[i - 1][1])) <= 1.5
+               for i in range(1, len(pts)))
+    assert pts[1][0] < b["bbox"][1]                      # колено над блоком

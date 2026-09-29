@@ -62,6 +62,14 @@ PORT_SNAP = 8.0      # px: snap-порог гистерезиса `ports.choose_
                      # у drag в редакторе (сторож == судья, этап A)
 STRAIGHT_EPS = 0.5   # px: канон посадил конец строгой прямой к другому
                      # концу — прямая неприкосновенна, порт не применяется
+WAIST_BUFFER = 3.0   # px: клиренс в коридоре у клапана, сидящего талией
+                     # (Р5). Сосед поперёк стоит на зазоре под прямую трубу
+                     # (<= 2 × route_buffer), колену за клапаном коридор
+                     # шириной 0 — libavoid отдаёт прямую центр–центр. Только
+                     # в повторном проходе упавших рёбер и только у клапана
+                     # (поперёк оси) и форм ближе 2 × route_buffer к его
+                     # рамке; вдоль оси клапана и у прочих форм — прежний
+                     # route_buffer (стаб из талии не короче).
 
 
 def _polygon_pts(node):
@@ -93,6 +101,26 @@ def _obstacle(node):
     if x2 - x1 <= 0 or y2 - y1 <= 0:
         return None
     return [(x1, y1), (x2, y1), (x2, y2), (x1, y2)], (x1, y1, x2, y2)
+
+
+def _waist_grow(node, valve, grow, near):
+    """(dl, dt, dr, db) — на сколько раздуть препятствие node в проходе
+    с уменьшенным буфером роутера, чтобы клиренс остался route_buffer
+    везде, кроме коридора у клапана valve (сидит талией, Р5).
+
+    Сам клапан: вдоль оси — grow (стаб из талии прежней длины), поперёк — 0.
+    Прочая форма ближе near к рамке клапана (стенка коридора) — 0 со всех
+    сторон (у угла соседа колено идёт по тому же узкому коридору), дальше —
+    grow со всех сторон.
+    """
+    if node is valve:
+        return (grow, 0.0, grow, 0.0) if valve.get("_axis") == "H" \
+            else (0.0, grow, 0.0, grow)
+    vx1, vy1, vx2, vy2 = _anchor_rect(valve) or \
+        tuple(float(v) for v in valve["bbox"])
+    x1, y1, x2, y2 = (float(v) for v in node["bbox"])
+    gap = max(vx1 - x2, x1 - vx2, vy1 - y2, y1 - vy2)
+    return (0.0,) * 4 if gap < near else (grow,) * 4
 
 
 def _conn_dirs(ag, px, py, rect, eps=SIDE_EPS):
@@ -258,6 +286,18 @@ def route_graph(graph, params=None, ends_out=None):
             and len(acc[e.get("id")][0]) > 2]          # но маршрут с изломами
     if redo:
         acc.update(_route_pass(graph, byid, geoms, redo, p, force_ports=True))
+    # Р5: упавшее ребро с концом в талии клапана — повтор с узким коридором
+    # у клапана (WAIST_BUFFER), по одному ребру: раздутие зависит от клапана
+    faces = axial_plan(graph, byid)
+    for e in routable:
+        if acc.get(e.get("id")) is not None:
+            continue
+        s, t = edge_ends(e)
+        vs = tuple(byid[nid] for nid, role in ((s, "source"), (t, "target"))
+                   if faces.get((id(e), role)) and nid in byid)
+        if vs:
+            acc.update(_route_pass(graph, byid, geoms, [e], p,
+                                   force_ports=False, waist=vs))
 
     out = {}
     for e in routable:
@@ -281,8 +321,23 @@ def route_graph(graph, params=None, ends_out=None):
     return out
 
 
-def _route_pass(graph, byid, geoms, edge_list, p, force_ports):
+def _stretch(pts, bb, d):
+    """Растянуть точки препятствия по осям: грани bbox уходят на d =
+    (dl, dt, dr, db); у прямоугольника — точный сдвиг граней."""
+    x1, y1, x2, y2 = bb
+    dl, dt, dr, db = d
+    kx = (x2 - x1 + dl + dr) / (x2 - x1) if x2 > x1 else 1.0
+    ky = (y2 - y1 + dt + db) / (y2 - y1) if y2 > y1 else 1.0
+    out = [(x1 - dl + (x - x1) * kx, y1 - dt + (y - y1) * ky) for x, y in pts]
+    return out, (x1 - dl, y1 - dt, x2 + dr, y2 + db)
+
+
+def _route_pass(graph, byid, geoms, edge_list, p, force_ports, waist=None):
     """Один проход libavoid по рёбрам edge_list.
+
+    waist — узлы клапанов ребра, сидящих талией: буфер роутера WAIST_BUFFER,
+    препятствия раздуты `_waist_grow` (клиренс route_buffer всюду, кроме
+    коридора у клапанов).
 
     -> {edge_id: (pts, pin_xy, straight_exempt)} — только ПРИНЯТЫЕ маршруты
     (пины/ортогональность/прошивание — те же сторожа, что и раньше);
@@ -293,7 +348,11 @@ def _route_pass(graph, byid, geoms, edge_list, p, force_ports):
     """
     ag = load()
     router = ag.Router(ag.OrthogonalRouting)
-    router.setRoutingParameter(ag.shapeBufferDistance, float(p.route_buffer))
+    buf = float(p.route_buffer)
+    if waist is not None:
+        grow = max(buf - WAIST_BUFFER, 0.0)
+        buf = min(buf, WAIST_BUFFER)
+    router.setRoutingParameter(ag.shapeBufferDistance, buf)
     router.setRoutingParameter(ag.idealNudgingDistance, float(p.route_nudge))
 
     # SWIG-GC (ловушка 1): все прокси живут здесь до конца извлечения
@@ -306,12 +365,17 @@ def _route_pass(graph, byid, geoms, edge_list, p, force_ports):
         if ob is None:
             continue
         pts, bb = ob
+        box = bb
+        if waist is not None and grow > 0:
+            d = [_waist_grow(n, v, grow, 2.0 * float(p.route_buffer))
+                 for v in waist]
+            pts, box = _stretch(pts, bb, tuple(map(min, zip(*d))))
         poly = ag.Polygon(len(pts))
         for j, (x, y) in enumerate(pts):
             poly.setPoint(j, ag.Point(x, y))
         ref = ag.ShapeRef(router, poly, i + 1)
         keep += [poly, ref]
-        shape_refs[n["id"]] = (ref, (bb[0], bb[1]), bb)
+        shape_refs[n["id"]] = (ref, (box[0], box[1]), bb)
 
     conns = []          # (edge_id, edge, ConnRef, pin_xy, straight_exempt)
     pin_class = 100
