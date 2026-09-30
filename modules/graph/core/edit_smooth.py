@@ -51,6 +51,9 @@
 
 Гейт хода (`accepts`) — лексикографически: косые -> отклонение ->
 ступеньки -> изломы (4-й приоритет, блок 6), прочие дефекты не хуже.
+Лестница пробует ВСЕ ступени и применяет ОДИН ход — лучшую пробу по тому
+же гейту (блок 6, `_attempt`); порядок ступеней решает только ничьи и
+несравнимые пробы: остаётся более ранняя.
 
 Чистый stdlib: ни Qt, ни shapely. Роутинг приходит колбэком `route_fn`
 (редактор отдаёт свою лестницу), потому что он живёт в UI-слое.
@@ -622,9 +625,24 @@ def _refuse(stats, kind):
     stats[kind] += 1
 
 
+def better(a, b):
+    """Состояние a лучше b по приоритету гейта — ЛЕКСИКОГРАФИЧЕСКИ: косые
+    -> отклонение (шум 0.5 px) -> ступеньки -> изломы. Равенство — не лучше.
+
+    Выигрыш хода в `accepts`; через `accepts` же — выбор лучшей пробы
+    лестницы в `_attempt` (блок 6): сторож и судья не расходятся."""
+    if a["diag"] != b["diag"]:
+        return a["diag"] < b["diag"]
+    if abs(a["dev"] - b["dev"]) > 0.5:
+        return a["dev"] < b["dev"]
+    if a["steps"] != b["steps"]:
+        return a["steps"] < b["steps"]
+    return a.get("bends", 0) < b.get("bends", 0)
+
+
 def accepts(before, after):
     """Гейт хода: выигрыш ЛЕКСИКОГРАФИЧЕСКИ (косые -> отклонение ->
-    ступеньки), остальное не хуже, холст цел.
+    ступеньки -> изломы, `better`), остальное не хуже, холст цел.
 
     Ступеньки — третьим приоритетом, а НЕ в списке «не хуже»: ход, который
     убирает косую ценой одного шажка, обязан приниматься (косая заметнее
@@ -642,13 +660,7 @@ def accepts(before, after):
     for k in _NOT_WORSE:
         if after.get(k, 0) > before.get(k, 0):
             return False
-    if after["diag"] != before["diag"]:
-        return after["diag"] < before["diag"]
-    if abs(after["dev"] - before["dev"]) > 0.5:
-        return after["dev"] < before["dev"]
-    if after["steps"] != before["steps"]:
-        return after["steps"] < before["steps"]
-    return after.get("bends", 0) < before.get("bends", 0)
+    return better(after, before)
 
 
 # ── главный цикл ───────────────────────────────────────────────────────
@@ -717,27 +729,71 @@ def _try_remedies(graph, e, stats, route_fn, reseat_fn, budget,
             restore_all()
 
 
+def _capture(graph):
+    """Снимок ПОЭЛЕМЕНТНЫЙ (узлы, рёбра), а не подменой списков: редактор
+    держит индекс {id -> тот же самый dict}, и подмена graph['nodes']
+    осиротила бы его — модель продолжила бы указывать на выброшенные
+    объекты."""
+    return ([deepcopy(n) for n in (graph.get("nodes") or [])],
+            [deepcopy(dict(x)) for x in g_edges(graph)])
+
+
+def _put(graph, snap):
+    """Вернуть холст в снимок `_capture` на месте (те же dict).
+
+    deepcopy обязателен: update() копирует dict ПОВЕРХНОСТНО, и без него
+    живое ребро получило бы тот же список waypoints, что лежит в снимке.
+    Дальше drop_collinear делает по нему pop(), снимок укорачивается
+    навсегда, и следующий откат возвращает уже порчу. Здесь это критично
+    вдвойне: снимок входа ребра возвращается после КАЖДОЙ пробы лестницы."""
+    nodes, links = snap
+    for cur, old in zip(graph.get("nodes") or [], nodes):
+        cur.clear()
+        cur.update(deepcopy(old))
+    for cur, old in zip(g_edges(graph), links):
+        cur.clear()
+        cur.update(deepcopy(old))
+
+
 def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
              allow_node_shift, big_area, before):
-    """Собственно лестница (см. _try_remedies)."""
-    # Снимок ПОЭЛЕМЕНТНЫЙ, а не подменой списков: редактор держит индекс
-    # {id -> тот же самый dict}, и подмена graph['nodes'] осиротила бы его —
-    # модель продолжила бы указывать на выброшенные объекты.
-    snap_nodes = [deepcopy(n) for n in (graph.get("nodes") or [])]
-    snap_edges = [deepcopy(dict(x)) for x in g_edges(graph)]
+    """Собственно лестница (см. _try_remedies).
+
+    ЛУЧШАЯ ПРОБА, а не первая (блок 6): каждая проба лестницы судится
+    гейтом от входа ребра и откатывается; из прошедших берётся лучшая по
+    ТОМУ ЖЕ гейту — поздняя проба вытесняет запомненную, только если
+    `accepts(запомненная, поздняя)`: выигрыш по приоритету (`better`:
+    косые -> отклонение -> ступеньки -> изломы) и ни один дефект
+    `_NOT_WORSE` не хуже, чем у запомненной. Несравнимые (одна чище по
+    изломам, другая — по «сквозь узел») и равные — остаётся более ранняя,
+    дешёвая ступень. Применяется ОДИН ход. Первая прошедшая проба
+    вытесняла следующую, которая была лучше: на graph_edited70827 ход
+    «только изломы» по edge_144 (коннектор, ступенек 3, изломов 18)
+    занимал место пробы, снимавшей ступеньку (ступенек 2, изломов 16).
+    Сравнение одним приоритетом, без «не хуже», проигрывало на
+    graph_edited_222222: сдвиг узла (изломов на 3 меньше) вытеснял сдвиг
+    коннектора, снимавший 5 прошиваний и 3 «вдоль чужого»."""
+    base = _capture(graph)
+    best = []                       # [score, ход, снимок] лучшей пробы
 
     def restore():
-        # deepcopy — см. restore_all(): снимок обязан пережить любое число
-        # проб. Здесь это критично вдвойне: restore() в ветке КОЛЕНА ниже
-        # зовётся БЕЗУСЛОВНО, как только движку передан роутер (а редактор
-        # передаёт его всегда), то есть на боевом пути алиас взводился
-        # раньше первой же пробы со сдвигом.
-        for cur, old in zip(graph.get("nodes") or [], snap_nodes):
-            cur.clear()
-            cur.update(deepcopy(old))
-        for cur, old in zip(g_edges(graph), snap_edges):
-            cur.clear()
-            cur.update(deepcopy(old))
+        _put(graph, base)
+
+    def judge(kind):
+        """Проба сделана: в гейт; прошла и гейт принимает переход от
+        лучшей к ней — запомнить. Холст возвращается во вход ребра."""
+        after = score(graph)
+        if accepts(before, after) and (not best or accepts(best[0], after)):
+            best[:] = [after, kind, _capture(graph)]
+        restore()
+
+    def done(refusal):
+        if best:
+            _put(graph, best[2])
+            stats[best[1]] += 1
+            return True
+        _refuse(stats, refusal)
+        return False
 
     eid = e.get("id")
 
@@ -755,27 +811,22 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
     if route_fn is not None:
         cur = live_edge()
         if cur is not None and route_fn(cur):
-            if accepts(before, score(graph)):
-                stats["колено"] += 1
-                return True
-        restore()
+            judge("колено")
+        else:
+            restore()               # отказ лестницы тоже мог писать в ребро
 
     # ── 1б. ПОДТЯНУТЬ ИЗЛОМ: тоже ничего не двигаем, кроме колена ──────
     cur = live_edge()
     if cur is not None and snap_waypoints(cur, budget):
-        if accepts(before, score(graph)):
-            stats["излом"] += 1
-            return True
-        restore()
+        judge("излом")
 
     step = shift_target(e)
     if step is None:
-        _refuse(stats, "нет кандидата")
-        return False        # многоступенчатый / косая внутри маршрута — оператору
+        # многоступенчатый / косая внутри маршрута — оператору
+        return done("нет кандидата")
     axis, d = step
     if d > budget:
-        _refuse(stats, "сверх бюджета")
-        return False        # «супер движение» — не наш случай, в очаги
+        return done("сверх бюджета")   # «супер движение» — в очаги
     sidx = step_index(e)    # ДО мутаций: после сдвига шажок не распознать
 
     byid = nodes_by_id(graph)
@@ -802,10 +853,7 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
             # `is_ortho` — см. докстринг предиката.
             if route_fn is not None and not is_straight(cur):   # И2
                 route_fn(cur)
-            if accepts(before, score(graph)):
-                stats["скольжение"] += 1
-                return True
-            restore()
+            judge("скольжение")
 
     # ── 3. КОННЕКТОР: точка, двигать дёшево ────────────────────────────
     for role, nid in ends:
@@ -825,10 +873,7 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
                     route_fn(cur)
             if reseat_fn is not None:
                 reseat_fn(nid)
-            if accepts(before, score(graph)):
-                stats["коннектор"] += 1
-                return True
-            restore()
+            judge("коннектор")
 
     # ── 4. УЗЕЛ: последнее средство, под бюджетом ──────────────────────
     if allow_node_shift:
@@ -851,10 +896,6 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
                         route_fn(cur)
                 if reseat_fn is not None:
                     reseat_fn(nid)
-                if accepts(before, score(graph)):
-                    stats["узел"] += 1
-                    return True
-                restore()
+                judge("узел")
 
-    _refuse(stats, "лестница исчерпана")
-    return False
+    return done("лестница исчерпана")

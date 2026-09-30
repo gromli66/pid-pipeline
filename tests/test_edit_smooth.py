@@ -762,3 +762,99 @@ def test_refusal_buckets_sum_to_the_total_on_a_mixed_canvas():
     assert _refusals(st) == {"нет кандидата": 1, "сверх бюджета": 1,
                              "лестница исчерпана": 1}, st
     assert st["отклонено"] == sum(_refusals(st).values()) == 3
+
+
+# ── лестница берёт ЛУЧШУЮ пробу, а не первую (блок 6) ─────────────────
+#
+# Репро graph_edited70827 / edge_144: проба «только изломы» (ступенек
+# столько же, изломов меньше) проходила гейт первой и занимала место
+# следующей пробы, которая снимала ступеньку. Холст ниже — та же
+# ситуация в миниатюре: рамка a -> коннектор b, ступенька 10 px у рамки и
+# U-обход 40 px (не ступенька: длиннее STEP_MAX). Лестница маршрута
+# (подставная, детерминированная) строит Z со ступенькой — изломов 6 -> 2,
+# ступенек 1 -> 1; сдвиг коннектора на 10 px выпрямляет трубу целиком.
+
+
+def _canvas_bends_vs_step():
+    a = _box("a", 100.0, 140.0, w=30.0, h=30.0)          # [85,125,115,155]
+    b = _conn("b", 620.0, 150.0)
+    e = _edge("e1", "a", "b", (115.0, 140.0), (620.0, 150.0),
+              [(200.0, 140.0), (200.0, 150.0), (400.0, 150.0),
+               (400.0, 190.0), (450.0, 190.0), (450.0, 150.0)])
+    return _g([a, b], [e])
+
+
+def _z_router(edge):
+    """Лестница маршрута: соосные концы — прямая, иначе Z с шажком x=200."""
+    sy, ty = edge["source_point"][0], edge["target_point"][0]
+    edge["waypoints"] = ([] if abs(sy - ty) < 0.5
+                         else [[sy, 200.0], [ty, 200.0]])
+    return True
+
+
+def test_ladder_takes_best_probe_not_first():
+    g = _canvas_bends_vs_step()
+    assert es.count_steps(g) == 1 and es.count_bends(g) == (6, 1), \
+        "фикстура: одна ступенька и U-обход"
+    assert es.shift_target(g["links"][0]) == ("y", 10.0)
+
+    # один раунд — ровно одна проба применяется: берётся та, что сняла
+    # ступеньку, а не первая прошедшая гейт («колено», только изломы)
+    g1 = _canvas_bends_vs_step()
+    st = es.smooth(g1, route_fn=_z_router, reseat_fn=None, max_rounds=1)
+    assert st["коннектор"] == 1 and st["колено"] == 0, st
+    assert es.count_steps(g1) == 0 and es.count_bends(g1) == (0, 1)
+    assert g1["links"][0]["waypoints"] == []
+    assert g1["nodes"][1]["centroid"] == [140.0, 620.0], \
+        "коннектор обязан встать на линию рамки"
+
+    # полный прогон: тот же итог ОДНИМ ходом (первая проба дала бы два:
+    # колено, затем коннектор)
+    st = es.smooth(g, route_fn=_z_router, reseat_fn=None)
+    assert (st["колено"], st["коннектор"]) == (0, 1), st
+    assert g == g1
+
+
+def _canvas_bends_vs_through():
+    """Тот же холст, но U-обход прошивает бокс x ([415,170,435,195]), а
+    конец b — бокс [620,140,640,160]: сдвиг узла (последняя ступень
+    лестницы) снимает ступеньку, а прошивание оставляет."""
+    g = _canvas_bends_vs_step()
+    g["nodes"][1] = _box("b", 630.0, 150.0, w=20.0, h=20.0)
+    g["links"][0]["target_point"] = [150.0, 620.0]
+    g["nodes"].append(_box("x", 425.0, 182.5, w=20.0, h=25.0))
+    return g
+
+
+def _z_router_aligned_refuses(edge):
+    """Лестница маршрута как у редактора: соосные концы без конфликта —
+    отказ без записи; иначе Z с шажком x=500 (мимо бокса x)."""
+    sy, ty = edge["source_point"][0], edge["target_point"][0]
+    if abs(sy - ty) < 0.5:
+        return False
+    edge["waypoints"] = [[sy, 500.0], [ty, 500.0]]
+    return True
+
+
+def test_ladder_best_probe_is_judged_by_the_whole_gate():
+    """Лучшая проба — по ВСЕМУ гейту, а не по одному приоритету: поздняя
+    проба (узел: ступенек 1 -> 0) не вытесняет раннюю (колено: изломов
+    6 -> 2, прошиваний 1 -> 0), потому что прошивание у неё хуже, чем у
+    запомненной. Репро graph_edited_222222: сдвиг узла с меньшим числом
+    изломов вытеснял сдвиг коннектора, снимавший 5 прошиваний."""
+    g = _canvas_bends_vs_through()
+    sc = es.score(g)
+    assert (sc["through"], sc["steps"], sc["bends"]) == (1, 1, 6), sc
+
+    g1 = _canvas_bends_vs_through()
+    st = es.smooth(g1, route_fn=_z_router_aligned_refuses, reseat_fn=None,
+                   max_rounds=1)
+    assert st["колено"] == 1 and st["узел"] == 0, st
+    sc = es.score(g1)
+    assert (sc["through"], sc["steps"], sc["bends"]) == (0, 1, 2), sc
+
+    # полный прогон: колено, затем узел — прямая без прошивания
+    st = es.smooth(g, route_fn=_z_router_aligned_refuses, reseat_fn=None)
+    assert (st["колено"], st["узел"]) == (1, 1), st
+    sc = es.score(g)
+    assert (sc["through"], sc["steps"], sc["bends"]) == (0, 0, 0), sc
