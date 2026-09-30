@@ -584,12 +584,18 @@ def _canvas_step_slides():
     ПЕРЕОБЪЯВЛЕНА 2026-09-22 (модель точек прикрепления): рамочный конец
     больше не скользит — он живёт в опорной точке грани (выверенный порт
     клапана или середина с допуском), — поэтому площадка проверяется
-    контурным узлом, где скольжение по участку осталось."""
+    контурным узлом, где скольжение по участку осталось.
+
+    ПЕРЕОБЪЯВЛЕНА 2026-09-30 (блок 6, «б»): партнёр — бокс unknow вместо
+    коннектора. Проба «б» (коннектор на линию трубы) стоит в лестнице
+    РАНЬШЕ скольжения и при равном гейте остаётся она — коннектор закрывал
+    бы ступеньку первым, и площадка 2 не проверялась бы. Бокс «б» не
+    двигает, сдвиг узла стоит позже скольжения."""
     a = _box("a", 100.0, 100.0,
              segmentation=[80.0, 80.0, 120.0, 80.0, 120.0, 120.0,
                            80.0, 120.0])
-    c = _conn("c", 400.0, 112.0)
-    e = _edge("e1", "a", "c", (120.0, 100.0), (400.0, 112.0),
+    c = _box("c", 400.0, 112.0)                          # [380,92,420,132]
+    e = _edge("e1", "a", "c", (120.0, 100.0), (380.0, 112.0),
               [(260.0, 100.0), (260.0, 112.0)])
     return _g([a, c], [e])
 
@@ -818,7 +824,8 @@ def test_ladder_takes_best_probe_not_first():
 def _canvas_bends_vs_through():
     """Тот же холст, но U-обход прошивает бокс x ([415,170,435,195]), а
     конец b — бокс [620,140,640,160]: сдвиг узла (последняя ступень
-    лестницы) снимает ступеньку, а прошивание оставляет."""
+    лестницы) снимает ступеньку, а прошивание оставляет. Бокс, а не
+    коннектор: коннектор взяла бы проба «б», стоящая ДО колена."""
     g = _canvas_bends_vs_step()
     g["nodes"][1] = _box("b", 630.0, 150.0, w=20.0, h=20.0)
     g["links"][0]["target_point"] = [150.0, 620.0]
@@ -858,3 +865,110 @@ def test_ladder_best_probe_is_judged_by_the_whole_gate():
     assert (st["колено"], st["узел"]) == (1, 1), st
     sc = es.score(g)
     assert (sc["through"], sc["steps"], sc["bends"]) == (0, 0, 0), sc
+
+
+# ── «б»: клапан поперёк оси на «линия − талия» (блок 6, Р4) ───────────
+#
+# Зеркало edge_62 на graph_edited971 (координаты холста до блока 3):
+# электроарматура node_39 (_axis H, талия 0.222·h ниже центра) и обратный
+# клапан node_40, конец которого стоит на линии y = 339.3482. Конец
+# электроарматуры — в центре левой грани (329.1697), как во входе, а
+# мини-жест (подставной, как `_reseat_after_resize`) сажает его в талию.
+# Сдвиг «на d» (10.18) увёл бы талию на 347.74 — ступенька 8.39 вернётся.
+
+_V39 = (475.8584, 310.2697, 517.8584, 348.0697)
+_V40 = (350.4178, 328.8482, 392.4178, 349.8482)
+_LINE62 = 339.3482
+
+
+def _waist_reseat(g):
+    """Мини-жест: концы рёбер клапана на осевой грани — в его талию."""
+    from modules.graph.core import contact, seating
+
+    def reseat(nid):
+        n = next(x for x in g["nodes"] if x["id"] == nid)
+        if not n.get("bbox"):
+            return                                   # коннектор
+        rect = tuple(n["bbox"])
+        refs = contact.face_refs(n, rect)
+        if not refs:
+            return
+        for e in g["links"]:
+            for xid, key in (("source", "source_point"),
+                             ("target", "target_point")):
+                if e[xid] != nid:
+                    continue
+                y, x = e[key]
+                side = seating._end_side(rect, x, y)
+                if side in refs:
+                    e[key] = ([refs[side], x] if side in ("L", "R")
+                              else [y, refs[side]])
+    return reseat
+
+
+def _canvas_edge62(neighbour=False, bottom=False):
+    v39 = _valve("node_39", _V39, cls="armatura_electro")
+    v40 = _valve("node_40", _V40, cls="klapan_obratn")
+    cy39 = (_V39[1] + _V39[3]) / 2                       # 329.1697
+    if bottom:
+        # конец на НИЖНЕЙ грани, ступенька поперёк оси — «б» не для него
+        c = _conn("c", 700.0, 370.0)
+        e = _edge("edge_62", "node_39", "c", (496.8584, _V39[3]),
+                  (700.0, 370.0), [(496.8584, 360.0), (560.0, 360.0),
+                                   (560.0, 370.0)])
+        return _g([v39, c], [e])
+    e = _edge("edge_62", "node_40", "node_39", (_V40[2], _LINE62),
+              (_V39[0], cy39), [(460.8584, _LINE62), (460.8584, cy39)])
+    nodes = [v40, v39]
+    if neighbour:
+        nodes.append(_box("nb", 500.0, 364.25, w=40.0, h=31.5))  # y1 348.5
+    return _g(nodes, [e])
+
+
+def test_valve_waist_onto_line():
+    """T3: клапан сдвигается поперёк оси на «линия − талия» (+1.7887 px),
+    труба — прямая из двух точек, партнёр неподвижен."""
+    from modules.graph.core import contact
+
+    g = _canvas_edge62()
+    v39 = g["nodes"][1]
+    assert contact.face_refs(v39, _V39)["L"] == pytest.approx(337.5613,
+                                                             abs=1e-4)
+    assert es.shift_target(g["links"][0]) == ("y", pytest.approx(10.1785,
+                                                                 abs=1e-4))
+    v40 = copy.deepcopy(g["nodes"][0])
+
+    st = es.smooth(g, route_fn=None, reseat_fn=_waist_reseat(g))
+
+    e = g["links"][0]
+    assert st["узел"] == 1, st
+    assert v39["bbox"][1] == pytest.approx(312.0584, abs=0.01)
+    assert v39["bbox"][1] - _V39[1] == pytest.approx(1.7887, abs=0.01)
+    assert len(es.edge_pts(e)) == 2 and es.count_bends(g) == (0, 1)
+    assert e["target_point"][0] == pytest.approx(_LINE62, abs=0.01)
+    assert g["nodes"][0] == v40, "партнёр обязан стоять"
+
+
+def test_valve_shift_skips_nonaxial_end():
+    """T4: конец клапана на нижней (неосевой) грани — «б» его не двигает
+    (это «д»); ступеньку закрывает коннектор, рамка клапана бит-в-бит."""
+    g = _canvas_edge62(bottom=True)
+    bb0 = list(g["nodes"][0]["bbox"])
+    assert es.shift_target(g["links"][0]) == ("y", 10.0)
+
+    st = es.smooth(g, route_fn=None, reseat_fn=_waist_reseat(g))
+
+    assert g["nodes"][0]["bbox"] == bb0, st
+    assert st["узел"] == 0 and st["коннектор"] == 1, st
+
+
+def test_valve_shift_refused_into_neighbour():
+    """T5: сдвиг на +1.79 заводит рамку клапана (y2 = 349.86) на соседа
+    (y1 = 348.5) — ход отклонён гейтом соседей, клапан на месте."""
+    g = _canvas_edge62(neighbour=True)
+    assert es.count_overlaps(g) == 0
+
+    es.smooth(g, route_fn=None, reseat_fn=_waist_reseat(g))
+
+    assert g["nodes"][1]["bbox"] == list(_V39)
+    assert es.count_overlaps(g) == 0

@@ -11,6 +11,10 @@
 списку дефектов судьи, где каждый ход проходит гейт и откатывается, если
 стало хуже.
 
+  0. «б» — КЛАПАН ИЛИ КОННЕКТОР НА ЛИНИЮ ТРУБЫ (Р4, блок 6): клапан
+     модели — строго поперёк оси на «линия − опорная точка» (талия, в
+     веере слотов — точка конца), коннектор — на «линия − свой конец»;
+     проба засчитывается, только если сняла излом;
   1. КОЛЕНО — маршрут вместо косой. Не двигает ничего. На холстах
      заказчика закрывает 41 диагональ из 46 (89%);
   2. СКОЛЬЖЕНИЕ КОНЦА по своей грани/участку — двигается только точка
@@ -461,6 +465,75 @@ def _node_is_anchor_role(graph, node_id, big_area):
     return False
 
 
+def _line_moves(graph, e, step, sidx, budget, big_area):
+    """«б» (блок 6, Р4): кто встанет на линию трубы — клапан поперёк оси
+    или коннектор. -> [(role, nid, ход, delta, line)] в порядке проб.
+
+    line — поперечная координата трубы за ступенькой: дальняя сторона
+    шажка (pts[sidx+1] для s, pts[sidx] для t), без шажка (прямая
+    диагональ) — противоположный конец. delta — на сколько сдвинуть узел:
+      * КЛАПАН с талией (`contact.face_refs`: клапан холста модели с
+        `_axis`, не старый холст), не крупный, конец не пин и лежит на
+        ОСЕВОЙ грани (`seating._AXIAL_FACES`), сдвиг строго поперёк оси.
+        Опорная точка — куда конец посадит мини-жест: талия, если конец на
+        грани один, иначе (веер слотов, k >= 2) — текущая точка конца.
+        delta = line − опорная; сдвиг «на d» мини-жест возвращал бы в
+        талию мимо линии (трасса 971/edge_62: ступенька 8.39 после сдвига);
+      * КОННЕКТОР (модель не важна): delta = line − свой конец.
+    |delta| < 0.25 или > budget — не ход. Порядок проб — меньшая степень,
+    затем меньший |delta|: при равном гейте остаётся более ранняя проба.
+    """
+    pts = edge_pts(e)
+    if not pts or step is None or step[1] > budget:
+        return []
+    axis = step[0]
+    byid = nodes_by_id(graph)
+    deg = degrees(graph)
+    out = []
+    for role, nid in (("s", e.get("source")), ("t", e.get("target"))):
+        node = byid.get(nid)
+        if node is None or end_kind(node, e) == "anchor":
+            continue
+        if sidx is not None:
+            far = pts[sidx + 1] if role == "s" else pts[sidx]
+        else:
+            far = pts[-1] if role == "s" else pts[0]
+        line = far[1] if axis == "y" else far[0]
+        mx, my = pts[0] if role == "s" else pts[-1]
+        mine = my if axis == "y" else mx
+        rect = seating._anchor_rect(node)
+        refs = contact.face_refs(node, rect) if rect is not None else None
+        if refs:
+            if (node["_axis"] == "H") != (axis == "y"):
+                continue                     # только поперёк оси клапана
+            if _node_is_anchor_role(graph, nid, big_area):
+                continue
+            side = seating._end_side(rect, mx, my)
+            if side not in seating._AXIAL_FACES[node["_axis"]]:
+                continue                     # неосевой конец — это «д»
+            k = 0
+            for x in g_edges(graph):
+                for xid, key in zip(edge_ends(x),
+                                    ("source_point", "target_point")):
+                    p = x.get(key)
+                    if xid == nid and p and seating._end_side(
+                            rect, float(p[1]), float(p[0])) == side:
+                        k += 1
+            ref = refs[side] if k == 1 else mine
+            kind = "узел"
+        elif is_connector(node):
+            ref, kind = mine, "коннектор"
+        else:
+            continue
+        delta = line - ref
+        if abs(delta) < 0.25 or abs(delta) > budget:
+            continue
+        out.append((deg.get(nid, 0), abs(delta), role, nid, kind, delta,
+                    line))
+    out.sort(key=lambda c: (c[0], c[1]))
+    return [c[2:] for c in out]
+
+
 def _breaks_anchor(graph, node_id):
     """У узла есть якорь оператора -> его сдвиг допустим только вместе с
     якорем (якорь локален, едет с узлом) — но НЕ допустим, если якорь
@@ -779,11 +852,14 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
     def restore():
         _put(graph, base)
 
-    def judge(kind):
+    def judge(kind, fewer_bends=False):
         """Проба сделана: в гейт; прошла и гейт принимает переход от
-        лучшей к ней — запомнить. Холст возвращается во вход ребра."""
+        лучшей к ней — запомнить. Холст возвращается во вход ребра.
+        fewer_bends — проба «б» обязана ещё и снять излом."""
         after = score(graph)
-        if accepts(before, after) and (not best or accepts(best[0], after)):
+        if accepts(before, after) and (not best or accepts(best[0], after)) \
+                and (not fewer_bends
+                     or after.get("bends", 0) < before.get("bends", 0)):
             best[:] = [after, kind, _capture(graph)]
         restore()
 
@@ -803,6 +879,39 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
                 return x
         return None
 
+    pts0 = edge_pts(e)
+    step = shift_target(e)
+    sidx = step_index(e)    # ДО мутаций: после сдвига шажок не распознать
+
+    # ── 0. «б»: КЛАПАН ИЛИ КОННЕКТОР НА ЛИНИЮ ТРУБЫ (Р4, блок 6) ───────
+    # Клапан — поперёк оси на «линия − талия» (`_line_moves`); проба
+    # принимается, только если гейт её пропускает И изломов стало меньше.
+    for role, nid, kind, delta, line in _line_moves(
+            graph, e, step, sidx, budget, big_area):
+        axis = step[0]
+        key = "source_point" if role == "s" else "target_point"
+        dx, dy = (0.0, delta) if axis == "y" else (delta, 0.0)
+        _shift_node(graph, nid, dx, dy)
+        cur = live_edge()
+        if cur is not None:
+            p = list(cur[key])
+            i = 0 if axis == "y" else 1          # [y, x]
+            run_d = line - (p[i] - delta)        # от конца ДО сдвига
+            if kind == "узел":
+                p[i] = line                      # конец — ровно на линию
+                cur[key] = p
+            if len(pts0) <= 4:
+                cur["waypoints"] = []
+            else:
+                shift_run(cur, role, axis, run_d if kind == "узел"
+                          else delta, sidx)
+                drop_collinear(cur)
+            if route_fn is not None and not is_straight(cur):   # И2
+                route_fn(cur)
+        if reseat_fn is not None:
+            reseat_fn(nid)
+        judge(kind, fewer_bends=True)
+
     # ── 1. КОЛЕНО: ничего не двигаем ───────────────────────────────────
     # Гейта И2 здесь НЕТ и он не нужен: кандидатом ребро становится только
     # косым или со ступенькой (см. отбор в `smooth`), то есть ПРЯМЫМ сюда
@@ -820,14 +929,12 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
     if cur is not None and snap_waypoints(cur, budget):
         judge("излом")
 
-    step = shift_target(e)
     if step is None:
         # многоступенчатый / косая внутри маршрута — оператору
         return done("нет кандидата")
     axis, d = step
     if d > budget:
         return done("сверх бюджета")   # «супер движение» — в очаги
-    sidx = step_index(e)    # ДО мутаций: после сдвига шажок не распознать
 
     byid = nodes_by_id(graph)
     ends = (("s", e.get("source")), ("t", e.get("target")))
