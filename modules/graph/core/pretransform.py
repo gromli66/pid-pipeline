@@ -526,6 +526,13 @@ def project_ray_to_polygon(seg, cx, cy, px, py):
     return (cx + dx * best, cy + dy * best)
 
 
+def _diagonals(pts, tol=0.5):
+    """Число косых сегментов полилинии [[y, x], ...] (None — конца нет)."""
+    pts = [p for p in pts if p]
+    return sum(1 for a, b in zip(pts, pts[1:])
+               if abs(a[0] - b[0]) > tol and abs(a[1] - b[1]) > tol)
+
+
 def seat_edge_endpoints(graph, legacy=False):
     """Посадка концов рёбер модулем `seating` — одним на всю систему (§3.4).
 
@@ -542,10 +549,19 @@ def seat_edge_endpoints(graph, legacy=False):
     выверенный порт клапана, середина рамки с допуском MID_SNAP, слоты
     вокруг опорной точки (`seating`, `model=True`). Сервер — всегда так.
 
+    Осевые входы клапана степени 1–2 (Р5, `axial`) — тоже модель: без
+    `legacy` открытие холста с меткой сажает так же, как финальная посадка
+    раскладки, и её выход — неподвижная точка. Роутера здесь нет, поэтому
+    гейт «не хуже входа»: ребро, которое осевое правило СДВИНУЛО и оно
+    вышло косым (боковой вход без waypoints в талию — косая; уже косое
+    ребро в талии ложится вдоль своей рамки), сажается той же посадкой без
+    правила; крючок строит раскладка или жест редактора. Несдвинутое ребро
+    (косая, оставленная сервером) не трогается — неподвижная точка.
+
     `legacy=True` — открытие СТАРОГО холста (метки модели нет, Р1): канон
-    238fe6b (`model=False`, без слотов). Узлы вызывающий размечает сам
-    (`contact.apply_attach_mode`): по ключу узла `seating` берёт старую
-    рамку letterbox, а `face_refs` — середину грани.
+    238fe6b (`model=False`, без слотов, без осевого правила). Узлы
+    вызывающий размечает сам (`contact.apply_attach_mode`): по ключу узла
+    `seating` берёт старую рамку letterbox, а `face_refs` — середину грани.
 
     Возвращает число сдвинутых концов (для статистики pretransform).
     """
@@ -553,7 +569,20 @@ def seat_edge_endpoints(graph, legacy=False):
 
     before = [(e.get("source_point"), e.get("target_point"))
               for e in _edges(graph)]
-    reseat_all_endpoints(graph, model=not legacy, slots=not legacy)
+    if legacy:
+        reseat_all_endpoints(graph)
+    else:
+        reseat_all_endpoints(graph, model=True, slots=True)
+        plain = [(e.get("source_point"), e.get("target_point"))
+                 for e in _edges(graph)]
+        for (sp0, tp0), e in zip(deepcopy(before), _edges(graph)):
+            e["source_point"], e["target_point"] = sp0, tp0
+        reseat_all_endpoints(graph, model=True, slots=True, axial=True)
+        for (sp, tp), (sp0, tp0), e in zip(plain, before, _edges(graph)):
+            wps = e.get("waypoints") or []
+            ends = [e.get("source_point"), e.get("target_point")]
+            if ends != [sp0, tp0] and _diagonals([ends[0], *wps, ends[1]]):
+                e["source_point"], e["target_point"] = sp, tp
     fixed = 0
     for (sp0, tp0), e in zip(before, _edges(graph)):
         fixed += (e.get("source_point") != sp0) + (e.get("target_point") != tp0)

@@ -993,7 +993,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         # (OptimizeEdgeCommand.execute ставит waypoints=[]).
         from modules.graph.core import seating
 
-        probe = {'source': original_source_id, 'target': original_target_id,
+        # id ребра — у probe-копии: степень клапана (Р5) считается по id
+        probe = {'id': edge_data.get('id'),
+                 'source': original_source_id, 'target': original_target_id,
                  'source_point': None, 'target_point': None, 'waypoints': []}
         seating.reseat_edge(self.nodes, probe)
         self._engine_finish_ends(probe)          # Э2c: порт/слот, не угол
@@ -2477,8 +2479,15 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
 
         Э2b: движку передаются рёбра узла — рамочные концы садятся в
         слоты вокруг середины грани (несколько труб в грань не сливаются
-        в точку); см. докстринг движка."""
-        from modules.graph.core import edit_engine
+        в точку); см. докстринг движка.
+
+        Р5: клапану степени 1–2 движок получает план осевых граней
+        (`seating.axial_faces` — та же функция, что у сервера). Степень —
+        по рёбрам `edges_data` ПО ID (кратные рёбра к unknow — разные
+        рёбра одной пары), probe-копия заменяет своё ребро, новое ребро
+        (id нет в списке) — плюс один. Поле узла `degree` не читается."""
+        from modules.graph.core import edit_engine, seating
+        from modules.graph.core.ports import pinned_port
 
         nid = node.get('id')
         # соседи по грани/участку; своё ребро исключается ПО ПАРЕ узлов
@@ -2488,10 +2497,32 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                       if nid in (e.get('source'), e.get('target'))
                       and not (e.get('source') == edge_data.get('source')
                                and e.get('target') == edge_data.get('target'))]
+        own_id = edge_data.get('id')
+        mine = [edge_data if own_id is not None and e.get('id') == own_id
+                else e for e in self.edges_data
+                if nid in (e.get('source'), e.get('target'))]
+        if not any(e is edge_data for e in mine):
+            mine.append(edge_data)
+        ends = []
+        for e in mine:
+            key = 'source' if e.get('source') == nid else 'target'
+            wps = e.get('waypoints') or []
+            if e is edge_data:
+                ref, p = (ref_x, ref_y), cur
+            else:
+                w = (wps[0] if key == 'source' else wps[-1]) if wps else \
+                    e.get('target_point' if key == 'source' else 'source_point')
+                if not w:
+                    continue
+                ref, p = (float(w[1]), float(w[0])), e.get(key + '_point')
+            ends.append((e, key, ref,
+                         (float(p[1]), float(p[0])) if p else None,
+                         pinned_port(node, e) is not None))
+        faces = seating.axial_faces(node, ends, len(mine))
         return edit_engine.seat_end(node, other_node, edge_data, role,
                                     cur, ref_x, ref_y, try_slack,
                                     float(self.snap_threshold),
-                                    node_edges=node_edges)
+                                    node_edges=node_edges, faces=faces)
 
     def _reseat_after_resize(self, node_id: str):
         """Э2d (переопределение легаси Simple): после resize/расталкивания

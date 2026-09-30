@@ -70,7 +70,7 @@ def _port_side(rect, px, py, tol=1.5):
 
 
 def _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y,
-               snap_threshold):
+               snap_threshold, faces=None):
     """Слот на грани side для edge_data среди рёбер узла ТОЙ ЖЕ грани.
 
     Членство (фикс 2026-08-01, репро заказчика «из одного порта из
@@ -79,6 +79,9 @@ def _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y,
     ориентиру), а не положением его текущего конца — при drag/resize
     концы соседей ещё на СТАРОЙ рамке, и проверка «конец на грани»
     теряла их всех (k=1 => все в середину). `_manual_route` не участвуют.
+
+    faces — план осевых граней клапана (Р5, `seating.axial_faces`): у
+    соседа из плана судья порта выбирает только на его грани.
 
     Порядок слотов — по проекции ДАЛЬНЕГО ориентира ребра (смежный
     waypoint, иначе противоположный конец) на ось грани: при drag узла
@@ -117,9 +120,11 @@ def _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y,
             continue
         p = e.get(end_key)
         cur_sib = (float(p[1]), float(p[0])) if p else None
+        f = (faces or {}).get(
+            (id(e), "source" if end_key == "source_point" else "target"))
         ps = port_model.choose_port_entry(
             node, cur_sib, (float(refp[1]), float(refp[0])),
-            float(snap_threshold), rect=rect)
+            float(snap_threshold), rect=rect, sides={f} if f else None)
         here = None
         if p is not None and _port_side(rect, float(p[1]),
                                         float(p[0])) == side:
@@ -324,7 +329,7 @@ def _shift_rect_stub(edge_data, role, cur, side, nx_, ny_):
 
 
 def seat_end(node, other_node, edge_data, role, cur, ref_x, ref_y,
-             try_slack, snap_threshold, node_edges=None):
+             try_slack, snap_threshold, node_edges=None, faces=None):
     """Посадка конца ребра на узел — единые ворота (Э2a/Э2b).
 
     Коннектор и полигон (посадка «как получились», спека заказчика):
@@ -354,6 +359,12 @@ def seat_end(node, other_node, edge_data, role, cur, ref_x, ref_y,
     полигонах). Форму трубы это не фиксирует — маршрут по-прежнему считает
     роутер, обходя препятствия.
 
+    ОСЕВЫЕ ГРАНИ (Р5): faces — план `seating.axial_faces` клапана степени
+    1–2 {(id(e), 'source'|'target'): side}. Свой конец садится только на
+    свою грань плана (`choose_port_entry(sides=)`, в талию), соседи по
+    грани судятся так же (`_slot_seat`). Нет плана (степень 3+, RELIEF,
+    старый холст) — прежняя посадка.
+
     cur — текущий конец [y, x] (гистерезис «остаться на своём порту»),
     role — 's'|'t' для станции Э10; node_edges — рёбра узла (для слотов;
     None => k=1, чистая середина). Возвращает (x, y).
@@ -367,16 +378,19 @@ def seat_end(node, other_node, edge_data, role, cur, ref_x, ref_y,
         return station
 
     if _rect_seated(node):
+        face = (faces or {}).get(
+            (id(edge_data), "source" if role == "s" else "target"))
         p = port_model.choose_port_entry(
             node, (cur[1], cur[0]) if cur else None, (ref_x, ref_y),
-            float(snap_threshold), rect=_seat_rect(node))
+            float(snap_threshold), rect=_seat_rect(node),
+            sides={face} if face else None)
         if p[4]:                                   # ручной порт свят
             return p[0], p[1]
         side = _NORMAL_SIDE.get((p[2], p[3]))
         if side is None:                           # точечный фолбэк
             return p[0], p[1]
         sx_, sy_ = _slot_seat(node, node_edges, edge_data, side,
-                              ref_x, ref_y, snap_threshold)
+                              ref_x, ref_y, snap_threshold, faces=faces)
         return _shift_rect_stub(edge_data, role, cur, side, sx_, sy_)
 
     lock = None

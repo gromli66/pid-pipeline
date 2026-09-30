@@ -297,3 +297,192 @@ def test_measured_waist_survives_operator_gestures(qapp, tmp_path):
     moved = [(e["id"], k) for e, o in zip(st["links"], ed.edges_data)
              for k in ("source_point", "target_point") if e[k] != o[k]]
     assert moved == [], f"серверная посадка сдвинула концы: {moved}"
+
+
+# ───────────── осевые входы клапана степени 1–2 (Р5, блок 5) ─────────────
+
+def _ends(ed, eid):
+    e = next(e for e in ed.edges_data if e["id"] == eid)
+    return e["source_point"], e["target_point"]
+
+
+def _drag(ed, nid, x, y):
+    ed.start_drag_node(nid)
+    ed.drag_node_to(x, y)
+    ed.end_drag_node()
+
+
+def test_drag_valve_under_connector_keeps_axial_entry(qapp, tmp_path):
+    """Д1, S1: оператор тянет клапан степени 2 под коннектор — c оказывается
+    сверху. Конец e1 у клапана — в талии свободной осевой грани L (колено за
+    клапаном), не на верхней грани. Поле `degree` узла нарочно 3: степень
+    считается по рёбрам. До блока 5 — T (210.0, 272.7)."""
+    g = _canvas()
+    g["nodes"][1]["degree"] = 3
+    ed = _editor(qapp, tmp_path, g)
+    _drag(ed, "v", 210.0, 300.0)
+
+    v = ed.nodes["v"]
+    rect = seating._anchor_rect(v)
+    assert v["centroid"] == pytest.approx([300.0, 210.0]), "перенос пуст"
+    assert rect[0] == pytest.approx(189.0)
+    assert _ends(ed, "e1")[1] == pytest.approx([300.0, 189.0], abs=0.5), \
+        "труба сверху вошла не в осевую талию"
+    assert _ends(ed, "e2")[0] == pytest.approx([300.0, 231.0], abs=0.5)
+
+
+def _conn_d(x, y):
+    return {"id": "d", "type": "connector", "class_id": -1,
+            "class_name": "connector", "centroid": [y, x], "bbox": None,
+            "segmentation": None, "degree": 0}
+
+
+def test_axial_rule_after_foreign_add_and_undo(qapp, tmp_path):
+    """Д1, S2: прогон ПОСЛЕ чужого действия. Оператор добавил третью трубу
+    (v–d, d снизу): степень 3 — правила нет, перенос клапана под c кладёт
+    e1 на верхнюю грань. Ctrl+Z (перенос и ребро) — снова степень 2, тот же
+    перенос — e1 в талии осевой грани L. Степень — по рёбрам `edges_data`,
+    не по полю `degree` и не из снимка до отмены."""
+    g = _canvas()
+    g["nodes"].append(_conn_d(210.0, 420.0))
+    ed = _editor(qapp, tmp_path, g)
+    depth = ed.undo_mgr.stack_depth
+    assert ed.add_edge("v", "d")
+    _drag(ed, "v", 210.0, 300.0)
+    rect = seating._anchor_rect(ed.nodes["v"])
+    tp = _ends(ed, "e1")[1]
+    assert tp[0] == pytest.approx(rect[1], abs=0.5), \
+        f"степень 3 — вход сверху, а конец {tp}"
+
+    ed.undo()
+    ed.undo()
+    assert ed.undo_mgr.stack_depth == depth, "отмена не вернула степень 2"
+    assert len(ed.edges_data) == 2
+    _drag(ed, "v", 210.0, 300.0)
+    assert _ends(ed, "e1")[1] == pytest.approx([300.0, 189.0], abs=0.5), \
+        "после отмены правило не вернулось"
+
+
+def test_multi_edges_count_by_id_not_by_pair(qapp, tmp_path):
+    """Д1, S2 (вариант): две трубы v–b к одному unknow и e1 — степень 3 по
+    рёбрам (кратные — разные рёбра), правила нет: перенос под c кладёт e1
+    на верхнюю грань. Подсчёт по паре узлов дал бы 2 и увёл e1 в талию."""
+    g = _canvas()
+    e3 = copy.deepcopy(g["links"][1])
+    e3["id"] = "e3"
+    g["links"].append(e3)
+    ed = _editor(qapp, tmp_path, g)
+    assert len(ed.edges_data) == 3, "кратное ребро не загрузилось"
+    _drag(ed, "v", 210.0, 300.0)
+    rect = seating._anchor_rect(ed.nodes["v"])
+    tp = _ends(ed, "e1")[1]
+    assert tp[0] == pytest.approx(rect[1], abs=0.5), \
+        f"степень 3 — вход сверху, а конец {tp}"
+
+
+def _open(tmp_path, g):
+    from ui.tabs.base_graph_tab import _reseat_canvas_endpoints
+
+    p = tmp_path / "graph_canvas.json"
+    p.write_text(json.dumps(g), encoding="utf-8")
+    changed = _reseat_canvas_endpoints(p)
+    return changed, json.loads(p.read_text(encoding="utf-8"))
+
+
+def _knee_canvas():
+    """Серверный холст: c сверху-слева от клапана степени 2, труба e1 —
+    коленом в талию левой осевой грани (стаб 29 px), e2 — прямая в R."""
+    g = _canvas()
+    g["nodes"][0]["centroid"] = [100.0, 250.0]
+    g["links"][0].update(source_point=[100.0, 250.0],
+                         waypoints=[[WAIST_Y, 250.0]],
+                         target_point=[WAIST_Y, 279.0])
+    return g
+
+
+def test_open_marked_canvas_is_fixed_point(tmp_path):
+    """Д1, S3: холст с меткой, собранный сервером с коленом у клапана
+    степени 2, открывается без единого сдвига (посадка открытия — та же
+    модель с осевым правилом, что финальная посадка раскладки)."""
+    g = _knee_canvas()
+    st = copy.deepcopy(g)
+    seating.reseat_all_endpoints(st, model=True, slots=True, axial=True)
+    assert st["links"] == g["links"], "фикстура — не выход сервера"
+
+    changed, got = _open(tmp_path, g)
+    assert not changed, "холст переписан при открытии"
+    assert got["links"] == g["links"]
+
+
+def _side_entry_canvas(mark):
+    """c прямо над клапаном степени 2, труба e1 без waypoints входит в
+    верхнюю грань (так сажали до блока 5). mark=None — старый холст:
+    концы — его каноном 238fe6b (letterbox), чтобы открытие было no-op."""
+    from modules.graph.core import pretransform
+
+    g = _canvas()
+    g["nodes"][0]["centroid"] = [100.0, 300.0]
+    g["links"][0].update(source_point=[100.0, 300.0],
+                         target_point=[VALVE_BBOX[1], 300.0])
+    if mark is None:
+        del g["graph"]["canvas_transform"]["attach_model"]
+        assert contact.apply_attach_mode(g)
+        pretransform.seat_edge_endpoints(g, legacy=True)
+        contact.strip_attach_mode(g["nodes"])
+    return g
+
+
+def test_open_marked_canvas_keeps_straight_side_entry(tmp_path):
+    """Холст с меткой и ПРЯМЫМ боковым входом у клапана степени 2 (c прямо
+    над клапаном, сохранён до блока 5): роутера при открытии нет, осевое
+    правило сделало бы трубу косой — гейт «не хуже входа» оставляет вход
+    (крючок в талию построят раскладка или жест). Находка red-team блока 5:
+    без гейта стенд edit_bench @model рос на 34 косых/вдоль своего."""
+    g = _side_entry_canvas("waist-1")
+    tp = g["links"][0]["target_point"]
+    assert tp[1] == 300.0 and tp[0] < WAIST_Y - 10,         f"фикстура: вход не сверху {tp}"
+    changed, got = _open(tmp_path, g)
+    assert not changed
+    assert got["links"] == g["links"]
+
+
+def test_open_marked_canvas_moves_knee_end_to_waist(tmp_path):
+    """Тот же клапан, c сверху-слева, колено сохранено (waypoint на линии
+    талии), а конец — на верхней грани (холст до блока 5): в талии
+    свободной грани L стаб к колену горизонтален — открытие сажает по
+    правилу Р5 (судья портов миграций — с фильтром граней плана, иначе
+    «остаться в порту» вернул бы конец на верхнюю грань)."""
+    g = _side_entry_canvas("waist-1")
+    g["nodes"][0]["centroid"] = [100.0, 250.0]
+    g["links"][0].update(source_point=[100.0, 250.0],
+                         waypoints=[[WAIST_Y, 250.0]])
+    changed, got = _open(tmp_path, g)
+    assert changed
+    by_id = {e["id"]: e for e in got["links"]}
+    assert by_id["e1"]["target_point"] == [WAIST_Y, 279.0]
+    assert by_id["e2"]["source_point"] == [WAIST_Y, 321.0]
+
+
+def test_open_unmarked_canvas_keeps_side_entry(tmp_path):
+    """Д1, S4: старый холст без метки — посадка 238fe6b, без осевого
+    правила: боковой вход степени 2 без waypoints не двигается (правило
+    превратило бы его при открытии в косую)."""
+    g = _side_entry_canvas(None)
+    tp = g["links"][0]["target_point"]
+    assert tp[1] == 300.0 and tp[0] < WAIST_Y - 10, \
+        f"фикстура: вход не сверху {tp}"
+    changed, got = _open(tmp_path, g)
+    assert not changed
+    assert got["links"] == g["links"]
+
+
+def test_optimize_edge_counts_its_own_edge_once(qapp, tmp_path):
+    """«Оптимизировать ребро» считает посадку на probe-копии ребра: копия
+    несёт id и заменяет своё ребро — степень клапана 2, а не 3, и труба от
+    c почти над клапаном садится в талию осевой грани L, а не на верхнюю."""
+    g = _canvas()
+    g["nodes"][0]["centroid"] = [100.0, 290.0]
+    g["links"][0]["source_point"] = [100.0, 290.0]
+    ed = _editor(qapp, tmp_path, g)
+    assert ed.optimize_edge("c", "v")
+    assert _ends(ed, "e1")[1] == pytest.approx([WAIST_Y, 279.0], abs=0.5)

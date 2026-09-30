@@ -185,12 +185,12 @@ def _in_slot(node, p, slot_faces) -> bool:
     return side is not None and (node.get("id"), side) in slot_faces
 
 
-def _migrate_stub_end(e, end_key, node, byid, snap=8.0) -> bool:
+def _migrate_stub_end(e, end_key, node, byid, snap=8.0, sides=None) -> bool:
     """Этап A: конец С waypoints и перпендикулярным стабом -> порт узла
     ВМЕСТЕ с осевым сдвигом смежного waypoint (координата wp вдоль грани
     сдвигается на ту же величину — ортогональность сохранена). Стоп-краны:
     порт ушёл с той же грани, сдвиг ломает следующий сегмент, сдвинутый
-    стаб прошил бы чужую рамку."""
+    стаб прошил бы чужую рамку. sides — осевая грань клапана (Р5)."""
     from ui.editors import port_model
 
     wps = e.get("waypoints") or []
@@ -200,7 +200,8 @@ def _migrate_stub_end(e, end_key, node, byid, snap=8.0) -> bool:
     first = end_key == "source_point"
     wp = wps[0] if first else wps[-1]
     horiz = abs(p[0] - wp[0]) <= 0.5            # стаб горизонтален ([y, x])
-    px, py = port_model.choose_port(node, (p[1], p[0]), (wp[1], wp[0]), snap)
+    px, py = port_model.choose_port(node, (p[1], p[0]), (wp[1], wp[0]), snap,
+                                    sides=sides)
     if horiz:
         if abs(px - p[1]) > 0.75:               # порт не на той же грани
             return False
@@ -345,14 +346,15 @@ def _lift_skin_ends_to_bbox(canvas: dict, byid: dict) -> int:
     return moved
 
 
-def _spread_stacked_ends(canvas: dict, byid: dict) -> int:
+def _spread_stacked_ends(canvas: dict, byid: dict, faces=None) -> int:
     """Развод СТОПОК при открытии (репро graph_edited971: три трубы w=14
     в одной точке — след толщины, применённой кодом до амнистии/членства):
     несколько АВТО-концов одного узла, слипшихся в точку (<2px),
     пересаживаются движком (слоты/участки, шаг по чернилам). Гейт «не
     хуже входа»: роутера при открытии нет, поэтому ребро, которое
     пересадка сделала бы косым, откатывается (дочинит жест/кисть).
-    _manual_route и коннекторы (порт-точка) не трогаются."""
+    _manual_route и коннекторы (порт-точка) не трогаются. faces — план
+    осевых граней клапанов (Р5, только холст с меткой)."""
     from modules.graph.core import edit_engine
     from modules.graph.core.graph_access import is_connector
 
@@ -391,7 +393,8 @@ def _spread_stacked_ends(canvas: dict, byid: dict) -> int:
             bak = (list(p), [list(w) for w in wps])
             x, y = edit_engine.seat_end(
                 node, None, e, role, p, float(ref[1]), float(ref[0]),
-                try_slack=False, snap_threshold=8.0, node_edges=node_edges)
+                try_slack=False, snap_threshold=8.0, node_edges=node_edges,
+                faces=faces)
             e[end_key] = [y, x]
             pts = [e["source_point"]] + list(e.get("waypoints") or []) \
                 + [e["target_point"]]
@@ -438,6 +441,14 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
     — старый: канон 238fe6b (`seat_edge_endpoints(legacy=True)`: без слотов,
     порты в середине граней по ключу узла `contact.LEGACY_KEY`). Ключ
     производный — перед записью файла снимается.
+
+    Осевые входы (Р5) — только у холста с меткой: план граней клапанов
+    степени 1–2 (`seating.axial_plan`, тот же, что у раскладки) считается
+    один раз после канона и фильтрует порты миграций («остаться в порту»,
+    «на лучший порт», стаб, развод стопок) — иначе «остаться в порту»
+    вернул бы трубу на боковую грань. Старый холст — как 238fe6b: боковой
+    вход степени 2 без waypoints остаётся (правило превратило бы его при
+    открытии в косую).
     """
     from copy import deepcopy
 
@@ -515,6 +526,13 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
                     e[end_key] = [pin[1], pin[0]]
 
     _apply_pins()
+    from modules.graph.core.seating import axial_plan
+    faces = {} if legacy else axial_plan(canvas, byid)
+
+    def _sides(e, node_key):
+        f = faces.get((id(e), node_key))
+        return {f} if f else None
+
     # Грани, где модель развела НЕСКОЛЬКО труб слотами (правило заказчика
     # «на равном удалении от точки прикрепления»): их концы ниже не трогаем.
     # На старом холсте слотов модели нет.
@@ -543,7 +561,8 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
             if orig is None or new == orig:
                 continue
             node = byid.get(e.get(node_key) or e.get(alt_key))
-            if node is None or not port_model.is_on_port(node, orig[1], orig[0]):
+            if node is None or not port_model.is_on_port(
+                    node, orig[1], orig[0], sides=_sides(e, node_key)):
                 continue
             ref = _end_ref(e, end_key)
             if ref and (abs(new[0] - ref[0]) <= 0.5
@@ -566,7 +585,8 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
             node = byid.get(e.get(node_key) or e.get(alt_key))
             if p is None or node is None:
                 continue
-            if port_model.is_on_port(node, p[1], p[0]):
+            sides = _sides(e, node_key)
+            if port_model.is_on_port(node, p[1], p[0], sides=sides):
                 continue
             if _in_slot(node, p, slot_faces):
                 continue        # грань со слотами: конец уже посажен моделью
@@ -576,16 +596,17 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
             if aligned:
                 if e.get("waypoints"):
                     # перпендикулярный стаб к waypoint — на порт со сдвигом
-                    _migrate_stub_end(e, end_key, node, byid)
+                    _migrate_stub_end(e, end_key, node, byid, sides=sides)
                 continue        # строгая прямая пары — прямизна важнее порта
             px, py = port_model.choose_port(node, (p[1], p[0]),
                                             (ref[1], ref[0]) if ref
-                                            else (p[1], p[0]), 8.0)
+                                            else (p[1], p[0]), 8.0,
+                                            sides=sides)
             e[end_key] = [py, px]
         del sp0, tp0
     _materialize_ray_ends(canvas, byid)
     _lift_skin_ends_to_bbox(canvas, byid)
-    _spread_stacked_ends(canvas, byid)
+    _spread_stacked_ends(canvas, byid, faces)
     # ─── Э5b (б): заморозка _manual_route -> пины концов ───
     # Решение заказчика 2026-08-02: «маршрут руками» отменён, вход держит
     # якорь; с 2026-08-03 якорь живёт на ребре. Стоит ПОСЛЕ материализации/

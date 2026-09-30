@@ -680,9 +680,63 @@ def test_parallel_lock_does_not_override_plan_face():
     assert ea["source_point"] == [pytest.approx(WAIST_Y), 179.0]
 
 
+def test_seat_edge_endpoints_axial_not_worse_than_input():
+    """Посадка без роутера (открытие холста с меткой, pretransform): осевое
+    правило выводится из `legacy` и работает, пока труба выходит без косых.
+    Колено ec сохранено с концом на T (холст до блока 5): в талию R — стаб
+    к колену горизонтален. c строго над клапаном без waypoints — прямая в T
+    держится (талия R сделала бы косую)."""
+    from modules.graph.core import pretransform
+
+    g = _graph([dict(VALVE_H), _conn("a", 100.0, WAIST_Y),
+                _conn("c", 260.0, 20.0)],
+               [_edge("ea", "a", "v"),
+                _edge("ec", "v", "c", sp=[81.1, 200.0], tp=[20.0, 260.0],
+                      wps=[[WAIST_Y, 260.0]])])
+    pretransform.seat_edge_endpoints(g)
+    assert _pts(g)["ec"][0] == [pytest.approx(WAIST_Y), 221.0]
+    g = _deg2()
+    pretransform.seat_edge_endpoints(g)
+    assert _pts(g)["ec"][0] == [81.1, 200.0]
+    assert _pts(g)["ea"][1] == [pytest.approx(WAIST_Y), 179.0]
+    # косая, оставленная сервером в талии (роутер не провёл), при открытии
+    # не трогается — выход сервера неподвижная точка (0aea61c0 edge_78)
+    g = _deg2()
+    g["links"][1].update(source_point=[WAIST_Y, 221.0],
+                         target_point=[20.0, 200.0])
+    g["links"][0].update(source_point=[WAIST_Y, 100.0],
+                         target_point=[WAIST_Y, 179.0])
+    pretransform.seat_edge_endpoints(g)
+    assert _pts(g)["ec"][0] == [WAIST_Y, 221.0]
+
+
 def test_degrees_counts_multi_edges():
     from modules.graph.core.graph_access import degrees
     g = _graph([dict(VALVE_H), _box("u", 400.0, 100.0), _conn("c", 1.0, 1.0)],
                [_edge("e1", "v", "u"), _edge("e2", "u", "v"),
                 _edge("e3", "v", "c")])
     assert degrees(g) == {"v": 3, "u": 2, "c": 1}
+
+
+def test_editor_sibling_judged_on_its_plan_face():
+    """Движок редактора (блок 5): сосед по клапану судится на СВОЕЙ грани
+    плана `axial_faces`. c справа-сверху (судья порта без плана отдал бы
+    ему R), по плану соосный b берёт R, c — свободную L; конец eb один на
+    R — в талии. Без грани соседа: на R два конца, слоты увели бы eb с
+    талии."""
+    v = dict(VALVE_H)
+    b, c = _conn("b", 400.0, WAIST_Y), _conn("c", 260.0, 90.0)
+    eb = _edge("eb", "v", "b", sp=[WAIST_Y, 221.0], tp=[WAIST_Y, 400.0])
+    ec = _edge("ec", "v", "c", sp=[WAIST_Y, 221.0], tp=[90.0, 260.0])
+    faces = seating.axial_faces(
+        v, [(eb, "source", (400.0, WAIST_Y), (221.0, WAIST_Y), False),
+            (ec, "source", (260.0, 90.0), (221.0, WAIST_Y), False)], 2)
+    assert faces == {(id(eb), "source"): "R", (id(ec), "source"): "L"}
+    # guard: без плана судья порта кладёт c на R — тест не пуст
+    ps = ports.choose_port_entry(v, (221.0, WAIST_Y), (260.0, 90.0), 8.0,
+                                 rect=tuple(v["bbox"]))
+    assert (ps[2], ps[3]) == (1.0, 0.0)
+    x, y = edit_engine.seat_end(v, b, eb, "s", eb["source_point"],
+                                400.0, WAIST_Y, False, 8.0,
+                                node_edges=[eb, ec], faces=faces)
+    assert (x, y) == (221.0, pytest.approx(WAIST_Y))

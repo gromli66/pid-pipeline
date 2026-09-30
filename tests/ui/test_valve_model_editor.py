@@ -506,9 +506,10 @@ def _box_below(y1):
 def test_neighbour_in_the_turned_frame_blocks_the_turn(make_editor):
     """Решение Максима 28.09: повёрнутая рамка (ещё до сдвига) задела бы
     соседа — клапан НЕ поворачивается. Сосед в 1 px под нижней гранью (рамка
-    растёт вниз до 327.2): ось H и рамка по-прежнему, `_axis_free` снят,
-    ребро садится как обычно; Ctrl+Z одним шагом. Сосед далеко (y=340) —
-    поворот и сдвиг, как без соседа."""
+    растёт вниз до 327.2): ось H и рамка по-прежнему, `_axis_free` снят;
+    ребро — крючком в осевую талию (Р5, блок 5: степень 1 принимает трубу
+    только в осевую грань; до блока 5 — верхняя грань y=286); Ctrl+Z одним
+    шагом. Сосед далеко (y=340) — поворот и сдвиг, как без соседа."""
     from modules.graph.core.graph_access import box_hits
 
     ed = make_editor(_sheet(_conn("k", 150.0, 505.0), _box_below(315.0)))
@@ -525,7 +526,9 @@ def test_neighbour_in_the_turned_frame_blocks_the_turn(make_editor):
     assert n["_axis"] == "H" and "_axis_free" not in n, "клапан повёрнут"
     assert n["bbox"] == frame and n["centroid"] == [WAIST_Y, 500.0]
     e = ed.edges_data[0]
-    assert e["source_point"][0] == pytest.approx(286.0, abs=0.01),         "ребро не на верхней грани"
+    # k (x=505) правее середины рамки — правая осевая грань, в талии
+    assert e["source_point"] == pytest.approx([WAIST_Y, 521.0], abs=0.01), \
+        "ребро не в осевой талии"
     assert e["target_point"] == [150.0, 505.0]
     assert ed._edge_is_ortho(e), "труба легла косой"
     assert ed.nodes["b"]["bbox"] == [480.0, 315.0, 520.0, 345.0]

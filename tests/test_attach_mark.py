@@ -175,6 +175,8 @@ def test_model_seating_differs_on_same_canvas():
     assert pretransform.seat_edge_endpoints(g) > 0
     p = _points(g)
     assert p["e1"][1] == [208.3916, 279.0]
+    # h2 — клапан степени 1, труба сверху прямая: осевое правило (Р5) без
+    # роутера сделало бы её косой — гейт «не хуже входа», верх bbox
     assert p["e6"][1] == [170.0, 500.0]
     assert p["e7"][0] == [200.0, 420.0]
 
