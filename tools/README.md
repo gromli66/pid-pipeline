@@ -16,6 +16,11 @@
   edit_render_probe.py, drag_stress_probe.py, dn2_edit_diff.py работают на общем корпусе
   локальных сейвов холста — `tools/bench/edit_corpus/graph_edited*.json`. Корпус вне git
   (данные заказчика, ~2.9 МБ); до пункта 0.2 он лежал в корне репозитория
+- smooth_bench.py — судья кнопки «Авто-выравнивание» (живой редактор в offscreen-Qt,
+  популяции raw/edited и @model на корпусе `tools/bench/smooth_corpus/`, эталон
+  `bench/smooth_baseline.json` в git). Принятый рост дефектов пересъём узаконивает только
+  ключом `--allow-growth "<основание>"`: основание и перечень выросших строк пишутся в эталон
+  (поле `allowed_growth`), docs/TESTING.md §3
 - corpus.py (КД7) — общий вход к корпусу `graph_validated.json` для стендов и тестов:
   сначала три графа из git (`tests/fixtures/graph/`, пункт 0.8), потом локальный
   `storage/diagrams/`. На него переведены layout_bench.py и корпусная цепочка

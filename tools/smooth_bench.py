@@ -53,6 +53,17 @@
         чем у эталона (урок `layout_determinism --runs`).
 Доказанный рост сильнее неполноты.
 
+Пересъём `--write-baseline` — с теми же исходами: медиана любой
+дефектной колонки выше верха диапазона эталона — ОТКАЗ (1), «пересъём
+узаконит рост». Принятый рост (цена правила, принятая решением Максима, а
+не поломка) узаконивается только явно: `--allow-growth "<основание>"`
+(решение 30.09, по образцу `layout_determinism --allow-fixed`). Основание и
+поимённый перечень выросших строк (популяция/файл/колонка, верх диапазона
+эталона -> медиана) печатаются и дописываются в поле эталона
+`allowed_growth` — история разрешений, пересъёмы её не стирают. Пустое
+основание и ключ без `--write-baseline` — ошибка вызова (2) до замера.
+Неполноту (усечённый корпус, слабый замер) ключ не снимает.
+
 ВРЕМЯ в `--check` НЕ судится (флап от машины) — только печатается: p50 и
 худший по популяции. Метрики честности (обесточенность reseat-гейта, доля
 принятых ходов) тоже справочные: их целевые пункты — блоки 1 и 2, и рост
@@ -62,6 +73,8 @@
     python -X utf8 tools/smooth_bench.py --all
     python -X utf8 tools/smooth_bench.py --population edited --runs 1
     python -X utf8 tools/smooth_bench.py --all --write-baseline
+    python -X utf8 tools/smooth_bench.py --all --write-baseline \
+        --allow-growth "<основание: чьё решение, что за рост>"
     python -X utf8 tools/smooth_bench.py --all --check
 
 Координаты двойственны (`CODING_GUIDE §6`): `centroid`/`source_point` = [y, x],
@@ -651,10 +664,20 @@ def main() -> int:
                     help="выгрузить подробности прогонов")
     ap.add_argument("--write-baseline", action="store_true")
     ap.add_argument("--check", action="store_true")
+    ap.add_argument("--allow-growth", default=None, metavar="ОСНОВАНИЕ",
+                    help="при пересъёме узаконить рост дефектов — явное "
+                         "разрешение; основание и перечень выросших строк "
+                         "пишутся в эталон (allowed_growth)")
     args = ap.parse_args()
 
     if not args.all and args.population is None:
         ap.error("нужна --population или --all")
+    if args.allow_growth is not None:
+        if not args.write_baseline:
+            ap.error("--allow-growth разрешает рост только при --write-baseline")
+        if not args.allow_growth.strip():
+            ap.error("--allow-growth: пустое основание — рост без объяснения "
+                     "не узаконивается")
     pops = POPULATIONS if args.all else (args.population,)
 
     problem = env_problem()
@@ -700,7 +723,8 @@ def main() -> int:
         print(f"\nподробности -> {args.json}")
 
     if args.write_baseline:
-        return _write(out, base, base_pops, unjudged, args.runs)
+        return _write(out, base, base_pops, unjudged, args.runs,
+                      args.allow_growth)
     if args.check:
         return _check(out, base, base_pops, unjudged, args.runs)
     return 2 if unjudged else 0
@@ -760,9 +784,16 @@ def _check(out, base, base_pops, unjudged, runs) -> int:
     return 2 if (holes or said) else 0
 
 
-def _write(out, base, base_pops, unjudged, runs) -> int:
-    """Пересъём с теми же тремя исходами (Д6, урок 1-25/1-28/1-30)."""
-    refused, holes = [], list(unjudged)
+def _write(out, base, base_pops, unjudged, runs,
+           allow_growth: str | None = None) -> int:
+    """Пересъём с теми же тремя исходами (Д6, урок 1-25/1-28/1-30).
+
+    `allow_growth` — основание `--allow-growth`: рост не отказ, а запись
+    в историю `allowed_growth` эталона (строки: популяция, файл, колонка,
+    `was` — верх диапазона эталона, `now` — медиана замера). Неполноту
+    (`holes`) основание не снимает.
+    """
+    refused, allowed, holes = [], [], list(unjudged)
     for pop, data in out.items():
         bp = base_pops.get(pop) or {}
         files, known = bp.get("files", {}), bp.get("inputs", {})
@@ -778,11 +809,15 @@ def _write(out, base, base_pops, unjudged, runs) -> int:
                          f"из {len(files)} — пересъём вычеркнул бы их: "
                          f"{', '.join(missing)}")
         grown = growth(data["summary"], files, drift)
-        if grown:
+        if grown and allow_growth is None:
             refused.append(f"[{pop}] дефекты выросли — пересъём узаконит рост:\n"
                            + "\n".join(f"    {n}: {k} {top} -> {now}"
                                        for n, cols in sorted(grown.items())
                                        for k, top, now in cols))
+        allowed += [{"population": pop, "file": n, "col": k,
+                     "was": top, "now": now}
+                    for n, cols in sorted(grown.items())
+                    for k, top, now in cols]
     base_runs = int(base.get("runs", 0))
     if base_pops and runs < base_runs:
         holes.append(f"прогонов {runs}, а эталон снят на {base_runs} — "
@@ -795,12 +830,20 @@ def _write(out, base, base_pops, unjudged, runs) -> int:
         return 1
     if holes:
         return 2
+    history = list(base.get("allowed_growth", []))
+    if allowed:
+        print(f"\n[РОСТ РАЗРЕШЁН по --allow-growth] основание: {allow_growth}")
+        for r in allowed:
+            print(f"    {r['population']}/{r['file']}: {r['col']} "
+                  f"{r['was']} -> {r['now']}")
+        history.append({"reason": allow_growth, "rows": allowed})
     pops = dict(base_pops)
     for pop, data in out.items():
         pops[pop] = {"files": data["summary"], "inputs": data["inputs"]}
     BASELINE.parent.mkdir(parents=True, exist_ok=True)
     BASELINE.write_text(json.dumps(
-        {"version": BASELINE_VERSION, "runs": runs, "populations": pops},
+        {"version": BASELINE_VERSION, "runs": runs, "populations": pops,
+         "allowed_growth": history},
         ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"\nбаза заморожена -> {BASELINE.relative_to(REPO)}")
     return 0
