@@ -42,7 +42,15 @@
     «скольжение конца» к нему неприменимо: двигается сам коннектор;
   * КОРОТКИЕ РЁБРА-ДАТЧИКИ (< SEG_FLOOR): структурный пол, не судятся;
   * ТОПОЛОГИЯ: ни одно лекарство не меняет состав рёбер и узлов;
-  * ХОЛСТ 1920x1080: выход за границу отменяет ход.
+  * ХОЛСТ 1920x1080: выход за границу отменяет ход;
+  * НЕ НАЕЗЖАТЬ НА СОСЕДЕЙ (Р4, блок 6): число пар узлов с наложенными
+    рамками (`overlap`) ход не увеличивает;
+  * В КЛАПАН — ТОЛЬКО В ТАЛИЮ (Р4/Р5, блок 6): число неосевых концов
+    клапанов степени 1–2 (`offaxis`, правило `contact.axial_only`) ход не
+    увеличивает.
+
+Гейт хода (`accepts`) — лексикографически: косые -> отклонение ->
+ступеньки -> изломы (4-й приоритет, блок 6), прочие дефекты не хуже.
 
 Чистый stdlib: ни Qt, ни shapely. Роутинг приходит колбэком `route_fn`
 (редактор отдаёт свою лестницу), потому что он живёт в UI-слое.
@@ -52,9 +60,12 @@ from __future__ import annotations
 import math
 from copy import deepcopy
 
+from . import contact
 from . import edit_checks as ec
 from . import ports as port_model
-from .graph_access import edges as g_edges, is_connector, nodes_by_id
+from . import seating
+from .graph_access import degrees, edge_ends, edges as g_edges, \
+    is_connector, nodes_by_id
 
 # ── пороги ─────────────────────────────────────────────────────────────
 BUDGET = 22.0        # px: максимум «чуть сдвинуть». Выбран замером и
@@ -511,8 +522,64 @@ def count_bends(graph):
     return bends, edges
 
 
+def count_overlaps(graph):
+    """Пар узлов с наложенными рамками (Р4, блок 6: «не наезжать на соседей»).
+
+    Предикат — `graph_access.box_hits` / `_spread_overlaps` редактора:
+    пересечение по ОБЕИМ осям строго больше нуля (касание — не наложение);
+    узлы без рамки (коннекторы) не считаются. Наложения из построения
+    легальны — гейт судит только прирост (`_NOT_WORSE`). Развёртка по x1:
+    score зовётся на каждую пробу хода, перебор всех пар дорог.
+    """
+    boxes = sorted((float(bb[0]), float(bb[1]), float(bb[2]), float(bb[3]))
+                   for bb in (n.get("bbox") for n in graph.get("nodes") or ())
+                   if bb and len(bb) == 4)
+    n = 0
+    for i, (x1, y1, x2, y2) in enumerate(boxes):
+        for u1, v1, u2, v2 in boxes[i + 1:]:
+            if u1 >= x2:
+                break                   # дальше x1 только больше — мимо
+            if min(x2, u2) - u1 > 0 and min(y2, v2) - max(y1, v1) > 0:
+                n += 1
+    return n
+
+
+def offaxis_ends(graph):
+    """[(node_id, edge_id)] неосевых концов клапанов под правилом Р5.
+
+    Правило — `contact.axial_only` (клапан холста с `_axis`, степень 1–2 по
+    рёбрам, без RELIEF и узлов старого холста `LEGACY_KEY`), грань —
+    `seating._end_side` по рамке посадки `seating._anchor_rect`, осевые
+    грани — `seating._AXIAL_FACES`: тот же судья, что посадка блока 5
+    (`seating.axial_faces`) и счётчик `layout_bench.valve_ends`. Конец с
+    пином оператора не судится (пин — истина).
+    """
+    byid = nodes_by_id(graph)
+    deg = degrees(graph)
+    out = []
+    for e in g_edges(graph):
+        for nid, key in zip(edge_ends(e), ("source_point", "target_point")):
+            n = byid.get(nid)
+            if n is None or not contact.axial_only(n, deg.get(nid, 0)):
+                continue
+            pt, rect = e.get(key), seating._anchor_rect(n)
+            if not pt or rect is None:
+                continue
+            if port_model.pinned_port(n, e) is not None:
+                continue
+            side = seating._end_side(rect, float(pt[1]), float(pt[0]))
+            if side not in seating._AXIAL_FACES[n["_axis"]]:
+                out.append((nid, e.get("id")))
+    return out
+
+
 def score(graph):
-    """Метрики в порядке приоритета заказчика: ортогональность -> прочее."""
+    """Метрики в порядке приоритета заказчика: ортогональность -> прочее.
+
+    Блок 6: `bends` — изломы (`count_bends`, 4-й приоритет гейта),
+    `overlap` — пар наложенных рамок (`count_overlaps`), `offaxis` —
+    неосевых концов клапанов степени 1–2 (`offaxis_ends`); последние два —
+    в `_NOT_WORSE`."""
     c = ec.check_canvas(graph)["counts"]
     dev = 0.0
     for e in g_edges(graph):
@@ -533,11 +600,14 @@ def score(graph):
         "conn_off": c["conn_off"], "poly_off": c["poly_off"],
         "w": (max(xs) - min(xs)) if xs else 0.0,
         "h": (max(ys) - min(ys)) if ys else 0.0,
+        "bends": count_bends(graph)[0],
+        "overlap": count_overlaps(graph),
+        "offaxis": len(offaxis_ends(graph)),
     }
 
 
 _NOT_WORSE = ("along_own", "along_foreign", "through", "corner",
-              "adrift", "conn_off", "poly_off", "near")
+              "adrift", "conn_off", "poly_off", "near", "overlap", "offaxis")
 
 # Причины отказа (К-4): те же три ветки `_attempt`, которые снаружи
 # восстанавливал стенд (`tools/smooth_bench.py:119`), — теперь движок
@@ -560,17 +630,25 @@ def accepts(before, after):
     убирает косую ценой одного шажка, обязан приниматься (косая заметнее
     ступеньки), иначе теряется главный выигрыш — обходы. Зато чистое
     устранение шажка (косых столько же, отклонение то же) теперь принимается,
-    раньше гейт его не видел вовсе."""
+    раньше гейт его не видел вовсе.
+
+    Изломы — ЧЕТВЁРТЫМ приоритетом (блок 6, «а″»): при равных косых,
+    отклонении и ступеньках ход, снимающий изломы, принимается, добавляющий
+    — нет. Слияние двух ступенек в одно колено счётчику ступенек невидимо,
+    а изломов становится меньше. Словари без ключа (`bends`, `overlap`,
+    `offaxis`) судятся как 0 — поведение прежнее."""
     if after["w"] > CANVAS_W + 0.5 or after["h"] > CANVAS_H + 0.5:
         return False
     for k in _NOT_WORSE:
-        if after[k] > before[k]:
+        if after.get(k, 0) > before.get(k, 0):
             return False
     if after["diag"] != before["diag"]:
         return after["diag"] < before["diag"]
     if abs(after["dev"] - before["dev"]) > 0.5:
         return after["dev"] < before["dev"]
-    return after["steps"] < before["steps"]
+    if after["steps"] != before["steps"]:
+        return after["steps"] < before["steps"]
+    return after.get("bends", 0) < before.get("bends", 0)
 
 
 # ── главный цикл ───────────────────────────────────────────────────────

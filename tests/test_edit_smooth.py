@@ -149,6 +149,130 @@ def test_gate_sees_steps_but_diagonal_wins():
         "снятие косой ценой шажка — принимается: косая заметнее"
 
 
+def test_gate_bends_fourth_priority():
+    """Блок 6, «а″»: изломы — ЧЕТВЁРТЫЙ приоритет. При равных косых,
+    отклонении и ступеньках ход, снявший излом, принимается, добавивший —
+    нет; ступенька старше изломов; словари без ключа — прежнее поведение."""
+    base = {"diag": 1, "dev": 10.0, "steps": 2, "bends": 10, "near": 0,
+            "along_own": 0, "along_foreign": 0, "through": 0, "corner": 0,
+            "adrift": 0, "conn_off": 0, "poly_off": 0, "overlap": 0,
+            "offaxis": 0, "w": 100.0, "h": 100.0}
+    assert es.accepts(base, dict(base, bends=9)), \
+        "снятие излома при прочих равных обязано приниматься"
+    assert not es.accepts(base, dict(base, bends=11)), \
+        "рождение излома без иного выигрыша — отказ"
+    assert not es.accepts(base, dict(base, bends=10)), "без выигрыша — отказ"
+    assert not es.accepts(base, dict(base, steps=3, bends=0)), \
+        "ступенька старше изломов"
+    assert es.accepts(base, dict(base, steps=1, bends=12)), \
+        "снятие ступеньки ценой изломов — принимается (3-й приоритет)"
+    assert not es.accepts(base, dict(base, bends=9, overlap=1)), \
+        "наслоение узлов — в «не хуже»"
+    assert not es.accepts(base, dict(base, bends=9, offaxis=1)), \
+        "неосевой вход клапана — в «не хуже»"
+    old = {k: v for k, v in base.items()
+           if k not in ("bends", "overlap", "offaxis")}
+    assert not es.accepts(old, dict(old)), \
+        "словари без изломов — прежнее поведение (отказ без выигрыша)"
+    assert es.accepts(old, dict(old, steps=1))
+
+
+def test_count_overlaps_threshold_both_sides():
+    """Наслоение — пересечение по обеим осям строго > 0 (как `box_hits`):
+    касание — 0, заход на 0.01 px — 1; коннектор без рамки не считается."""
+    a = _box("a", 100.0, 100.0)                    # [80, 80, 120, 120]
+    touch = _box("b", 140.0, 100.0)                # x1 = 120 — касание
+    g = _g([a, touch, _conn("c", 100.0, 100.0)], [])
+    assert es.count_overlaps(g) == 0
+    touch["bbox"][0] -= 0.01
+    assert es.count_overlaps(g) == 1
+    far = _box("d", 90.0, 140.0, w=20.0)           # y1 = 120 — касание
+    g["nodes"].append(far)
+    assert es.count_overlaps(g) == 1
+    far["bbox"][1] = 119.99
+    assert es.count_overlaps(g) == 2
+    assert es.score(g)["overlap"] == 2
+
+
+def _valve(nid, bbox, axis="H", cls="armatura_electro", **kw):
+    x1, y1, x2, y2 = bbox
+    n = {"id": nid, "type": "equipment", "class_id": 7, "class_name": cls,
+         "centroid": [(y1 + y2) / 2, (x1 + x2) / 2], "bbox": list(bbox),
+         "segmentation": None, "_axis": axis}
+    n.update(kw)
+    return n
+
+
+def _offaxis_canvas(bottom=True):
+    """H-клапан степени 2: ребро A в правой грани, ребро B — в нижней
+    (bottom=True) или в левой грани (False)."""
+    v = _valve("v", (400.0, 300.0, 440.0, 340.0))
+    r = _box("r", 600.0, 320.0)
+    q = _box("q", 300.0, 500.0)
+    a = _edge("A", "v", "r", (440.0, 320.0), (580.0, 320.0))
+    b = (_edge("B", "v", "q", (420.0, 340.0), (300.0, 480.0),
+               [(420.0, 480.0)]) if bottom else
+         _edge("B", "v", "q", (400.0, 320.0), (300.0, 480.0),
+               [(300.0, 320.0)]))
+    return _g([v, r, q], [a, b])
+
+
+def test_offaxis_ends_rule_of_block5():
+    """Неосевой конец клапана степени 1–2 считается; тот же конец — нет у
+    степени 3, RELIEF (predohran), пина на конце и узла старого холста."""
+    from modules.graph.core import contact
+
+    assert es.offaxis_ends(_offaxis_canvas(bottom=False)) == []
+    g = _offaxis_canvas()
+    assert es.offaxis_ends(g) == [("v", "B")]
+    assert es.score(g)["offaxis"] == 1
+    # степень 3 — правила нет
+    g3 = _offaxis_canvas()
+    g3["nodes"].append(_box("t", 420.0, 200.0))
+    g3["links"].append(_edge("C", "v", "t", (420.0, 300.0), (420.0, 220.0)))
+    assert es.offaxis_ends(g3) == []
+    # RELIEF_VLV — исключение Р5
+    gr = _offaxis_canvas()
+    gr["nodes"][0]["class_name"] = "predohran"
+    assert es.offaxis_ends(gr) == []
+    # старый холст (метки модели нет) — без правила
+    gl = _offaxis_canvas()
+    gl["nodes"][0][contact.LEGACY_KEY] = True
+    assert es.offaxis_ends(gl) == []
+    # пин оператора на неосевом конце — истина
+    gp = _offaxis_canvas()
+    ports.set_edge_pin(gp["nodes"][0], gp["links"][1], "source", 420.0, 340.0)
+    assert es.offaxis_ends(gp) == []
+
+
+def test_node_shift_refused_into_neighbour():
+    """«Не наезжать на соседей»: ступенька 10 px между рамками закрывается
+    только сдвигом узла, а оба сдвига (a вниз, b вверх) заходят на соседа —
+    ход отклонён, холст бит-в-бит. Без соседей тот же холст лечится
+    сдвигом узла."""
+    def canvas(neighbours):
+        a = _box("a", 100.0, 140.0, w=30.0, h=30.0)      # [85,125,115,155]
+        b = _box("b", 620.0, 150.0)                      # [600,130,640,170]
+        e = _edge("e1", "a", "b", (115.0, 140.0), (620.0, 150.0),
+                  [(200.0, 140.0), (200.0, 150.0)])
+        nodes = [a, b]
+        if neighbours:
+            nodes += [_box("n", 100.0, 173.0, w=30.0, h=34.0),   # y1 = 156
+                      _box("m", 620.0, 107.5, h=35.0)]           # y2 = 125
+        return _g(nodes, [e])
+
+    free = canvas(False)
+    st = es.smooth(free, route_fn=None, reseat_fn=None)
+    assert st["узел"] == 1 and es.count_steps(free) == 0, st
+
+    g = canvas(True)
+    assert es.count_overlaps(g) == 0
+    before = copy.deepcopy(g)
+    st = es.smooth(g, route_fn=None, reseat_fn=None)
+    assert st["узел"] == 0 and st["лестница исчерпана"] == 1, st
+    assert g == before, "отклонённый ход обязан оставить холст бит-в-бит"
+
+
 def test_count_bends():
     """Излом — точка, где маршрут меняет направление; коллинеарная точка
     в пределах DIAG_TOL (0.4 px поперёк) изломом не считается — тот же

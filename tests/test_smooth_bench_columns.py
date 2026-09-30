@@ -3,8 +3,8 @@
 
 `overlap` (наслоений узлов) и `offaxis` (неосевых входов клапана) — ДЕФЕКТЫ:
 судятся `--check` и попадают в эталон входа. Значения берёт стенд из
-`edit_smooth.score`; пока движок их не считает — 0 (через `.get`), чтобы
-эталон входа можно было снять ДО правок движка. Ход «осевая талия» считается
+`edit_smooth.score` (через `.get`: эталон входа снимался ДО правок движка, и
+там их не было; с шага 4 движок их считает). Ход «осевая талия» считается
 в `moves` вместе с прочими. Qt и libavoid не нужны.
 """
 from __future__ import annotations
@@ -35,7 +35,7 @@ def test_new_columns_are_defects_and_remedy_is_counted():
 
 def test_new_columns_come_from_engine_score(monkeypatch):
     m = sb.canvas_metrics(_graph())
-    assert (m["overlap"], m["offaxis"]) == (0, 0)     # движок их ещё не считает
+    assert (m["overlap"], m["offaxis"]) == (0, 0)     # рамок и клапанов нет
     real = es.score
     monkeypatch.setattr(es, "score",
                         lambda g: dict(real(g), overlap=3, offaxis=2))
