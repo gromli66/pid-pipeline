@@ -1133,3 +1133,39 @@ def test_engine_clearance_is_the_editor_route_clearance():
     from ui.editors.advanced_graph_editor import AdvancedGraphEditor
 
     assert es.ec.CLEARANCE == AdvancedGraphEditor.ROUTE_CLEARANCE
+
+
+# ── принятый ход снимает _slack у ребра-кандидата (блок 6, S10) ────────
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_accepted_move_drops_slack_of_candidate(legacy):
+    """Ход кнопки — жест оператора: метка вынужденной прямой сервера
+    `_slack` у ребра-кандидата снимается (шов с блоком 1 п.5). Старый
+    холст (`LEGACY_KEY`) живёт по правилам 238fe6b — метка остаётся."""
+    from modules.graph.core import contact
+
+    g = _canvas_single_step()
+    e = g["links"][0]
+    e["_slack"] = True
+    if legacy:
+        for n in g["nodes"]:
+            n[contact.LEGACY_KEY] = True
+
+    st = es.smooth(g, route_fn=None, reseat_fn=None)
+
+    assert st["коннектор"] == 1 and es.count_steps(g) == 0, st
+    assert ("_slack" in e) == legacy
+
+
+def test_refused_move_keeps_slack():
+    """Отказ — холст бит-в-бит, метка тоже."""
+    a = _box("a", 100.0, 100.0)
+    b = _box("b", 400.0, 200.0)                      # за бюджетом
+    e = _edge("e1", "a", "b", (120.0, 100.0), (380.0, 200.0))
+    e["_slack"] = True
+    g = _g([a, b], [e])
+    before = copy.deepcopy(g)
+
+    st = es.smooth(g, route_fn=None, reseat_fn=None)
+
+    assert st["отклонено"] == 1 and g == before

@@ -1109,6 +1109,10 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self._drag_route_ctx = None          # вне жеста: полный набор препятствий
         self._drag_routable_edges = set()
         self._amnesty_cache = {}
+        # центроиды ДО движка: он двигает узлы на месте и про подписи не
+        # знает — дельту привязанным подписям отдаём здесь (блок 6)
+        centroids0 = {n.get('id'): list(n.get('centroid') or [])
+                      for n in self.model.graph_data.get('nodes') or []}
         try:
             stats = edit_smooth.smooth(
                 self.model.graph_data,
@@ -1117,6 +1121,14 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 budget=edit_smooth.BUDGET if budget is None else float(budget),
                 allow_node_shift=allow_node_shift,
             )
+            # Решение §8.3: привязанная подпись едет за сдвинутым узлом на ту
+            # же дельту, как у протяжки; шаг отмены (SnapshotCommand) уже
+            # снимает текст-блоки
+            for n in self.model.graph_data.get('nodes') or []:
+                c0, c1 = centroids0.get(n.get('id')), n.get('centroid')
+                if c0 and c1:
+                    self._shift_bound_blocks(n.get('id'), c1[1] - c0[1],
+                                             c1[0] - c0[0])
         finally:
             self._drag_route_ctx = prev_ctx
             self._drag_routable_edges = prev_routable
@@ -1133,7 +1145,8 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         self.update_status(
             f"Сглаживание: колен {stats['колено']}, изломов "
             f"{stats['излом']}, скольжений {stats['скольжение']}, "
-            f"коннекторов {stats['коннектор']}, узлов {stats['узел']}; "
+            f"коннекторов {stats['коннектор']}, узлов {stats['узел']}, "
+            f"осевых {stats.get('осевая талия', 0)}; "
             f"осталось {stats['осталось']}")
         self.update_statistics()
         return stats

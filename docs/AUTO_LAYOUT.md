@@ -258,3 +258,7 @@ a6d28736 5, 8d14cf73 1 — крючки ортогональны, изломов
   столько же. Тесты — `::test_valve_along_axis_for_clearance`,
   `::test_valve_along_axis_needs_short_stub`,
   `::test_engine_clearance_is_the_editor_route_clearance`.
+
+Принятый ход снимает у ребра-кандидата метку вынужденной прямой сервера
+`_slack` (кроме старого холста), а привязанные подписи сдвинутого клапана
+едут за ним на ту же дельту (`smooth_canvas` → `_shift_bound_blocks`).

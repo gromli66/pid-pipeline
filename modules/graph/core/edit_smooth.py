@@ -939,6 +939,21 @@ def _try_remedies(graph, e, stats, route_fn, reseat_fn, budget,
             restore_all()
 
 
+def _drop_slack(graph, e):
+    """Принятый ход — жест оператора: метка вынужденной прямой сервера
+    (`_slack`) у ребра-кандидата снимается (шов с блоком 1 п.5: «д»
+    зовёт лестницу маршрута и мини-жест, но не всегда — снять метку
+    больше некому). На старом холсте (`contact.LEGACY_KEY`) метку не
+    трогаем — как редактор (`_waist_model()` ложно)."""
+    if e is None or "_slack" not in e:
+        return
+    byid = nodes_by_id(graph)
+    if any((byid.get(nid) or {}).get(contact.LEGACY_KEY)
+           for nid in edge_ends(e)):
+        return
+    e.pop("_slack", None)
+
+
 def _capture(graph):
     """Снимок ПОЭЛЕМЕНТНЫЙ (узлы, рёбра), а не подменой списков: редактор
     держит индекс {id -> тот же самый dict}, и подмена graph['nodes']
@@ -1005,6 +1020,7 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
         if best:
             _put(graph, best[2])
             stats[best[1]] += 1
+            _drop_slack(graph, live_edge())
             return True
         _refuse(stats, refusal)
         return False
