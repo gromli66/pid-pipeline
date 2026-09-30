@@ -486,6 +486,31 @@ def count_steps(graph, step_max=STEP_MAX):
     return n
 
 
+def count_bends(graph):
+    """(изломов всего, рёбер с геометрией).
+
+    Излом — промежуточная точка, в которой маршрут МЕНЯЕТ направление.
+    Нужен блоку 6: слияние двух ступенек в одно колено счётчику `steps`
+    невидимо (20+20 -> 40 — по-прежнему «не ступенька»), а изломов при этом
+    становится меньше. Предикат «лишняя точка» тот же, что у
+    `drop_collinear`, — сторож и судья не должны расходиться. Перенесён из
+    `tools/smooth_bench.py` бит-в-бит (блок 6, шаг 1): стенд зовёт отсюда.
+    """
+    tol = ec.DIAG_TOL
+    bends = edges = 0
+    for e in g_edges(graph):
+        pts = edge_pts(e)
+        if not pts:
+            continue
+        edges += 1
+        for a, b, c in zip(pts, pts[1:], pts[2:]):
+            same_x = abs(a[0] - b[0]) <= tol and abs(b[0] - c[0]) <= tol
+            same_y = abs(a[1] - b[1]) <= tol and abs(b[1] - c[1]) <= tol
+            if not (same_x or same_y):
+                bends += 1
+    return bends, edges
+
+
 def score(graph):
     """Метрики в порядке приоритета заказчика: ортогональность -> прочее."""
     c = ec.check_canvas(graph)["counts"]

@@ -149,6 +149,24 @@ def test_gate_sees_steps_but_diagonal_wins():
         "снятие косой ценой шажка — принимается: косая заметнее"
 
 
+def test_count_bends():
+    """Излом — точка, где маршрут меняет направление; коллинеарная точка
+    в пределах DIAG_TOL (0.4 px поперёк) изломом не считается — тот же
+    предикат, что у `drop_collinear`. Стенд зовёт движок (блок 6, шаг 1)."""
+    from tools import smooth_bench as sb
+
+    z = _g([_conn("a", 100.0, 100.0), _conn("b", 300.0, 150.0)],
+           [_edge("e", "a", "b", (100.0, 100.0), (300.0, 150.0),
+                  [(200.0, 100.0), (200.0, 150.0)])])
+    assert es.count_bends(z) == (2, 1)
+    line = _g([_conn("a", 100.0, 100.0), _conn("b", 300.0, 100.0)],
+              [_edge("e", "a", "b", (100.0, 100.0), (300.0, 100.0),
+                     [(200.0, 100.4)])])
+    assert es.count_bends(line) == (0, 1)
+    for g in (z, line):
+        assert sb.count_bends(g) == es.count_bends(g)
+
+
 # ── главный цикл: что неприкосновенно ──────────────────────────────────
 
 def _canvas_with_anchor():

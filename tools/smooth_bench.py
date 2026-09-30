@@ -156,31 +156,13 @@ def population_paths(name: str) -> list[Path]:
 
 # ── метрики холста ─────────────────────────────────────────────────────
 def count_bends(graph) -> tuple[int, int]:
-    """(изломов всего, рёбер с геометрией).
+    """(изломов всего, рёбер с геометрией) — `edit_smooth.count_bends`.
 
-    Излом — промежуточная точка, в которой маршрут МЕНЯЕТ направление.
-    Нужен блоку 6: слияние двух ступенек в одно колено счётчику `steps`
-    невидимо (20+20 -> 40 — по-прежнему «не ступенька»), а изломов при этом
-    становится меньше. Предикат «лишняя точка» тот же, что у
-    `edit_smooth.drop_collinear`, — сторож и судья не должны расходиться.
+    Счётчик живёт в движке с блока 6 (шаг 1): судья хода и судья стенда —
+    один предикат. Здесь только обёртка, её зовут стенд и тесты.
     """
-    from modules.graph.core import edit_checks as ec
     from modules.graph.core import edit_smooth as es
-    from modules.graph.core.graph_access import edges as g_edges
-
-    tol = ec.DIAG_TOL
-    bends = edges = 0
-    for e in g_edges(graph):
-        pts = es.edge_pts(e)
-        if not pts:
-            continue
-        edges += 1
-        for a, b, c in zip(pts, pts[1:], pts[2:]):
-            same_x = abs(a[0] - b[0]) <= tol and abs(b[0] - c[0]) <= tol
-            same_y = abs(a[1] - b[1]) <= tol and abs(b[1] - c[1]) <= tol
-            if not (same_x or same_y):
-                bends += 1
-    return bends, edges
+    return es.count_bends(graph)
 
 
 def offsheet(graph) -> tuple[int, int]:
