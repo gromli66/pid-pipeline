@@ -56,16 +56,26 @@
       "hi": 5
      },
      "ms": {
-      "med": 11246.3,
-      "lo": 9919.0,
-      "hi": 11917.8
+      "med": 5651.9,
+      "lo": 5613.5,
+      "hi": 5688.0
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -81,14 +91,14 @@
       "hi": 6
      },
      "reseat_blind": {
-      "med": 20,
-      "lo": 20,
-      "hi": 20
+      "med": 23,
+      "lo": 23,
+      "hi": 23
      },
      "reseat_calls": {
-      "med": 29,
-      "lo": 29,
-      "hi": 29
+      "med": 32,
+      "lo": 32,
+      "hi": 32
      },
      "rollback_bad": {
       "med": 0,
@@ -168,16 +178,26 @@
       "hi": 1
      },
      "ms": {
-      "med": 175.9,
-      "lo": 170.0,
-      "hi": 301.6
+      "med": 71.1,
+      "lo": 69.7,
+      "hi": 71.6
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -280,19 +300,29 @@
       "hi": 0
      },
      "ms": {
-      "med": 35664.6,
-      "lo": 33412.7,
-      "hi": 45147.2
+      "med": 17858.0,
+      "lo": 17835.9,
+      "hi": 17903.2
      },
      "near": {
       "med": 2,
       "lo": 2,
       "hi": 2
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
       "med": 28,
       "lo": 28,
       "hi": 28
+     },
+     "overlap": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
      },
      "poly_off": {
       "med": 0,
@@ -347,9 +377,9 @@
       "hi": 0
      },
      "along_foreign": {
-      "med": 12,
-      "lo": 12,
-      "hi": 12
+      "med": 11,
+      "lo": 11,
+      "hi": 11
      },
      "along_own": {
       "med": 0,
@@ -367,9 +397,9 @@
       "hi": 0
      },
      "corner": {
-      "med": 9,
-      "lo": 9,
-      "hi": 9
+      "med": 10,
+      "lo": 10,
+      "hi": 10
      },
      "dev": {
       "med": 0.0,
@@ -392,16 +422,26 @@
       "hi": 16
      },
      "ms": {
-      "med": 3818.1,
-      "lo": 2986.9,
-      "hi": 4059.2
+      "med": 1911.6,
+      "lo": 1905.1,
+      "hi": 1929.2
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -417,14 +457,14 @@
       "hi": 0
      },
      "reseat_blind": {
-      "med": 3,
-      "lo": 3,
-      "hi": 3
+      "med": 4,
+      "lo": 4,
+      "hi": 4
      },
      "reseat_calls": {
-      "med": 5,
-      "lo": 5,
-      "hi": 5
+      "med": 6,
+      "lo": 6,
+      "hi": 6
      },
      "rollback_bad": {
       "med": 0,
@@ -504,16 +544,26 @@
       "hi": 13
      },
      "ms": {
-      "med": 10383.7,
-      "lo": 9691.1,
-      "hi": 11328.5
+      "med": 6082.5,
+      "lo": 6063.2,
+      "hi": 6118.7
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -529,14 +579,14 @@
       "hi": 6
      },
      "reseat_blind": {
-      "med": 14,
-      "lo": 14,
-      "hi": 14
+      "med": 20,
+      "lo": 20,
+      "hi": 20
      },
      "reseat_calls": {
-      "med": 38,
-      "lo": 38,
-      "hi": 38
+      "med": 48,
+      "lo": 48,
+      "hi": 48
      },
      "rollback_bad": {
       "med": 0,
@@ -616,16 +666,26 @@
       "hi": 6
      },
      "ms": {
-      "med": 2989.7,
-      "lo": 2527.5,
-      "hi": 3274.2
+      "med": 1980.3,
+      "lo": 1956.5,
+      "hi": 2116.0
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -641,14 +701,14 @@
       "hi": 2
      },
      "reseat_blind": {
-      "med": 6,
-      "lo": 6,
-      "hi": 6
+      "med": 8,
+      "lo": 8,
+      "hi": 8
      },
      "reseat_calls": {
-      "med": 12,
-      "lo": 12,
-      "hi": 12
+      "med": 18,
+      "lo": 18,
+      "hi": 18
      },
      "rollback_bad": {
       "med": 0,
@@ -728,16 +788,26 @@
       "hi": 0
      },
      "ms": {
-      "med": 7.9,
-      "lo": 7.2,
-      "hi": 14.0
+      "med": 4.1,
+      "lo": 4.1,
+      "hi": 4.2
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -805,9 +875,9 @@
       "hi": 0
      },
      "bends": {
-      "med": 78,
-      "lo": 78,
-      "hi": 78
+      "med": 80,
+      "lo": 80,
+      "hi": 80
      },
      "conn_off": {
       "med": 0,
@@ -835,21 +905,31 @@
       "hi": 1031.3
      },
      "moves": {
-      "med": 1,
-      "lo": 1,
-      "hi": 1
+      "med": 0,
+      "lo": 0,
+      "hi": 0
      },
      "ms": {
-      "med": 56545.5,
-      "lo": 48621.4,
-      "hi": 62999.9
+      "med": 12910.6,
+      "lo": 12876.7,
+      "hi": 12982.0
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -860,19 +940,19 @@
       "hi": 0
      },
      "refused": {
-      "med": 18,
-      "lo": 18,
-      "hi": 18
+      "med": 10,
+      "lo": 10,
+      "hi": 10
      },
      "reseat_blind": {
-      "med": 64,
-      "lo": 64,
-      "hi": 64
+      "med": 35,
+      "lo": 35,
+      "hi": 35
      },
      "reseat_calls": {
-      "med": 72,
-      "lo": 72,
-      "hi": 72
+      "med": 40,
+      "lo": 40,
+      "hi": 40
      },
      "rollback_bad": {
       "med": 0,
@@ -880,14 +960,14 @@
       "hi": 0
      },
      "rounds": {
-      "med": 2,
-      "lo": 2,
-      "hi": 2
+      "med": 1,
+      "lo": 1,
+      "hi": 1
      },
      "steps": {
-      "med": 9,
-      "lo": 9,
-      "hi": 9
+      "med": 10,
+      "lo": 10,
+      "hi": 10
      },
      "through": {
       "med": 23,
@@ -917,9 +997,9 @@
       "hi": 0
      },
      "bends": {
-      "med": 38,
-      "lo": 38,
-      "hi": 38
+      "med": 40,
+      "lo": 40,
+      "hi": 40
      },
      "conn_off": {
       "med": 0,
@@ -947,21 +1027,31 @@
       "hi": 1025.5
      },
      "moves": {
-      "med": 8,
-      "lo": 8,
-      "hi": 8
+      "med": 7,
+      "lo": 7,
+      "hi": 7
      },
      "ms": {
-      "med": 8027.6,
-      "lo": 7511.8,
-      "hi": 9024.7
+      "med": 5473.1,
+      "lo": 5448.5,
+      "hi": 5516.5
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -972,9 +1062,9 @@
       "hi": 0
      },
      "refused": {
-      "med": 4,
-      "lo": 4,
-      "hi": 4
+      "med": 6,
+      "lo": 6,
+      "hi": 6
      },
      "reseat_blind": {
       "med": 8,
@@ -982,9 +1072,9 @@
       "hi": 8
      },
      "reseat_calls": {
-      "med": 12,
-      "lo": 12,
-      "hi": 12
+      "med": 20,
+      "lo": 20,
+      "hi": 20
      },
      "rollback_bad": {
       "med": 0,
@@ -997,9 +1087,9 @@
       "hi": 2
      },
      "steps": {
-      "med": 6,
-      "lo": 6,
-      "hi": 6
+      "med": 7,
+      "lo": 7,
+      "hi": 7
      },
      "through": {
       "med": 11,
@@ -1064,16 +1154,26 @@
       "hi": 7
      },
      "ms": {
-      "med": 5502.8,
-      "lo": 5310.8,
-      "hi": 5693.5
+      "med": 3291.6,
+      "lo": 3285.8,
+      "hi": 3304.2
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -1089,14 +1189,14 @@
       "hi": 2
      },
      "reseat_blind": {
-      "med": 4,
-      "lo": 4,
-      "hi": 4
+      "med": 6,
+      "lo": 6,
+      "hi": 6
      },
      "reseat_calls": {
-      "med": 14,
-      "lo": 14,
-      "hi": 14
+      "med": 20,
+      "lo": 20,
+      "hi": 20
      },
      "rollback_bad": {
       "med": 0,
@@ -1176,16 +1276,26 @@
       "hi": 4
      },
      "ms": {
-      "med": 13813.4,
-      "lo": 12876.9,
-      "hi": 14353.2
+      "med": 7466.1,
+      "lo": 7445.5,
+      "hi": 7508.4
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -1288,16 +1398,26 @@
       "hi": 0
      },
      "ms": {
-      "med": 26.3,
-      "lo": 24.9,
-      "hi": 27.7
+      "med": 18.1,
+      "lo": 17.8,
+      "hi": 18.9
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -1400,16 +1520,26 @@
       "hi": 2
      },
      "ms": {
-      "med": 3639.3,
-      "lo": 3215.9,
-      "hi": 3809.0
+      "med": 1943.2,
+      "lo": 1913.8,
+      "hi": 1949.1
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -1477,9 +1607,9 @@
       "hi": 0
      },
      "bends": {
-      "med": 33,
-      "lo": 33,
-      "hi": 33
+      "med": 31,
+      "lo": 31,
+      "hi": 31
      },
      "conn_off": {
       "med": 0,
@@ -1507,21 +1637,31 @@
       "hi": 1020.0
      },
      "moves": {
-      "med": 1,
-      "lo": 1,
-      "hi": 1
+      "med": 0,
+      "lo": 0,
+      "hi": 0
      },
      "ms": {
-      "med": 6032.9,
-      "lo": 5443.1,
-      "hi": 6224.4
+      "med": 2118.6,
+      "lo": 2112.2,
+      "hi": 2345.4
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -1532,19 +1672,19 @@
       "hi": 0
      },
      "refused": {
-      "med": 6,
-      "lo": 6,
-      "hi": 6
+      "med": 4,
+      "lo": 4,
+      "hi": 4
      },
      "reseat_blind": {
-      "med": 10,
-      "lo": 10,
-      "hi": 10
+      "med": 11,
+      "lo": 11,
+      "hi": 11
      },
      "reseat_calls": {
-      "med": 24,
-      "lo": 24,
-      "hi": 24
+      "med": 16,
+      "lo": 16,
+      "hi": 16
      },
      "rollback_bad": {
       "med": 0,
@@ -1552,14 +1692,14 @@
       "hi": 0
      },
      "rounds": {
-      "med": 2,
-      "lo": 2,
-      "hi": 2
+      "med": 1,
+      "lo": 1,
+      "hi": 1
      },
      "steps": {
-      "med": 3,
-      "lo": 3,
-      "hi": 3
+      "med": 4,
+      "lo": 4,
+      "hi": 4
      },
      "through": {
       "med": 4,
@@ -1589,9 +1729,9 @@
       "hi": 0
      },
      "bends": {
-      "med": 97,
-      "lo": 97,
-      "hi": 97
+      "med": 108,
+      "lo": 108,
+      "hi": 108
      },
      "conn_off": {
       "med": 0,
@@ -1619,21 +1759,31 @@
       "hi": 1030.1
      },
      "moves": {
-      "med": 49,
-      "lo": 49,
-      "hi": 49
+      "med": 44,
+      "lo": 44,
+      "hi": 44
      },
      "ms": {
-      "med": 39772.6,
-      "lo": 38298.3,
-      "hi": 44079.8
+      "med": 44645.4,
+      "lo": 44520.8,
+      "hi": 45299.5
      },
      "near": {
       "med": 2,
       "lo": 2,
       "hi": 2
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -1644,19 +1794,19 @@
       "hi": 0
      },
      "refused": {
-      "med": 14,
-      "lo": 14,
-      "hi": 14
-     },
-     "reseat_blind": {
       "med": 34,
       "lo": 34,
       "hi": 34
      },
+     "reseat_blind": {
+      "med": 104,
+      "lo": 104,
+      "hi": 104
+     },
      "reseat_calls": {
-      "med": 83,
-      "lo": 83,
-      "hi": 83
+      "med": 197,
+      "lo": 197,
+      "hi": 197
      },
      "rollback_bad": {
       "med": 0,
@@ -1664,14 +1814,14 @@
       "hi": 0
      },
      "rounds": {
-      "med": 2,
-      "lo": 2,
-      "hi": 2
+      "med": 3,
+      "lo": 3,
+      "hi": 3
      },
      "steps": {
-      "med": 9,
-      "lo": 9,
-      "hi": 9
+      "med": 14,
+      "lo": 14,
+      "hi": 14
      },
      "through": {
       "med": 6,
@@ -1736,16 +1886,26 @@
       "hi": 0
      },
      "ms": {
-      "med": 8598.6,
-      "lo": 8335.0,
-      "hi": 8980.9
+      "med": 5168.4,
+      "lo": 5132.5,
+      "hi": 5211.2
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -1813,9 +1973,9 @@
       "hi": 1
      },
      "bends": {
-      "med": 45,
-      "lo": 45,
-      "hi": 45
+      "med": 43,
+      "lo": 43,
+      "hi": 43
      },
      "conn_off": {
       "med": 0,
@@ -1823,9 +1983,9 @@
       "hi": 0
      },
      "corner": {
-      "med": 9,
-      "lo": 9,
-      "hi": 9
+      "med": 10,
+      "lo": 10,
+      "hi": 10
      },
      "dev": {
       "med": 0.0,
@@ -1848,16 +2008,26 @@
       "hi": 6
      },
      "ms": {
-      "med": 20309.6,
-      "lo": 19859.8,
-      "hi": 20877.0
+      "med": 9423.8,
+      "lo": 9333.8,
+      "hi": 9443.0
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -1868,9 +2038,9 @@
       "hi": 0
      },
      "refused": {
-      "med": 17,
-      "lo": 17,
-      "hi": 17
+      "med": 15,
+      "lo": 15,
+      "hi": 15
      },
      "reseat_blind": {
       "med": 50,
@@ -1878,9 +2048,9 @@
       "hi": 50
      },
      "reseat_calls": {
-      "med": 60,
-      "lo": 60,
-      "hi": 60
+      "med": 54,
+      "lo": 54,
+      "hi": 54
      },
      "rollback_bad": {
       "med": 0,
@@ -1893,9 +2063,9 @@
       "hi": 3
      },
      "steps": {
-      "med": 6,
-      "lo": 6,
-      "hi": 6
+      "med": 5,
+      "lo": 5,
+      "hi": 5
      },
      "through": {
       "med": 32,
@@ -1955,21 +2125,31 @@
       "hi": 1027.8
      },
      "moves": {
-      "med": 1,
-      "lo": 1,
-      "hi": 1
+      "med": 0,
+      "lo": 0,
+      "hi": 0
      },
      "ms": {
-      "med": 2448.7,
-      "lo": 2385.7,
-      "hi": 2891.5
+      "med": 878.0,
+      "lo": 866.4,
+      "hi": 955.3
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -1980,19 +2160,19 @@
       "hi": 0
      },
      "refused": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "reseat_blind": {
       "med": 4,
       "lo": 4,
       "hi": 4
      },
-     "reseat_blind": {
-      "med": 8,
-      "lo": 8,
-      "hi": 8
-     },
      "reseat_calls": {
-      "med": 8,
-      "lo": 8,
-      "hi": 8
+      "med": 6,
+      "lo": 6,
+      "hi": 6
      },
      "rollback_bad": {
       "med": 0,
@@ -2000,14 +2180,14 @@
       "hi": 0
      },
      "rounds": {
-      "med": 2,
-      "lo": 2,
-      "hi": 2
+      "med": 1,
+      "lo": 1,
+      "hi": 1
      },
      "steps": {
-      "med": 2,
-      "lo": 2,
-      "hi": 2
+      "med": 3,
+      "lo": 3,
+      "hi": 3
      },
      "through": {
       "med": 2,
@@ -2096,16 +2276,26 @@
       "hi": 2
      },
      "ms": {
-      "med": 270.1,
-      "lo": 243.9,
-      "hi": 433.9
+      "med": 180.1,
+      "lo": 174.5,
+      "hi": 185.2
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -2173,9 +2363,9 @@
       "hi": 1
      },
      "bends": {
-      "med": 21,
-      "lo": 21,
-      "hi": 21
+      "med": 24,
+      "lo": 24,
+      "hi": 24
      },
      "conn_off": {
       "med": 0,
@@ -2203,21 +2393,31 @@
       "hi": 1027.8
      },
      "moves": {
-      "med": 7,
-      "lo": 7,
-      "hi": 7
+      "med": 6,
+      "lo": 6,
+      "hi": 6
      },
      "ms": {
-      "med": 3449.4,
-      "lo": 3181.6,
-      "hi": 4239.5
+      "med": 2829.0,
+      "lo": 2823.5,
+      "hi": 2851.0
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -2228,19 +2428,19 @@
       "hi": 0
      },
      "refused": {
-      "med": 4,
-      "lo": 4,
-      "hi": 4
+      "med": 8,
+      "lo": 8,
+      "hi": 8
      },
      "reseat_blind": {
-      "med": 11,
-      "lo": 11,
-      "hi": 11
+      "med": 15,
+      "lo": 15,
+      "hi": 15
      },
      "reseat_calls": {
-      "med": 12,
-      "lo": 12,
-      "hi": 12
+      "med": 20,
+      "lo": 20,
+      "hi": 20
      },
      "rollback_bad": {
       "med": 0,
@@ -2253,9 +2453,9 @@
       "hi": 4
      },
      "steps": {
-      "med": 1,
-      "lo": 1,
-      "hi": 1
+      "med": 2,
+      "lo": 2,
+      "hi": 2
      },
      "through": {
       "med": 2,
@@ -2269,230 +2469,6 @@
      }
     },
     "graph_edited70827.json": {
-     "adrift": {
-      "med": 0,
-      "lo": 0,
-      "hi": 0
-     },
-     "along_foreign": {
-      "med": 1,
-      "lo": 1,
-      "hi": 1
-     },
-     "along_own": {
-      "med": 0,
-      "lo": 0,
-      "hi": 0
-     },
-     "bends": {
-      "med": 13,
-      "lo": 13,
-      "hi": 13
-     },
-     "conn_off": {
-      "med": 0,
-      "lo": 0,
-      "hi": 0
-     },
-     "corner": {
-      "med": 3,
-      "lo": 3,
-      "hi": 3
-     },
-     "dev": {
-      "med": 0.0,
-      "lo": 0.0,
-      "hi": 0.0
-     },
-     "diag": {
-      "med": 0,
-      "lo": 0,
-      "hi": 0
-     },
-     "h": {
-      "med": 1027.8,
-      "lo": 1027.8,
-      "hi": 1027.8
-     },
-     "moves": {
-      "med": 4,
-      "lo": 4,
-      "hi": 4
-     },
-     "ms": {
-      "med": 2965.3,
-      "lo": 2877.0,
-      "hi": 3047.9
-     },
-     "near": {
-      "med": 0,
-      "lo": 0,
-      "hi": 0
-     },
-     "offsheet": {
-      "med": 0,
-      "lo": 0,
-      "hi": 0
-     },
-     "poly_off": {
-      "med": 0,
-      "lo": 0,
-      "hi": 0
-     },
-     "refused": {
-      "med": 4,
-      "lo": 4,
-      "hi": 4
-     },
-     "reseat_blind": {
-      "med": 11,
-      "lo": 11,
-      "hi": 11
-     },
-     "reseat_calls": {
-      "med": 12,
-      "lo": 12,
-      "hi": 12
-     },
-     "rollback_bad": {
-      "med": 0,
-      "lo": 0,
-      "hi": 0
-     },
-     "rounds": {
-      "med": 4,
-      "lo": 4,
-      "hi": 4
-     },
-     "steps": {
-      "med": 1,
-      "lo": 1,
-      "hi": 1
-     },
-     "through": {
-      "med": 2,
-      "lo": 2,
-      "hi": 2
-     },
-     "w": {
-      "med": 1855.3,
-      "lo": 1855.3,
-      "hi": 1855.3
-     }
-    },
-    "graph_edited87537.json": {
-     "adrift": {
-      "med": 0,
-      "lo": 0,
-      "hi": 0
-     },
-     "along_foreign": {
-      "med": 2,
-      "lo": 2,
-      "hi": 2
-     },
-     "along_own": {
-      "med": 0,
-      "lo": 0,
-      "hi": 0
-     },
-     "bends": {
-      "med": 15,
-      "lo": 15,
-      "hi": 15
-     },
-     "conn_off": {
-      "med": 0,
-      "lo": 0,
-      "hi": 0
-     },
-     "corner": {
-      "med": 3,
-      "lo": 3,
-      "hi": 3
-     },
-     "dev": {
-      "med": 0.0,
-      "lo": 0.0,
-      "hi": 0.0
-     },
-     "diag": {
-      "med": 0,
-      "lo": 0,
-      "hi": 0
-     },
-     "h": {
-      "med": 1027.8,
-      "lo": 1027.8,
-      "hi": 1027.8
-     },
-     "moves": {
-      "med": 5,
-      "lo": 5,
-      "hi": 5
-     },
-     "ms": {
-      "med": 2863.4,
-      "lo": 2445.4,
-      "hi": 3019.2
-     },
-     "near": {
-      "med": 0,
-      "lo": 0,
-      "hi": 0
-     },
-     "offsheet": {
-      "med": 0,
-      "lo": 0,
-      "hi": 0
-     },
-     "poly_off": {
-      "med": 0,
-      "lo": 0,
-      "hi": 0
-     },
-     "refused": {
-      "med": 4,
-      "lo": 4,
-      "hi": 4
-     },
-     "reseat_blind": {
-      "med": 11,
-      "lo": 11,
-      "hi": 11
-     },
-     "reseat_calls": {
-      "med": 12,
-      "lo": 12,
-      "hi": 12
-     },
-     "rollback_bad": {
-      "med": 0,
-      "lo": 0,
-      "hi": 0
-     },
-     "rounds": {
-      "med": 4,
-      "lo": 4,
-      "hi": 4
-     },
-     "steps": {
-      "med": 1,
-      "lo": 1,
-      "hi": 1
-     },
-     "through": {
-      "med": 3,
-      "lo": 3,
-      "hi": 3
-     },
-     "w": {
-      "med": 1855.3,
-      "lo": 1855.3,
-      "hi": 1855.3
-     }
-    },
-    "graph_edited87537_2.json": {
      "adrift": {
       "med": 0,
       "lo": 0,
@@ -2539,21 +2515,31 @@
       "hi": 1027.8
      },
      "moves": {
-      "med": 5,
-      "lo": 5,
-      "hi": 5
+      "med": 3,
+      "lo": 3,
+      "hi": 3
      },
      "ms": {
-      "med": 2943.0,
-      "lo": 2580.9,
-      "hi": 3097.7
+      "med": 2658.6,
+      "lo": 2625.3,
+      "hi": 2666.4
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -2564,19 +2550,19 @@
       "hi": 0
      },
      "refused": {
-      "med": 4,
-      "lo": 4,
-      "hi": 4
+      "med": 8,
+      "lo": 8,
+      "hi": 8
      },
      "reseat_blind": {
-      "med": 11,
-      "lo": 11,
-      "hi": 11
+      "med": 15,
+      "lo": 15,
+      "hi": 15
      },
      "reseat_calls": {
-      "med": 12,
-      "lo": 12,
-      "hi": 12
+      "med": 20,
+      "lo": 20,
+      "hi": 20
      },
      "rollback_bad": {
       "med": 0,
@@ -2589,9 +2575,253 @@
       "hi": 4
      },
      "steps": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "through": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "w": {
+      "med": 1855.3,
+      "lo": 1855.3,
+      "hi": 1855.3
+     }
+    },
+    "graph_edited87537.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "along_own": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "bends": {
+      "med": 18,
+      "lo": 18,
+      "hi": 18
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1027.8,
+      "lo": 1027.8,
+      "hi": 1027.8
+     },
+     "moves": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "ms": {
+      "med": 2668.6,
+      "lo": 2641.0,
+      "hi": 2711.9
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 8,
+      "lo": 8,
+      "hi": 8
+     },
+     "reseat_blind": {
+      "med": 15,
+      "lo": 15,
+      "hi": 15
+     },
+     "reseat_calls": {
+      "med": 20,
+      "lo": 20,
+      "hi": 20
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "steps": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
+     },
+     "through": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "w": {
+      "med": 1855.3,
+      "lo": 1855.3,
+      "hi": 1855.3
+     }
+    },
+    "graph_edited87537_2.json": {
+     "adrift": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "along_foreign": {
       "med": 1,
       "lo": 1,
       "hi": 1
+     },
+     "along_own": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "bends": {
+      "med": 19,
+      "lo": 19,
+      "hi": 19
+     },
+     "conn_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "corner": {
+      "med": 3,
+      "lo": 3,
+      "hi": 3
+     },
+     "dev": {
+      "med": 0.0,
+      "lo": 0.0,
+      "hi": 0.0
+     },
+     "diag": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "h": {
+      "med": 1027.8,
+      "lo": 1027.8,
+      "hi": 1027.8
+     },
+     "moves": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "ms": {
+      "med": 2679.2,
+      "lo": 2659.8,
+      "hi": 2705.6
+     },
+     "near": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "poly_off": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "refused": {
+      "med": 8,
+      "lo": 8,
+      "hi": 8
+     },
+     "reseat_blind": {
+      "med": 15,
+      "lo": 15,
+      "hi": 15
+     },
+     "reseat_calls": {
+      "med": 20,
+      "lo": 20,
+      "hi": 20
+     },
+     "rollback_bad": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "rounds": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "steps": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
      },
      "through": {
       "med": 2,
@@ -2611,9 +2841,9 @@
       "hi": 1
      },
      "along_foreign": {
-      "med": 17,
-      "lo": 17,
-      "hi": 17
+      "med": 16,
+      "lo": 16,
+      "hi": 16
      },
      "along_own": {
       "med": 5,
@@ -2621,9 +2851,9 @@
       "hi": 5
      },
      "bends": {
-      "med": 42,
-      "lo": 42,
-      "hi": 42
+      "med": 51,
+      "lo": 51,
+      "hi": 51
      },
      "conn_off": {
       "med": 0,
@@ -2636,14 +2866,14 @@
       "hi": 1
      },
      "dev": {
-      "med": 261.7,
-      "lo": 261.7,
-      "hi": 261.7
+      "med": 139.2,
+      "lo": 139.2,
+      "hi": 139.2
      },
      "diag": {
-      "med": 3,
-      "lo": 3,
-      "hi": 3
+      "med": 2,
+      "lo": 2,
+      "hi": 2
      },
      "h": {
       "med": 1061.0,
@@ -2651,24 +2881,34 @@
       "hi": 1061.0
      },
      "moves": {
-      "med": 10,
-      "lo": 10,
-      "hi": 10
+      "med": 9,
+      "lo": 9,
+      "hi": 9
      },
      "ms": {
-      "med": 3526.7,
-      "lo": 3341.4,
-      "hi": 3625.9
+      "med": 2783.8,
+      "lo": 2776.2,
+      "hi": 2810.4
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
       "med": 1,
       "lo": 1,
       "hi": 1
+     },
+     "overlap": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
      },
      "poly_off": {
       "med": 0,
@@ -2676,19 +2916,19 @@
       "hi": 0
      },
      "refused": {
-      "med": 6,
-      "lo": 6,
-      "hi": 6
+      "med": 7,
+      "lo": 7,
+      "hi": 7
      },
      "reseat_blind": {
-      "med": 0,
-      "lo": 0,
-      "hi": 0
+      "med": 4,
+      "lo": 4,
+      "hi": 4
      },
      "reseat_calls": {
-      "med": 1,
-      "lo": 1,
-      "hi": 1
+      "med": 10,
+      "lo": 10,
+      "hi": 10
      },
      "rollback_bad": {
       "med": 0,
@@ -2701,14 +2941,14 @@
       "hi": 2
      },
      "steps": {
-      "med": 2,
-      "lo": 2,
-      "hi": 2
+      "med": 3,
+      "lo": 3,
+      "hi": 3
      },
      "through": {
-      "med": 14,
-      "lo": 14,
-      "hi": 14
+      "med": 13,
+      "lo": 13,
+      "hi": 13
      },
      "w": {
       "med": 1737.8,
@@ -2723,19 +2963,19 @@
       "hi": 0
      },
      "along_foreign": {
-      "med": 18,
-      "lo": 18,
-      "hi": 18
+      "med": 15,
+      "lo": 15,
+      "hi": 15
      },
      "along_own": {
-      "med": 8,
-      "lo": 8,
-      "hi": 8
+      "med": 7,
+      "lo": 7,
+      "hi": 7
      },
      "bends": {
-      "med": 44,
-      "lo": 44,
-      "hi": 44
+      "med": 47,
+      "lo": 47,
+      "hi": 47
      },
      "conn_off": {
       "med": 0,
@@ -2768,19 +3008,29 @@
       "hi": 10
      },
      "ms": {
-      "med": 3467.2,
-      "lo": 3373.1,
-      "hi": 3532.2
+      "med": 2719.2,
+      "lo": 2713.7,
+      "hi": 2739.4
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
       "med": 1,
       "lo": 1,
       "hi": 1
+     },
+     "overlap": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
      },
      "poly_off": {
       "med": 0,
@@ -2788,19 +3038,19 @@
       "hi": 0
      },
      "refused": {
-      "med": 2,
-      "lo": 2,
-      "hi": 2
-     },
-     "reseat_blind": {
-      "med": 1,
-      "lo": 1,
-      "hi": 1
-     },
-     "reseat_calls": {
       "med": 4,
       "lo": 4,
       "hi": 4
+     },
+     "reseat_blind": {
+      "med": 4,
+      "lo": 4,
+      "hi": 4
+     },
+     "reseat_calls": {
+      "med": 12,
+      "lo": 12,
+      "hi": 12
      },
      "rollback_bad": {
       "med": 0,
@@ -2813,14 +3063,14 @@
       "hi": 2
      },
      "steps": {
-      "med": 2,
-      "lo": 2,
-      "hi": 2
+      "med": 3,
+      "lo": 3,
+      "hi": 3
      },
      "through": {
-      "med": 16,
-      "lo": 16,
-      "hi": 16
+      "med": 11,
+      "lo": 11,
+      "hi": 11
      },
      "w": {
       "med": 1786.3,
@@ -2880,16 +3130,26 @@
       "hi": 2
      },
      "ms": {
-      "med": 2226.0,
-      "lo": 2129.1,
-      "hi": 2242.2
+      "med": 1258.4,
+      "lo": 1256.9,
+      "hi": 1271.8
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -2957,9 +3217,9 @@
       "hi": 5
      },
      "bends": {
-      "med": 29,
-      "lo": 29,
-      "hi": 29
+      "med": 32,
+      "lo": 32,
+      "hi": 32
      },
      "conn_off": {
       "med": 0,
@@ -2987,21 +3247,31 @@
       "hi": 1027.8
      },
      "moves": {
-      "med": 7,
-      "lo": 7,
-      "hi": 7
+      "med": 6,
+      "lo": 6,
+      "hi": 6
      },
      "ms": {
-      "med": 6450.0,
-      "lo": 6362.7,
-      "hi": 7257.2
+      "med": 5214.1,
+      "lo": 5203.3,
+      "hi": 5221.9
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -3012,19 +3282,19 @@
       "hi": 0
      },
      "refused": {
-      "med": 20,
-      "lo": 20,
-      "hi": 20
+      "med": 24,
+      "lo": 24,
+      "hi": 24
      },
      "reseat_blind": {
-      "med": 21,
-      "lo": 21,
-      "hi": 21
+      "med": 25,
+      "lo": 25,
+      "hi": 25
      },
      "reseat_calls": {
-      "med": 28,
-      "lo": 28,
-      "hi": 28
+      "med": 36,
+      "lo": 36,
+      "hi": 36
      },
      "rollback_bad": {
       "med": 0,
@@ -3037,9 +3307,9 @@
       "hi": 4
      },
      "steps": {
-      "med": 3,
-      "lo": 3,
-      "hi": 3
+      "med": 4,
+      "lo": 4,
+      "hi": 4
      },
      "through": {
       "med": 5,
@@ -3104,16 +3374,26 @@
       "hi": 0
      },
      "ms": {
-      "med": 651.0,
-      "lo": 530.8,
-      "hi": 724.8
+      "med": 336.5,
+      "lo": 334.9,
+      "hi": 339.8
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -3181,9 +3461,9 @@
       "hi": 3
      },
      "bends": {
-      "med": 22,
-      "lo": 22,
-      "hi": 22
+      "med": 27,
+      "lo": 27,
+      "hi": 27
      },
      "conn_off": {
       "med": 0,
@@ -3211,21 +3491,31 @@
       "hi": 1027.8
      },
      "moves": {
-      "med": 7,
-      "lo": 7,
-      "hi": 7
+      "med": 5,
+      "lo": 5,
+      "hi": 5
      },
      "ms": {
-      "med": 3439.5,
-      "lo": 3388.4,
-      "hi": 3976.8
+      "med": 2835.7,
+      "lo": 2818.1,
+      "hi": 2851.3
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -3236,19 +3526,19 @@
       "hi": 0
      },
      "refused": {
-      "med": 2,
-      "lo": 2,
-      "hi": 2
+      "med": 6,
+      "lo": 6,
+      "hi": 6
      },
      "reseat_blind": {
-      "med": 5,
-      "lo": 5,
-      "hi": 5
+      "med": 12,
+      "lo": 12,
+      "hi": 12
      },
      "reseat_calls": {
-      "med": 11,
-      "lo": 11,
-      "hi": 11
+      "med": 20,
+      "lo": 20,
+      "hi": 20
      },
      "rollback_bad": {
       "med": 0,
@@ -3261,9 +3551,9 @@
       "hi": 2
      },
      "steps": {
-      "med": 1,
-      "lo": 1,
-      "hi": 1
+      "med": 3,
+      "lo": 3,
+      "hi": 3
      },
      "through": {
       "med": 2,
@@ -3328,16 +3618,26 @@
       "hi": 4
      },
      "ms": {
-      "med": 2498.5,
-      "lo": 2356.8,
-      "hi": 2708.0
+      "med": 1610.8,
+      "lo": 1600.7,
+      "hi": 1614.2
      },
      "near": {
       "med": 2,
       "lo": 2,
       "hi": 2
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -3440,16 +3740,26 @@
       "hi": 7
      },
      "ms": {
-      "med": 8505.6,
-      "lo": 7119.0,
-      "hi": 9489.9
+      "med": 4860.7,
+      "lo": 4840.9,
+      "hi": 4886.1
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -3465,14 +3775,14 @@
       "hi": 10
      },
      "reseat_blind": {
-      "med": 9,
-      "lo": 9,
-      "hi": 9
+      "med": 14,
+      "lo": 14,
+      "hi": 14
      },
      "reseat_calls": {
-      "med": 30,
-      "lo": 30,
-      "hi": 30
+      "med": 33,
+      "lo": 33,
+      "hi": 33
      },
      "rollback_bad": {
       "med": 0,
@@ -3552,16 +3862,26 @@
       "hi": 2
      },
      "ms": {
-      "med": 3781.1,
-      "lo": 3629.0,
-      "hi": 4064.8
+      "med": 2606.4,
+      "lo": 2583.9,
+      "hi": 2615.4
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -3664,16 +3984,26 @@
       "hi": 2
      },
      "ms": {
-      "med": 3736.9,
-      "lo": 3526.2,
-      "hi": 3820.0
+      "med": 2594.8,
+      "lo": 2585.2,
+      "hi": 2604.4
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -3731,9 +4061,9 @@
       "hi": 0
      },
      "along_foreign": {
-      "med": 15,
-      "lo": 15,
-      "hi": 15
+      "med": 14,
+      "lo": 14,
+      "hi": 14
      },
      "along_own": {
       "med": 5,
@@ -3741,9 +4071,9 @@
       "hi": 5
      },
      "bends": {
-      "med": 44,
-      "lo": 44,
-      "hi": 44
+      "med": 55,
+      "lo": 55,
+      "hi": 55
      },
      "conn_off": {
       "med": 0,
@@ -3756,14 +4086,14 @@
       "hi": 1
      },
      "dev": {
-      "med": 261.7,
-      "lo": 261.7,
-      "hi": 261.7
+      "med": 139.2,
+      "lo": 139.2,
+      "hi": 139.2
      },
      "diag": {
-      "med": 3,
-      "lo": 3,
-      "hi": 3
+      "med": 2,
+      "lo": 2,
+      "hi": 2
      },
      "h": {
       "med": 1061.0,
@@ -3771,24 +4101,34 @@
       "hi": 1061.0
      },
      "moves": {
-      "med": 12,
-      "lo": 12,
-      "hi": 12
+      "med": 11,
+      "lo": 11,
+      "hi": 11
      },
      "ms": {
-      "med": 3703.1,
-      "lo": 2942.5,
-      "hi": 4178.7
+      "med": 3444.8,
+      "lo": 3435.9,
+      "hi": 3455.0
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
       "med": 1,
       "lo": 1,
       "hi": 1
+     },
+     "overlap": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
      },
      "poly_off": {
       "med": 0,
@@ -3796,19 +4136,19 @@
       "hi": 0
      },
      "refused": {
-      "med": 6,
-      "lo": 6,
-      "hi": 6
+      "med": 8,
+      "lo": 8,
+      "hi": 8
      },
      "reseat_blind": {
-      "med": 0,
-      "lo": 0,
-      "hi": 0
+      "med": 8,
+      "lo": 8,
+      "hi": 8
      },
      "reseat_calls": {
-      "med": 1,
-      "lo": 1,
-      "hi": 1
+      "med": 15,
+      "lo": 15,
+      "hi": 15
      },
      "rollback_bad": {
       "med": 0,
@@ -3821,14 +4161,14 @@
       "hi": 2
      },
      "steps": {
-      "med": 2,
-      "lo": 2,
-      "hi": 2
+      "med": 4,
+      "lo": 4,
+      "hi": 4
      },
      "through": {
-      "med": 14,
-      "lo": 14,
-      "hi": 14
+      "med": 13,
+      "lo": 13,
+      "hi": 13
      },
      "w": {
       "med": 1737.8,
@@ -3888,16 +4228,26 @@
       "hi": 0
      },
      "ms": {
-      "med": 585.0,
-      "lo": 490.7,
-      "hi": 681.6
+      "med": 336.7,
+      "lo": 334.6,
+      "hi": 337.5
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -3965,9 +4315,9 @@
       "hi": 0
      },
      "bends": {
-      "med": 6,
-      "lo": 6,
-      "hi": 6
+      "med": 9,
+      "lo": 9,
+      "hi": 9
      },
      "conn_off": {
       "med": 0,
@@ -3995,21 +4345,31 @@
       "hi": 1027.8
      },
      "moves": {
-      "med": 1,
-      "lo": 1,
-      "hi": 1
+      "med": 0,
+      "lo": 0,
+      "hi": 0
      },
      "ms": {
-      "med": 978.1,
-      "lo": 906.5,
-      "hi": 1196.6
+      "med": 507.1,
+      "lo": 503.0,
+      "hi": 513.6
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -4025,9 +4385,9 @@
       "hi": 2
      },
      "reseat_blind": {
-      "med": 4,
-      "lo": 4,
-      "hi": 4
+      "med": 3,
+      "lo": 3,
+      "hi": 3
      },
      "reseat_calls": {
       "med": 4,
@@ -4040,14 +4400,14 @@
       "hi": 0
      },
      "rounds": {
-      "med": 2,
-      "lo": 2,
-      "hi": 2
-     },
-     "steps": {
       "med": 1,
       "lo": 1,
       "hi": 1
+     },
+     "steps": {
+      "med": 2,
+      "lo": 2,
+      "hi": 2
      },
      "through": {
       "med": 2,
@@ -4112,16 +4472,26 @@
       "hi": 9
      },
      "ms": {
-      "med": 3868.7,
-      "lo": 3448.2,
-      "hi": 4670.7
+      "med": 2567.0,
+      "lo": 2554.3,
+      "hi": 2605.7
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -4224,16 +4594,26 @@
       "hi": 1
      },
      "ms": {
-      "med": 120.4,
-      "lo": 117.7,
-      "hi": 139.9
+      "med": 96.7,
+      "lo": 96.4,
+      "hi": 98.1
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -4362,16 +4742,26 @@
       "hi": 38
      },
      "ms": {
-      "med": 25974.6,
-      "lo": 21409.7,
-      "hi": 35509.6
+      "med": 16131.7,
+      "lo": 16094.8,
+      "hi": 16334.4
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -4474,16 +4864,26 @@
       "hi": 3
      },
      "ms": {
-      "med": 288.2,
-      "lo": 287.2,
-      "hi": 295.4
+      "med": 144.2,
+      "lo": 142.9,
+      "hi": 146.6
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -4586,19 +4986,29 @@
       "hi": 0
      },
      "ms": {
-      "med": 79911.9,
-      "lo": 49189.8,
-      "hi": 84967.7
+      "med": 39228.0,
+      "lo": 39189.2,
+      "hi": 42303.9
      },
      "near": {
       "med": 3,
       "lo": 3,
       "hi": 3
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
       "med": 28,
       "lo": 28,
       "hi": 28
+     },
+     "overlap": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
      },
      "poly_off": {
       "med": 0,
@@ -4698,16 +5108,26 @@
       "hi": 31
      },
      "ms": {
-      "med": 6103.9,
-      "lo": 5920.1,
-      "hi": 11636.1
+      "med": 5811.4,
+      "lo": 5586.7,
+      "hi": 6026.9
      },
      "near": {
       "med": 2,
       "lo": 2,
       "hi": 2
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -4810,16 +5230,26 @@
       "hi": 67
      },
      "ms": {
-      "med": 20784.3,
-      "lo": 20579.1,
-      "hi": 20891.2
+      "med": 20718.1,
+      "lo": 20066.8,
+      "hi": 21618.5
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -4922,16 +5352,26 @@
       "hi": 56
      },
      "ms": {
-      "med": 13420.2,
-      "lo": 13387.1,
-      "hi": 13778.9
+      "med": 15289.9,
+      "lo": 14439.5,
+      "hi": 16741.3
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -5034,16 +5474,26 @@
       "hi": 4
      },
      "ms": {
-      "med": 166.6,
-      "lo": 166.2,
-      "hi": 169.4
+      "med": 203.9,
+      "lo": 188.5,
+      "hi": 209.2
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -5146,16 +5596,26 @@
       "hi": 8
      },
      "ms": {
-      "med": 51199.4,
-      "lo": 50881.9,
-      "hi": 53483.0
+      "med": 63492.9,
+      "lo": 62678.0,
+      "hi": 66879.8
      },
      "near": {
       "med": 4,
       "lo": 4,
       "hi": 4
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -5258,16 +5718,26 @@
       "hi": 44
      },
      "ms": {
-      "med": 24757.1,
-      "lo": 24636.3,
-      "hi": 24827.6
+      "med": 28090.4,
+      "lo": 27391.1,
+      "hi": 32089.8
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -5370,16 +5840,26 @@
       "hi": 41
      },
      "ms": {
-      "med": 18947.9,
-      "lo": 18884.4,
-      "hi": 19054.7
+      "med": 20691.9,
+      "lo": 20591.6,
+      "hi": 20979.3
      },
      "near": {
       "med": 2,
       "lo": 2,
       "hi": 2
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -5482,16 +5962,26 @@
       "hi": 22
      },
      "ms": {
-      "med": 33338.5,
-      "lo": 33113.5,
-      "hi": 33378.2
+      "med": 35026.7,
+      "lo": 34552.4,
+      "hi": 39841.2
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -5594,16 +6084,26 @@
       "hi": 24
      },
      "ms": {
-      "med": 4017.8,
-      "lo": 3982.5,
-      "hi": 4024.2
+      "med": 4885.1,
+      "lo": 4867.3,
+      "hi": 4935.8
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -5706,16 +6206,26 @@
       "hi": 98
      },
      "ms": {
-      "med": 28781.6,
-      "lo": 28696.3,
-      "hi": 28816.2
+      "med": 35519.0,
+      "lo": 35387.5,
+      "hi": 36926.1
      },
      "near": {
       "med": 8,
       "lo": 8,
       "hi": 8
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -5818,16 +6328,26 @@
       "hi": 69
      },
      "ms": {
-      "med": 17916.1,
-      "lo": 17841.8,
-      "hi": 18002.5
+      "med": 21800.6,
+      "lo": 21704.1,
+      "hi": 22516.3
      },
      "near": {
       "med": 2,
       "lo": 2,
       "hi": 2
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -5930,16 +6450,26 @@
       "hi": 70
      },
      "ms": {
-      "med": 53424.8,
-      "lo": 51465.1,
-      "hi": 63726.1
+      "med": 63888.5,
+      "lo": 63124.8,
+      "hi": 65699.8
      },
      "near": {
       "med": 2,
       "lo": 2,
       "hi": 2
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -6042,16 +6572,26 @@
       "hi": 10
      },
      "ms": {
-      "med": 20678.3,
-      "lo": 20612.8,
-      "hi": 20771.3
+      "med": 23977.2,
+      "lo": 23836.8,
+      "hi": 24334.0
      },
      "near": {
       "med": 2,
       "lo": 2,
       "hi": 2
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -6154,16 +6694,26 @@
       "hi": 59
      },
      "ms": {
-      "med": 27565.5,
-      "lo": 26711.9,
-      "hi": 28174.8
+      "med": 32997.7,
+      "lo": 32607.1,
+      "hi": 35317.3
      },
      "near": {
       "med": 4,
       "lo": 4,
       "hi": 4
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -6266,16 +6816,26 @@
       "hi": 49
      },
      "ms": {
-      "med": 11787.6,
-      "lo": 11772.2,
-      "hi": 11802.5
+      "med": 14469.6,
+      "lo": 14279.7,
+      "hi": 14781.6
      },
      "near": {
       "med": 2,
       "lo": 2,
       "hi": 2
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -6402,16 +6962,26 @@
       "hi": 38
      },
      "ms": {
-      "med": 6839.3,
-      "lo": 6732.4,
-      "hi": 6876.1
+      "med": 6859.9,
+      "lo": 6318.2,
+      "hi": 7359.7
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -6514,16 +7084,26 @@
       "hi": 39
      },
      "ms": {
-      "med": 9160.1,
-      "lo": 8990.5,
-      "hi": 9206.8
+      "med": 8820.6,
+      "lo": 8143.2,
+      "hi": 9683.9
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -6626,16 +7206,26 @@
       "hi": 38
      },
      "ms": {
-      "med": 8881.4,
-      "lo": 8779.2,
-      "hi": 9080.7
+      "med": 8237.2,
+      "lo": 8132.0,
+      "hi": 8392.6
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -6738,16 +7328,26 @@
       "hi": 37
      },
      "ms": {
-      "med": 8767.7,
-      "lo": 8709.0,
-      "hi": 8817.0
+      "med": 8024.8,
+      "lo": 8009.6,
+      "hi": 8137.8
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -6850,16 +7450,26 @@
       "hi": 38
      },
      "ms": {
-      "med": 8932.3,
-      "lo": 8868.4,
-      "hi": 8988.3
+      "med": 8437.0,
+      "lo": 8316.6,
+      "hi": 8983.9
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -6962,19 +7572,29 @@
       "hi": 44
      },
      "ms": {
-      "med": 12069.4,
-      "lo": 11991.4,
-      "hi": 12092.9
+      "med": 11079.9,
+      "lo": 10928.9,
+      "hi": 12001.2
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
       "med": 1,
       "lo": 1,
       "hi": 1
+     },
+     "overlap": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
      },
      "poly_off": {
       "med": 0,
@@ -7074,19 +7694,29 @@
       "hi": 36
      },
      "ms": {
-      "med": 9481.6,
-      "lo": 9417.3,
-      "hi": 9618.5
+      "med": 8670.8,
+      "lo": 8502.8,
+      "hi": 8737.1
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
       "med": 1,
       "lo": 1,
       "hi": 1
+     },
+     "overlap": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
      },
      "poly_off": {
       "med": 0,
@@ -7186,16 +7816,26 @@
       "hi": 35
      },
      "ms": {
-      "med": 6896.7,
-      "lo": 6742.3,
-      "hi": 6949.9
+      "med": 6303.5,
+      "lo": 6175.0,
+      "hi": 6353.6
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -7298,16 +7938,26 @@
       "hi": 41
      },
      "ms": {
-      "med": 12476.7,
-      "lo": 12346.8,
-      "hi": 12990.5
+      "med": 11334.3,
+      "lo": 11211.1,
+      "hi": 11807.0
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -7410,16 +8060,26 @@
       "hi": 38
      },
      "ms": {
-      "med": 7330.6,
-      "lo": 7297.8,
-      "hi": 7366.2
+      "med": 6670.7,
+      "lo": 6609.4,
+      "hi": 6785.4
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -7522,16 +8182,26 @@
       "hi": 39
      },
      "ms": {
-      "med": 9610.1,
-      "lo": 9368.0,
-      "hi": 10675.2
+      "med": 8882.2,
+      "lo": 8765.1,
+      "hi": 8961.9
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -7634,16 +8304,26 @@
       "hi": 39
      },
      "ms": {
-      "med": 7829.8,
-      "lo": 7628.0,
-      "hi": 7866.2
+      "med": 7268.5,
+      "lo": 7241.1,
+      "hi": 7404.5
      },
      "near": {
       "med": 2,
       "lo": 2,
       "hi": 2
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -7746,16 +8426,26 @@
       "hi": 58
      },
      "ms": {
-      "med": 28211.4,
-      "lo": 26931.2,
-      "hi": 29244.9
+      "med": 25450.6,
+      "lo": 25261.2,
+      "hi": 27597.0
      },
      "near": {
       "med": 0,
       "lo": 0,
       "hi": 0
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -7858,16 +8548,26 @@
       "hi": 61
      },
      "ms": {
-      "med": 23352.5,
-      "lo": 22534.8,
-      "hi": 23722.9
+      "med": 20778.8,
+      "lo": 20750.0,
+      "hi": 20925.1
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -7970,16 +8670,26 @@
       "hi": 61
      },
      "ms": {
-      "med": 22094.5,
-      "lo": 21518.6,
-      "hi": 23657.9
+      "med": 20523.6,
+      "lo": 20454.5,
+      "hi": 20652.4
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -8082,19 +8792,29 @@
       "hi": 41
      },
      "ms": {
-      "med": 13516.9,
-      "lo": 13293.1,
-      "hi": 14422.0
+      "med": 12367.1,
+      "lo": 12252.8,
+      "hi": 12401.2
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
       "med": 1,
       "lo": 1,
       "hi": 1
+     },
+     "overlap": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
      },
      "poly_off": {
       "med": 0,
@@ -8194,16 +8914,26 @@
       "hi": 36
      },
      "ms": {
-      "med": 6691.9,
-      "lo": 6494.7,
-      "hi": 6847.9
+      "med": 6025.5,
+      "lo": 5897.7,
+      "hi": 6045.3
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -8306,16 +9036,26 @@
       "hi": 37
      },
      "ms": {
-      "med": 7824.0,
-      "lo": 7580.5,
-      "hi": 8167.1
+      "med": 6780.0,
+      "lo": 6731.9,
+      "hi": 6830.7
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -8418,16 +9158,26 @@
       "hi": 48
      },
      "ms": {
-      "med": 11859.3,
-      "lo": 11481.0,
-      "hi": 12994.2
+      "med": 10765.4,
+      "lo": 10715.9,
+      "hi": 10852.4
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -8530,16 +9280,26 @@
       "hi": 38
      },
      "ms": {
-      "med": 6653.6,
-      "lo": 6435.1,
-      "hi": 7173.8
+      "med": 5837.9,
+      "lo": 5760.8,
+      "hi": 5856.5
      },
      "near": {
       "med": 1,
       "lo": 1,
       "hi": 1
      },
+     "offaxis": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
      "offsheet": {
+      "med": 0,
+      "lo": 0,
+      "hi": 0
+     },
+     "overlap": {
       "med": 0,
       "lo": 0,
       "hi": 0
@@ -8791,6 +9551,221 @@
      "col": "bends",
      "was": 28,
      "now": 32
+    }
+   ]
+  },
+  {
+   "reason": "Эталон входа блока 6 (Д6, шаг 3 проекта блока 6) — на дереве после шагов 1–2 (count_bends в движке, колонки overlap/offaxis = 0), до правок движка. Плоские raw/edited красны против эталона al-0 (721b7a7) с коммита D блока 1 — запрет скольжения рамочного конца (решение Максима: запрет сохраняется и на старом холсте, красный оставлен до блока 6, блок 6 переснимает эталон входа; MEASUREMENTS §131, §135): raw 10 строк — corner 0fc9d04c, a6d28736; steps 51b339ab, 54a60fd1, 89ca7583, 8d517a35, c2f79462; bends 51b339ab, 54a60fd1, 8d517a35; edited 20 строк — steps и bends у graph_edited0598, 70827, 87537, 87537_2, 971, _222222, _3edge, _av, _line, _size",
+   "rows": [
+    {
+     "population": "raw",
+     "file": "0fc9d04c_canvas.json",
+     "col": "corner",
+     "was": 9,
+     "now": 10
+    },
+    {
+     "population": "raw",
+     "file": "51b339ab_canvas.json",
+     "col": "steps",
+     "was": 9,
+     "now": 10
+    },
+    {
+     "population": "raw",
+     "file": "51b339ab_canvas.json",
+     "col": "bends",
+     "was": 78,
+     "now": 80
+    },
+    {
+     "population": "raw",
+     "file": "54a60fd1_canvas.json",
+     "col": "steps",
+     "was": 6,
+     "now": 7
+    },
+    {
+     "population": "raw",
+     "file": "54a60fd1_canvas.json",
+     "col": "bends",
+     "was": 38,
+     "now": 40
+    },
+    {
+     "population": "raw",
+     "file": "89ca7583_canvas.json",
+     "col": "steps",
+     "was": 3,
+     "now": 4
+    },
+    {
+     "population": "raw",
+     "file": "8d517a35_canvas.json",
+     "col": "steps",
+     "was": 9,
+     "now": 14
+    },
+    {
+     "population": "raw",
+     "file": "8d517a35_canvas.json",
+     "col": "bends",
+     "was": 97,
+     "now": 108
+    },
+    {
+     "population": "raw",
+     "file": "a6d28736_canvas.json",
+     "col": "corner",
+     "was": 9,
+     "now": 10
+    },
+    {
+     "population": "raw",
+     "file": "c2f79462_canvas.json",
+     "col": "steps",
+     "was": 2,
+     "now": 3
+    },
+    {
+     "population": "edited",
+     "file": "graph_edited0598.json",
+     "col": "steps",
+     "was": 1,
+     "now": 2
+    },
+    {
+     "population": "edited",
+     "file": "graph_edited0598.json",
+     "col": "bends",
+     "was": 21,
+     "now": 24
+    },
+    {
+     "population": "edited",
+     "file": "graph_edited70827.json",
+     "col": "steps",
+     "was": 1,
+     "now": 2
+    },
+    {
+     "population": "edited",
+     "file": "graph_edited70827.json",
+     "col": "bends",
+     "was": 13,
+     "now": 16
+    },
+    {
+     "population": "edited",
+     "file": "graph_edited87537.json",
+     "col": "steps",
+     "was": 1,
+     "now": 2
+    },
+    {
+     "population": "edited",
+     "file": "graph_edited87537.json",
+     "col": "bends",
+     "was": 15,
+     "now": 18
+    },
+    {
+     "population": "edited",
+     "file": "graph_edited87537_2.json",
+     "col": "steps",
+     "was": 1,
+     "now": 2
+    },
+    {
+     "population": "edited",
+     "file": "graph_edited87537_2.json",
+     "col": "bends",
+     "was": 16,
+     "now": 19
+    },
+    {
+     "population": "edited",
+     "file": "graph_edited971.json",
+     "col": "steps",
+     "was": 2,
+     "now": 3
+    },
+    {
+     "population": "edited",
+     "file": "graph_edited971.json",
+     "col": "bends",
+     "was": 42,
+     "now": 51
+    },
+    {
+     "population": "edited",
+     "file": "graph_edited_222222.json",
+     "col": "steps",
+     "was": 2,
+     "now": 3
+    },
+    {
+     "population": "edited",
+     "file": "graph_edited_222222.json",
+     "col": "bends",
+     "was": 44,
+     "now": 47
+    },
+    {
+     "population": "edited",
+     "file": "graph_edited_3edge.json",
+     "col": "steps",
+     "was": 3,
+     "now": 4
+    },
+    {
+     "population": "edited",
+     "file": "graph_edited_3edge.json",
+     "col": "bends",
+     "was": 29,
+     "now": 32
+    },
+    {
+     "population": "edited",
+     "file": "graph_edited_av.json",
+     "col": "steps",
+     "was": 1,
+     "now": 3
+    },
+    {
+     "population": "edited",
+     "file": "graph_edited_av.json",
+     "col": "bends",
+     "was": 22,
+     "now": 27
+    },
+    {
+     "population": "edited",
+     "file": "graph_edited_line.json",
+     "col": "steps",
+     "was": 2,
+     "now": 4
+    },
+    {
+     "population": "edited",
+     "file": "graph_edited_line.json",
+     "col": "bends",
+     "was": 44,
+     "now": 55
+    },
+    {
+     "population": "edited",
+     "file": "graph_edited_size.json",
+     "col": "steps",
+     "was": 1,
+     "now": 2
+    },
+    {
+     "population": "edited",
+     "file": "graph_edited_size.json",
+     "col": "bends",
+     "was": 6,
+     "now": 9
     }
    ]
   }
