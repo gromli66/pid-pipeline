@@ -69,6 +69,12 @@
 принятых ходов) тоже справочные: их целевые пункты — блоки 1 и 2, и рост
 принятых ходов там ожидаем по построению.
 
+Колонки блока 6 (авто-выравнивание, Р4/Р5): `overlap` — наслоений узлов
+(пары bbox с перекрытием по обеим осям), `offaxis` — неосевых входов клапана
+на модельном холсте; обе — дефекты, берутся из `edit_smooth.score`, а пока
+движок их не считает — 0. Ход «осевая талия» (неосевой конец клапана в
+свободную осевую талию) — в колонке `moves` вместе с прочими.
+
 Запуск (из корня репо, системный python 3.11.9):
     python -X utf8 tools/smooth_bench.py --all
     python -X utf8 tools/smooth_bench.py --population edited --runs 1
@@ -116,6 +122,8 @@ DEFECT_COLS = [
     ("adrift", "оторванных"),
     ("conn_off", "коннектор мимо"),
     ("poly_off", "полигон мимо"),
+    ("overlap", "наслоений узлов"),
+    ("offaxis", "неосевых входов клапана"),
     ("w", "габарит w"),
     ("h", "габарит h"),
     ("offsheet", "узлов за листом"),
@@ -133,7 +141,11 @@ REF_COLS = [
 
 SCORE_KEYS = ("diag", "dev", "steps", "near", "along_own", "along_foreign",
               "through", "corner", "adrift", "conn_off", "poly_off", "w", "h")
-REMEDIES = ("колено", "излом", "скольжение", "коннектор", "узел")
+REMEDIES = ("колено", "излом", "скольжение", "коннектор", "узел",
+            "осевая талия")
+# Колонки блока 6 (шаг 4 заводит их в `edit_smooth.score`): до правки
+# движка их там нет, и стенд пишет 0 — эталон входа снимается с ними.
+SCORE_NEW_KEYS = ("overlap", "offaxis")
 REFUSAL_KINDS = ("нет кандидата", "сверх бюджета", "лестница исчерпана")
 POPULATIONS = ("raw", "edited", "raw@model", "edited@model")
 MODEL_SUFFIX = "@model"
@@ -207,7 +219,9 @@ def canvas_metrics(graph) -> dict:
     """Полный набор метрик холста: score движка + изломы + лист."""
     from modules.graph.core import edit_smooth as es
 
-    out = {k: es.score(graph)[k] for k in SCORE_KEYS}
+    sc = es.score(graph)
+    out = {k: sc[k] for k in SCORE_KEYS}
+    out.update({k: sc.get(k, 0) for k in SCORE_NEW_KEYS})
     out["bends"], out["edges"] = count_bends(graph)
     out["offsheet"], out["offsheet_pts"] = offsheet(graph)
     return out
@@ -587,7 +601,7 @@ def report(pop: str, summary: dict, detail: dict):
         b, a = tot_before.get(k, 0.0), tot_after.get(k, 0.0)
         mark = "" if abs(a - b) < 1e-9 else ("  <-- лучше" if a < b
                                              else "  <-- ХУЖЕ")
-        print(f"    {ru:<18} {b:>9.1f} -> {a:>9.1f}{mark}")
+        print(f"    {ru:<24} {b:>9.1f} -> {a:>9.1f}{mark}")
     print("  ходы движка: " + ", ".join(f"{k} {tot_stats[k]}"
                                         for k in REMEDIES))
     print(f"    принято всего {sum(tot_stats[k] for k in REMEDIES)}, "
