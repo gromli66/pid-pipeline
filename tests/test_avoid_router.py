@@ -332,6 +332,29 @@ def test_pin_of_degree2_valve_stays_axial():
     assert _pin_port(v, (179.0, 100.0), (200.0, 20.0)) == (179.0, 100.0)
 
 
+def test_two_ends_on_one_polygon_do_not_share_a_pin():
+    """Блок 5, неповторимость 13d1ef5f: концы двух труб на полигоне p в
+    разных точках левой грани (y 316.7 и 311.8), судья порта сводит оба в
+    один порт (200, 400). Два коннектора в один пин libavoid не проводит —
+    второй получал прямую-фолбэк и терял маршрут, какой из двух — решала
+    куча. Второй конец в уже занятый порт остаётся на своём месте: оба
+    ребра проведены, пины разные."""
+    poly = {"id": "p", "type": "block", "class_name": "testpoly",
+            "centroid": [400.0, 300.0],             # [y, x]
+            "bbox": [200.0, 300.0, 400.0, 500.0],
+            "segmentation": [200.0, 300.0, 400.0, 300.0,
+                             400.0, 500.0, 200.0, 500.0]}
+    g = _graph([_block("a", 60, 200), _block("b", 130, 250), poly],
+               [_edge("e1", "a", "p"), _edge("e2", "b", "p")])
+    cur = [e["target_point"] for e in edges(g)]
+    assert cur[0] != cur[1] and all(p[1] == 200.0 for p in cur),         f"фикстура: концы на p не на левой грани в разных точках: {cur}"
+    ends = {}
+    route_graph(g, LayoutParams(), ends_out=ends)
+    assert sorted(ends) == ["e1", "e2"], f"проведены не оба ребра: {ends}"
+    assert ends["e1"][1] == [400.0, 200.0]
+    assert ends["e2"][1] == pytest.approx(cur[1]), "второй конец ушёл в занятый порт"
+
+
 @pytest.mark.parametrize("gap", [12.0, 8.0])
 def test_waist_pin_elbow_squeezes_past_transverse_neighbour(gap):
     """Р5, отступ роутера у талии (репро 06b938ec edge_89): клапан V

@@ -354,12 +354,19 @@ def reseat_edge(byid, e, straight_tol=STRAIGHT_TOL, model=False, snap=None,
             x = _pick_axis_coord(src, tgt, xlo, xhi, axis="V", model=model)
             if x is not None:
                 v_lock = ("V", x)
-        # Р5: замок поперёк оси клапана невыполним для осевой грани
-        for f in (s_face, t_face):
+        # Р5: замок поперёк оси клапана невыполним для осевой грани; замок
+        # вдоль оси, сажающий конец на ДРУГУЮ осевую грань (node_anchor:
+        # замок главнее грани), тоже снимается — иначе обе трубы степени 2
+        # садились бы в одну грань мимо талии
+        for f, node, ref in ((s_face, src, s_ref), (t_face, tgt, t_ref)):
             if f in ("L", "R"):
                 v_lock = None
+                if h_lock and _lock_face(node, f, ref) != f:
+                    h_lock = None
             elif f in ("T", "B"):
                 h_lock = None
+                if v_lock and _lock_face(node, f, ref) != f:
+                    v_lock = None
         # Э2: ось — от реальной геометрии связи, не от порядка веток.
         # Прежний код брал H всегда, когда H достижима; у коннектора
         # диапазон вырожден в точку, и когда его координата попадала в
@@ -408,6 +415,17 @@ def reseat_edge(byid, e, straight_tol=STRAIGHT_TOL, model=False, snap=None,
     e["target_point"] = [ty, tx]
     if "waypoints" not in e or e["waypoints"] is None:
         e["waypoints"] = []
+
+
+def _lock_face(node, face, ref):
+    """Грань, на которую замок вдоль оси грани `face` посадит конец узла
+    (ветка замка `node_anchor`: сторона — по ref относительно центра рамки)."""
+    rect = _anchor_rect(node)
+    if rect is None:
+        return face
+    if face in ("L", "R"):
+        return "R" if ref[0] >= (rect[0] + rect[2]) / 2.0 else "L"
+    return "B" if ref[1] >= (rect[1] + rect[3]) / 2.0 else "T"
 
 
 def _pick_axis_coord(src, tgt, lo, hi, axis, model=False):
@@ -496,6 +514,7 @@ def reseat_all_endpoints(graph, straight_tol=STRAIGHT_TOL, model=False,
 # ─────────── осевые входы клапана степени 1–2 (Р5, 2026-09-29) ───────────
 
 _AXIAL_FACES = {"H": ("L", "R"), "V": ("T", "B")}
+_ACROSS_TIE = 0.75      # px: соседи одинаково соосны — прежний порядок вдоль
 
 
 def axial_faces(node, ends, degree):
@@ -509,9 +528,12 @@ def axial_faces(node, ends, degree):
       * один конец: грань из cur, если она осевая; иначе осевая грань,
         смотрящая на ref вдоль оси;
       * два конца: оба cur на РАЗНЫХ осевых гранях — остаются (решение
-        оператора); иначе по координате ref вдоль оси: меньший — L/T,
-        больший — R/B (равенство — по id ребра). Это «колено за клапаном»:
-        поперечная труба берёт свободную осевую талию;
+        оператора); иначе самый соосный конец (ref ближе к линии талии
+        поперёк оси) — в грань, смотрящую на его ref, второй — в другую
+        осевую: соосный сосед не получает грань «от себя», поперечный идёт
+        «коленом за клапан» в свободную осевую талию; одинаково соосные
+        (±_ACROSS_TIE, в т.ч. коннектор в центре клапана) — по координате
+        ref вдоль оси: меньший — L/T, больший — R/B (равенство — по id);
       * два конца к ОДНОМУ партнёру (кратные рёбра старого холста) разных
         граней не требуют — каждый как одиночный.
     Одна функция для сервера (`axial_plan`) и редактора.
@@ -528,6 +550,12 @@ def axial_faces(node, ends, degree):
     def along(xy):
         return xy[0] if horiz else xy[1]
 
+    waist = _pref_val(node, node["_axis"], True)
+
+    def across(xy):
+        # отступ поперёк оси от линии талии
+        return abs((xy[1] if horiz else xy[0]) - waist)
+
     def on_axial(cur):
         if cur is None:
             return None
@@ -542,8 +570,16 @@ def axial_faces(node, ends, degree):
     out = {}
     if len(free) == 2 and partner(*free[0][:2]) != partner(*free[1][:2]):
         f0, f1 = on_axial(free[0][3]), on_axial(free[1][3])
+        a0, a1 = across(free[0][2]), across(free[1][2])
         if f0 and f1 and f0 != f1:
             pick = (f0, f1)
+        elif abs(a0 - a1) > _ACROSS_TIE:
+            # самый соосный конец — в грань, смотрящую на свой ref, второй —
+            # в другую (иначе соосный сосед мог получить грань «от себя»)
+            i = 0 if a0 < a1 else 1
+            fi = hi_f if along(free[i][2]) >= mid else lo_f
+            pick = [None, None]
+            pick[i], pick[1 - i] = fi, (lo_f if fi == hi_f else hi_f)
         else:
             order = sorted((0, 1), key=lambda i: (along(free[i][2]),
                                                   str(free[i][0].get("id"))))

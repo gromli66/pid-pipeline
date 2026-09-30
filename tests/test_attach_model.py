@@ -645,6 +645,41 @@ def test_two_pipes_to_one_partner_share_a_face():
     assert all(p[0][1] == 221.0 for p in _pts(g).values())
 
 
+def _coaxial_right():
+    """Клапан H степени 2: a на линии талии справа (x=300), c сверху-справа
+    дальше (x=400). Концы — как их оставила раскладка: ea на R, ec на T."""
+    return _graph([dict(VALVE_H), _conn("a", 300.0, WAIST_Y),
+                   _conn("c", 400.0, 20.0)],
+                  [_edge("ea", "v", "a", sp=[WAIST_Y, 221.0],
+                         tp=[WAIST_Y, 300.0]),
+                   _edge("ec", "v", "c", sp=[81.1, 210.0], tp=[20.0, 400.0])])
+
+
+def test_degree2_coaxial_neighbour_keeps_facing_face():
+    """Находка red-team блока 5: по координате вдоль оси соосный a (ближе)
+    получал L — грань «от себя», и обе трубы садились в R мимо талии. Самый
+    соосный конец берёт грань к своему соседу, поперечный — свободную."""
+    g = _coaxial_right()
+    ea, ec = g["links"]
+    assert seating.axial_plan(g) == {(id(ea), "source"): "R",
+                                     (id(ec), "source"): "L"}
+    seating.reseat_all_endpoints(g, model=True, slots=True, axial=True)
+    p = _pts(g)
+    assert p["ea"][0] == [pytest.approx(WAIST_Y), 221.0]
+    assert p["ec"][0] == [pytest.approx(WAIST_Y), 179.0]
+
+
+def test_parallel_lock_does_not_override_plan_face():
+    """Замок вдоль оси главнее грани в `node_anchor`: H-замок пары v–a
+    посадил бы ea на R (a справа), хотя план отдал ему L. Такой замок
+    снимается — конец в талии своей грани плана."""
+    g = _coaxial_right()
+    ea = g["links"][0]
+    seating.reseat_edge(nodes_by_id(g), ea, model=True,
+                        faces={(id(ea), "source"): "L"})
+    assert ea["source_point"] == [pytest.approx(WAIST_Y), 179.0]
+
+
 def test_degrees_counts_multi_edges():
     from modules.graph.core.graph_access import degrees
     g = _graph([dict(VALVE_H), _box("u", 400.0, 100.0), _conn("c", 1.0, 1.0)],

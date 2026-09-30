@@ -384,6 +384,12 @@ def _route_pass(graph, byid, geoms, edge_list, p, force_ports, waist=None):
     # и свёл с соседом в одну
     busy = slot_faces(graph, byid)
     faces = axial_plan(graph, byid)          # Р5: осевые грани клапанов
+    # занятые точки пинов (узел, x, y) на весь проход: два конца в один пин
+    # libavoid не проводит — второй коннектор получает прямую-фолбэк, и
+    # какой из двух, решает порядок в куче (неповторимость 13d1ef5f и др.,
+    # блок 5). Порт, уже занятый другим концом этого узла, не берётся —
+    # конец остаётся на своём месте.
+    taken = set()
     for e in edge_list:
         eid = e.get("id")
         sp, tp = e.get("source_point"), e.get("target_point")
@@ -413,8 +419,11 @@ def _route_pass(graph, byid, geoms, edge_list, p, force_ports, waist=None):
                     exempt = True
                 elif not on_slot:
                     face = faces.get((id(e), role))
-                    x, y = _pin_port(node, (x, y), (ox, oy),
-                                     sides={face} if face else None)
+                    px, py = _pin_port(node, (x, y), (ox, oy),
+                                       sides={face} if face else None)
+                    if (nid, round(px, 2), round(py, 2)) not in taken:
+                        x, y = px, py
+                taken.add((nid, round(x, 2), round(y, 2)))
                 pin_xy.append((x, y))
                 ref, (bx1, by1), bb = shape_refs[nid]
                 pin_class += 1
