@@ -196,6 +196,14 @@ def hand_tab(qapp, monkeypatch, tmp_path):
         ip = tmp_path / "hand.png"
         assert img.save(str(ip))
         editor = tab._create_editor()
+        # ПЕРЕОБЪЯВЛЕНО 2026-09-30 (блок 6, «д»): режим холста ДО load_data,
+        # как ставит вкладка в бою (`ui/tabs/base_graph_tab.py`, см. и
+        # `tools/smooth_bench.run_once`). Без него корпусный холст грузился
+        # растровой «Проверкой схемы»: метка старого холста не ставилась, и
+        # клапаны с `_axis` из файла попадали под правило Р5 — ступень
+        # «осевая талия» делала ходы, и холст REFUSING_CANVAS переставал
+        # быть чисто отказным (второй прогон видел другой холст).
+        editor._canvas_mode = True
         assert editor.load_data(str(ip), str(canvas_path))
         tab._editor = editor
         editor.status_callback = tab.status_label.setText

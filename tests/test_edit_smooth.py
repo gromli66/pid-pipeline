@@ -972,3 +972,88 @@ def test_valve_shift_refused_into_neighbour():
 
     assert g["nodes"][1]["bbox"] == list(_V39)
     assert es.count_overlaps(g) == 0
+
+
+# ── «д»: неосевой конец клапана -> свободная осевая талия (блок 6, Р4) ─
+
+def _ell_router(edge):
+    """Лестница маршрута: L — сначала по горизонтали от source."""
+    sy, sx = edge["source_point"]
+    ty, tx = edge["target_point"]
+    edge["waypoints"] = [[sy, tx]]
+    return True
+
+
+def test_offaxis_end_to_free_axial_waist():
+    """T7: H-клапан степени 2 — A в правой грани (соосный сосед r), B из
+    середины нижней грани к боксу q слева-снизу. План Р5
+    (`seating.axial_faces`): B — в свободную левую талию, колено
+    наружу; неосевых 1 -> 0, ход «осевая талия»."""
+    from modules.graph.core import contact
+
+    g = _offaxis_canvas()
+    v = g["nodes"][0]
+    waist = contact.face_refs(v, tuple(v["bbox"]))["L"]
+    assert waist == pytest.approx(320.0 + 0.222 * 40.0)
+    assert es.score(g)["offaxis"] == 1
+
+    st = es.smooth(g, route_fn=_ell_router, reseat_fn=None)
+
+    b = g["links"][1]
+    assert st["осевая талия"] == 1, st
+    assert b["source_point"] == pytest.approx([waist, 400.0], abs=0.01)
+    assert b["_src_side"] == "left"
+    assert b["waypoints"] and b["waypoints"][0][1] < 400.0, \
+        "колено обязано уйти наружу за клапан"
+    assert es.score(g)["offaxis"] == 0
+    assert v["bbox"] == [400.0, 300.0, 440.0, 340.0], "клапан стоит"
+
+
+def _offaxis_variant(kind):
+    from modules.graph.core import contact
+
+    g = _offaxis_canvas()
+    v = g["nodes"][0]
+    if kind == "степень 3":
+        g["nodes"].append(_box("t", 420.0, 200.0))
+        g["links"].append(_edge("C", "v", "t", (420.0, 300.0),
+                                (420.0, 220.0)))
+    elif kind == "predohran":
+        v["class_name"] = "predohran"
+    elif kind == "пин":
+        ports.set_edge_pin(v, g["links"][1], "source", 420.0, 340.0)
+    elif kind == "холст без метки":
+        v[contact.LEGACY_KEY] = True
+    elif kind == "кратная пара":
+        # B ведёт в тот же r, что и A; конец левее середины нижней грани —
+        # план отдал бы ему свободную левую талию (грани A и B разные)
+        b = g["links"][1]
+        b["target"] = "r"
+        b["source_point"] = [340.0, 410.0]
+        b["target_point"] = [340.0, 600.0]
+        b["waypoints"] = [[380.0, 410.0], [380.0, 600.0]]
+    return g
+
+
+@pytest.mark.parametrize("kind", ["степень 3", "predohran", "пин",
+                                  "холст без метки", "кратная пара"])
+def test_offaxis_move_skipped(kind):
+    """T7: без правила Р5 (степень 3, predohran, пин, старый холст) и у
+    кратной пары (лестница адресует ребро парой) — «д» не ходит, холст
+    бит-в-бит."""
+    g = _offaxis_variant(kind)
+    before = copy.deepcopy(g)
+
+    def u_router(edge):
+        """Кратная пара: из левой талии — U под клапаном к нижней грани r
+        (маршрут годный — отказ обязан прийти от правила, а не от гейта)."""
+        sy, sx = edge["source_point"]
+        edge["waypoints"] = [[sy, sx - 20.0], [380.0, sx - 20.0],
+                             [380.0, 600.0]]
+        return True
+
+    router = u_router if kind == "кратная пара" else _ell_router
+    st = es.smooth(g, route_fn=router, reseat_fn=None)
+
+    assert st["осевая талия"] == 0, (kind, st)
+    assert g == before, kind

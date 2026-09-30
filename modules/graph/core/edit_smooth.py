@@ -11,7 +11,10 @@
 списку дефектов судьи, где каждый ход проходит гейт и откатывается, если
 стало хуже.
 
-  0. «б» — КЛАПАН ИЛИ КОННЕКТОР НА ЛИНИЮ ТРУБЫ (Р4, блок 6): клапан
+  0. «д» — НЕОСЕВОЙ КОНЕЦ КЛАПАНА В СВОБОДНУЮ ОСЕВУЮ ТАЛИЮ (Р4/Р5, блок
+     6): грань — план Р5 `seating.axial_plan`, узел стоит; свой гейт
+     `accepts_axial` (неосевых строго меньше, косых не больше);
+  0б. «б» — КЛАПАН ИЛИ КОННЕКТОР НА ЛИНИЮ ТРУБЫ (Р4, блок 6): клапан
      модели — строго поперёк оси на «линия − опорная точка» (талия, в
      веере слотов — точка конца), коннектор — на «линия − свой конец»;
      проба засчитывается, только если сняла излом;
@@ -630,6 +633,11 @@ def offaxis_ends(graph):
     (`seating.axial_faces`) и счётчик `layout_bench.valve_ends`. Конец с
     пином оператора не судится (пин — истина).
     """
+    return [(nid, e.get("id")) for nid, e in _offaxis(graph)]
+
+
+def _offaxis(graph):
+    """[(node_id, ребро)] — тело `offaxis_ends` (ребро — живой dict)."""
     byid = nodes_by_id(graph)
     deg = degrees(graph)
     out = []
@@ -645,7 +653,73 @@ def offaxis_ends(graph):
                 continue
             side = seating._end_side(rect, float(pt[1]), float(pt[0]))
             if side not in seating._AXIAL_FACES[n["_axis"]]:
-                out.append((nid, e.get("id")))
+                out.append((nid, e))
+    return out
+
+
+_FACE_NAME = {"L": "left", "R": "right", "T": "top", "B": "bottom"}
+
+
+def _pair(e):
+    """Ключ ребра редактора (`model.edge_key`): неупорядоченная пара узлов."""
+    return tuple(sorted(str(v) for v in edge_ends(e)))
+
+
+def _axial_moves(graph, e):
+    """«д» (блок 6, Р4/Р5): неосевой конец клапана -> свободная осевая
+    талия. -> [(node_id, [(ребро, ключ точки, ключ стороны, точка)])].
+
+    Грани — план `seating.axial_plan` (правило Р5 `seating.axial_faces`,
+    тот же, что посадка сервера и редактора; своего правила нет):
+    степень 2 — соосный сосед берёт грань к себе, поперечный — вторую
+    осевую, колено уходит за клапан; степень 1 — осевая грань к соседу,
+    маршрут — колено или крючок (ось клапана редактор не поворачивает,
+    Р3). Двигаются все концы клапана, чья грань расходится с планом:
+    конец — ровно в талию грани (`contact.face_refs`). Пропуск: пин (в
+    плане его нет), две трубы в одну грань (нужен веер слотов — дело
+    мини-жеста), кратная пара узлов (лестница редактора адресует ребро
+    ПАРОЙ и переложила бы чужое, Р7).
+    """
+    off = [nid for nid, x in _offaxis(graph) if x is e]
+    if not off:
+        return []
+    plan = seating.axial_plan(graph)
+    byid = nodes_by_id(graph)
+    pairs = {}
+    for x in g_edges(graph):
+        pairs[_pair(x)] = pairs.get(_pair(x), 0) + 1
+    out = []
+    for nid in dict.fromkeys(off):
+        n = byid[nid]
+        rect = seating._anchor_rect(n)
+        refs = contact.face_refs(n, rect) if rect is not None else None
+        if not refs:
+            continue
+        moves, faces, ok = [], [], True
+        for x in g_edges(graph):
+            s, t = edge_ends(x)
+            for role, xid, key, sk in (
+                    ("source", s, "source_point", "_src_side"),
+                    ("target", t, "target_point", "_tgt_side")):
+                if xid != nid:
+                    continue
+                f = plan.get((id(x), role))
+                if f is None:
+                    continue
+                faces.append(f)
+                p = x.get(key)
+                if p and seating._end_side(rect, float(p[1]),
+                                           float(p[0])) == f:
+                    continue
+                if pairs[_pair(x)] > 1:
+                    ok = False
+                w = refs[f]
+                pt = ([w, rect[0] if f == "L" else rect[2]]
+                      if f in ("L", "R") else
+                      [rect[1] if f == "T" else rect[3], w])
+                moves.append((x, key, sk, f, pt))
+        if ok and moves and len(faces) == len(set(faces)):
+            out.append((nid, moves))
     return out
 
 
@@ -736,6 +810,24 @@ def accepts(before, after):
     return better(after, before)
 
 
+def accepts_axial(before, after):
+    """Гейт хода «осевая талия» (блок 6, «д»): неосевых входов клапана
+    СТРОГО меньше; косых не больше, отклонение не больше (шум 0.5 px);
+    прочие дефекты `_NOT_WORSE` не хуже; холст цел. Ступеньки и изломы
+    могут расти — колено выносится за клапан (Р5): правило «в клапан
+    только через талию» старше красоты маршрута."""
+    if after["w"] > CANVAS_W + 0.5 or after["h"] > CANVAS_H + 0.5:
+        return False
+    for k in _NOT_WORSE:
+        if k != "offaxis" and after.get(k, 0) > before.get(k, 0):
+            return False
+    if after.get("offaxis", 0) >= before.get("offaxis", 0):
+        return False
+    if after["diag"] > before["diag"]:
+        return False
+    return after["dev"] <= before["dev"] + 0.5
+
+
 # ── главный цикл ───────────────────────────────────────────────────────
 def smooth(graph, route_fn=None, reseat_fn=None, budget=BUDGET,
            allow_node_shift=True, big_area=40000.0, max_rounds=MAX_ROUNDS):
@@ -747,17 +839,19 @@ def smooth(graph, route_fn=None, reseat_fn=None, budget=BUDGET,
     вырождаются: движок не изобретает своей геометрии маршрутов.
     """
     stats = {"колено": 0, "излом": 0, "скольжение": 0, "коннектор": 0,
-             "узел": 0, "отклонено": 0, "осталось": 0, "раунды": 0,
-             **{k: 0 for k in REFUSAL_KINDS}}
+             "узел": 0, "осевая талия": 0, "отклонено": 0, "осталось": 0,
+             "раунды": 0, **{k: 0 for k in REFUSAL_KINDS}}
     for _round in range(max_rounds):
         stats["раунды"] += 1
         applied = 0
+        # неосевые входы клапана (Р5) — тоже кандидаты, даже прямые («д»)
+        off = {id(x) for _nid, x in _offaxis(graph)}
         for e in list(g_edges(graph)):
             # Кандидат — не только КОСОЕ ребро: ступенька строго ортогональна
             # (H-V-H), и отбор «только косые» проходил мимо неё вовсе — ровно
             # то, на что заказчик указал по graph_edited_av («не исправило
             # ступеньки»). Берём и ортогональные с одиночным шажком.
-            if is_ortho(e) and single_step(e) is None:
+            if is_ortho(e) and single_step(e) is None and id(e) not in off:
                 continue
             if _try_remedies(graph, e, stats, route_fn, reseat_fn,
                              budget, allow_node_shift, big_area):
@@ -852,12 +946,13 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
     def restore():
         _put(graph, base)
 
-    def judge(kind, fewer_bends=False):
+    def judge(kind, fewer_bends=False, gate=accepts):
         """Проба сделана: в гейт; прошла и гейт принимает переход от
         лучшей к ней — запомнить. Холст возвращается во вход ребра.
-        fewer_bends — проба «б» обязана ещё и снять излом."""
+        fewer_bends — проба «б» обязана ещё и снять излом; gate — свой
+        гейт входа у «д» (`accepts_axial`), сравнение с лучшей — общее."""
         after = score(graph)
-        if accepts(before, after) and (not best or accepts(best[0], after)) \
+        if gate(before, after) and (not best or accepts(best[0], after)) \
                 and (not fewer_bends
                      or after.get("bends", 0) < before.get("bends", 0)):
             best[:] = [after, kind, _capture(graph)]
@@ -883,7 +978,31 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
     step = shift_target(e)
     sidx = step_index(e)    # ДО мутаций: после сдвига шажок не распознать
 
-    # ── 0. «б»: КЛАПАН ИЛИ КОННЕКТОР НА ЛИНИЮ ТРУБЫ (Р4, блок 6) ───────
+    # ── 0. «д»: НЕОСЕВОЙ КОНЕЦ КЛАПАНА -> СВОБОДНАЯ ОСЕВАЯ ТАЛИЯ (Р4/Р5) ─
+    # Узел стоит. Две пробы: (1) конец — в талию грани плана Р5, маршрут
+    # строит лестница редактора (колено за клапан; отказ или пометка
+    # дефектом — пробы нет); (2) мини-жест узла без сдвига — посадка
+    # редактора по тому же плану и оконная libavoid-сессия с нуджингом.
+    for nid, moves in _axial_moves(graph, e):
+        for x, key, sk, f, pt in moves:
+            x[key] = list(pt)
+            x[sk] = _FACE_NAME[f]
+            x["waypoints"] = []
+        routed = True
+        for x, *_rest in moves:
+            if route_fn is not None and not is_straight(x):
+                if not route_fn(x) or x.get("_route_defect"):
+                    routed = False
+                    break
+        if routed:
+            judge("осевая талия", gate=accepts_axial)
+        else:
+            restore()
+        if reseat_fn is not None:
+            reseat_fn(nid)
+            judge("осевая талия", gate=accepts_axial)
+
+    # ── 0б. «б»: КЛАПАН ИЛИ КОННЕКТОР НА ЛИНИЮ ТРУБЫ (Р4, блок 6) ──────
     # Клапан — поперёк оси на «линия − талия» (`_line_moves`); проба
     # принимается, только если гейт её пропускает И изломов стало меньше.
     for role, nid, kind, delta, line in _line_moves(
