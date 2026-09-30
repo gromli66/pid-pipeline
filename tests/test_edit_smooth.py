@@ -1057,3 +1057,79 @@ def test_offaxis_move_skipped(kind):
 
     assert st["осевая талия"] == 0, (kind, st)
     assert g == before, kind
+
+
+# ── «е»: клапан вдоль оси при нехватке клиренса (блок 6, Р4) ──────────
+#
+# Мотив — edge_manual_4 (graph_edited971): труба из правой талии клапана
+# уходит вертикалью в 3.4 px от его грани. Лестница маршрута держит
+# клиренс (`ROUTE_CLEARANCE`) и вертикаль так близко к рамке бракует —
+# колену негде встать, косая остаётся. Подставная лестница ниже строит
+# только L «сначала вбок, потом вниз» и бракует вертикаль ближе
+# `ec.CLEARANCE` к боковой грани любой рамки, которую она проходит по y.
+
+_V86 = (280.3, 280.0, 322.3, 318.0)             # H-клапан, талия 307.436
+
+
+def _clearance_router(g):
+    def route(edge):
+        sy, sx = edge["source_point"]
+        ty, tx = edge["target_point"]
+        lo, hi = min(sy, ty), max(sy, ty)
+        for n in g["nodes"]:
+            bb = n.get("bbox")
+            if not bb or bb[3] <= lo or bb[1] >= hi:
+                continue
+            if min(abs(tx - bb[0]), abs(tx - bb[2])) < es.ec.CLEARANCE:
+                return False                   # вертикаль липнет к рамке
+        edge["waypoints"] = [[sy, tx]]
+        return True
+    return route
+
+
+def _canvas_manual4(target_x=325.7):
+    from modules.graph.core import contact
+
+    v = _valve("v", _V86)
+    waist = contact.face_refs(v, _V86)["R"]
+    q = _box("q", target_x, 520.0)                       # верх y = 500
+    e = _edge("em4", "v", "q", (_V86[2], waist), (target_x, 500.0))
+    return _g([v, q], [e])
+
+
+def test_valve_along_axis_for_clearance():
+    """T9: вылет 3.4 px < клиренса 6 — клапан отходит вдоль оси от
+    следующей точки на 6 − 3.4 + 0.5 = 3.1 px (x2 322.3 -> 319.2), лестница
+    строит L с одним изломом, косой больше нет."""
+    g = _canvas_manual4()
+    assert es.score(g)["diag"] == 1
+
+    st = es.smooth(g, route_fn=_clearance_router(g), reseat_fn=None)
+
+    v, e = g["nodes"][0], g["links"][0]
+    assert st["узел"] == 1, st
+    assert v["bbox"][2] == pytest.approx(319.2, abs=0.01)
+    assert v["bbox"][1] == _V86[1] and v["bbox"][3] == _V86[3], \
+        "сдвиг — только вдоль оси клапана"
+    assert es.score(g)["diag"] == 0
+    assert es.count_bends(g) == (1, 1) and len(es.edge_pts(e)) == 3
+
+
+def test_valve_along_axis_needs_short_stub():
+    """Клиренса хватает (вылет 7.7 px): «е» не ходит, колено строится на
+    месте, клапан стоит."""
+    g = _canvas_manual4(target_x=330.0)
+
+    st = es.smooth(g, route_fn=_clearance_router(g), reseat_fn=None)
+
+    assert st["колено"] == 1 and st["узел"] == 0, st
+    assert g["nodes"][0]["bbox"] == list(_V86)
+
+
+def test_engine_clearance_is_the_editor_route_clearance():
+    """Сторож = судья: клиренс «е» — тот же, что держит лестница маршрута
+    редактора."""
+    pytest.importorskip("PySide6")
+    from ui.editors.advanced_graph_editor import AdvancedGraphEditor
+
+    assert es.ec.CLEARANCE == AdvancedGraphEditor.ROUTE_CLEARANCE

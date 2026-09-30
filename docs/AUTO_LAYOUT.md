@@ -249,3 +249,12 @@ a6d28736 5, 8d14cf73 1 — крючки ортогональны, изломов
   (graph_edited971 `edge_75` у node_47: колено ложится вдоль своей рамки).
   Тесты — `tests/test_edit_smooth.py::test_offaxis_end_to_free_axial_waist`,
   `::test_offaxis_move_skipped`.
+- **«е»: клапан вдоль оси при нехватке клиренса** — ступень перед сдвигом
+  узла. Следующая точка маршрута после конца клапана (на осевой грани)
+  вылетает за грань меньше `ec.CLEARANCE` (= `ROUTE_CLEARANCE` редактора,
+  6 px) — клапан отходит от неё вдоль оси на «клиренс − вылет + 0.5» (≤ 22
+  px), и лестница маршрута получает место под колено. Замер: ступенек
+  edited@model 73 → 66, raw@model 111 → 109, изломов +3 / −1, косых
+  столько же. Тесты — `::test_valve_along_axis_for_clearance`,
+  `::test_valve_along_axis_needs_short_stub`,
+  `::test_engine_clearance_is_the_editor_route_clearance`.

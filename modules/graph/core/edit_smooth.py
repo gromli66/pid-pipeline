@@ -25,6 +25,9 @@
   3. СДВИГ КОННЕКТОРА на величину ступеньки — коннектор это точка, у него
      нет ни формы, ни идентичности; таких случаев больше половины
      (68 дефектов из 124 имеют коннектор на конце);
+  3б. «е» — КЛАПАН ВДОЛЬ ОСИ ПРИ НЕХВАТКЕ КЛИРЕНСА (Р4, блок 6): стаб из
+     талии короче `ec.CLEARANCE` — клапан отходит от следующей точки
+     маршрута на CLEARANCE − вылет + 0.5 (не больше бюджета);
   4. СДВИГ УЗЛА — последнее средство, в пределах бюджета.
 
 Замер по 19 холстам заказчика (tools/smooth_bench.py повторяет):
@@ -535,6 +538,46 @@ def _line_moves(graph, e, step, sidx, budget, big_area):
                     line))
     out.sort(key=lambda c: (c[0], c[1]))
     return [c[2:] for c in out]
+
+
+def _clearance_moves(graph, e, budget, big_area):
+    """«е» (блок 6, Р4): клапан ВДОЛЬ оси, когда стабу из талии не хватает
+    клиренса. -> [(role, nid, dx, dy)].
+
+    Конец клапана модели на осевой грани F (не пин, клапан не крупный); q —
+    следующая точка маршрута после конца (первый излом, иначе другой
+    конец); g — вылет q за грань наружу. При 0 <= g < ec.CLEARANCE
+    лестнице маршрута негде поставить колено у клапана (стаб короче
+    клиренса), и клапан отходит от q вдоль оси на CLEARANCE − g + 0.5
+    (не больше бюджета)."""
+    pts = edge_pts(e)
+    if not pts or len(pts) < 2:
+        return []
+    byid = nodes_by_id(graph)
+    out = []
+    for role, nid in (("s", e.get("source")), ("t", e.get("target"))):
+        node = byid.get(nid)
+        if node is None or end_kind(node, e) == "anchor":
+            continue
+        rect = seating._anchor_rect(node)
+        refs = contact.face_refs(node, rect) if rect is not None else None
+        if not refs or _node_is_anchor_role(graph, nid, big_area):
+            continue
+        mx, my = pts[0] if role == "s" else pts[-1]
+        qx, qy = pts[1] if role == "s" else pts[-2]
+        side = seating._end_side(rect, mx, my)
+        if side not in refs:
+            continue
+        nx, ny = {"L": (-1, 0), "R": (1, 0), "T": (0, -1), "B": (0, 1)}[side]
+        face = {"L": rect[0], "R": rect[2], "T": rect[1], "B": rect[3]}[side]
+        g = ((qx if nx else qy) - face) * (nx or ny)
+        if not (0.0 <= g < ec.CLEARANCE):
+            continue
+        s = ec.CLEARANCE - g + 0.5
+        if s > budget:
+            continue
+        out.append((role, nid, -nx * s, -ny * s))
+    return out
 
 
 def _breaks_anchor(graph, node_id):
@@ -1100,6 +1143,19 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
             if reseat_fn is not None:
                 reseat_fn(nid)
             judge("коннектор")
+
+    # ── 3б. «е»: КЛАПАН ВДОЛЬ ОСИ ПРИ НЕХВАТКЕ КЛИРЕНСА (Р4, блок 6) ───
+    # Стаб из талии короче клиренса лестницы маршрута — колену у клапана
+    # негде встать; клапан отходит от следующей точки вдоль своей оси
+    # (`_clearance_moves`), маршрут и мини-жест — как у сдвига узла.
+    for role, nid, dx, dy in _clearance_moves(graph, e, budget, big_area):
+        _shift_node(graph, nid, dx, dy)
+        cur = live_edge()
+        if cur is not None and route_fn is not None and not is_straight(cur):
+            route_fn(cur)
+        if reseat_fn is not None:
+            reseat_fn(nid)
+        judge("узел")
 
     # ── 4. УЗЕЛ: последнее средство, под бюджетом ──────────────────────
     if allow_node_shift:
