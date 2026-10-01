@@ -68,7 +68,10 @@ class OptimizeEdgeCommand(Command):
 
 
 class DragNodeCommand(Command):
-    """Перемещение одного узла (не batch)."""
+    """Перемещение одного узла (не batch).
+
+    Рёбра в снимках — по `edge_ref` (id ребра): у кратной пары ключ пары
+    один, и Ctrl+Z возвращал одно ребро пары из двух."""
 
     def __init__(self, model: GraphDataModel, editor, node_id: str,
                  old_centroid: list, old_bbox: list, old_segmentation: list,
@@ -102,10 +105,12 @@ class DragNodeCommand(Command):
         # undo обязан вернуть и их побайтово)
         self._new_edge_points = {}
         keys = list(self._old_edge_points)
-        keys += [k for k in self._model.get_connected_edges(self._node_id)
-                 if k not in self._old_edge_points]
+        keys += [r for r in (self._model.edge_ref(e)
+                             for e in self._model.edges_data
+                             if self._node_id in (e['source'], e['target']))
+                 if r not in self._old_edge_points]
         for key in keys:
-            edge_data = self._model.find_edge_data(key)
+            edge_data = self._model.find_edge_by_ref(key)
             if edge_data:
                 self._new_edge_points[key] = {
                     'source_point': (edge_data.get('source_point') or []).copy(),
@@ -149,7 +154,7 @@ class DragNodeCommand(Command):
 
         if edge_points:
             for key, points in edge_points.items():
-                edge_data = self._model.find_edge_data(key)
+                edge_data = self._model.find_edge_by_ref(key)
                 if edge_data:
                     if 'source_point' in points:
                         edge_data['source_point'] = points['source_point'].copy()

@@ -544,21 +544,23 @@ class SimpleGraphEditor(BaseGraphEditor):
 
     def _snapshot_edge_pins(self, node_id: str) -> dict:
         """Э5: снимок пинов концов инцидентных рёбер для undo resize —
-        {(edge_key, role): {'dx','dy'} | None}."""
+        {(edge_ref, role): {'dx','dy'} | None} (`edge_ref` — id ребра: у
+        кратной пары ключ пары один)."""
         from ui.editors import port_model
         snap = {}
         for e in self.edges_data:
             for role in ('source', 'target'):
                 if e.get(role) != node_id:
                     continue
-                key = self.model.edge_key(e['source'], e['target'])
+                key = self.model.edge_ref(e)
                 pin = port_model.edge_pin(e, role)
                 snap[(key, role)] = dict(pin) if pin else None
         return snap
 
     def _snapshot_edge_routes(self, node_id: str) -> dict:
         """1.7: снимок маршрутов инцидентных рёбер для undo resize —
-        {edge_key: {поле: значение}} по `ResizeNodeCommand.ROUTE_KEYS`.
+        {edge_ref: {поле: значение}} по `ResizeNodeCommand.ROUTE_KEYS`
+        (`edge_ref` — id ребра: у кратной пары ключ пары один).
         Отсутствующее поле в снимок не попадает — при откате оно удаляется."""
         import copy
 
@@ -566,7 +568,7 @@ class SimpleGraphEditor(BaseGraphEditor):
         for e in self.edges_data:
             if node_id not in (e.get('source'), e.get('target')):
                 continue
-            key = self.model.edge_key(e['source'], e['target'])
+            key = self.model.edge_ref(e)
             snap[key] = {f: copy.deepcopy(e[f])
                          for f in ResizeNodeCommand.ROUTE_KEYS if f in e}
         return snap

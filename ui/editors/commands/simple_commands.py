@@ -345,7 +345,9 @@ class ResizeNodeCommand(Command):
     (`port_model.rescale_edge_pins` в `_on_node_resized`) — undo обязан
     вернуть и их, иначе после отката пин остаётся отмасштабированным при
     старой рамке и вылетает за границу узла. Снимок пинов:
-    {(edge_key, role): {'dx','dy'} | None}.
+    {(edge_ref, role): {'dx','dy'} | None}; `edge_ref` — id ребра
+    (`GraphDataModel.edge_ref`): у кратной пары ключ пары один, и Ctrl+Z
+    возвращал одно ребро пары из двух.
 
     1.7: тем же жестом пересаживаются КОНЦЫ инцидентных рёбер
     (`_reseat_after_resize`; в «Ручной правке» — движком, вместе с коленями).
@@ -353,7 +355,7 @@ class ResizeNodeCommand(Command):
     `source_point`/`target_point`/`waypoints`. Без их снимка Ctrl+Z возвращал
     рамку и оставлял маршруты в состоянии «после ресайза» (замер 1.7: ребро
     `node_2 -> node_3`, source_point [13, 1547] -> [27.26, 1577.79], не
-    возвращался). Снимок маршрутов: {edge_key: {поле: значение}}, поля —
+    возвращался). Снимок маршрутов: {edge_ref: {поле: значение}}, поля —
     `ROUTE_KEYS`; отсутствующее в снимке поле при откате УДАЛЯЕТСЯ (иначе
     `_src_side`/`_tgt_side`, заведённые ресайзом, переживают undo).
     """
@@ -389,7 +391,7 @@ class ResizeNodeCommand(Command):
         if not routes:
             return
         for key, fields in routes.items():
-            edge_data = self._model.find_edge_data(key)
+            edge_data = self._model.find_edge_by_ref(key)
             if edge_data is None:
                 continue
             for field in self.ROUTE_KEYS:
@@ -403,7 +405,7 @@ class ResizeNodeCommand(Command):
             return
         from ui.editors import port_model
         for (key, role), pin in pins.items():
-            edge_data = self._model.find_edge_data(key)
+            edge_data = self._model.find_edge_by_ref(key)
             if edge_data is None:
                 continue
             if pin is None:

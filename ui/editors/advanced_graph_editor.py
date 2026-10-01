@@ -1596,8 +1596,8 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                                   edge_data.get('target'))
         if key in self._amnesty_cache:
             return self._amnesty_cache[key]
-        base = self.drag_start_edge_points.get(key) \
-            if not self._batch_drag else None
+        base = self.drag_start_edge_points.get(
+            self.model.edge_ref(edge_data)) if not self._batch_drag else None
         src_geom = base if base else edge_data
         sp = src_geom.get('source_point')
         tp = src_geom.get('target_point')
@@ -3431,10 +3431,14 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                         self._batch_bound_blocks.append(blk)
         else:
             self.drag_start_edge_points = {}
-            for key in self.model.get_connected_edges(node_id):
-                edge_data = self.model.find_edge_data(key)
-                if edge_data:
-                    self.drag_start_edge_points[key] = {
+            # по id ребра (`edge_ref`), не парой узлов: у кратной пары ключ
+            # пары один, и Ctrl+Z возвращал одно ребро пары из двух
+            for edge_data in self.model.edges_data:
+                key = self.model.edge_key(edge_data['source'],
+                                          edge_data['target'])
+                if node_id in key:
+                    self.drag_start_edge_points[
+                            self.model.edge_ref(edge_data)] = {
                         'source_point': (edge_data.get('source_point') or []).copy(),
                         'target_point': (edge_data.get('target_point') or []).copy(),
                         # Бэкап waypoints: пересадка конца waypoints не трогает

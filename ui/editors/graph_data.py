@@ -255,6 +255,20 @@ class GraphDataModel:
         """O(1) поиск edge_data по ключу."""
         return self._edge_data_index.get(key)
 
+    def edge_ref(self, edge: dict):
+        """Адрес ребра в снимках жеста для undo: id ребра, без id — ключ пары.
+
+        Ключ пары у кратной пары (Р7, пары с unknow) один на все её рёбра,
+        а индекс `find_edge_data` хранит последнее: снимок по ключу пары
+        возвращал по Ctrl+Z одно ребро пары из двух."""
+        return edge.get('id') or self.edge_key(edge['source'], edge['target'])
+
+    def find_edge_by_ref(self, ref) -> Optional[dict]:
+        """Ребро по адресу `edge_ref` (ключ пары — через индекс, как прежде)."""
+        if isinstance(ref, tuple):
+            return self.find_edge_data(ref)
+        return next((e for e in self.edges_data if e.get('id') == ref), None)
+
     def rebuild_edge_data_index(self):
         """Пересоздать индекс edge_key → edge_data."""
         self._edge_data_index.clear()

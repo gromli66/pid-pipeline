@@ -268,8 +268,8 @@ def test_multi_pair_routes_its_own_edge(qapp, tmp_path, monkeypatch,
     которое ей отдал движок: каждый вызов лестницы из кнопки прокладывает
     ровно своё ребро (e1 — кандидат — среди них)."""
     ed = _editor(tmp_path, _multi_canvas(e1_last))
-    # протяжка узла кратной пары + Ctrl+Z пару не восстанавливает (отдельная
-    # находка, вне этой правки) — чужое действие оператора у коннектора
+    # чужое действие оператора у коннектора (протяжка узла самой пары и
+    # Ctrl+Z — test_multi_pair_gesture_undo_redo)
     _drag_and_undo(ed, "cL", 0.0, 30.0)
     pairs, routed = [], []
     real_smooth = es.smooth
@@ -293,3 +293,74 @@ def test_multi_pair_routes_its_own_edge(qapp, tmp_path, monkeypatch,
     ed.smooth_canvas()
     assert "e1" in [a for a, _got in pairs], pairs
     assert all(got == [a] for a, got in pairs), pairs
+
+
+# ── попутная находка (7): жест узла кратной пары и Ctrl+Z / Ctrl+Y ─────
+def _links(ed):
+    return {e["id"]: json.dumps(e, sort_keys=True) for e in ed.model.edges_data}
+
+
+@pytest.mark.parametrize("gesture", ["протяжка", "ресайз", "ресайз с пинами"])
+@pytest.mark.parametrize("nid", ["V", "U"])
+@pytest.mark.parametrize("e1_last", [False, True],
+                         ids=["e1 первым", "e1 последним"])
+def test_multi_pair_gesture_undo_redo(qapp, tmp_path, e1_last, nid, gesture):
+    """Попутная находка red-team блока 6 (MEASUREMENTS §144): снимки жеста
+    для отмены (`DragNodeCommand`, `ResizeNodeCommand`) адресовали рёбра
+    ПАРОЙ узлов (`edge_key` + индекс `find_edge_data` — последнее ребро
+    пары), и у кратной пары V–U Ctrl+Z возвращал одно ребро из двух: у
+    другого оставались конец и waypoints жеста (так же у deploy 238fe6b).
+    Теперь снимки — по id ребра (`GraphDataModel.edge_ref`): Ctrl+Z
+    возвращает обе трубы пары бит-в-бит (и пины входов, которые ресайз
+    масштабирует), Ctrl+Y — состояние жеста."""
+    from modules.graph.core import ports
+    ed = _editor(tmp_path, _multi_canvas(e1_last))
+    if gesture == "ресайз с пинами":
+        for e in ed.model.edges_data:
+            if e["id"] in ("e1", "e2"):
+                role = "source" if e["source"] == nid else "target"
+                pt = e[role + "_point"]
+                assert ports.set_edge_pin(ed.nodes[nid], e, role, pt[1], pt[0])
+    before = _links(ed)
+    if gesture == "протяжка":
+        y, x = ed.nodes[nid]["centroid"]
+        ed.set_mode("drag_node")
+        ed.start_drag_node(nid)
+        ed.drag_node_to(x, y + 30.0)
+        ed.end_drag_node()
+        ed.set_mode("idle")
+    else:
+        bb = list(ed.nodes[nid]["bbox"])
+        ed._start_resize(nid)
+        ed._on_node_resized(nid, [bb[0], bb[1], bb[2] + 20.0, bb[3] + 30.0])
+        ed._commit_resize(nid)
+    after = _links(ed)
+    assert after["e1"] != before["e1"] and after["e2"] != before["e2"],         "фикстура: жест ведёт обе трубы пары"
+    ed.undo_mgr.undo()
+    assert _links(ed) == before
+    ed.undo_mgr.redo()
+    assert _links(ed) == after
+
+
+@pytest.mark.parametrize("with_id", [True, False], ids=["с id", "без id"])
+def test_drag_amnesty_base_is_gesture_input(qapp, tmp_path, with_id):
+    """Бэкап протяжки теперь адресован `edge_ref` (id ребра, без id — ключ
+    пары), и амнистия жеста (`_amnesty_ids`) берёт из него базу — полилинию
+    ребра на ВХОДЕ жеста, а не текущего кадра (репро 222222). Стережёт, что
+    смена адреса бэкапа базу не потеряла: труба на входе шла сквозь B, кадр
+    увёл её — B остаётся в амнистии."""
+    e = {"source": "c", "target": "T", "source_point": [500.0, 100.0],
+         "target_point": [500.0, 400.0], "waypoints": []}
+    if with_id:
+        e["id"] = "e"
+    graph = _canvas([_conn("c", 100.0, 500.0), _box("B", 200, 480, 240, 520),
+                     _box("T", 400, 480, 440, 520)], [e])
+    ed = _editor(tmp_path, graph)
+    ed.set_mode("drag_node")
+    ed.start_drag_node("c")
+    live = ed.model.edges_data[0]
+    live["source_point"], live["target_point"] = [700.0, 100.0], [700.0, 400.0]
+    ed._amnesty_cache = {}
+    thru, _along = ed._amnesty_ids(live)
+    ed.end_drag_node()
+    assert "B" in thru
