@@ -1469,3 +1469,127 @@ def test_snapshot_round_trip_is_exact():
     w.append(3)
     es._put(g, snap)
     assert json.dumps(g) == before and g["links"][0]["w"] is not w
+
+
+# ── «ж»: перемычка клапан–клапан талия-в-талию (решение Максима 01.10) ──
+# Числа — graph_edited971@model после хода «узел» по edge_52: электроарматура
+# node_36 и обратный клапан node_37 впритык (зазор 0.72 px), талии 321.686 и
+# 327.215, перемычка edge_53 — L из сегментов 0.72 и 5.53 px (оба короче
+# SEG_FLOOR: косой судья не видит, окна H-V-H у трёх точек нет).
+_V36 = (1034.3, 294.39, 1076.3, 332.19)
+_V37 = (1077.02, 316.72, 1119.02, 337.72)
+
+
+def _canvas_jumper(neighbour=False, legacy=False, gap=0.72, jog=None):
+    """node_37 -> node_36 перемычкой из левой талии node_37 в правую талию
+    node_36; у node_37 — прямая к боксу r по своей талии, у node_36 —
+    колено к коннектору c из левой талии. neighbour — бокс под node_36
+    (y1 = 334: сдвиг вниз на 5.53 до y2 = 337.72 на него заезжает)."""
+    from modules.graph.core import contact
+
+    v36 = _valve("node_36", _V36, cls="armatura_electro")
+    x1 = _V36[2] + gap
+    v37 = _valve("node_37", (x1, _V37[1], x1 + 42.0, _V37[3]),
+                 cls="klapan_obratn")
+    w36 = contact.face_refs(v36, tuple(_V36))["R"]
+    w37 = contact.face_refs(v37, tuple(v37["bbox"]))["L"]
+    if jog is not None:                       # смещение концов перемычки
+        w36 = w37 - jog
+    r = _box("r", 1250.0, w37)
+    c = _conn("c", 1000.0, 450.0)
+    links = [
+        _edge("edge_52", "node_36", "c", (_V36[0], w36), (1000.0, 450.0),
+              [(1000.0, w36)]),
+        _edge("edge_53", "node_37", "node_36", (x1, w37), (_V36[2], w36),
+              [(_V36[2], w37)] if gap < es.ec.SEG_FLOOR else None),
+        _edge("edge_56", "node_37", "r", (x1 + 42.0, w37), (1230.0, w37)),
+    ]
+    nodes = [v36, v37, r, c]
+    if neighbour:
+        nodes.append(_box("nb", 1050.0, 344.0, w=30.0, h=20.0))
+    if legacy:
+        for n in (v36, v37):
+            n[contact.LEGACY_KEY] = True
+    return _g(nodes, links)
+
+
+def test_judge_sees_waist_step_between_valves():
+    """Судья: перемычка с талиями вразнобой 5.53 px — одна ступенька
+    (`count_steps`), хотя косой и окна H-V-H у неё нет. Не ступенька: старый
+    холст (талии нет), смещение в допуске оси, длинная косая (её видит
+    судья косых — двойного счёта нет)."""
+    g = _canvas_jumper()
+    e53 = g["links"][1]
+    assert es.diag_segments_of(e53) == [] and es._step_windows(e53) == 0
+    assert es.count_steps(g) == 1 and es.score(g)["steps"] == 1
+    assert es.count_steps(_canvas_jumper(legacy=True)) == 0
+    assert es.count_steps(_canvas_jumper(jog=1.0)) == 0
+    far = _canvas_jumper(gap=30.0)               # прямая косая 30 x 5.53
+    assert len(es.edge_pts(far["links"][1])) == 2
+    assert es.score(far)["diag"] == 1 and es.count_steps(far) == 0
+
+
+def test_waist_jumper_onto_one_line():
+    """Кнопка: node_36 — строго поперёк оси на разницу талий (+5.529),
+    перемычка — прямая из двух точек на одной линии, талии клапанов на
+    одной линии, ступенек 0; node_37 (его прямая к r косила бы) стоит."""
+    from modules.graph.core import contact
+
+    g = _canvas_jumper()
+    v36, v37 = g["nodes"][0], g["nodes"][1]
+    bb37 = list(v37["bbox"])
+
+    st = es.smooth(g, route_fn=_ell_router, reseat_fn=_waist_reseat(g))
+
+    e53 = g["links"][1]
+    assert st["узел"] >= 1, st
+    assert v37["bbox"] == bb37, "второй клапан обязан стоять"
+    assert v36["bbox"][0] == _V36[0] and v36["bbox"][2] == _V36[2]
+    assert v36["bbox"][1] - _V36[1] == pytest.approx(5.529, abs=0.01)
+    w36 = contact.face_refs(v36, tuple(v36["bbox"]))["R"]
+    w37 = contact.face_refs(v37, tuple(v37["bbox"]))["L"]
+    assert w36 == pytest.approx(w37, abs=0.01)
+    pts = es.edge_pts(e53)
+    assert len(pts) == 2 and pts[0][1] == pytest.approx(pts[1][1], abs=0.01)
+    assert es.count_steps(g) == 0 and es.score(g)["diag"] == 0
+
+
+def test_waist_jumper_refused_into_neighbour():
+    """Сдвиг node_36 вниз на 5.53 заводит его рамку (y2 337.72) на бокс nb
+    (y1 334) — гейт соседей (`box_hits`) не пускает; node_37 не пускает
+    гейт хода (`accepts_waist`: его прямая к r стала бы косой). Клапаны
+    стоят, ступенька талий остаётся видимой."""
+    g = _canvas_jumper(neighbour=True)
+    bbs = [list(n["bbox"]) for n in g["nodes"][:2]]
+    assert es.count_overlaps(g) == 0
+    moves = es._waist_moves(g, g["links"][1], es.BUDGET, 40000.0)
+    assert [m[0] for m in moves] == ["node_37"], "node_36 — мимо box_hits"
+
+    es.smooth(g, route_fn=_ell_router, reseat_fn=_waist_reseat(g))
+
+    assert [n["bbox"] for n in g["nodes"][:2]] == bbs
+    assert es.count_overlaps(g) == 0 and es.count_steps(g) == 1
+
+
+@pytest.mark.parametrize("kind", ["пин", "веер"])
+def test_waist_jumper_skipped(kind):
+    """Хода «ж» нет: конец перемычки — пин оператора (прямая переставила бы
+    и его) или на грани перемычки вторая труба (веер слотов, конец не в
+    талии). Пин — кнопка не двигает ни клапан, ни конец."""
+    g = _canvas_jumper()
+    e53 = g["links"][1]
+    if kind == "пин":
+        y, x = e53["target_point"]
+        ports.set_edge_pin(g["nodes"][0], e53, "target", x, y)
+    else:
+        w = e53["source_point"][0] + 6.0
+        g["nodes"].append(_conn("c2", 1100.0, 400.0))
+        g["links"].append(_edge("edge_x", "node_37", "c2",
+                                (e53["source_point"][1], w), (1100.0, 400.0),
+                                [(1070.0, w), (1070.0, 400.0)]))
+    assert es._waist_moves(g, e53, es.BUDGET, 40000.0) == []
+    if kind == "пин":
+        before = copy.deepcopy(g)
+        es.smooth(g, route_fn=_ell_router, reseat_fn=_waist_reseat(g))
+        assert g["nodes"] == before["nodes"]
+        assert e53["target_point"] == before["links"][1]["target_point"]

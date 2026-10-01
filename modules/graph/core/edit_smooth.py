@@ -18,6 +18,10 @@
      модели — строго поперёк оси на «линия − опорная точка» (талия, в
      веере слотов — точка конца), коннектор — на «линия − свой конец»;
      проба засчитывается, только если сняла излом;
+  0в. «ж» — ПЕРЕМЫЧКА КЛАПАН–КЛАПАН ТАЛИЯ-В-ТАЛИЮ (решение Максима 01.10):
+     клапаны стоят впритык, талии вразнобой — один клапан строго поперёк
+     оси на разницу талий, перемычка — прямая; свой гейт `accepts_waist`
+     (ступенек талий строго меньше, косых, ступенек и изломов не больше);
   1. КОЛЕНО — маршрут вместо косой. Не двигает ничего. На холстах
      заказчика закрывает 41 диагональ из 46 (89%);
   2. СКОЛЬЖЕНИЕ КОНЦА по своей грани/участку — двигается только точка
@@ -61,6 +65,9 @@
 
 Гейт хода (`accepts`) — лексикографически: косые -> отклонение ->
 ступеньки -> изломы (4-й приоритет, блок 6), прочие дефекты не хуже.
+Ступенька судьи — окно H-V-H с коротким средним сегментом И ступенька
+талий: перемычка клапан–клапан с концами вразнобой поперёк оси, у которой
+иначе не видно ничего (сегменты короче SEG_FLOOR, 01.10).
 Лестница пробует ВСЕ ступени и применяет ОДИН ход — лучшую пробу по тому
 же гейту (блок 6, `_attempt`); порядок ступеней решает только ничьи и
 несравнимые пробы: остаётся более ранняя.
@@ -90,7 +97,7 @@ from . import contact
 from . import edit_checks as ec
 from . import ports as port_model
 from . import seating
-from .graph_access import degrees, edge_ends, edges as g_edges, \
+from .graph_access import box_hits, degrees, edge_ends, edges as g_edges, \
     is_connector, nodes_by_id
 
 # ── пороги ─────────────────────────────────────────────────────────────
@@ -593,6 +600,71 @@ def _clearance_moves(graph, e, budget, big_area):
     return out
 
 
+def _waist_moves(graph, e, budget, big_area):
+    """«ж» (решение Максима 01.10, репро 971@model/edge_53): перемычка
+    клапан–клапан талия-в-талию — ОДИН клапан строго поперёк оси, чтобы его
+    талия легла на линию талии соседа. -> [(nid, dx, dy, (sp, tp))], sp/tp —
+    концы прямой перемычки после сдвига: оба в талиях, на одной линии.
+
+    Перемычка — `_waist_jumper` (талия — `contact.face_refs`, грань —
+    `seating._end_side`; своего правила нет), концы разошлись больше чем на
+    DIAG_TOL, сдвиг 0.25 <= |талия соседа − своя| <= budget. Хода нет, если
+    конец перемычки — пин (пин — истина, а прямая перемычка переставила бы
+    и его) или на грани перемычки у любого из клапанов не одна труба (веер
+    слотов: конец не в талии). Клапан стоит, если он крупный или сдвинутая
+    рамка задевает соседа, которого не задевала (`graph_access.box_hits` —
+    один судья «упирается в соседа» с редактором и сервером; наложения из
+    построения легальны, общий гейт держит их число). Порядок проб —
+    меньшая степень, при равной — источник."""
+    byid = nodes_by_id(graph)
+    j = _waist_jumper(e, byid)
+    if j is None or abs(j[0]) <= ec.DIAG_TOL:
+        return []
+    _d, axis, fa, fb = j
+    s, t = edge_ends(e)
+    rs, rt = seating._anchor_rect(byid[s]), seating._anchor_rect(byid[t])
+    if any(end_kind(byid[x], e) == "anchor" for x in (s, t)):
+        return []
+    for nid, face, rect in ((s, fa, rs), (t, fb, rt)):
+        k = 0
+        for x in g_edges(graph):
+            for xid, key in zip(edge_ends(x),
+                                ("source_point", "target_point")):
+                p = x.get(key)
+                if xid == nid and p and seating._end_side(
+                        rect, float(p[1]), float(p[0])) == face:
+                    k += 1
+        if k != 1:
+            return []
+    ws = contact.face_refs(byid[s], rs)[fa]
+    wt = contact.face_refs(byid[t], rt)[fb]
+    deg = degrees(graph)
+    nodes = graph.get("nodes") or []
+
+    def face_pt(rect, face, line):
+        if axis == "H":
+            return [line, rect[0] if face == "L" else rect[2]]
+        return [rect[1] if face == "T" else rect[3], line]
+
+    out = []
+    for role, nid, rect, delta, line in (
+            ("s", s, rs, wt - ws, wt), ("t", t, rt, ws - wt, ws)):
+        if not 0.25 <= abs(delta) <= budget \
+                or _node_is_anchor_role(graph, nid, big_area):
+            continue
+        dx, dy = (0.0, delta) if axis == "H" else (delta, 0.0)
+        moved = (rect[0] + dx, rect[1] + dy, rect[2] + dx, rect[3] + dy)
+        free = [n for n in nodes if not box_hits([n], nid, rect)]
+        if box_hits(free, nid, moved):
+            continue
+        ends = ((face_pt(moved, fa, line), face_pt(rt, fb, line))
+                if role == "s" else
+                (face_pt(rs, fa, line), face_pt(moved, fb, line)))
+        out.append((deg.get(nid, 0), nid, dx, dy, ends))
+    out.sort(key=lambda c: c[0])
+    return [c[1:] for c in out]
+
+
 def _breaks_anchor(graph, node_id):
     """У узла есть якорь оператора -> его сдвиг допустим только вместе с
     якорем (якорь локален, едет с узлом) — но НЕ допустим, если якорь
@@ -612,24 +684,96 @@ def count_steps(graph, step_max=STEP_MAX):
     Судья их НЕ считает дефектом и не может: ступенька строго ортогональна
     (H-V-H), отклонение от осей у неё ноль. Поэтому метрика своя — иначе
     гейт не видит улучшения от их устранения и откатывает ход (репро
-    graph_edited_av: 10 ступенек пережили сглаживание нетронутыми)."""
+    graph_edited_av: 10 ступенек пережили сглаживание нетронутыми).
+
+    Плюс СТУПЕНЬКА ТАЛИЙ (решение Максима 01.10, репро 971@model/edge_53:
+    электроарматура и обратный клапан впритык, зазор 0.72 px, талии на
+    321.69 и 327.22): перемычка клапан–клапан (`_waist_jumper`), концы
+    которой разошлись поперёк оси на DIAG_TOL < |d| <= step_max, а судья не
+    видит у неё ни окна H-V-H, ни косой (две-три точки, сегменты короче
+    SEG_FLOOR не судятся), — одна ступенька."""
+    byid = nodes_by_id(graph)
     n = 0
     for e in g_edges(graph):
-        pts = edge_pts(e)
-        if not pts or len(pts) < 4:
-            continue
-        for i in range(1, len(pts) - 2):
-            a, b, c, d = pts[i - 1], pts[i], pts[i + 1], pts[i + 2]
-            L = math.hypot(c[0] - b[0], c[1] - b[1])
-            if not (1e-6 < L <= step_max):
-                continue
-            horiz = (abs(a[1] - b[1]) <= ec.DIAG_TOL
-                     and abs(c[1] - d[1]) <= ec.DIAG_TOL)
-            vert = (abs(a[0] - b[0]) <= ec.DIAG_TOL
-                    and abs(c[0] - d[0]) <= ec.DIAG_TOL)
-            if horiz or vert:
-                n += 1
+        k = _step_windows(e, step_max)
+        if not k and _waist_step(e, byid, step_max):
+            k = 1
+        n += k
     return n
+
+
+def count_waist_steps(graph, step_max=STEP_MAX):
+    """Сколько из ступенек `count_steps` — ступеньки талий."""
+    byid = nodes_by_id(graph)
+    return sum(1 for e in g_edges(graph)
+               if not _step_windows(e, step_max)
+               and _waist_step(e, byid, step_max))
+
+
+def _step_windows(e, step_max=STEP_MAX):
+    """Окон H-V-H (V-H-V) с коротким средним сегментом у одного ребра."""
+    pts = edge_pts(e)
+    if not pts or len(pts) < 4:
+        return 0
+    n = 0
+    for i in range(1, len(pts) - 2):
+        a, b, c, d = pts[i - 1], pts[i], pts[i + 1], pts[i + 2]
+        L = math.hypot(c[0] - b[0], c[1] - b[1])
+        if not (1e-6 < L <= step_max):
+            continue
+        horiz = (abs(a[1] - b[1]) <= ec.DIAG_TOL
+                 and abs(c[1] - d[1]) <= ec.DIAG_TOL)
+        vert = (abs(a[0] - b[0]) <= ec.DIAG_TOL
+                and abs(c[0] - d[0]) <= ec.DIAG_TOL)
+        if horiz or vert:
+            n += 1
+    return n
+
+
+_FACING = {("R", "L"): (2, 0), ("L", "R"): (0, 2),
+           ("B", "T"): (3, 1), ("T", "B"): (1, 3)}
+
+
+def _waist_jumper(e, byid):
+    """Перемычка клапан–клапан (решение Максима 01.10): оба конца в ОСЕВЫХ
+    гранях двух клапанов модели одной оси (`contact.face_refs` — порт талии
+    есть только на осевых гранях; грань конца — `seating._end_side` по
+    рамке `seating._anchor_rect`), грани смотрят друг на друга (грань
+    источника не дальше DIAG_TOL за гранью цели). -> (d, ось, грань
+    источника, грань цели), d — смещение конца цели от конца источника
+    поперёк оси; иначе None. Своего правила талии нет."""
+    s, t = edge_ends(e)
+    ns, nt = byid.get(s), byid.get(t)
+    if ns is None or nt is None or ns is nt:
+        return None
+    axis = ns.get("_axis")
+    if axis not in ("H", "V") or nt.get("_axis") != axis:
+        return None
+    sp, tp = e.get("source_point"), e.get("target_point")
+    rs, rt = seating._anchor_rect(ns), seating._anchor_rect(nt)
+    if not sp or not tp or rs is None or rt is None:
+        return None
+    fs, ft = contact.face_refs(ns, rs), contact.face_refs(nt, rt)
+    if not fs or not ft:
+        return None
+    sx, sy, tx, ty = float(sp[1]), float(sp[0]), float(tp[1]), float(tp[0])
+    a, b = seating._end_side(rs, sx, sy), seating._end_side(rt, tx, ty)
+    if a not in fs or b not in ft or (a, b) not in _FACING:
+        return None
+    i, j = _FACING[(a, b)]
+    if a in ("R", "B"):
+        if rs[i] > rt[j] + ec.DIAG_TOL:
+            return None
+    elif rt[j] > rs[i] + ec.DIAG_TOL:
+        return None
+    return ((ty - sy) if axis == "H" else (tx - sx)), axis, a, b
+
+
+def _waist_step(e, byid, step_max=STEP_MAX):
+    """Ступенька талий судьи (см. `count_steps`)."""
+    j = _waist_jumper(e, byid)
+    return (j is not None and ec.DIAG_TOL < abs(j[0]) <= step_max
+            and not diag_segments_of(e))
 
 
 def count_bends(graph):
@@ -791,7 +935,8 @@ def score(graph):
     Блок 6: `bends` — изломы (`count_bends`, 4-й приоритет гейта),
     `overlap` — пар наложенных рамок (`count_overlaps`), `offaxis` —
     неосевых концов клапанов степени 1–2 (`offaxis_ends`); последние два —
-    в `_NOT_WORSE`."""
+    в `_NOT_WORSE`. `waist` — ступенек талий (`count_waist_steps`, они же
+    внутри `steps`): гейт хода «ж» (`accepts_waist`)."""
     c = ec.check_canvas(graph)["counts"]
     dev = 0.0
     for e in g_edges(graph):
@@ -815,6 +960,7 @@ def score(graph):
         "bends": count_bends(graph)[0],
         "overlap": count_overlaps(graph),
         "offaxis": len(offaxis_ends(graph)),
+        "waist": count_waist_steps(graph),
     }
 
 
@@ -917,7 +1063,7 @@ class _Judge:
             self._overlap = count_overlaps(graph)
 
         diag = near = steps = bends = thr = corner = 0
-        adrift = conn_off = poly_off = offaxis = 0
+        adrift = conn_off = poly_off = offaxis = waist = 0
         dev = 0.0
         seen = {}
         for e, p in zip(links, parts):
@@ -936,6 +1082,7 @@ class _Judge:
             conn_off += p[9]
             poly_off += p[10]
             offaxis += p[11]
+            waist += p[12]
         own = sum(1 for v in seen.values() if v)
         xs, ys = [], []
         for n in nodes:
@@ -951,6 +1098,7 @@ class _Judge:
             "w": (max(xs) - min(xs)) if xs else 0.0,
             "h": (max(ys) - min(ys)) if ys else 0.0,
             "bends": bends, "overlap": self._overlap, "offaxis": offaxis,
+            "waist": waist,
         }
 
     @staticmethod
@@ -976,7 +1124,8 @@ class _Judge:
                 tuple((a["node"], a["own"]) for a in ec.along_border(mini)),
                 len(ec.through_box(mini)), len(ec.corner_ends(mini)),
                 len(cl["adrift"]), len(cl["conn_off"]), len(cl["poly_off"]),
-                len(_offaxis_of(e, nodes_by_id(mini), deg)))
+                len(_offaxis_of(e, nodes_by_id(mini), deg)),
+                count_waist_steps(mini))
 
 
 _ACTIVE = None      # (холст, судья) идущего `smooth` — см. `_score`
@@ -1065,6 +1214,29 @@ def accepts_axial(before, after):
     return after["dev"] <= before["dev"] + 0.5
 
 
+def accepts_waist(before, after):
+    """Гейт хода «ж» (решение Максима 01.10: талии соседних клапанов — на
+    одну линию, «если гейт соседей пропускает»): ступенек талий СТРОГО
+    меньше; косых, ступенек всего и изломов не больше, отклонение не больше
+    (шум 0.5 px); прочие дефекты `_NOT_WORSE` (наложения — гейт соседей)
+    не хуже; холст цел. Обмен ступеньки талий на ступеньку той же цены
+    допустим: на 971 сдвиг node_36 укорачивает крючок edge_52 до 20 px —
+    судья считает его ступенькой (окно H-V-H без направления), и общий
+    гейт видел бы ничью."""
+    if after["w"] > CANVAS_W + 0.5 or after["h"] > CANVAS_H + 0.5:
+        return False
+    for k in _NOT_WORSE:
+        if after.get(k, 0) > before.get(k, 0):
+            return False
+    if after.get("waist", 0) >= before.get("waist", 0):
+        return False
+    if after["diag"] > before["diag"] or after["steps"] > before["steps"]:
+        return False
+    if after.get("bends", 0) > before.get("bends", 0):
+        return False
+    return after["dev"] <= before["dev"] + 0.5
+
+
 # ── главный цикл ───────────────────────────────────────────────────────
 def smooth(graph, route_fn=None, reseat_fn=None, budget=BUDGET,
            allow_node_shift=True, big_area=40000.0, max_rounds=MAX_ROUNDS):
@@ -1104,12 +1276,16 @@ def _rounds(graph, stats, route_fn, reseat_fn, budget, allow_node_shift,
         applied = 0
         # неосевые входы клапана (Р5) — тоже кандидаты, даже прямые («д»)
         off = {id(x) for _nid, x in _offaxis(graph)}
+        byid = nodes_by_id(graph)
         for e in list(g_edges(graph)):
             # Кандидат — не только КОСОЕ ребро: ступенька строго ортогональна
             # (H-V-H), и отбор «только косые» проходил мимо неё вовсе — ровно
             # то, на что заказчик указал по graph_edited_av («не исправило
             # ступеньки»). Берём и ортогональные с одиночным шажком.
-            if is_ortho(e) and single_step(e) is None and id(e) not in off:
+            # Ступенька талий (перемычка клапан–клапан, `count_steps`) —
+            # тоже кандидат: у неё две-три точки, и она ортогональна.
+            if is_ortho(e) and single_step(e) is None and id(e) not in off \
+                    and not _waist_step(e, byid):
                 continue
             if _try_remedies(graph, e, stats, route_fn, reseat_fn,
                              budget, allow_node_shift, big_area):
@@ -1370,6 +1546,21 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
         if reseat_fn is not None:
             reseat_fn(nid)
         judge(kind, fewer_bends=True)
+
+    # ── 0в. «ж»: ПЕРЕМЫЧКА КЛАПАН–КЛАПАН ТАЛИЯ-В-ТАЛИЮ (решение 01.10) ──
+    # Клапан строго поперёк оси на разницу талий (`_waist_moves`),
+    # перемычка — прямая из талии в талию, прочие трубы клапана пересаживает
+    # мини-жест; гейт входа свой (`accepts_waist`), сравнение с лучшей —
+    # общее.
+    for nid, dx, dy, (sp, tp) in _waist_moves(graph, e, budget, big_area):
+        _shift_node(graph, nid, dx, dy)
+        cur = live_edge()
+        if cur is not None:
+            cur["source_point"], cur["target_point"] = list(sp), list(tp)
+            cur["waypoints"] = []
+        if reseat_fn is not None:
+            reseat_fn(nid)
+        judge("узел", gate=accepts_waist)
 
     # ── 1. КОЛЕНО: ничего не двигаем ───────────────────────────────────
     # Гейта И2 здесь НЕТ и он не нужен: кандидатом ребро становится только
