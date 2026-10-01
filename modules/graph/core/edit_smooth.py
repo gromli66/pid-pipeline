@@ -1556,6 +1556,11 @@ def smooth(graph, route_fn=None, reseat_fn=None, budget=BUDGET,
     («г», `_with_reroute`); обёртка живёт здесь, поэтому подмена
     `reseat_fn` снаружи (стенд, тесты) видит и её.
 
+    allow_node_shift=False — оборудование стоит на ВСЕХ ступенях: нет ни
+    сдвига узла (4), ни ходов клапана «б», «ж», «е» (находка red-team блока
+    6, 01.10: флаг держала только ступень 4). Коннектор — точка, его ходы
+    («б» коннектора, ступень 3) остаются, как и «д» (узел стоит).
+
     canon_fn(canvas) -> None — канон открытия вкладки (Р-б, `_Canon`):
     мутирует переданный холст так, как его пересадит следующее открытие.
     Задан — проба, прошедшая гейт, судится после канона и принимается
@@ -1863,6 +1868,8 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
     # принимается, только если гейт её пропускает И изломов стало меньше.
     for role, nid, kind, delta, line in _line_moves(
             graph, e, step, sidx, budget, big_area):
+        if kind == "узел" and not allow_node_shift:
+            continue                     # клапан стоит (allow_node_shift)
         axis = step[0]
         key = "source_point" if role == "s" else "target_point"
         dx, dy = (0.0, delta) if axis == "y" else (delta, 0.0)
@@ -1892,7 +1899,8 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
     # перемычка — прямая из талии в талию, прочие трубы клапана пересаживает
     # мини-жест; гейт входа свой (`accepts_waist`), сравнение с лучшей —
     # общее.
-    for nid, dx, dy, (sp, tp) in _waist_moves(graph, e, budget, big_area):
+    for nid, dx, dy, (sp, tp) in (_waist_moves(graph, e, budget, big_area)
+                                  if allow_node_shift else ()):
         _shift_node(graph, nid, dx, dy)
         cur = live_edge()
         if cur is not None:
@@ -1976,7 +1984,8 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
     # Стаб из талии короче клиренса лестницы маршрута — колену у клапана
     # негде встать; клапан отходит от следующей точки вдоль своей оси
     # (`_clearance_moves`), маршрут и мини-жест — как у сдвига узла.
-    for role, nid, dx, dy in _clearance_moves(graph, e, budget, big_area):
+    for role, nid, dx, dy in (_clearance_moves(graph, e, budget, big_area)
+                              if allow_node_shift else ()):
         _shift_node(graph, nid, dx, dy)
         cur = live_edge()
         if cur is not None and route_fn is not None and not is_straight(cur):

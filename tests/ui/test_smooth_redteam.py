@@ -114,3 +114,22 @@ def test_button_keeps_nodes_on_the_sheet(qapp, tmp_path, right):
     bb = ed.nodes["v"]["bbox"]
     assert bb[0] == pytest.approx(room + (3.1 if right else -3.1))
     assert es.sheet_out(ed.model.graph_data) == 0.0
+
+
+# ── (3) allow_node_shift=False: оборудование стоит на всех ступенях ────
+def test_no_node_shift_keeps_the_valve(qapp, tmp_path):
+    """Находка red-team (3): `smooth_canvas(allow_node_shift=False)` держала
+    только сдвиг узла (ступень 4) — «е» отводил клапан. Холст модели, в 5 px
+    от края листа: с флагом клапан бит-в-бит; без флага «е» отводит его на
+    3.1 px."""
+    bb = [5.0, 280.0, 47.0, 318.0]
+    ed = _editor(tmp_path, _edge_of_sheet(5.0, False))
+    _drag_and_undo(ed, "q", 30.0, 0.0)
+    st = ed.smooth_canvas(allow_node_shift=False)
+    assert ed.nodes["v"]["bbox"] == bb, st
+
+    d = tmp_path / "free"
+    d.mkdir()
+    ed = _editor(d, _edge_of_sheet(5.0, False))
+    ed.smooth_canvas()
+    assert ed.nodes["v"]["bbox"][0] == pytest.approx(5.0 - 3.1)

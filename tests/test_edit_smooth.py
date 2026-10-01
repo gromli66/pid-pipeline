@@ -1200,6 +1200,37 @@ def test_sheet_out_is_position_not_extent():
                                 dict(better, waist=0, sheet=2.51))
 
 
+# ── allow_node_shift=False: оборудование стоит на всех ступенях ────────
+def _valve_moves(kind):
+    """Холст и колбэки, на которых ход клапана ступени kind принят: «б» —
+    клапан поперёк оси на линию трубы (edge_62), «ж» — перемычка
+    талия-в-талию (edge_53), «е» — клапан вдоль оси ради клиренса (em4)."""
+    if kind == "б":
+        g = _canvas_edge62()
+        return g, {"route_fn": None, "reseat_fn": _waist_reseat(g)}
+    if kind == "ж":
+        g = _canvas_jumper()
+        return g, {"route_fn": _ell_router, "reseat_fn": _waist_reseat(g)}
+    g = _canvas_manual4()
+    return g, {"route_fn": _clearance_router(g), "reseat_fn": None}
+
+
+@pytest.mark.parametrize("kind", ["б", "ж", "е"])
+def test_no_node_shift_keeps_valves_still(kind):
+    """Находка red-team (3): `allow_node_shift=False` держала только
+    ступень 4 — «б», «ж» и «е» двигали клапан. С флагом рамки клапанов
+    бит-в-бит; без флага тот же холст лечится сдвигом клапана."""
+    g, kw = _valve_moves(kind)
+    st = es.smooth(g, **kw)
+    assert st["узел"] >= 1, st
+
+    g, kw = _valve_moves(kind)
+    boxes = {n["id"]: list(n["bbox"]) for n in g["nodes"] if n.get("bbox")}
+    st = es.smooth(g, allow_node_shift=False, **kw)
+    assert st["узел"] == 0, st
+    assert {n["id"]: n["bbox"] for n in g["nodes"] if n.get("bbox")} == boxes
+
+
 # ── принятый ход снимает _slack у ребра-кандидата (блок 6, S10) ────────
 
 @pytest.mark.parametrize("legacy", [False, True])
