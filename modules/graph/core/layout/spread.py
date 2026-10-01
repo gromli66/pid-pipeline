@@ -7,9 +7,9 @@
 Расстановка оставляет часть труб невидимыми (зазор между формами < FLOOR).
 Слой чинит их лестницей механизмов (куст -> каскад -> расталкивание ->
 выпрямление -> составной ход -> расцепление -> перенос полос); каждый ход
-проходит приёмку из 11 условий (11-е — коннектор трубы клапана не заходит в
-его рамку, `conn_in_valve`, 2026-10-01), любое нарушение — откат вместе с
-точками.
+проходит приёмку из 11 условий (11-е — коннектор трубы не заходит в рамку
+узла на её другом конце, `conn_in_frame`, 2026-10-01), любое нарушение —
+откат вместе с точками.
 
 Два правила, на которых всё держится (стоили стенду многих итераций):
   * любой запрет сравнивается С БАЗОЙ ВХОДА, а не с нулём;
@@ -610,25 +610,27 @@ def defects(graph, byid, floor=FLOOR):
     return out
 
 
-def conn_in_valve(graph, byid, links=None):
-    """{(коннектор, клапан)}: центроид коннектора СТРОГО внутри рамки
-    (`shape_box`) клапана (`contact.is_valve`), с которым его связывает
-    ребро — труба клапана короче нуля, её коннектор в теле клапана.
+def conn_in_frame(graph, byid, links=None):
+    """{(коннектор, узел)}: центроид коннектора СТРОГО внутри рамки
+    (`shape_box`) узла, с которым его связывает ребро, — труба короче нуля,
+    её коннектор в теле узла на другом конце.
 
-    Сторож хода раздвигания (решение Максима 30.09): ход, который ЗАВОДИТ
-    коннектор трубы клапана в его рамку, отклоняется. Замер 8d517a35
-    (MEASUREMENTS §133.4): node_115 после расстановки в 1.95 px под рамкой
-    node_114, ход вылечил чужое ребро и втянул его внутрь (−10.5) — счёт
-    дефектов это прятал: ребро и так было дефектным. Как и прочие запреты,
-    сравнивается с базой входа слоя: пары, пришедшие из расстановки,
-    законны. links — только эти рёбра (проба хода), иначе все."""
+    Сторож хода раздвигания: ход, который ЗАВОДИТ коннектор трубы в рамку
+    узла, отклоняется. Решение Максима 30.09 — о клапане (замер 8d517a35,
+    MEASUREMENTS §133.4: node_115 после расстановки в 1.95 px под рамкой
+    node_114, ход вылечил чужое ребро и втянул его внутрь, −10.5; счёт
+    дефектов это прятал — ребро и так было дефектным); решение 01.10 —
+    рамка ЛЮБОГО узла (тот же ход уводил ряд в рамку стрелки направления,
+    edge_manual_90, §138). Как и прочие запреты, сравнивается с базой входа
+    слоя: пары, пришедшие из расстановки, законны. links — только эти рёбра
+    (проба хода), иначе все."""
     out = set()
     for e in (edges(graph) if links is None else links):
         s, t = edge_ends(e)
         for c, v in ((s, t), (t, s)):
             nc, nv = byid.get(c), byid.get(v)
             if nc is None or nv is None or not is_connector(nc) \
-                    or not contact.is_valve(nv):
+                    or is_connector(nv):
                 continue
             x, y = node_cxy(nc)
             x1, y1, x2, y2 = shape_box(nv)
@@ -800,7 +802,7 @@ def spread(graph, orig, floor=FLOOR, target=TARGET, passes=PASSES,
     base_magi = box_on_magi_drawn(graph, byid)
     base_pen = penetration_sum(graph, byid)
     base_ovl = overlaps(graph, legal)
-    base_civ = conn_in_valve(graph, byid)
+    base_cif = conn_in_frame(graph, byid)
     # БАЗА ДИАГОНАЛЕЙ, а не абсолютный ноль: v16 сам оставляет диагонали
     # относительно оригинала (a6d28736 — 7, 8d517a35 — 6, 13d1ef5f — 3,
     # 6e7144d5 — 1; на 51b случайно 0). Абсолютное «> 0» блокировало ВСЕ ходы
@@ -916,7 +918,7 @@ def spread(graph, orig, floor=FLOOR, target=TARGET, passes=PASSES,
                or pipe_pen > base_pipe_pen + pen_tol
                or penetration_sum(graph, byid) > base_pen + pen_tol
                or new_diagonals(graph, byid, o_byid) > base_diag
-               or bool(conn_in_valve(graph, byid, t_edges) - base_civ)
+               or bool(conn_in_frame(graph, byid, t_edges) - base_cif)
                # СТРОГО меньше, а не «не больше»: ход, который лечит своё
                # ребро и ломает соседнее (нетто 0), запускал качели — проходы
                # 7..14 принимали по 5 ходов при неизменных 17 дефектах
@@ -946,8 +948,8 @@ def spread(graph, orig, floor=FLOOR, target=TARGET, passes=PASSES,
                 why.append("проникновение форм")
             if new_diagonals(graph, byid, o_byid) > base_diag:
                 why.append("новые диагонали")
-            if conn_in_valve(graph, byid, t_edges) - base_civ:
-                why.append("коннектор в рамке клапана")
+            if conn_in_frame(graph, byid, t_edges) - base_cif:
+                why.append("коннектор в рамке узла")
             if (len(now) >= len(cur_def) if strict else len(now) > len(cur_def)):
                 why.append(f"счёт дефектов {len(cur_def)}->{len(now)}")
             if base_v16 is not None and order_broken_local(graph, base_v16) > 0:
