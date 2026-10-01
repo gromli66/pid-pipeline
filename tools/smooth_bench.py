@@ -347,10 +347,9 @@ class Probe:
 
         def smooth(graph, **kw):
             self.smooth_kwargs = dict(kw)
-            self.smooth_kwargs.pop("route_fn", None)
-            self.smooth_kwargs.pop("reseat_fn", None)
-            self.smooth_kwargs["route_fn?"] = kw.get("route_fn") is not None
-            self.smooth_kwargs["reseat_fn?"] = kw.get("reseat_fn") is not None
+            for k in ("route_fn", "reseat_fn", "canon_fn"):
+                self.smooth_kwargs.pop(k, None)
+                self.smooth_kwargs[k + "?"] = kw.get(k) is not None
             return orig_smooth(graph, **kw)
 
         self._saved = [(es, "_shift_node", orig_shift),

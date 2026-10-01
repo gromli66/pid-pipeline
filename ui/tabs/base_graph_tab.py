@@ -408,8 +408,34 @@ def _spread_stacked_ends(canvas: dict, byid: dict, faces=None) -> int:
 
 
 def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
+    """Канон открытия над файлом холста (`reseat_canvas`): прочитать, пересадить,
+    записать, если хоть что-то сдвинулось (производный ключ старого холста
+    `contact.LEGACY_KEY` перед записью снимается). -> записан ли файл."""
+    from modules.graph.core import contact
+
+    try:
+        canvas = json.loads(Path(canvas_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        logger.warning("починка посадки концов пропущена (%s)", exc)
+        return False
+    moved = reseat_canvas(canvas)
+    if not moved:
+        return False
+    contact.strip_attach_mode(canvas.get("nodes"))
+    Path(canvas_path).write_text(json.dumps(canvas, ensure_ascii=False),
+                                 encoding="utf-8")
+    logger.info("посадка концов при открытии: пересажено %d концов", moved)
+    return True
+
+
+def reseat_canvas(canvas: dict) -> int:
     """Страховка §8.3.1 EDITOR_AFTER_LAYOUT_PLAN (решение заказчика: чинить
     при открытии): пересадить концы рёбер холста по канону `seating`.
+    Мутирует `canvas` на месте (узлы размечает `contact.apply_attach_mode`);
+    -> сколько концов сдвинуто плюс миграций (0 — холст неподвижная точка).
+    Тот же канон кнопка «Выровнять» прикладывает к пробе хода на холсте с
+    меткой модели (Р-б, `edit_smooth.smooth(canon_fn=...)`): судит ход так,
+    как его увидит следующее открытие.
 
     Свежий выход раскладки каноничен by construction — для него это no-op.
     Чинится смесь контрактов посадки, которую редакторские инструменты
@@ -458,11 +484,6 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
     from ui.editors import port_model
     from ui.editors import port_model as _pm
 
-    try:
-        canvas = json.loads(Path(canvas_path).read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        logger.warning("починка посадки концов пропущена (%s)", exc)
-        return False
     legacy = contact.apply_attach_mode(canvas)
     if legacy:
         logger.info("холст без метки модели — старая посадка (238fe6b)")
@@ -653,14 +674,7 @@ def _reseat_canvas_endpoints(canvas_path: Path) -> bool:
     moved = sum(
         (e.get("source_point") != s0) + (e.get("target_point") != t0)
         for e, (s0, t0, _w0) in zip(edges_list, snap))
-    moved += flagged + unfrozen + ports_nodes
-    if not moved:
-        return False
-    contact.strip_attach_mode(canvas.get("nodes"))
-    Path(canvas_path).write_text(json.dumps(canvas, ensure_ascii=False),
-                                 encoding="utf-8")
-    logger.info("посадка концов при открытии: пересажено %d концов", moved)
-    return True
+    return moved + flagged + unfrozen + ports_nodes
 
 
 def _canvas_has_layout(canvas_path: Path) -> bool:

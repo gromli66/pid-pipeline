@@ -92,8 +92,19 @@
 вдвое (MEASUREMENTS §137): прежде полный судья на каждую пробу съедал
 45–60 % времени.
 
-Без Qt. Роутинг приходит колбэком `route_fn` (редактор отдаёт свою
-лестницу), потому что он живёт в UI-слое. Детектор зазора форм — из пакета
+Ход судится так, как его покажет следующее открытие (Р-б, решение Максима
+01.10): на холсте с меткой модели редактор отдаёт канон открытия вкладки
+(`canon_fn`), и проба, прошедшая гейт, переводится каноном в вид после
+открытия и судится ещё раз (`_Canon`); принятый ход оставляет геометрию
+после канона — «сохранить -> открыть» не двигает ничего, что сделала
+кнопка. Прежде открытие переделывало принятый ход: стаб короче EXIT_RUN
+вдоль грани входа — в угол или на соседнюю грань, прямую вне MID_SNAP от
+середины грани — в косую (MEASUREMENTS §142.2). Старый холст — без канона
+(ADR-009).
+
+Без Qt. Роутинг и канон открытия приходят колбэками `route_fn`/`canon_fn`
+(редактор отдаёт свою лестницу и канон вкладки), потому что они живут в
+UI-слое. Детектор зазора форм — из пакета
 раскладки (`layout._gap`), импорт ленивый (`_gap_detector`): пакет тянет
 shapely, при импорте движка он не грузится.
 """
@@ -1223,7 +1234,7 @@ class _Judge:
                 bool(_gap_ids(mini)))
 
 
-_ACTIVE = None      # (холст, судья) идущего `smooth` — см. `_score`
+_ACTIVE = None      # (холст, судья, канон|None) идущего `smooth` — `_score`
 
 
 def _score(graph):
@@ -1235,6 +1246,148 @@ def _score(graph):
     if _ACTIVE is not None and _ACTIVE[0] is graph:
         return _ACTIVE[1](graph)
     return score(graph)
+
+
+def _canon_of(graph):
+    """Канон открытия идущей кнопки (`_Canon`) или None — как `_score`."""
+    if _ACTIVE is not None and _ACTIVE[0] is graph:
+        return _ACTIVE[2]
+    return None
+
+
+# ── канон открытия над пробой (Р-б, решение Максима 01.10) ─────────────
+_GEOM = ("source_point", "target_point", "waypoints")
+
+
+def _geom(e):
+    return tuple(e.get(k) for k in _GEOM)
+
+
+def _copy_geom(e):
+    """`_geom` своей копией: канон правит списки точек и на месте."""
+    return marshal.loads(marshal.dumps(_geom(e), 2))
+
+
+_NOISE = 1e-6       # px: сдвиг арифметики канона, а не посадки
+
+
+def _close_geom(a, b):
+    """Геометрии ребра совпадают с точностью до `_NOISE` (та же форма)."""
+    if a is None or b is None:
+        return a is b
+    if isinstance(a, (list, tuple)):
+        return (isinstance(b, (list, tuple)) and len(a) == len(b)
+                and all(_close_geom(x, y) for x, y in zip(a, b)))
+    return abs(float(a) - float(b)) <= _NOISE
+
+
+class _Canon:
+    """Проба хода — в том виде, в каком её покажет следующее открытие.
+
+    Зачем (гейт блока 6, MEASUREMENTS §142.2): оператор жмёт кнопку,
+    сохраняет и открывает лист ещё раз, а вкладка пересаживает концы своим
+    каноном открытия. Ход, который гейт принял, открытие переделывало: стаб
+    короче EXIT_RUN вдоль грани входа (судья его не видит — не ступенька и
+    не «вдоль своего») уходил на соседнюю грань или в угол, прямая в 6.1 px
+    от середины грани бокса (> MID_SNAP) — в середину, то есть в косую
+    (54a60fd1 edge_25: исток уезжал на 339 px). Поэтому проба, прошедшая
+    гейт, проходит канон открытия и судится ещё раз; принятый ход оставляет
+    геометрию ПОСЛЕ канона — «сохранить -> открыть» неподвижная точка.
+
+    Канон — колбэк `fn(canvas)` (вкладка: `base_graph_tab.reseat_canvas`,
+    UI-слой; редактор отдаёт его только на холсте с меткой модели, старый
+    холст живёт по правилам 238fe6b — ADR-009). Он идёт по копии ВСЕГО
+    холста (слоты, план осевых граней, развод стопок зависят от соседей), а
+    в пробу возвращается геометрия концов и waypoints только тех рёбер,
+    которые канон сдвигает ИЗ-ЗА пробы: тронутых пробой (ребро отличается от
+    входа) и нетронутых, у которых канон после пробы даёт иное, чем канон
+    входа. Нетронутое ребро, которое канон сдвигает и без пробы (вход не
+    каноничен — правка оператора), остаётся как есть: не дело кнопки.
+    Канон входа считается лениво, один раз на вход ребра (снимок `base`).
+    «Не трогала» — сравнение содержимого, не байтов снимка: `_freeze` пишет
+    marshal со ссылками, и равные словари дают разные байты."""
+
+    def __init__(self, fn):
+        self.fn = fn
+        self._base = None           # (снимок входа, геометрия после канона)
+
+    def _run(self, meta, nodes, links, polish=False):
+        """Геометрия рёбер после канона над копиями (nodes/links — свои):
+        одно открытие.
+
+        polish — дожим принятого хода (`polish`): канон не идемпотентен в
+        последнем знаке (edited@model graph_edited87537_2 edge_162: y
+        816.9176266602942 -> ...943 вторым открытием), а открытие после
+        кнопки должно не двигать ничего, — поэтому до двух проходов, и ребро
+        берёт геометрию прохода, только если она отличается от текущей на
+        шум арифметики (`_NOISE`). Сдвиг больше шума не дожимается: так
+        канон двигает waypoints при каждом открытии и без кнопки (свежие
+        холсты 26747a10, 089feca2, ca1f6ea2 — по 3–4 трубы, на 0.05–0.17 px
+        за открытие), и прогон его до упора увёл бы трубу дальше, чем одно
+        открытие. Пробы судятся одним проходом: шум счётчиков судьи не
+        меняет, а лишний проход на каждую пробу стоит времени."""
+        canvas = {"graph": meta, "nodes": nodes, "links": links}
+        if not polish:
+            self.fn(canvas)
+            return [_geom(e) for e in links]
+        out = [_copy_geom(e) for e in links]
+        for _ in range(2):
+            self.fn(canvas)
+            noise = False
+            for i, e in enumerate(links):
+                g = _geom(e)
+                if g != out[i] and _close_geom(g, out[i]):
+                    out[i] = _copy_geom(e)
+                    noise = True
+            if not noise:
+                break
+        return out
+
+    def _copies(self, graph):
+        return ([_thaw(_freeze(n)) for n in graph.get("nodes") or []],
+                [_thaw(_freeze(dict(e))) for e in g_edges(graph)])
+
+    def polish(self, graph, base):
+        """Принятый ход — до неподвижной точки канона в пределах шума: только
+        рёбра, которые ход изменил (отличаются от входа `base`)."""
+        links = g_edges(graph)
+        geom = self._run(graph.get("graph"), *self._copies(graph),
+                         polish=True)
+        for i, (e, new) in enumerate(zip(links, geom)):
+            if new != _geom(e) and dict(e) != _thaw(base[1][i]):
+                _set_geom(e, new)
+
+    def _base_geom(self, graph, base):
+        if self._base is None or self._base[0] is not base:
+            nodes0, links0 = base
+            self._base = (base, self._run(graph.get("graph"),
+                                          [_thaw(n) for n in nodes0],
+                                          [_thaw(x) for x in links0]))
+        return self._base[1]
+
+    def settle(self, graph, base):
+        """Пробу на месте — в вид после открытия (см. класс). base — снимок
+        входа ребра (`_capture`)."""
+        links = g_edges(graph)
+        geom = self._run(graph.get("graph"), *self._copies(graph))
+        base_geom = None
+        for i, (e, new) in enumerate(zip(links, geom)):
+            if new == _geom(e):
+                continue
+            if dict(e) == _thaw(base[1][i]):        # проба ребро не трогала
+                if base_geom is None:
+                    base_geom = self._base_geom(graph, base)
+                if base_geom[i] == new:
+                    continue                        # канон двигает его и так
+            _set_geom(e, new)
+
+
+def _set_geom(e, geom):
+    for k, v in zip(_GEOM, geom):
+        if v is None:
+            e.pop(k, None)
+        else:
+            e[k] = v
 
 
 _NOT_WORSE =("along_own", "along_foreign", "through", "corner",
@@ -1335,7 +1488,8 @@ def accepts_waist(before, after):
 
 # ── главный цикл ───────────────────────────────────────────────────────
 def smooth(graph, route_fn=None, reseat_fn=None, budget=BUDGET,
-           allow_node_shift=True, big_area=40000.0, max_rounds=MAX_ROUNDS):
+           allow_node_shift=True, big_area=40000.0, max_rounds=MAX_ROUNDS,
+           canon_fn=None):
     """Сгладить холст. Мутирует graph. Возвращает статистику ходов.
 
     route_fn(edge) -> bool — построить ортогональный маршрут (лестница
@@ -1346,6 +1500,11 @@ def smooth(graph, route_fn=None, reseat_fn=None, budget=BUDGET,
     Заданы оба колбэка — мини-жест обёрнут повтором лестницы маршрута
     («г», `_with_reroute`); обёртка живёт здесь, поэтому подмена
     `reseat_fn` снаружи (стенд, тесты) видит и её.
+
+    canon_fn(canvas) -> None — канон открытия вкладки (Р-б, `_Canon`):
+    мутирует переданный холст так, как его пересадит следующее открытие.
+    Задан — проба, прошедшая гейт, судится после канона и принимается
+    такой. None — как раньше (старый холст, ADR-009).
     """
     global _ACTIVE
     if reseat_fn is not None and route_fn is not None:
@@ -1353,7 +1512,8 @@ def smooth(graph, route_fn=None, reseat_fn=None, budget=BUDGET,
     stats = {"колено": 0, "излом": 0, "скольжение": 0, "коннектор": 0,
              "узел": 0, "осевая талия": 0, "отклонено": 0, "осталось": 0,
              "раунды": 0, **{k: 0 for k in REFUSAL_KINDS}}
-    prev, _ACTIVE = _ACTIVE, (graph, _Judge())
+    prev, _ACTIVE = _ACTIVE, (graph, _Judge(),
+                              _Canon(canon_fn) if canon_fn else None)
     try:
         _rounds(graph, stats, route_fn, reseat_fn, budget, allow_node_shift,
                 big_area, max_rounds)
@@ -1557,15 +1717,31 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
     def restore():
         _put(graph, base)
 
+    canon = _canon_of(graph)
+
     def judge(kind, fewer_bends=False, gate=accepts):
         """Проба сделана: в гейт; прошла и гейт принимает переход от
         лучшей к ней — запомнить. Холст возвращается во вход ребра.
         fewer_bends — проба «б» обязана ещё и снять излом; gate — свой
-        гейт входа у «д» (`accepts_axial`), сравнение с лучшей — общее."""
+        гейт входа у «д» (`accepts_axial`), сравнение с лучшей — общее.
+        Холст с каноном открытия (Р-б, `_Canon`): прошедшая проба
+        переводится в вид после открытия и судится ещё раз — запоминается
+        она такой."""
+        def passes(after):
+            return (gate(before, after)
+                    and (not best or accepts(best[0], after))
+                    and (not fewer_bends
+                         or after.get("bends", 0) < before.get("bends", 0)))
+
         after = _score(graph)
-        if gate(before, after) and (not best or accepts(best[0], after)) \
-                and (not fewer_bends
-                     or after.get("bends", 0) < before.get("bends", 0)):
+        if passes(after) and canon is not None:
+            # метку `_slack` принятый ход снимет (`done`), а канон её
+            # читает (вынужденная прямая) — судить состояние, которое
+            # будет сохранено
+            _drop_slack(graph, live_edge())
+            canon.settle(graph, base)
+            after = _score(graph)
+        if passes(after):
             best[:] = [after, kind, _capture(graph)]
         restore()
 
@@ -1574,6 +1750,8 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
             _put(graph, best[2])
             stats[best[1]] += 1
             _drop_slack(graph, live_edge())
+            if canon is not None:
+                canon.polish(graph, base)
             return True
         _refuse(stats, refusal)
         return False

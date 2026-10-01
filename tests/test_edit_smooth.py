@@ -1740,3 +1740,207 @@ def test_connector_shift_refused_below_gap_floor():
     st = es.smooth(g)
     assert st["коннектор"] == 0 and st["лестница исчерпана"] == 1, st
     assert g == before, "отклонённый ход обязан оставить холст бит-в-бит"
+
+
+# ── Р-б: ход судится так, как его покажет следующее открытие (01.10) ───
+def _poly(nid, x1, y1, x2, y2):
+    n = _box(nid, (x1 + x2) / 2, (y1 + y2) / 2, w=x2 - x1, h=y2 - y1)
+    n["segmentation"] = [x1, y1, x2, y1, x2, y2, x1, y2]
+    return n
+
+
+def _mid_canon(canvas):
+    """Канон-заглушка открытия: конец на правом участке контура — в середину
+    участка (как MID_SNAP у рамки, только без допуска)."""
+    byid = {n["id"]: n for n in canvas["nodes"]}
+    for e in canvas["links"]:
+        for key, nk in (("source_point", "source"), ("target_point", "target")):
+            seg = byid[e[nk]].get("segmentation")
+            if seg and abs(e[key][1] - max(seg[0::2])) < 0.5:
+                e[key] = [(min(seg[1::2]) + max(seg[1::2])) / 2, e[key][1]]
+
+
+def _canvas_reopen():
+    """Ступенька 6 px у контура A (x 100..140, середина правого участка
+    y 120): скольжение конца по участку выпрямляет трубу на y 126, вне
+    середины — открытие вернёт конец в середину, то есть в косую. Коннектор
+    c держит прямая e2 к боксу B (его сдвиг скосил бы e2). Вне игры —
+    e3: прямая от контура D в 6 px от середины, канон её двигает и без
+    кнопки (вход не каноничен)."""
+    A = _poly("A", 100, 100, 140, 140)
+    c = _conn("c", 300.0, 126.0)
+    B = _box("B", 420.0, 126.0)
+    D = _poly("D", 100, 300, 140, 340)
+    d = _conn("d", 300.0, 326.0)
+    return _g([A, c, B, D, d], [
+        _edge("e1", "A", "c", (140.0, 120.0), (300.0, 126.0),
+              [(220.0, 120.0), (220.0, 126.0)]),
+        _edge("e2", "c", "B", (300.0, 126.0), (400.0, 126.0)),
+        _edge("e3", "D", "d", (140.0, 326.0), (300.0, 326.0))])
+
+
+def test_canon_judges_the_probe_as_reopen_shows_it():
+    """Без канона ход — скольжение конца с середины участка (ступенька
+    снята, но открытие вернёт конец в середину — косая). С каноном та же
+    проба после канона косая и проигрывает; ход — сдвиг узла A, конец
+    остаётся в середине. Итог — неподвижная точка канона; e3, которую
+    канон двигает и без кнопки, кнопка не трогает."""
+    bare = _canvas_reopen()
+    st = es.smooth(bare)
+    assert st["скольжение"] == 1 and st["узел"] == 0, st
+    assert bare["links"][0]["source_point"] == [126.0, 140.0]
+
+    g, g0 = _canvas_reopen(), _canvas_reopen()
+    st = es.smooth(g, canon_fn=_mid_canon)
+    assert st["узел"] == 1 and st["скольжение"] == 0, st
+    assert es.count_steps(g) == 0 and es.score(g)["diag"] == 0
+    assert g["links"][2] == g0["links"][2], "e3 — не дело кнопки"
+    h = copy.deepcopy(g)
+    _mid_canon(h)
+    assert h["links"][:2] == g["links"][:2], "сохранить -> открыть сдвигает"
+
+
+def test_accepted_move_is_polished_refused_is_not(monkeypatch):
+    """Дожим шума (`_Canon.polish`) — ровно на принятых ходах, с входом
+    ребра того же хода; отклонённая лестница его не зовёт."""
+    seen = []
+    real = es._Canon.polish
+
+    def spy(self, graph, base):
+        seen.append(base)
+        return real(self, graph, base)
+
+    monkeypatch.setattr(es._Canon, "polish", spy)
+    st = es.smooth(_canvas_reopen(), canon_fn=_mid_canon)
+    assert len(seen) == sum(st[k] for k in ("узел", "скольжение",
+                                            "коннектор", "колено", "излом",
+                                            "осевая талия")) == 1
+    seen.clear()
+    es.smooth(_canvas_reopen(), allow_node_shift=False, canon_fn=_mid_canon)
+    assert seen == []
+
+
+def test_canon_refused_move_leaves_canvas_bit_identical():
+    """Сдвига узла нет (allow_node_shift=False): единственный ход —
+    скольжение, которое открытие превратит в косую, — отклонён, холст
+    бит-в-бит (включая e3, которую канон сдвинул бы)."""
+    g, before = _canvas_reopen(), _canvas_reopen()
+    st = es.smooth(g, allow_node_shift=False, canon_fn=_mid_canon)
+    assert st["скольжение"] == 0 and st["лестница исчерпана"] == 1, st
+    assert g == before
+
+
+def test_canon_settle_moves_neighbour_only_for_the_probe():
+    """`_Canon.settle`: нетронутое ребро получает геометрию канона, только
+    если канон двигает его ИЗ-ЗА пробы. Канон-заглушка ставит e2 на высоту
+    конца e1 (сосед по слоту); проба сдвинула e1 — e2 едет. Вход, где канон
+    двигает e2 и без пробы, а проба его не меняет, — e2 стоит."""
+    def canon(canvas):
+        e1, e2 = canvas["links"]
+        e2["source_point"] = [e1["source_point"][0] + 10.0,
+                              e2["source_point"][1]]
+
+    def canvas(y2):
+        return _g([_box("A", 120.0, 120.0), _conn("c", 300.0, 120.0),
+                   _conn("d", 300.0, 130.0)],
+                  [_edge("e1", "A", "c", (140.0, 120.0), (300.0, 120.0)),
+                   _edge("e2", "A", "d", (140.0, y2), (300.0, 130.0))])
+
+    g = canvas(130.0)                      # вход — неподвижная точка канона
+    base = es._capture(g)
+    g["links"][0]["source_point"] = [114.0, 140.0]          # проба
+    es._Canon(canon).settle(g, base)
+    assert g["links"][1]["source_point"] == [124.0, 140.0]
+
+    g = canvas(127.0)                      # канон двигает e2 и без пробы
+    base = es._capture(g)
+    g["links"][0]["target_point"] = [120.0, 301.0]          # e1 тронута,
+    es._Canon(canon).settle(g, base)                        # конец у A — нет
+    assert g["links"][1]["source_point"] == [127.0, 140.0]
+
+
+def test_canon_runs_to_its_fixed_point():
+    """Канон открытия не идемпотентен в последнем знаке (edited@model
+    graph_edited87537_2 edge_162: 816.9176266602942 -> ...943 вторым
+    открытием) — принятый ход `_Canon.polish` дожимает до неподвижной
+    точки: после settle и polish ещё одно открытие не двигает ничего."""
+    def canon(canvas):                     # 126 -> 120 + 1e-12 -> 120
+        for e in canvas["links"]:
+            y = e["source_point"][0]
+            if abs(y - 120.0) > 1.0:
+                e["source_point"] = [120.0 + 1e-12, e["source_point"][1]]
+            elif y != 120.0:
+                e["source_point"] = [120.0, e["source_point"][1]]
+
+    g = _g([_box("A", 120.0, 120.0), _conn("c", 300.0, 126.0)],
+           [_edge("e1", "A", "c", (140.0, 120.0), (300.0, 126.0))])
+    base = es._capture(g)
+    g["links"][0]["source_point"] = [126.0, 140.0]          # проба
+    c = es._Canon(canon)
+    c.settle(g, base)
+    assert g["links"][0]["source_point"] == [120.0 + 1e-12, 140.0]
+    c.polish(g, base)
+    h = copy.deepcopy(g)
+    canon(h)
+    assert h == g and g["links"][0]["source_point"] == [120.0, 140.0]
+
+
+def test_canon_sees_slack_dropped_by_the_move():
+    """Принятый ход снимает метку вынужденной прямой `_slack`, а канон её
+    читает (держит трубу прямой). Канон в судье видит ребро уже без метки:
+    скольжение, которое открытие без метки вернуло бы в середину участка,
+    проигрывает сдвигу узла; итог — неподвижная точка канона без `_slack`."""
+    def canon(canvas):                     # `_mid_canon`, но `_slack` держит
+        keep = {e["id"]: e["source_point"] for e in canvas["links"]
+                if e.get("_slack")}
+        _mid_canon(canvas)
+        for e in canvas["links"]:
+            if e["id"] in keep:
+                e["source_point"] = keep[e["id"]]
+
+    g = _canvas_reopen()
+    g["links"][0]["_slack"] = 1
+    st = es.smooth(g, canon_fn=canon)
+    assert st["узел"] == 1 and st["скольжение"] == 0, st
+    assert "_slack" not in g["links"][0]
+    h = copy.deepcopy(g)
+    canon(h)
+    assert h["links"][:2] == g["links"][:2]
+
+
+def test_canon_does_not_chase_its_own_drift():
+    """Канон двигает waypoints при каждом открытии и без кнопки (свежие
+    26747a10, 089feca2, ca1f6ea2: 0.05–0.17 px за открытие). Дожимается
+    только шум арифметики; дрейф больше шума — геометрия одного открытия,
+    а не трёх."""
+    def canon(canvas):                     # дрейф колена на 0.17 px
+        for e in canvas["links"]:
+            e["waypoints"] = [[w[0], w[1] - 0.17] for w in e["waypoints"]]
+
+    g = _g([_box("A", 120.0, 120.0), _conn("c", 300.0, 160.0)],
+           [_edge("e1", "A", "c", (140.0, 120.0), (300.0, 160.0),
+                  [(220.0, 120.0), (220.0, 160.0)])])
+    base = es._capture(g)
+    g["links"][0]["target_point"] = [160.0, 301.0]          # проба
+    c = es._Canon(canon)
+    c.settle(g, base)
+    c.polish(g, base)
+    assert g["links"][0]["waypoints"] == [[120.0, 219.83], [160.0, 219.83]]
+
+
+def test_polish_touches_only_edges_of_the_move():
+    """Дожим шума — только рёбра, которые изменил ход: шум канона на
+    нетронутом ребре (его вход так же неустойчив) — не дело кнопки."""
+    def canon(canvas):                     # e2: шум в последнем знаке
+        e2 = canvas["links"][1]
+        e2["source_point"] = [e2["source_point"][0] + 1e-12,
+                              e2["source_point"][1]]
+
+    g = _g([_box("A", 120.0, 120.0), _conn("c", 300.0, 120.0),
+            _conn("d", 300.0, 130.0)],
+           [_edge("e1", "A", "c", (140.0, 120.0), (300.0, 120.0)),
+            _edge("e2", "A", "d", (140.0, 130.0), (300.0, 130.0))])
+    base = es._capture(g)
+    g["links"][0]["target_point"] = [120.0, 301.0]          # ход трогает e1
+    es._Canon(canon).polish(g, base)
+    assert g["links"][1]["source_point"] == [130.0, 140.0]

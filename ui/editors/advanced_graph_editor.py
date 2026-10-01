@@ -1113,6 +1113,13 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         # знает — дельту привязанным подписям отдаём здесь (блок 6)
         centroids0 = {n.get('id'): list(n.get('centroid') or [])
                       for n in self.model.graph_data.get('nodes') or []}
+        # Р-б (решение Максима 01.10): ход судится так, как его покажет
+        # следующее открытие, — канон открытия вкладки (`reseat_canvas`,
+        # импорт ленивый: модуль вкладки грузит редактор). Старый холст без
+        # метки модели — без канона, как в 238fe6b (ADR-009).
+        canon_fn = None
+        if self._waist_model():
+            from ui.tabs.base_graph_tab import reseat_canvas as canon_fn
         try:
             stats = edit_smooth.smooth(
                 self.model.graph_data,
@@ -1120,6 +1127,7 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 reseat_fn=self._reseat_after_resize,
                 budget=edit_smooth.BUDGET if budget is None else float(budget),
                 allow_node_shift=allow_node_shift,
+                canon_fn=canon_fn,
             )
             # Решение §8.3: привязанная подпись едет за сдвинутым узлом на ту
             # же дельту, как у протяжки; шаг отмены (SnapshotCommand) уже
