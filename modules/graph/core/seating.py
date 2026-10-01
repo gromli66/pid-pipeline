@@ -801,7 +801,7 @@ def _seat_group(byid, node, side, ends, rect, busy, rect_of=None):
     widths = [ports._ink_w(t[2]) for t in ends]
     slots = ports.side_slots(node, side, k, rect=rect,
                              pitch=ports._ink_pitch(widths, length, k))
-    ends.sort(key=lambda t: (t[0], t[1]))
+    ends.sort(key=lambda t: (t[0], _departure(t, side), t[1]))
     moved = []
     for (_along, _eid, e, pkey, other_key), (sx, sy, _nx, _ny, _m) \
             in zip(ends, slots):
@@ -817,6 +817,25 @@ def _seat_group(byid, node, side, ends, rect, busy, rect_of=None):
         else:
             _follow_knee(wps, pkey, side, old, new)
     return moved
+
+
+def _departure(end, side):
+    """Ничья порядка слотов (`_seat_group`): концы стоят в одной точке и
+    смежные изломы на одной линии (стопка) — порядок по тому, куда труба
+    уходит: первая точка маршрута (изломы, затем дальний конец), чья
+    координата вдоль грани отличается от ничейной. Без неё порядок решал id
+    ребра, и у веера с трубой в талии (вариант 2, решение Максима 30.09)
+    трубы перекрещивались: слот новой трубы совпадал с концом соседки в
+    талии. Нет такой точки — ничейная координата (порядок по id)."""
+    along, _eid, e, pkey, other_key = end
+    i = 1 if side in ("T", "B") else 0           # точки [y, x]
+    wps = list(e.get("waypoints") or [])
+    if pkey == "target_point":
+        wps.reverse()
+    for p in (*wps, e.get(other_key)):
+        if p and abs(float(p[i]) - along) > 1e-9:
+            return float(p[i])
+    return along
 
 
 def seat_face(graph, byid, nid, side, rect_of=None):

@@ -390,14 +390,20 @@ def side_slots(node, side, k, rect=None, pitch=None):
     неё, шаг min(SLOT_PITCH, длина_грани/(k+1)) — крайние слоты не
     доходят до углов по построению. Опорная точка — середина грани, у
     клапана холста на осевой грани — выверенный порт талии (2026-09-22):
-    он смещён от середины. Если крайний слот веера вокруг талии ближе
-    VERTEX_MARGIN к углу, веер сдвигается внутрь грани при прежнем шаге:
-    центр = clamp(талия, lo+M+span, hi−M−span), span = (k−1)/2·шаг
-    (К7, блок 2). Если веер с этим шагом не влезает в грань с отступами,
-    он встаёт в середину грани, а шаг сжимается до (длина − 2M)/(k−1).
-    k=1 и грани без выверенного порта это не меняет. side из {'L','R','T','B'};
-    порядок — по возрастанию координаты вдоль грани. rect —
-    переопределение рамки (редактор: bbox). [(x, y, nx, ny, False), ...]."""
+    он смещён от середины. Если крайний слот симметричного веера вокруг
+    талии ближе VERTEX_MARGIN к углу (веер не помещается симметрично),
+    КРАЙНЯЯ труба встаёт ровно в талию, остальные — с прежним шагом в
+    сторону, где есть место (к дальнему углу), пока последняя держит
+    отступ M (решение Максима 30.09, вариант 2: шаг не сжимается, центр
+    мимо талии не сдвигается). Порядок слотов по-прежнему по возрастанию
+    координаты — трубы раздаются по порядку дальних концов без
+    перекрёстков. Не влезает и так — прежнее правило К7 (блок 2): веер
+    внутрь грани, центр = clamp(талия, lo+M+span, hi−M−span), span =
+    (k−1)/2·шаг; не влезает в грань с отступами вовсе — в середину грани
+    со сжатием шага до (длина − 2M)/(k−1). k=1 и грани без выверенного
+    порта это не меняет. side из {'L','R','T','B'}; порядок — по
+    возрастанию координаты вдоль грани. rect — переопределение рамки
+    (редактор: bbox). [(x, y, nx, ny, False), ...]."""
     from modules.graph.core import seating
 
     if rect is None:
@@ -414,26 +420,35 @@ def side_slots(node, side, k, rect=None, pitch=None):
     elif pitch is None:
         pitch = min(SLOT_PITCH, (hi - lo) / (k + 1))
     # pitch задан вызывающим (движок: шаг «по чернилам», Э10-лайт)
+    pos = None                               # вариант 2: слоты от талии
     if ref is not None:
         center = ref
         if k > 1:
             span = (k - 1) / 2.0 * pitch
             a = lo + VERTEX_MARGIN + span
             b = hi - VERTEX_MARGIN - span
-            if a <= b:                       # веер влезает: сдвиг внутрь
+            down = ref - lo >= hi - ref      # место — к нижнему углу
+            last = ref - 2.0 * span if down else ref + 2.0 * span
+            if a <= ref <= b:
+                pass                         # симметрично вокруг талии
+            elif lo + VERTEX_MARGIN <= last <= hi - VERTEX_MARGIN:
+                step = -pitch if down else pitch
+                pos = sorted(ref + j * step for j in range(k))
+            elif a <= b:                     # К7: веер внутрь грани
                 center = min(max(ref, a), b)
             else:                            # не влезает: середина, сжатие
                 center = (lo + hi) / 2.0
                 half = min(center - lo, hi - center) - VERTEX_MARGIN
                 pitch = max(0.0, 2.0 * half / (k - 1))
-    offs = [(j - (k - 1) / 2.0) * pitch for j in range(k)]
+    if pos is None:
+        pos = [center + (j - (k - 1) / 2.0) * pitch for j in range(k)]
     if side == "L":
-        return [(x1, center + o, -1.0, 0.0, False) for o in offs]
+        return [(x1, v, -1.0, 0.0, False) for v in pos]
     if side == "R":
-        return [(x2, center + o, 1.0, 0.0, False) for o in offs]
+        return [(x2, v, 1.0, 0.0, False) for v in pos]
     if side == "T":
-        return [(center + o, y1, 0.0, -1.0, False) for o in offs]
-    return [(center + o, y2, 0.0, 1.0, False) for o in offs]
+        return [(v, y1, 0.0, -1.0, False) for v in pos]
+    return [(v, y2, 0.0, 1.0, False) for v in pos]
 
 
 def nearest_port(node, x, y, radius, rect=None, sides=None):

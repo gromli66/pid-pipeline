@@ -91,10 +91,22 @@ def _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y,
     сторону соседа, который по порядку стоит с другой стороны: иначе
     раскладка грани (`seating.seat_face`) закрепит перестановку и трубы
     перекрестятся (веер у смещённой талии, К7). Свободного нет — свой слот.
+    Ничья ориентиров (стопка: конец соседки в талии, ориентир новой трубы —
+    её колено на той же линии; вариант 2, решение Максима 30.09) — по тому,
+    куда труба уходит (`seating._departure`), а не по id: у новой трубы id
+    ещё нет («None» сортировался первым, и труба вниз брала слот выше
+    соседки). Старый холст без метки — как 238fe6b (по id).
     Возвращает (x, y)."""
     rect = _seat_rect(node)
     nid = node.get("id")
     horiz = side in ("T", "B")
+    legacy = bool(node.get(contact.LEGACY_KEY))
+
+    def _dep(e, along, end_key):
+        if legacy:
+            return 0.0
+        other = "target_point" if end_key == "source_point" else "source_point"
+        return seating._departure((along, None, e, end_key, other), side)
 
     def _ref_of(e, end_key):
         wps = e.get("waypoints") or []
@@ -102,8 +114,11 @@ def _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y,
             else e.get("target_point" if end_key == "source_point"
                        else "source_point")
 
+    own_key = ("source_point" if (edge_data.get("source")
+                                  or edge_data.get("from")) == nid
+               else "target_point")
     entries = [(ref_x if horiz else ref_y, str(edge_data.get("id")), True,
-                None)]
+                None, _dep(edge_data, ref_x if horiz else ref_y, own_key))]
     widths = [_ink_w(edge_data)]
     taken = []
     for e in node_edges or []:
@@ -134,10 +149,11 @@ def _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y,
             continue              # сосед на ручном порту/пине ребра (Э5)
         if _NORMAL_SIDE.get((ps[2], ps[3])) != side:
             continue
-        entries.append((float(refp[1]) if horiz else float(refp[0]),
-                        str(e.get("id")), False, here))
+        along = float(refp[1]) if horiz else float(refp[0])
+        entries.append((along, str(e.get("id")), False, here,
+                        _dep(e, along, end_key)))
         widths.append(_ink_w(e))
-    entries.sort(key=lambda t: (t[0], t[1]))
+    entries.sort(key=lambda t: (t[0], t[4], t[1]))
     idx = next(i for i, t in enumerate(entries) if t[2])
     k = len(entries)
     x1, y1, x2, y2 = rect
@@ -162,7 +178,6 @@ def _slot_seat(node, node_edges, edge_data, side, ref_x, ref_y,
     order = sorted(range(k), key=lambda j: (abs(j - idx), j))
     # Порядок соседей (К7) — часть модели (раскладка грани `seat_face`);
     # старый холст без метки (Р1) выбирает слот как 238fe6b.
-    legacy = bool(node.get(contact.LEGACY_KEY))
     for j in order:
         if all(abs(coords[j] - t) >= 2.0 for t in taken) and (
                 legacy or j == idx or all((i < idx) == (t[3] < coords[j])

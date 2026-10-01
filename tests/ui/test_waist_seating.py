@@ -111,11 +111,12 @@ def test_open_keeps_slots_of_several_pipes_on_one_face(tmp_path):
 
     ys = sorted(e["target_point"][0] for e in g["links"])
     assert len(set(ys)) == 3, f"слоты не развели трубы: {ys}"
-    # К7 (блок 2): веер 3 x 9.45 вокруг порта 200.0 упёрся бы в нижний угол
-    # (210.51) — он сдвинут внутрь грани до отступа 6 px, шаг не сжат.
+    # Вариант 2 (решение Максима 30.09): веер 3 x 9.45 вокруг порта 200.0
+    # упёрся бы в нижний угол (210.51) — нижняя труба ровно в талии, две
+    # другие с тем же шагом выше (К7, блок 2: 185.61/195.06/204.51 — мимо).
     assert _valve_port(g["nodes"][1]) == pytest.approx(WAIST_Y)
-    assert ys == pytest.approx([185.6084, 195.0584, 204.5084], abs=1e-6), \
-        "веер у смещённой талии не сдвинут внутрь грани"
+    assert ys == pytest.approx([WAIST_Y - 18.9, WAIST_Y - 9.45, WAIST_Y],
+                               abs=1e-6), "крайняя труба веера не в талии"
 
     p = tmp_path / "graph_canvas.json"
     p.write_text(json.dumps(g), encoding="utf-8")

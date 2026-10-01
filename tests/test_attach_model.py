@@ -74,11 +74,13 @@ def test_side_slots_center_on_waist_and_keep_corner_margin():
     assert one[0][:2] == (221.0, pytest.approx(WAIST_Y))
     two = ports.side_slots(VALVE_H, "R", 2)
     ys = [s[1] for s in two]
-    # К7 (блок 2): до нижнего угла от талии 10.5 px, веер с шагом
-    # min(18, 37.8/3) = 12.6 вокруг талии упёрся бы в угол — он сдвинут
-    # вверх до отступа 6 px, шаг не сжат (до К7: 9.016 вокруг талии).
-    assert ys == pytest.approx([100.3, 112.9])
-    assert max(ys) == pytest.approx(118.9 - ports.VERTEX_MARGIN)
+    # Вариант 2 (решение Максима 30.09): до нижнего угла от талии 10.5 px,
+    # веер с шагом min(18, 37.8/3) = 12.6 вокруг талии упёрся бы в угол —
+    # нижняя (крайняя) труба ровно в талии, верхняя на шаг выше, шаг не
+    # сжат (К7, блок 2: 100.3/112.9 — обе мимо талии; до К7: 9.016 вокруг).
+    assert ys == pytest.approx([WAIST_Y - 12.6, WAIST_Y])
+    assert ys[1] == pytest.approx(WAIST_Y, abs=1e-9)
+    assert min(ys) - 81.1 >= ports.VERTEX_MARGIN
 
 
 def test_side_slots_of_box_bit_identical():
@@ -128,41 +130,108 @@ K7_FACES = [("regulator_electro", "H", 42.0, 37.8, "L"),
 
 @pytest.mark.parametrize("k", [2, 3])
 @pytest.mark.parametrize("cn,axis,w,h,side", K7_FACES)
-def test_fan_at_offset_waist_moves_inside_the_face(cn, axis, w, h, side, k):
-    """Шаг не сжимается (зазор между краями линий >= INK_GAP), веер
-    симметричен вокруг сдвинутого центра, крайний слот — ровно на отступе
-    VERTEX_MARGIN от угла, центр ближе к середине грани, чем талия."""
+def test_fan_at_offset_waist_extreme_pipe_in_waist(cn, axis, w, h, side, k):
+    """Вариант 2 (решение Максима 30.09): веер не помещается симметрично
+    вокруг смещённой талии — КРАЙНЯЯ (ближняя к углу) труба ровно в талии,
+    остальные с прежним шагом к дальнему углу; шаг не сжат (зазор между
+    краями линий >= INK_GAP), последняя держит отступ VERTEX_MARGIN."""
     v = _valve(cn, axis, w, h)
     x1, y1, x2, y2 = v["bbox"]
     lo, hi = (x1, x2) if side in ("T", "B") else (y1, y2)
-    mid = (lo + hi) / 2.0
     waist = contact.face_refs(v, v["bbox"])[side]
     got = _along(ports.side_slots(v, side, k), side)
     pitch = min(ports.SLOT_PITCH, (hi - lo) / (k + 1))
     gaps = [b - a for a, b in zip(got, got[1:])]
     assert gaps == pytest.approx([pitch] * (k - 1)), "шаг сжат"
     assert min(gaps) - ports.INK_DEFAULT >= ports.INK_GAP, "чернила слиплись"
-    c = sum(got) / k
-    assert [a + b for a, b in zip(got, reversed(got))] \
-        == pytest.approx([2.0 * c] * k), "веер не симметричен"
-    assert abs(c - mid) < abs(waist - mid), "веер не сдвинут внутрь"
-    assert min(min(got) - lo, hi - max(got)) \
-        == pytest.approx(ports.VERTEX_MARGIN), "не упёрся в отступ"
+    near, far = ((max(got), min(got)) if waist > (lo + hi) / 2.0
+                 else (min(got), max(got)))
+    assert near == pytest.approx(waist, abs=1e-9), "крайняя не в талии"
+    assert sum(abs(g - waist) <= 0.05 for g in got) == 1
+    assert min(far - lo, hi - far) >= ports.VERTEX_MARGIN - 1e-9, \
+        "последняя залезла в отступ угла"
 
 
 def test_fan_at_offset_waist_literals():
     """Абсолютные числа (Т5 блока 1 — armatura_seroprivod V, bbox x
-    100..128, k=2 на T-грани: до К7 оба слота 123.548, шаг 0)."""
+    100..128, талия 123.548: до К7 оба слота 123.548, шаг 0; К7 —
+    112.667/122.0 и 108/115/122, все мимо талии; regulator_electro, талия
+    111.869: К7 — 100.3/112.9 и 94.0/103.45/112.9)."""
     aoc = _valve("armatura_seroprivod", "V", 28.0, 42.0, cx=114.0)
     assert _along(ports.side_slots(aoc, "T", 2), "T") \
-        == pytest.approx([112.667, 122.0], abs=1e-3)
+        == pytest.approx([114.215, 123.548], abs=1e-3)
     assert _along(ports.side_slots(aoc, "B", 3), "B") \
-        == pytest.approx([108.0, 115.0, 122.0])
+        == pytest.approx([109.548, 116.548, 123.548], abs=1e-3)
     reg = _valve("regulator_electro", "H", 42.0, 37.8)        # талия 111.869
     assert _along(ports.side_slots(reg, "R", 2), "R") \
-        == pytest.approx([100.3, 112.9])
+        == pytest.approx([99.269, 111.869], abs=1e-3)
     assert _along(ports.side_slots(reg, "R", 3), "R") \
-        == pytest.approx([94.0, 103.45, 112.9])
+        == pytest.approx([92.969, 102.419, 111.869], abs=1e-3)
+
+
+@pytest.mark.parametrize("cn,k,want", [
+    # от талии вниз 2·9.45 = 18.9 > 105.632 − (81.1 + 6) = 18.532
+    ("armatura_membr_electro", 3, [94.0, 103.45, 112.9]),
+    # 3·7.56 = 22.68 > 108.392 − 87.1 = 21.292
+    ("armatura_electro", 4, [90.22, 97.78, 105.34, 112.9]),
+])
+def test_fan_without_room_from_the_waist_keeps_k7(cn, k, want):
+    """Граница варианта 2: и от талии с прежним шагом последний слот
+    залез бы в отступ угла — остаётся правило К7 (веер внутрь грани, шаг
+    не сжат). На корпусе 26 uid таких граней нет (MEASUREMENTS §138)."""
+    v = _valve(cn, "H", 42.0, 37.8)
+    assert _along(ports.side_slots(v, "R", k), "R") \
+        == pytest.approx(want, abs=1e-3)
+
+
+# Сервер (`seating.reseat_all_endpoints`, слоты) и редактор
+# (`edit_engine._slot_seat`) — одна функция `ports.side_slots`. Дальние концы
+# раскиданы вдоль грани, id рёбер — вразнобой с их порядком.
+_FAN_FAR = {2: (("f1", 70.0), ("f0", -60.0)),
+            3: (("f2", 10.0), ("f0", -70.0), ("f1", 80.0))}
+
+
+@pytest.mark.parametrize("k", [2, 3])
+@pytest.mark.parametrize("cn,axis,w,h", [
+    ("regulator_electro", "H", 42.0, 37.8),
+    ("armatura_seroprivod", "V", 28.0, 42.0),
+], ids=["regulator_electro", "AOC"])
+def test_fan_variant2_server_and_editor(cn, axis, w, h, k):
+    """Вариант 2 сквозь посадку: на осевой грани ровно одна труба в талии
+    (±0.05 px), шаг не сжат (чистый зазор между линиями >= INK_GAP), порядок
+    концов вдоль грани = порядок дальних концов (без перекрёстка);
+    редактор отдаёт каждой трубе тот же слот, что сервер."""
+    v = _valve(cn, axis, w, h, cx=200.0, cy=100.0)
+    v["id"] = "v"
+    side = "R" if axis == "H" else "B"
+    nodes, links = [v], []
+    for eid, off in _FAN_FAR[k]:
+        if axis == "H":
+            nodes.append(_box(eid + "b", 420.0, 100.0 + off))
+        else:
+            nodes.append(_box(eid + "b", 200.0 + off, 320.0))
+        links.append(_edge(eid, "v", eid + "b"))
+    g = _graph(nodes, links)
+    seating.reseat_all_endpoints(g, model=True, slots=True)
+
+    i = 0 if axis == "H" else 1              # [y, x]: вдоль грани
+    face = [e["source_point"][i] for e in g["links"]]
+    waist = contact.face_refs(v, tuple(v["bbox"]))[side]
+    assert sum(abs(a - waist) <= 0.05 for a in face) == 1, face
+    srt = sorted(face)
+    assert min(b - a for a, b in zip(srt, srt[1:])) - ports.INK_DEFAULT \
+        >= ports.INK_GAP, "чернила слиплись"
+    far = [off for _eid, off in _FAN_FAR[k]]
+    assert sorted(range(k), key=lambda j: face[j]) \
+        == sorted(range(k), key=lambda j: far[j]), "трубы перекрестились"
+
+    byid = nodes_by_id(g)
+    for e in g["links"]:
+        b = byid[e["target"]]
+        got = edit_engine._slot_seat(v, g["links"], e, side, b["centroid"][1],
+                                     b["centroid"][0], 8.0)
+        sy, sx = e["source_point"]
+        assert got == (pytest.approx(sx), pytest.approx(sy)), e["id"]
 
 
 def test_fan_that_fits_around_the_waist_is_bit_identical():
@@ -268,8 +337,9 @@ def test_server_slots_around_waist_ordered_by_far_ends():
     seating.reseat_all_endpoints(g, model=True, slots=True)
     ys = {e["id"]: e["source_point"][0] for e in g["links"]}
     assert ys["e2"] < ys["e1"]                          # порядок по дальним
-    # веер у талии 108.39 сдвинут внутрь грани (К7): 106.6 ∓ 6.3
-    assert (ys["e2"], ys["e1"]) == pytest.approx((100.3, 112.9))
+    # веер у талии 108.39 (вариант 2): нижняя труба в талии, верхняя на
+    # шаг 12.6 выше (К7 было 100.3/112.9 — обе мимо талии)
+    assert (ys["e2"], ys["e1"]) == pytest.approx((WAIST_Y - 12.6, WAIST_Y))
     assert all(e["source_point"][1] == 221.0 for e in g["links"])
 
 
@@ -472,16 +542,20 @@ def test_seat_face_slots_only_its_face_like_seat_slots():
     import copy
     full, one = _two_faces_graph(), _two_faces_graph()
     before = copy.deepcopy(one)
-    assert seating.seat_slots(full) == 4
+    # смежные изломы обеих труб на линии талии — порядок по тому, куда
+    # труба уходит (`seating._departure`): e1 вниз — в слоте талии, где и
+    # стоял (вариант 2), двигается только e2 (вверх, на шаг выше)
+    assert seating.seat_slots(full) == 3
     moved = seating.seat_face(one, nodes_by_id(one), "v", "R")
-    assert sorted(e["id"] for e, _k in moved) == ["e1", "e2"]
+    assert sorted(e["id"] for e, _k in moved) == ["e2"]
     L = {e["id"]: e for e in one["links"]}
     F = {e["id"]: e for e in full["links"]}
     B = {e["id"]: e for e in before["links"]}
     for eid in ("e1", "e2"):                            # как у seat_slots
         assert L[eid]["source_point"] == F[eid]["source_point"]
         assert L[eid]["waypoints"] == F[eid]["waypoints"]
-        assert L[eid]["source_point"] != B[eid]["source_point"]
+    assert L["e2"]["source_point"] != B["e2"]["source_point"]
+    assert L["e1"] == B["e1"]
     for eid in ("e3", "e4"):                            # чужая грань цела
         assert L[eid] == B[eid]
         assert F[eid]["source_point"] != B[eid]["source_point"]
@@ -499,9 +573,11 @@ def test_seat_face_uses_given_rect():
     wide = lambda n: [179.0, 81.1, 240.0, 118.9] if n["id"] == "v" \
         else seating._anchor_rect(n)
     moved = seating.seat_face(g, byid, "v", "R", rect_of=wide)
-    ys = sorted(e["source_point"][0] for e, _k in moved)
-    assert len(ys) == 2 and ys[0] < WAIST_Y < ys[1]
-    assert all(e["source_point"][1] == 240.0 for e, _k in moved)
+    # вариант 2: e1 (вниз) остаётся в талии, e2 (вверх) — на шаг выше
+    assert [e["id"] for e, _k in moved] == ["e2"]
+    ys = sorted(e["source_point"][0] for e in g["links"][:2])
+    assert ys == pytest.approx([WAIST_Y - 12.6, WAIST_Y])
+    assert all(e["source_point"][1] == 240.0 for e in g["links"][:2])
 
 
 # ─────────────────── судья «упирается в соседа» (К1) ───────────────────
