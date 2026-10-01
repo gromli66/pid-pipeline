@@ -79,6 +79,14 @@
 разные стороны, `edit_smooth.count_hooks`, решение Максима 01.10) —
 СПРАВОЧНАЯ колонка: крючок не ступенька и не дефект, `--check` его не судит.
 
+`reopen` — сдвигов повторного открытия после кнопки (дефект; гейт блока 6,
+MEASUREMENTS §142.2): холст после кнопки сохраняется редактором и проходит
+канон открытия вкладки (`_reseat_canvas_endpoints`) — сценарий «нажать,
+сохранить, открыть ещё раз». Всё, что канон сдвинет, гейт хода не видел.
+Сдвиги, которые канон делает и во входе кнопки (стенд первого открытия не
+делает), не в счёт — `reopen_moves`. Эталон входа колонки не знает:
+`--check` её не судит, пока эталон не переснят (Д6).
+
 Запуск (из корня репо, системный python 3.11.9):
     python -X utf8 tools/smooth_bench.py --all
     python -X utf8 tools/smooth_bench.py --population edited --runs 1
@@ -132,6 +140,7 @@ DEFECT_COLS = [
     ("h", "габарит h"),
     ("offsheet", "узлов за листом"),
     ("rollback_bad", "откатов с мусором"),
+    ("reopen", "сдвигов повторного открытия"),
 ]
 # Справочные: печатаются, но не судятся.
 REF_COLS = [
@@ -407,6 +416,8 @@ def run_once(path: Path, tmp: Path, rollback_cap: int,
     # ещё зовёт `_reseat_canvas_endpoints` (:976, «на каноничном холсте —
     # no-op»). Стенд его не зовёт СОЗНАТЕЛЬНО: он мутирует входной файл, а
     # корпус запинован отпечатками. Величина отличия замерена — MEASUREMENTS §AL0.
+    # Повторное открытие ПОСЛЕ кнопки стенд делает — над копией сохранения
+    # (колонка `reopen`, `reopen_moves`): входной файл не трогается.
     ed._canvas_mode = True
     if not ed.load_data(str(ip), str(gp)):
         _drop(ed)
@@ -414,6 +425,7 @@ def run_once(path: Path, tmp: Path, rollback_cap: int,
 
     live = ed.model.graph_data
     before = canvas_metrics(live)
+    pre = json.dumps(live, ensure_ascii=False)     # вход кнопки для `reopen`
     probe = Probe(ed, rollback_cap)
     probe.install()
     try:
@@ -423,9 +435,15 @@ def run_once(path: Path, tmp: Path, rollback_cap: int,
     finally:
         probe.remove()
     after = canvas_metrics(live)
+    saved = tmp / "saved.json"
+    if not ed.save_graph(str(saved)):
+        _drop(ed)
+        raise ValueError("редактор не сохранил холст после кнопки")
     _drop(ed)
+    reopen = reopen_moves(pre, saved.read_text(encoding="utf-8"), tmp)
 
     row = {"before": before, "after": after, "ms": round(ms, 1),
+           "reopen": reopen,
            "stats": {k: stats.get(k, 0) for k in
                      (*REMEDIES, "отклонено", "осталось", "раунды")},
            "refusals": dict(probe.refusals),
@@ -454,7 +472,60 @@ def _columns(row: dict) -> dict:
     cols["reseat_calls"] = row["reseat_calls"]
     cols["reseat_blind"] = row["reseat_blind"]
     cols["hooks"] = int(a.get("hooks", 0))
+    if "reopen" in row:
+        cols["reopen"] = int(row["reopen"])
     return cols
+
+
+# ── повторное открытие после кнопки ───────────────────────────────────
+_END_KEYS = ("source_point", "target_point")
+
+
+def _ends(graph: dict) -> dict:
+    """{(id ребра, № повтора id, ключ конца): точка} — концы рёбер холста.
+    Ключ — id, а не позиция: сохранение редактора пишет рёбра без
+    отфильтрованных при загрузке (без source/target)."""
+    from modules.graph.core.graph_access import edges as g_edges
+    out, seen = {}, {}
+    for e in g_edges(graph):
+        eid = e.get("id")
+        k = seen[eid] = seen.get(eid, -1) + 1
+        for key in _END_KEYS:
+            out[(eid, k, key)] = e.get(key)
+    return out
+
+
+def _opened(text: str, tmp: Path) -> dict:
+    """Концы холста после открытия вкладкой: `_reseat_canvas_endpoints` над
+    файлом — тот же вызов, что вкладка делает над скачанным холстом."""
+    from ui.tabs.base_graph_tab import _reseat_canvas_endpoints
+    p = tmp / "reopen.json"
+    p.write_text(text, encoding="utf-8")
+    _reseat_canvas_endpoints(p)
+    return _ends(json.loads(p.read_text(encoding="utf-8")))
+
+
+def reopen_moves(pre: str, saved: str, tmp: Path) -> int:
+    """Сдвигов повторного открытия после кнопки (колонка `reopen`).
+
+    Оператор жмёт кнопку, сохраняет и открывает лист ещё раз: вкладка
+    пересаживает концы каноном открытия, и всё, что он сдвинет, — то, чего
+    гейт хода не видел (судил ход до канона). Считаются концы, которые
+    канон сдвигает в холсте `saved` (сохранён после кнопки), КРОМЕ тех, что
+    кнопка не тронула и канон сдвигает так же, как во входе кнопки `pre`:
+    стенд первого открытия не делает (вход не каноничен, §AL0), и такой
+    сдвиг — не дело кнопки. Сравниваются концы (`source_point` /
+    `target_point`), как у сценария оператора гейта блока 6."""
+    a, b = _ends(json.loads(saved)), _opened(saved, tmp)
+    p0, p1 = _ends(json.loads(pre)), _opened(pre, tmp)
+    n = 0
+    for k, pt in a.items():
+        if b.get(k) == pt:
+            continue
+        if p0.get(k) == pt and p1.get(k) == b.get(k):
+            continue
+        n += 1
+    return n
 
 
 # ── свод по N прогонам ─────────────────────────────────────────────────
@@ -606,7 +677,7 @@ def report(pop: str, summary: dict, detail: dict):
         times += [r["cols"]["ms"] for r in runs]
     print("  дефекты до -> после (сумма по популяции; габарит — максимум):")
     for k, ru in DEFECT_COLS:
-        if k in ("rollback_bad",):
+        if k in ("rollback_bad", "reopen"):
             continue
         b, a = tot_before.get(k, 0.0), tot_after.get(k, 0.0)
         mark = "" if abs(a - b) < 1e-9 else ("  <-- лучше" if a < b
@@ -630,6 +701,12 @@ def report(pop: str, summary: dict, detail: dict):
           f"расхождений {rb_bad}")
     print(f"  узлов за листом 1920x1080: до {tot_before['offsheet']:.0f}, "
           f"после {tot_after['offsheet']:.0f}")
+    ro = [r["cols"]["reopen"] for r in
+          (sorted(rs, key=lambda r: r["cols"]["diag"])[len(rs) // 2]
+           for rs in detail.values()) if "reopen" in r["cols"]]
+    if ro:
+        print(f"  сдвигов повторного открытия после кнопки: {sum(ro)} "
+              f"(холстов {sum(1 for v in ro if v)})")
     if times:
         print(f"  время: p50 {statistics.median(times):.0f} мс, "
               f"худший {max(times):.0f} мс, всего прогонов {len(times)}")

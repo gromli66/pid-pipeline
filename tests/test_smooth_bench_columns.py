@@ -76,3 +76,40 @@ def test_hooks_column_is_reference_not_defect(monkeypatch):
     worse = dict(one, steps={"med": cols["steps"] + 1, "lo": 0, "hi": 0})
     assert sb.growth({"x": worse}, {"x": one}, {}) \
         == {"x": [("steps", cols["steps"], cols["steps"] + 1)]}
+
+
+def _jog_canvas(y: float) -> dict:
+    """Бокс и коннектор, прямая из грани R бокса на высоте y (середина грани —
+    501.985; red-team блока 6, e21): на середине канон открытия её не трогает,
+    в 6.1 px от середины (> MID_SNAP) сажает конец в середину — косая."""
+    from modules.graph.core import contact
+    box = {"id": "A", "type": "equipment", "class_id": 99,
+           "class_name": "unknow", "centroid": [501.99, 853.64],
+           "bbox": [821.7, 483.86, 885.89, 520.11], "segmentation": None}
+    c = {"id": "c", "type": "connector", "class_id": -1,
+         "class_name": "connector", "centroid": [y, 977.79], "bbox": None,
+         "segmentation": None}
+    e = {"id": "e", "source": "A", "target": "c", "source_point": [y, 885.89],
+         "target_point": [y, 977.79], "waypoints": []}
+    return {"graph": {"image_size": [1080, 1920], "canvas_transform": {
+        "attach_model": contact.ATTACH_MODEL}},
+        "nodes": [box, c], "links": [e]}
+
+
+def test_reopen_column_counts_only_moves_made_by_the_button(tmp_path):
+    """`reopen` (гейт блока 6, §142.2): канон открытия вкладки над холстом,
+    сохранённым после кнопки. Кнопка увела прямую с середины грани — открытие
+    её пересаживает: 1. Вход уже такой и кнопка его не трогала — сдвиг
+    открытия не дело кнопки: 0. Канон без витрин: виджеты не создаются."""
+    import json
+    assert dict(sb.DEFECT_COLS)["reopen"] == "сдвигов повторного открытия"
+    mid, off = json.dumps(_jog_canvas(501.99)), json.dumps(_jog_canvas(495.89))
+    assert sb.reopen_moves(mid, off, tmp_path) == 1
+    assert sb.reopen_moves(off, off, tmp_path) == 0
+    assert sb.reopen_moves(mid, mid, tmp_path) == 0
+    stats = {k: 0 for k in sb.REMEDIES}
+    stats.update({"отклонено": 0, "раунды": 1})
+    row = {"after": sb.canvas_metrics(_graph()), "stats": stats, "ms": 1.0,
+           "rollback_bad": 0, "reseat_calls": 0, "reseat_blind": 0,
+           "reopen": 3}
+    assert sb._columns(row)["reopen"] == 3
