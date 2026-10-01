@@ -235,3 +235,61 @@ def test_button_save_open_keeps_pipe_in_waist(qapp, tmp_path, cls, w, h,
     assert len(miss) == 2 and max(miss.values()) <= 0.35, miss
     assert max(run("bare", False).values()) > 0.35, \
         "фикстура: без кнопки открытие обязано уводить конец из талии"
+
+
+# ── (7) кратная пара: лестница маршрута прокладывает своё ребро ────────
+def _multi_canvas(e1_last):
+    """Репро red-team e6_multi: клапан V и бокс unknow U связаны ДВУМЯ
+    рёбрами (Р7): e1 со ступенькой 8 px (кандидат кнопки), e2 — прямая;
+    слева коннектор cL прямой e0 в талию V. e1_last — e1 последним в списке
+    рёбер (индекс пары `find_edge_data` отдаёт последнее ребро пары)."""
+    def edge(eid, s, t, sp, tp, wps=()):
+        return {"id": eid, "source": s, "target": t, "source_point": list(sp),
+                "target_point": list(tp),
+                "waypoints": [list(w) for w in wps]}
+    v = _valve("V", (379.0, 289.5, 421.0, 310.5), cls="armatura_ruchn")
+    u = _box("U", 600.0, 260.0, 640.0, 340.0)
+    e1 = edge("e1", "V", "U", (295.0, 421.0), (287.0, 600.0),
+              [(295.0, 500.0), (287.0, 500.0)])
+    e2 = edge("e2", "V", "U", (305.0, 421.0), (305.0, 600.0))
+    e0 = edge("e0", "cL", "V", (300.0, 250.0), (300.0, 379.0))
+    links = [e2, e0, e1] if e1_last else [e1, e2, e0]
+    return _canvas([v, u, _conn("cL", 250.0, 300.0)], links)
+
+
+@pytest.mark.parametrize("e1_last", [False, True],
+                         ids=["e1 первым", "e1 последним"])
+def test_multi_pair_routes_its_own_edge(qapp, tmp_path, monkeypatch,
+                                        e1_last):
+    """Находка red-team (7): `route_fn` редактора адресовал ребро ПАРОЙ узлов
+    (`edge_key` + `find_edge_data`), и у кратной пары V–U ступени «б», «е»
+    и колено прокладывали ЧУЖОЕ ребро — при e1 первым в списке маршрут
+    строился у прямой e2. Теперь лестница маршрута получает то ребро,
+    которое ей отдал движок: каждый вызов лестницы из кнопки прокладывает
+    ровно своё ребро (e1 — кандидат — среди них)."""
+    ed = _editor(tmp_path, _multi_canvas(e1_last))
+    # протяжка узла кратной пары + Ctrl+Z пару не восстанавливает (отдельная
+    # находка, вне этой правки) — чужое действие оператора у коннектора
+    _drag_and_undo(ed, "cL", 0.0, 30.0)
+    pairs, routed = [], []
+    real_smooth = es.smooth
+
+    def spy_smooth(graph, route_fn=None, **kw):
+        def spy_route(edge):
+            n = len(routed)
+            ok = route_fn(edge)
+            pairs.append((edge.get("id"), routed[n:]))
+            return ok
+        return real_smooth(graph, route_fn=spy_route, **kw)
+
+    real_route = ed._route_orthogonal
+
+    def spy(live, *a, **k):
+        routed.append(live.get("id"))
+        return real_route(live, *a, **k)
+
+    monkeypatch.setattr(es, "smooth", spy_smooth)
+    ed._route_orthogonal = spy
+    ed.smooth_canvas()
+    assert "e1" in [a for a, _got in pairs], pairs
+    assert all(got == [a] for a, got in pairs), pairs

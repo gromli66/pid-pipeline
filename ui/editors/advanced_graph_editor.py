@@ -1091,11 +1091,19 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         cmd.execute()
 
         def route_fn(edge_data):
-            key = self.model.edge_key(edge_data.get('source'),
-                                      edge_data.get('target'))
-            live = self.model.find_edge_data(key)
+            # Ребро — само (по id), а не парой узлов (находка red-team
+            # блока 6, 01.10): у кратной пары (Р7, пары с unknow) ключ
+            # `edge_key` один на все её рёбра, и индекс отдавал последнее —
+            # «б», «е» и колено прокладывали ЧУЖОЕ ребро.
+            live = next((x for x in self.model.edges_data
+                         if x is edge_data), None)
+            if live is None:
+                eid = edge_data.get('id')
+                live = next((x for x in self.model.edges_data
+                             if x.get('id') == eid), None)
             if live is None:
                 return False
+            key = self.model.edge_key(live.get('source'), live.get('target'))
             ok = self._route_orthogonal(live)
             if ok and self._waist_model():
                 # ребро проложено ходом выравнивания — метка вынужденной

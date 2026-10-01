@@ -1039,7 +1039,7 @@ def _offaxis_variant(kind):
                                   "холст без метки", "кратная пара"])
 def test_offaxis_move_skipped(kind):
     """T7: без правила Р5 (степень 3, predohran, пин, старый холст) и у
-    кратной пары (лестница адресует ребро парой) — «д» не ходит, холст
+    кратной пары (пропуск Р7, `_axial_moves`) — «д» не ходит, холст
     бит-в-бит."""
     g = _offaxis_variant(kind)
     before = copy.deepcopy(g)
@@ -1562,8 +1562,9 @@ def test_reroute_after_reseat_rolls_back_exactly(why, build):
 
 
 def test_reroute_skips_non_unique_pair():
-    """Кратное ребро пары (b, c): лестница редактора адресует ребро парой и
-    переложила бы чужое — повтора нет, e2 остаётся после мини-жеста."""
+    """Кратное ребро пары (b, c): повтора нет (пропуск Р7, заведён, когда
+    лестница редактора адресовала ребро парой), e2 остаётся после
+    мини-жеста."""
     g = _canvas_reroute(dup=True)
     reseat = _StairReseat(g)
 
