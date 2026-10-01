@@ -17,6 +17,8 @@ import copy
 import hashlib
 import json
 
+import pytest
+
 from modules.canvas_to_fxml import generate_canvas_fxml
 from modules.graph.core import canvas_state, contact, pretransform, seating
 
@@ -89,16 +91,163 @@ def _points(g) -> dict:
 
 # ───────────────────── сторож таблицы и метки ─────────────────────
 
-def test_table_guard_raises_model_mark():
-    """Правка `SKIN_CONTACT_OFFSET` меняет геометрию помеченных холстов, а
-    is_stale её не видит. Красный здесь = поднять `ATTACH_MODEL` (новая
-    метка) и `ATTACH_MODEL_TABLE_SHA` вместе с правкой таблицы."""
-    canon = json.dumps(sorted((k, [float(a), float(b)]) for k, (a, b)
-                              in contact.SKIN_CONTACT_OFFSET.items()),
-                       separators=(",", ":"))
-    sha = hashlib.sha256(canon.encode("utf-8")).hexdigest()
-    assert (contact.ATTACH_MODEL, sha) == \
-        ("waist-1", contact.ATTACH_MODEL_TABLE_SHA)
+# Замороженные sha записей реестра талий (ADR-009 п. 5). Запись не правится
+# никогда: новый замер — новая метка `ATTACH_MODEL`, новая запись
+# `WAIST_TABLES` и её sha здесь; холсты прежней метки живут по своей таблице.
+FROZEN_TABLES = {
+    "waist-1": "36b8889dd4c197ea94d908f325338abff58959cd547b25372c30b8e2afd6dd98",
+}
+# Правила, от которых зависит талия на холсте и которые НЕ версионируются по
+# метке (общие для всех меток): клапанные классы -> скин, разворот вертикали,
+# исключения осевого правила. Их правка двигает холсты ВСЕХ меток.
+FROZEN_RULES = (
+    "waist-1", "29946900f76fe6469aa7c7a53da967826154c7cfb68b6c3b48b93e6017aed592")
+
+
+def _sha(obj) -> str:
+    return hashlib.sha256(json.dumps(obj, separators=(",", ":"))
+                          .encode("utf-8")).hexdigest()
+
+
+def _table_sha(table) -> str:
+    return _sha(sorted((k, [float(a), float(b)]) for k, (a, b)
+                       in table.items()))
+
+
+def test_waist_tables_are_frozen_per_mark():
+    """Красный здесь = запись реестра правилась (холсты её метки сдвинутся
+    при открытии, а is_stale этого не видит) или метка добавлена без
+    замороженного sha. Правильно: новая запись + новая `ATTACH_MODEL`."""
+    assert {m: _table_sha(t) for m, t in contact.WAIST_TABLES.items()} == \
+        FROZEN_TABLES
+
+
+def test_current_table_is_the_registry_entry_of_the_mark():
+    """Текущая таблица (сервер, холст текущей метки, стенды, пробник) — запись
+    реестра метки, которую ставит сборка холста."""
+    assert contact.ATTACH_MODEL in contact.WAIST_TABLES
+    assert contact.SKIN_CONTACT_OFFSET == \
+        contact.WAIST_TABLES[contact.ATTACH_MODEL]
+
+
+def test_valve_rules_guard_raises_model_mark():
+    """Клапанные классы -> скин (`CLASS_NAME_TO_SKIN`), разворот вертикали
+    (`REVERSE_VERTICAL_CLASSES`) и исключения осевого правила
+    (`AXIAL_EXEMPT_SKINS`) двигают талию на холсте, но общие для всех меток.
+    Красный здесь = поднять `ATTACH_MODEL` (новая запись реестра) и решить,
+    что делать с холстами прежних меток: правило сдвинет и их."""
+    valve = sorted([cn, spec[1]] for cn, spec
+                   in contact.CLASS_NAME_TO_SKIN.items()
+                   if spec[0] == "ValveControl")
+    sha = _sha([valve, sorted(contact.REVERSE_VERTICAL_CLASSES),
+                sorted(contact.AXIAL_EXEMPT_SKINS)])
+    assert (contact.ATTACH_MODEL, sha) == FROZEN_RULES
+
+
+# ───────────── холст прежней метки — по таблице своей метки ─────────────
+# Репро сквозного red-team 02.10 (s/mv.py): значение метки нигде не
+# сверялось — после правки таблицы и подъёма метки холст 'waist-1' шёл по
+# НОВОЙ таблице (ELECTRIC: промах 0.008 -> -1.05 px, открытие сдвигало оба
+# конца на 1.06 px). Здесь подъём метки сымитирован так, как его делает
+# правка: новая запись реестра, новая текущая метка и таблица.
+
+_WY = 508.3916                 # талия ELECTRIC_VLV H по 'waist-1' (y)
+
+
+def _waist1_canvas(mark="waist-1"):
+    """c — клапан armatura_electro H — c2, трубы в талии по 'waist-1'."""
+    def conn(nid, x):
+        return {"id": nid, "type": "connector", "class_name": "connector",
+                "centroid": [_WY, x], "bbox": None}
+
+    return {
+        "directed": False, "multigraph": False,
+        "graph": {"image_size": [1080, 1920],
+                  "canvas_transform": {"s": 1.0, "offx": 0, "offy": 0,
+                                       "attach_model": mark}},
+        "nodes": [conn("c", 400.0), conn("c2", 600.0),
+                  {"id": "v", "type": "equipment",
+                   "class_name": "armatura_electro", "_axis": "H",
+                   "centroid": [_WY, 500.0],
+                   "bbox": [479.0, 481.1, 521.0, 518.9]}],
+        "links": [
+            {"id": "e1", "source": "c", "target": "v",
+             "source_point": [_WY, 400.0], "target_point": [_WY, 479.0],
+             "waypoints": []},
+            {"id": "e2", "source": "v", "target": "c2",
+             "source_point": [_WY, 521.0], "target_point": [_WY, 600.0],
+             "waypoints": []},
+        ],
+        "text_blocks": [], "bindings": [],
+    }
+
+
+@pytest.fixture
+def bumped(monkeypatch):
+    """Подъём метки: 'waist-2' с другой талией ELECTRIC_VLV — текущая."""
+    new = dict(contact.WAIST_TABLES["waist-1"], ELECTRIC_VLV=(0.25, 0.25))
+    monkeypatch.setattr(contact, "WAIST_TABLES",
+                        dict(contact.WAIST_TABLES, **{"waist-2": new}))
+    monkeypatch.setattr(contact, "ATTACH_MODEL", "waist-2")
+    monkeypatch.setattr(contact, "SKIN_CONTACT_OFFSET", dict(new))
+    return new
+
+
+def _open_canon(g):
+    """Канон открытия холста с меткой (ядро `reseat_canvas`)."""
+    contact.apply_attach_mode(g)
+    pretransform.seat_edge_endpoints(g)
+    contact.strip_attach_mode(g["nodes"])
+    return g
+
+
+def test_canvas_fixture_is_fixed_point_before_bump():
+    g = _waist1_canvas()
+    assert _open_canon(copy.deepcopy(g))["links"] == g["links"]
+
+
+def test_prior_mark_canvas_keeps_its_table_after_bump(bumped):
+    """Холст 'waist-1' после подъёма метки: узлы получают ключ таблицы своей
+    метки, талия — по 'waist-1', открытие ничего не двигает, FXML прежний,
+    в файл ключ не уходит."""
+    g = _waist1_canvas()
+    fx0 = generate_canvas_fxml(copy.deepcopy(g))
+    probe = copy.deepcopy(g)
+    assert contact.apply_attach_mode(probe) is False
+    v = next(n for n in probe["nodes"] if n["id"] == "v")
+    assert v[contact.TABLE_KEY] == "waist-1"
+    assert contact.face_refs(v, tuple(v["bbox"]))["L"] == pytest.approx(_WY)
+
+    got = _open_canon(copy.deepcopy(g))
+    assert got["links"] == g["links"], "открытие сдвинуло холст прежней метки"
+    assert not any(contact.TABLE_KEY in n for n in got["nodes"])
+    assert generate_canvas_fxml(copy.deepcopy(g)) == fx0
+
+
+def test_current_mark_canvas_follows_new_table(bumped):
+    """Двойник: тот же холст с текущей меткой 'waist-2' идёт по новой
+    таблице — ключа нет, открытие сажает концы в новую талию (подъём метки
+    действует, тест выше не пустой)."""
+    g = _waist1_canvas("waist-2")
+    probe = copy.deepcopy(g)
+    contact.apply_attach_mode(probe)
+    assert not any(contact.TABLE_KEY in n for n in probe["nodes"])
+    got = _open_canon(copy.deepcopy(g))
+    # центр рамки 500.0 + 0.25 * 37.8 — талия новой таблицы
+    assert [e["target_point"][0] for e in got["links"][:1]] + \
+        [got["links"][1]["source_point"][0]] == pytest.approx([509.45] * 2)
+
+
+def test_unknown_mark_uses_current_table_and_warns(caplog):
+    """Метки нет в реестре (холст собран сервером новее клиента): текущая
+    таблица и предупреждение в лог, ключа таблицы нет."""
+    g = _waist1_canvas("waist-9")
+    with caplog.at_level("WARNING", logger=contact.__name__):
+        assert contact.apply_attach_mode(g) is False
+    assert "waist-9" in caplog.text
+    assert not any(contact.TABLE_KEY in n for n in g["nodes"])
+    v = next(n for n in g["nodes"] if n["id"] == "v")
+    assert contact.face_refs(v, tuple(v["bbox"]))["L"] == pytest.approx(_WY)
 
 
 # ───────────────────── метка -> режим узлов ─────────────────────

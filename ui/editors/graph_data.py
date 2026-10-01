@@ -186,11 +186,12 @@ class GraphDataModel:
         # «какой код это писал» решается взглядом на файл, не верой.
         graph_meta['_editor_commit'] = _editor_commit()
 
-        # Производный ключ старого холста (`contact.LEGACY_KEY`) в файл не
-        # пишется: он пересчитывается из метки при каждой загрузке. Живые
-        # узлы не мутируются — пишется копия списка.
+        # Производные ключи метки (`contact.LEGACY_KEY`, `contact.TABLE_KEY`)
+        # в файл не пишутся: они пересчитываются из метки при каждой
+        # загрузке. Живые узлы не мутируются — пишется копия списка.
         out = dict(self.graph_data)
-        out['nodes'] = [{k: v for k, v in n.items() if k != contact.LEGACY_KEY}
+        out['nodes'] = [{k: v for k, v in n.items()
+                         if k not in (contact.LEGACY_KEY, contact.TABLE_KEY)}
                         for n in self.graph_data['nodes']]
         try:
             with open(path, 'w', encoding='utf-8') as f:
@@ -277,6 +278,8 @@ class GraphDataModel:
             node[contact.LEGACY_KEY] = True
         else:
             node.pop(contact.LEGACY_KEY, None)
+        # холст прежней метки — таблица талий его метки, как у соседей
+        contact.mark_table(node, self.graph_data)
         self.nodes[node_id] = node
         nodes_list = self.graph_data.setdefault('nodes', [])
         # Avoid duplicate — node may already be in list after undo/redo
@@ -474,6 +477,8 @@ class GraphDataModel:
         if self.attach_legacy:
             # старый холст (Р1): ключ — ДО расчёта оси и талии клапана
             node[contact.LEGACY_KEY] = True
+        # холст прежней метки: таблица талий — тоже ДО расчёта талии
+        contact.mark_table(node, self.graph_data)
         return node
 
     def create_edge_data(self, source: str, target: str,

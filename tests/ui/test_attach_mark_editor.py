@@ -408,3 +408,68 @@ def test_mode_follows_the_mark_and_the_file_keeps_it(qapp, tmp_path):
     ed = _editor(qapp, sub, _canvas(), canvas_mode=False)
     assert ed.model.attach_legacy is False
     assert not any(LEGACY_KEY in n for n in ed.model.nodes.values())
+
+
+# ───── холст прежней метки в редакторе — таблица своей метки (ADR-009 п. 5) ─────
+
+TABLE_KEY = "_attach_table"
+_WY = 508.3916                 # талия ELECTRIC_VLV H по 'waist-1' (y)
+
+
+def _waist1_canvas():
+    """c — клапан armatura_electro H — c2, трубы в талии по 'waist-1'."""
+    def conn(nid, x):
+        return {"id": nid, "type": "connector", "class_id": -1,
+                "class_name": "connector", "centroid": [_WY, x],
+                "bbox": None, "segmentation": None, "degree": 1}
+
+    g = _canvas("waist-1")
+    g["nodes"] = [conn("c", 400.0), conn("c2", 600.0),
+                  {"id": "v", "type": "equipment", "class_id": 3,
+                   "class_name": "armatura_electro", "_axis": "H",
+                   "centroid": [_WY, 500.0],
+                   "bbox": [479.0, 481.1, 521.0, 518.9],
+                   "segmentation": None, "degree": 2}]
+    g["links"] = [
+        {"id": "e1", "source": "c", "target": "v",
+         "source_point": [_WY, 400.0], "target_point": [_WY, 479.0],
+         "waypoints": []},
+        {"id": "e2", "source": "v", "target": "c2",
+         "source_point": [_WY, 521.0], "target_point": [_WY, 600.0],
+         "waypoints": []},
+    ]
+    return g
+
+
+def test_prior_mark_canvas_gestures_keep_its_waist(qapp, tmp_path,
+                                                   monkeypatch):
+    """Д1: после подъёма метки ('waist-2' с другой талией ELECTRIC_VLV)
+    оператор открывает холст 'waist-1': перенос клапана вдоль трубы держит
+    трубы прямыми в талии 'waist-1'; новый клапан получает ключ таблицы и
+    центроид в талии 'waist-1'; в файл ключ не уходит, метка остаётся."""
+    new = dict(contact.WAIST_TABLES["waist-1"], ELECTRIC_VLV=(0.25, 0.25))
+    monkeypatch.setattr(contact, "WAIST_TABLES",
+                        dict(contact.WAIST_TABLES, **{"waist-2": new}))
+    monkeypatch.setattr(contact, "ATTACH_MODEL", "waist-2")
+    monkeypatch.setattr(contact, "SKIN_CONTACT_OFFSET", dict(new))
+
+    ed = _editor(qapp, tmp_path, _waist1_canvas())
+    assert ed._waist_model() is True
+    assert ed.nodes["v"][TABLE_KEY] == "waist-1"
+    ed.start_drag_node("v")
+    ed.drag_node_to(530.0, _WY)
+    ed.end_drag_node()
+    assert _edge(ed, "e1")["target_point"] == pytest.approx([_WY, 509.0])
+    assert _edge(ed, "e2")["source_point"] == pytest.approx([_WY, 551.0])
+    assert not _edge(ed, "e1")["waypoints"] and \
+        not _edge(ed, "e2")["waypoints"]
+
+    nid = ed.add_equipment_node(800.0, 400.0, 3, "armatura_electro",
+                                width=42, height=37.8, enter_resize=False)
+    n = ed.nodes[nid]
+    assert n[TABLE_KEY] == "waist-1"
+    assert n["centroid"] == [pytest.approx(400.0 + 0.222 * 37.8), 800.0]
+
+    _p, g = _save(ed, tmp_path)
+    assert not any(TABLE_KEY in x for x in g["nodes"])
+    assert g["graph"]["canvas_transform"]["attach_model"] == "waist-1"

@@ -26,11 +26,17 @@
 середине граней; выгрузка — старая поправка контрола по
 `SKIN_CONTACT_OFFSET_LEGACY`). До `face_refs` признак доходит производным
 ключом узла `LEGACY_KEY` (`apply_attach_mode`); в файл он не пишется
-(`strip_attach_mode`).
+(`strip_attach_mode`). Холст с меткой идёт по таблице талий СВОЕЙ метки
+(реестр `WAIST_TABLES`; прежняя метка — ключ узла `TABLE_KEY`); метка,
+которой нет в реестре, — текущая таблица и предупреждение в лог.
 
 Чистый python (stdlib), без Qt и shapely.
 """
 from __future__ import annotations
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # class_name -> (ControlClass, SkinType, [EquipmentType])
@@ -185,16 +191,25 @@ REVERSE_VERTICAL_CLASSES = {
 #   v_frac: VERTICAL — после rotate(90) талия ЛЕВЕЕ центра на v_frac*width;
 #           VERTICAL_REVERSE — ПРАВЕЕ (разворот на 180°); v_frac < 0 — наоборот.
 # Скин клапана вне таблицы симметричен: талия в центре (сдвиг 0).
+#
+# Реестр {метка модели: таблица} (Р1, ADR-009 п. 5): холст с меткой сажается
+# по таблице СВОЕЙ метки (`apply_attach_mode` -> ключ узла `TABLE_KEY` ->
+# `face_refs`). Запись реестра не правится НИКОГДА: новый замер — новая
+# запись и новая `ATTACH_MODEL`; холсты прежней метки живут по своей
+# таблице, пока их не пересоберёт сервер. Сторож — sha каждой записи
+# (tests/test_attach_mark.py).
 # ---------------------------------------------------------------------------
-SKIN_CONTACT_OFFSET = {
-    'ELECTRIC_VLV':         (0.222,  0.222),
-    'ELECTROMAGNETIC_VLV':  (0.149,  0.149),
-    'CTRL_VLV_ELEC':        (0.314,  0.314),
-    'CTRL_VLV_HANDLE':      (0.131,  0.131),
-    'CHECK_HYDRO_VLV':      (-0.041, -0.041),
-    'AOC_CTRL_VLV':         (0.256,  0.256),
-    'AOC_VLV':              (0.341,  0.341),
-    'RELIEF_VLV':           (0.167,  0.167),
+WAIST_TABLES = {
+    'waist-1': {
+        'ELECTRIC_VLV':         (0.222,  0.222),
+        'ELECTROMAGNETIC_VLV':  (0.149,  0.149),
+        'CTRL_VLV_ELEC':        (0.314,  0.314),
+        'CTRL_VLV_HANDLE':      (0.131,  0.131),
+        'CHECK_HYDRO_VLV':      (-0.041, -0.041),
+        'AOC_CTRL_VLV':         (0.256,  0.256),
+        'AOC_VLV':              (0.341,  0.341),
+        'RELIEF_VLV':           (0.167,  0.167),
+    },
 }
 
 # Старая таблица (побайтово deploy 238fe6b, graph_to_fxml.py:223-232):
@@ -213,16 +228,22 @@ SKIN_CONTACT_OFFSET_LEGACY = {
     'AOC_CTRL_VLV':     (0.15,  0.111),
 }
 
-# Метка модели точек прикрепления на холсте (Р1). Правка SKIN_CONTACT_OFFSET
-# меняет геометрию помеченных холстов, а is_stale её не видит: любая правка
-# таблицы обязана поднять метку и `ATTACH_MODEL_TABLE_SHA` (сторож —
-# tests/test_attach_mark.py).
+# Метка модели точек прикрепления на холсте (Р1), которую ставит сборка
+# холста сервером. Таблица метки меняет геометрию помеченных холстов, а
+# is_stale её не видит: новый замер — новая метка и новая запись
+# `WAIST_TABLES` (сторож — tests/test_attach_mark.py).
 ATTACH_MODEL = 'waist-1'
-ATTACH_MODEL_TABLE_SHA = \
-    '36b8889dd4c197ea94d908f325338abff58959cd547b25372c30b8e2afd6dd98'
+# Таблица текущей метки: сборка холста сервером, холст текущей метки,
+# стенды, пробник `tools/skin_waist_probe.py`. Копия — запись реестра
+# правкой текущей таблицы не меняется.
+SKIN_CONTACT_OFFSET = dict(WAIST_TABLES[ATTACH_MODEL])
 # Производный ключ узла старого холста (метки нет): face_refs -> None.
 # Ставится при каждой загрузке из метки, в файл не пишется.
 LEGACY_KEY = '_attach_legacy'
+# Производный ключ узла холста ПРЕЖНЕЙ известной метки: значение — метка,
+# face_refs берёт её таблицу из `WAIST_TABLES`. Холст текущей метки ключа
+# не несёт. Ставится при каждой загрузке из метки, в файл не пишется.
+TABLE_KEY = '_attach_table'
 
 # px: на сколько конец трубы на середине грани (НЕ выверенный порт) может
 # уйти от середины ради прямой трубы. Решение заказчика 2026-09-22
@@ -315,22 +336,43 @@ def apply_attach_mode(graph) -> bool:
     """Разметить узлы по метке холста; вернуть True, если холст старый.
 
     Метки нет — всем узлам `LEGACY_KEY` = True (face_refs -> None: порты в
-    середине граней, как в 238fe6b); метка есть — ключ снимается.
-    Идемпотентна: истина — метка.
+    середине граней, как в 238fe6b); метка есть — ключ снимается, а таблица
+    талий — своей метки (`mark_table`). Метки нет в реестре `WAIST_TABLES`
+    (холст собран сервером новее клиента) — текущая таблица и предупреждение
+    в лог. Идемпотентна: истина — метка.
     """
-    legacy = canvas_model(graph) is None
+    mark = canvas_model(graph)
+    legacy = mark is None
+    if not legacy and mark not in WAIST_TABLES:
+        logger.warning("холст с меткой модели %r — её нет в реестре таблиц "
+                       "талий (клиент старше сервера?): талии по таблице "
+                       "%r", mark, ATTACH_MODEL)
     for n in graph.get('nodes') or ():
         if legacy:
             n[LEGACY_KEY] = True
         else:
             n.pop(LEGACY_KEY, None)
+        mark_table(n, graph)
     return legacy
 
 
+def mark_table(node, graph):
+    """Ключ таблицы талий узла по метке холста: прежняя известная метка —
+    `TABLE_KEY` = метка; текущая, неизвестная или метки нет — ключа нет.
+    Зовут `apply_attach_mode` и новый узел редактора (`GraphDataModel`)."""
+    mark = canvas_model(graph)
+    if mark != ATTACH_MODEL and mark in WAIST_TABLES:
+        node[TABLE_KEY] = mark
+    else:
+        node.pop(TABLE_KEY, None)
+
+
 def strip_attach_mode(nodes):
-    """Снять производный ключ старого холста перед записью файла."""
+    """Снять производные ключи метки (`LEGACY_KEY`, `TABLE_KEY`) перед
+    записью файла."""
     for n in nodes or ():
         n.pop(LEGACY_KEY, None)
+        n.pop(TABLE_KEY, None)
 
 
 def face_refs(node, rect, sides=None):
@@ -351,7 +393,8 @@ def face_refs(node, rect, sides=None):
     бокс — детекция, и доля талии к нему не приложима: там портов нет.
 
     Узел старого холста (`LEGACY_KEY`, метки модели нет) — портов нет:
-    середина грани, как в 238fe6b (Р1).
+    середина грани, как в 238fe6b (Р1). Узел холста прежней метки
+    (`TABLE_KEY`) — таблица его метки из `WAIST_TABLES`.
     """
     if node.get(LEGACY_KEY):
         return None
@@ -363,7 +406,8 @@ def face_refs(node, rect, sides=None):
     if w <= 0 or h <= 0:
         return None
     axis, emit = orientation(node, sides)
-    h_frac, v_frac = SKIN_CONTACT_OFFSET.get(skin_info(node)[1], (0.0, 0.0))
+    table = WAIST_TABLES.get(node.get(TABLE_KEY)) or SKIN_CONTACT_OFFSET
+    h_frac, v_frac = table.get(skin_info(node)[1], (0.0, 0.0))
     if axis == 'H':
         y = (y1 + y2) / 2.0 + h_frac * h
         return {'L': y, 'R': y}
