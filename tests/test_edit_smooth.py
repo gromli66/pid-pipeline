@@ -1742,6 +1742,26 @@ def test_connector_shift_refused_below_gap_floor():
     assert g == before, "отклонённый ход обязан оставить холст бит-в-бит"
 
 
+def test_gap_floor_only_on_model_canvas():
+    """Р-а — только на холсте с меткой модели (решение Максима 01.10). На
+    старом холсте (узлы с `LEGACY_KEY`: их ставит редактор по метке, тот же
+    переключатель, что `_waist_model()`) ход сближения форм принят, как до
+    ddd84ec: ступенька снята сдвигом коннектора ценой зазора 5.83 < 6. На
+    холсте модели тот же ход отклонён."""
+    from modules.graph.core import contact
+    old = _canvas_gap(3.0)
+    for n in old["nodes"]:
+        n[contact.LEGACY_KEY] = True
+    st = es.smooth(old)
+    assert st["коннектор"] == 1 and es.count_steps(old) == 0, st
+    assert es.count_gaps(old) == 1
+    new = _canvas_gap(3.0)
+    st = es.smooth(new)
+    assert st["коннектор"] == 0 and es.count_steps(new) == 1, st
+    assert es.count_gaps(new) == 0
+    assert "gap" not in es._Judge(gap=False)(old)
+
+
 # ── Р-б: ход судится так, как его покажет следующее открытие (01.10) ───
 def _poly(nid, x1, y1, x2, y2):
     n = _box(nid, (x1 + x2) / 2, (y1 + y2) / 2, w=x2 - x1, h=y2 - y1)

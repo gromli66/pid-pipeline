@@ -354,9 +354,16 @@ a6d28736 5, 8d14cf73 1 — крючки ортогональны, изломов
 увеличивает. Зазоры из построения легальны — судится только прирост, как у
 наложений. Гейт блока 6 (MEASUREMENTS §142.2) нашёл, что кнопка подводила
 формы ближе пола на 4 листах свежего холста (+7: ae30deb4 0 → 4 — коннектор
-вплотную к арматуре), deploy — на одном (+1). Замер — §143. Тесты —
-`tests/test_edit_smooth.py::test_count_gaps_is_layout_defects`,
-`::test_connector_shift_refused_below_gap_floor`.
+вплотную к арматуре), deploy — на одном (+1). Замер — §143. Правило —
+только на холсте с меткой модели (решение Максима 01.10, позднее): на
+старом холсте (узлы с `contact.LEGACY_KEY` — тот же переключатель, что
+`_waist_model()` редактора) судья кнопки зазор не меряет
+(`edit_smooth._Judge(gap=False)`), кнопка как до ddd84ec — цена Р-а на
+старых холстах (raw a6d28736 +1 косая, edited _3edge оторванных 0 → 3)
+снята. Тесты — `tests/test_edit_smooth.py::test_count_gaps_is_layout_defects`,
+`::test_connector_shift_refused_below_gap_floor`,
+`::test_gap_floor_only_on_model_canvas`,
+`tests/ui/test_smooth_reopen.py::test_gap_floor_follows_the_canvas_mark`.
 
 **Ход — таким, каким его покажет следующее открытие** (Р-б, решение Максима
 01.10). Оператор жмёт кнопку, сохраняет и открывает лист ещё раз, а вкладка

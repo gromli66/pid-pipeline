@@ -64,7 +64,10 @@
     увеличивает;
   * НЕ ПОДВОДИТЬ ФОРМЫ БЛИЖЕ ПОЛА (Р-а, решение Максима 01.10): число
     рёбер с зазором форм концов меньше 6 px (`gap`, счёт
-    `layout.spread.defects`) ход не увеличивает.
+    `layout.spread.defects`) ход не увеличивает — только на холсте с
+    меткой модели; старый холст (узлы с `contact.LEGACY_KEY`, тот же
+    переключатель, что `_waist_model()` редактора) — как до ddd84ec
+    (решение Максима 01.10).
 
 Гейт хода (`accepts`) — лексикографически: косые -> отклонение ->
 ступеньки -> изломы (4-й приоритет, блок 6), прочие дефекты не хуже.
@@ -915,7 +918,9 @@ def count_gaps(graph):
     трубу до невидимой (гейт блока 6 кнопки, MEASUREMENTS §142.2: ae30deb4
     0 -> 4 — edge_220 4.85, edge_227 4.63, edge_362 4.19, edge_manual_13
     0.31). Зазоры из построения легальны — гейт судит только прирост
-    (`_NOT_WORSE`), как и наложения."""
+    (`_NOT_WORSE`), как и наложения, и только на холсте с меткой модели:
+    старый холст — как до ddd84ec (`_Judge(gap=False)`, решение Максима
+    01.10)."""
     return len(_gap_ids(graph))
 
 
@@ -1035,7 +1040,8 @@ def score(graph):
     внутри `steps`): гейт хода «ж» (`accepts_waist`). `hooks` — крючков
     (`count_hooks`, 01.10): справочно, ни в гейт, ни в `_NOT_WORSE`.
     `gap` — рёбер с зазором форм меньше пола раскладки (`count_gaps`,
-    Р-а 01.10): в `_NOT_WORSE`."""
+    Р-а 01.10): в `_NOT_WORSE`; судья кнопки старого холста его не меряет
+    (`_Judge(gap=False)`)."""
     c = ec.check_canvas(graph)["counts"]
     dev = 0.0
     for e in g_edges(graph):
@@ -1113,9 +1119,14 @@ class _Judge:
     же порядке, что у `score` (сумма float не ассоциативна); «вдоль» склеено
     по паре (id ребра, узел) первым вхождением в порядке рёбер — как
     склейка `ec.along_border`. Габарит — по всем узлам, наложения — заново,
-    если сдвинулся хоть один узел."""
+    если сдвинулся хоть один узел.
 
-    def __init__(self):
+    gap=False — судья старого холста (Р-а только на холсте с меткой модели,
+    решение Максима 01.10): зазор форм не меряется, ключа `gap` в отчёте
+    нет — гейт судит его как 0 и 0, кнопка как до ddd84ec."""
+
+    def __init__(self, gap=True):
+        self._gap = gap
         self._nodes = None      # узлы прошлого вызова (те же dict)
         self._nsig = []
         self._nzone = []
@@ -1195,7 +1206,7 @@ class _Judge:
             if bb and len(bb) == 4:
                 xs += [bb[0], bb[2]]
                 ys += [bb[1], bb[3]]
-        return {
+        out = {
             "diag": diag, "dev": round(dev, 2), "steps": steps,
             "near": near, "along_own": own, "along_foreign": len(seen) - own,
             "through": thr, "corner": corner, "adrift": adrift,
@@ -1203,8 +1214,11 @@ class _Judge:
             "w": (max(xs) - min(xs)) if xs else 0.0,
             "h": (max(ys) - min(ys)) if ys else 0.0,
             "bends": bends, "overlap": self._overlap, "offaxis": offaxis,
-            "waist": waist, "hooks": hooks, "gap": len(gaps),
+            "waist": waist, "hooks": hooks,
         }
+        if self._gap:
+            out["gap"] = len(gaps)
+        return out
 
     @staticmethod
     def _box(e):
@@ -1231,7 +1245,7 @@ class _Judge:
                 len(cl["adrift"]), len(cl["conn_off"]), len(cl["poly_off"]),
                 len(_offaxis_of(e, nodes_by_id(mini), deg)),
                 count_waist_steps(mini), count_hooks(mini),
-                bool(_gap_ids(mini)))
+                self._gap and bool(_gap_ids(mini)))
 
 
 _ACTIVE = None      # (холст, судья, канон|None) идущего `smooth` — `_score`
@@ -1505,6 +1519,10 @@ def smooth(graph, route_fn=None, reseat_fn=None, budget=BUDGET,
     мутирует переданный холст так, как его пересадит следующее открытие.
     Задан — проба, прошедшая гейт, судится после канона и принимается
     такой. None — как раньше (старый холст, ADR-009).
+
+    Зазор форм (Р-а) гейт судит только на холсте с меткой модели: на
+    старом (`_legacy_canvas`) судья его не меряет — кнопка как до ddd84ec
+    (решение Максима 01.10).
     """
     global _ACTIVE
     if reseat_fn is not None and route_fn is not None:
@@ -1512,7 +1530,7 @@ def smooth(graph, route_fn=None, reseat_fn=None, budget=BUDGET,
     stats = {"колено": 0, "излом": 0, "скольжение": 0, "коннектор": 0,
              "узел": 0, "осевая талия": 0, "отклонено": 0, "осталось": 0,
              "раунды": 0, **{k: 0 for k in REFUSAL_KINDS}}
-    prev, _ACTIVE = _ACTIVE, (graph, _Judge(),
+    prev, _ACTIVE = _ACTIVE, (graph, _Judge(gap=not _legacy_canvas(graph)),
                               _Canon(canon_fn) if canon_fn else None)
     try:
         _rounds(graph, stats, route_fn, reseat_fn, budget, allow_node_shift,
@@ -1521,6 +1539,13 @@ def smooth(graph, route_fn=None, reseat_fn=None, budget=BUDGET,
         _ACTIVE = prev
     stats["осталось"] = sum(1 for e in g_edges(graph) if not is_ortho(e))
     return stats
+
+
+def _legacy_canvas(graph):
+    """Старый холст без метки модели: узлы несут `contact.LEGACY_KEY` —
+    его ставит редактор по метке (`contact.apply_attach_mode`, Р1), тот же
+    переключатель, что `_waist_model()`."""
+    return any(n.get(contact.LEGACY_KEY) for n in graph.get("nodes") or ())
 
 
 def _rounds(graph, stats, route_fn, reseat_fn, budget, allow_node_shift,

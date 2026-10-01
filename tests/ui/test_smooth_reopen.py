@@ -10,7 +10,8 @@
 точка для всего, что сделала кнопка. Старый холст без метки — как 238fe6b,
 канона в кнопке нет (ADR-009).
 
-Р-а: ход не подводит формы концов трубы ближе пола раскладки (6 px).
+Р-а: ход не подводит формы концов трубы ближе пола раскладки (6 px) — только
+на холсте с меткой модели; старый холст — как до ddd84ec (решение Максима 01.10).
 
 Сценарии — живой редактор в режиме холста, чужое действие оператора
 (протяжка узла) перед кнопкой. Сдвиги открытия считает тот же счёт, что
@@ -141,9 +142,10 @@ def test_canon_reaches_the_engine_only_on_model_canvas(qapp, tmp_path,
     assert seen["canon_fn"] is (reseat_canvas if model else None)
 
 
-def _gap_canvas(dx):
+def _gap_canvas(dx, model=True):
     """Ступенька 10 px между коннекторами, у каждого — бокс по диагонали в
-    dx px (`tests/test_edit_smooth.py::_canvas_gap`), холст с меткой модели."""
+    dx px (`tests/test_edit_smooth.py::_canvas_gap`), холст с меткой модели
+    (model=False — старый холст без метки)."""
     def conn(nid, x, y):
         return {"id": nid, "type": "connector", "class_id": -1,
                 "class_name": "connector", "centroid": [y, x], "bbox": None,
@@ -168,9 +170,10 @@ def _gap_canvas(dx):
                                     (100.0 - dx, 175.0)]),
              edge("e3", "c2", "b2", [(400.0, 150.0), (400.0, 116.0),
                                     (400.0 + dx, 116.0)])]
-    return {"directed": False, "multigraph": False,
-            "graph": {"image_size": [1080, 1920], "canvas_transform": {
-                "attach_model": contact.ATTACH_MODEL}},
+    meta = {"image_size": [1080, 1920]}
+    if model:
+        meta["canvas_transform"] = {"attach_model": contact.ATTACH_MODEL}
+    return {"directed": False, "multigraph": False, "graph": meta,
             "nodes": nodes, "links": links, "text_blocks": [], "bindings": []}
 
 
@@ -194,3 +197,21 @@ def test_button_does_not_bring_forms_below_floor(qapp, tmp_path):
     pre, saved = _button_save(ed, d)
     after = json.loads(saved)
     assert es.count_steps(after) == 0 and es.count_gaps(after) == 0
+
+
+@pytest.mark.parametrize("model", [True, False], ids=["модель", "старый"])
+def test_gap_floor_follows_the_canvas_mark(qapp, tmp_path, model):
+    """Р-а — только на холсте с меткой модели (решение Максима 01.10).
+    Перед кнопкой оператор протягивает бокс и отменяет протяжку (Ctrl+Z).
+    Холст модели: ступеньку закрывает только сдвиг коннектора к боксу на
+    5.83 < 6 px — кнопка его не делает. Старый холст без метки — кнопка
+    как до ddd84ec: ступенька снята этим сдвигом, зазор форм меньше пола
+    появился."""
+    ed = _editor(tmp_path, _gap_canvas(3.0, model=model))
+    assert ed._waist_model() is model
+    _drag(ed, "b2", 30.0, 0.0)
+    ed.undo_mgr.undo()
+    pre, saved = _button_save(ed, tmp_path)
+    after = json.loads(saved)
+    assert es.count_steps(after) == (1 if model else 0)
+    assert es.count_gaps(after) == (0 if model else 1)
