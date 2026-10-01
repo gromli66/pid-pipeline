@@ -38,7 +38,7 @@ from .pretransform import (
 __all__ = ["to_canvas"]
 
 
-def to_canvas(validated_graph, image_hw=None, *, legacy=False):
+def to_canvas(validated_graph, image_hw=None, *, legacy=False, mark=None):
     """graph_validated (px растра) -> граф холста. -> (graph, transform).
 
     Вход не мутируется. `image_hw = (height, width)`; по умолчанию берётся из
@@ -64,6 +64,12 @@ def to_canvas(validated_graph, image_hw=None, *, legacy=False):
     Посадка концов `reproject_edge_endpoints` общая: на рабочих размерах
     `FIXED_SIZES` рамка == letterbox скина 238fe6b (сверено по всем классам
     обеих осей).
+
+    `mark` — метка модели холста, для которого строится геометрия (импорт
+    текста): прежняя известная метка (`contact.WAIST_TABLES`) — талии
+    клапанов по ЕЁ таблице (`contact.mark_table` -> `TABLE_KEY` на время
+    сборки, в выход ключ не попадает); текущая, неизвестная или None —
+    текущая таблица (red-team правок 02.10, (4)).
     """
     g = deepcopy(validated_graph)
     # кратные рёбра (Р7) на копии; степень — только у затронутых узлов: у
@@ -91,9 +97,13 @@ def to_canvas(validated_graph, image_hw=None, *, legacy=False):
     if legacy:
         for n in g.get("nodes", []):
             n[contact.LEGACY_KEY] = True
+    elif mark is not None:
+        holder = {"graph": {"canvas_transform": {"attach_model": mark}}}
+        for n in g.get("nodes", []):
+            contact.mark_table(n, holder)
     apply_fixed_sizes(g, _build_adjacency(g))
     reproject_edge_endpoints(g)
-    if legacy:
+    if legacy or mark is not None:
         contact.strip_attach_mode(g.get("nodes"))
     g["graph"]["detected_bbox"] = detected
     return g, transform

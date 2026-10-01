@@ -358,3 +358,40 @@ def test_import_on_marked_canvas_with_parallel_pair_follows_elements():
 
     stats = text_import.import_text(canvas, validated)
     _assert_follow(canvas, pre, stats, _DX, _DY)
+
+
+def test_import_on_prior_mark_canvas_uses_its_table(monkeypatch):
+    """(4) red-team правок 02.10: холст прежней метки после подъёма метки
+    (новая запись реестра, новая текущая таблица — как `bumped` в
+    test_attach_mark.py). До-раскладочная строится по таблице СВОЕЙ метки
+    (`to_canvas(mark=)`): подписи едут ровно на перенос холста. Ошибка:
+    `import_text` выбирал только legacy/модель — модель шла по текущей
+    таблице, рамка клапана съезжала на разницу талий, и якорь подписи с
+    ней (302171b3: 3 подписи на 1.06 px)."""
+    from modules.graph.core import contact
+    from modules.graph.core.canvas_input import to_canvas
+
+    validated = _paired_validated()
+    mark0 = contact.ATTACH_MODEL
+    canvas, _tr = to_canvas(validated)
+    canvas["graph"]["canvas_transform"]["attach_model"] = mark0
+    pre = deepcopy(canvas)
+    _shifted(canvas, _DX, _DY)
+
+    new = dict(contact.WAIST_TABLES[mark0], ELECTRIC_VLV=(0.25, 0.25))
+    monkeypatch.setattr(contact, "WAIST_TABLES",
+                        dict(contact.WAIST_TABLES, **{"bump": new}))
+    monkeypatch.setattr(contact, "ATTACH_MODEL", "bump")
+    monkeypatch.setattr(contact, "SKIN_CONTACT_OFFSET", dict(new))
+
+    def vbox(g):
+        return next(n for n in g["nodes"] if n["id"] == "v")["bbox"]
+    assert vbox(to_canvas(validated)[0]) != vbox(pre), \
+        "фикстура: подъём метки обязан менять рамку клапана"
+    own, _tr = to_canvas(validated, mark=mark0)
+    assert vbox(own) == vbox(pre)
+    assert not any(contact.TABLE_KEY in n for n in own["nodes"])
+
+    stats = text_import.import_text(canvas, validated)
+    _assert_follow(canvas, pre, stats, _DX, _DY)
+    assert not any(contact.TABLE_KEY in n for n in canvas["nodes"])

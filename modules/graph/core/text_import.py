@@ -20,7 +20,10 @@
 кратных рёбер (иначе индекс ребра — ключ якоря — съезжает: рассечённая пара
 добавляет ребро, и подписи уезжают к чужим трубам, замер 51b339ab — 1411 px)
 и с центроидом клапана в центре рамки (иначе якорь-узел съезжает на сдвиг
-талии). Холст с меткой — модельная `to_canvas`, как у раскладки.
+талии). Холст с меткой — модельная `to_canvas`, как у раскладки, и талии —
+по таблице СВОЕЙ метки (`to_canvas(mark=)`, реестр `contact.WAIST_TABLES`;
+red-team правок 02.10, (4): после подъёма метки холст прежней метки шёл по
+текущей таблице — 3 подписи на 1.06 px).
 
 ЗАЧЕМ ЯКОРЬ. Замер на корпусе: привязанных блоков 0 или 2 из сотен, то есть
 96-100 % подписей ни к чему не привязаны. Раскладка переставляет ~99 % узлов,
@@ -298,10 +301,12 @@ def import_text(canvas_graph, validated_graph, *, anchor_max=ANCHOR_MAX,
     сам холст, §3.8 п. 3).
 
     До-раскладочная геометрия — в режиме холста: без метки модели — как
-    238fe6b (`to_canvas(legacy=True)`, см. шапку модуля).
+    238fe6b (`to_canvas(legacy=True)`), с меткой — по таблице её талий
+    (`to_canvas(mark=)`, см. шапку модуля).
     """
-    legacy = contact.canvas_model(canvas_graph) is None
-    pre, _transform = to_canvas(validated_graph, legacy=legacy)
+    mark = contact.canvas_model(canvas_graph)
+    pre, _transform = to_canvas(validated_graph, legacy=mark is None,
+                                mark=mark)
     blocks = _active(pre)
     if not blocks:
         canvas_graph["text_blocks"] = []
