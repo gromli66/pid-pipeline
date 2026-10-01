@@ -61,7 +61,10 @@
     рамками (`overlap`) ход не увеличивает;
   * В КЛАПАН — ТОЛЬКО В ТАЛИЮ (Р4/Р5, блок 6): число неосевых концов
     клапанов степени 1–2 (`offaxis`, правило `contact.axial_only`) ход не
-    увеличивает.
+    увеличивает;
+  * НЕ ПОДВОДИТЬ ФОРМЫ БЛИЖЕ ПОЛА (Р-а, решение Максима 01.10): число
+    рёбер с зазором форм концов меньше 6 px (`gap`, счёт
+    `layout.spread.defects`) ход не увеличивает.
 
 Гейт хода (`accepts`) — лексикографически: косые -> отклонение ->
 ступеньки -> изломы (4-й приоритет, блок 6), прочие дефекты не хуже.
@@ -89,8 +92,10 @@
 вдвое (MEASUREMENTS §137): прежде полный судья на каждую пробу съедал
 45–60 % времени.
 
-Чистый stdlib: ни Qt, ни shapely. Роутинг приходит колбэком `route_fn`
-(редактор отдаёт свою лестницу), потому что он живёт в UI-слое.
+Без Qt. Роутинг приходит колбэком `route_fn` (редактор отдаёт свою
+лестницу), потому что он живёт в UI-слое. Детектор зазора форм — из пакета
+раскладки (`layout._gap`), импорт ленивый (`_gap_detector`): пакет тянет
+shapely, при импорте движка он не грузится.
 """
 from __future__ import annotations
 
@@ -868,6 +873,41 @@ def count_overlaps(graph):
     return n
 
 
+def _gap_detector():
+    """(пол, зазор форм пары узлов) — детектор раскладки `layout._gap`.
+    Импорт ленивый: пакет раскладки тянет shapely, а движку он нужен только
+    этой функцией."""
+    from .layout._gap import FLOOR, gap_and_seam, shape_box
+    return FLOOR, lambda a, b: gap_and_seam(shape_box(a), shape_box(b))[0]
+
+
+def _gap_ids(graph):
+    """{id ребра} с зазором форм концов меньше пола — ключи
+    `layout.spread.defects` (ребро без узла на конце не судится; рёбра с
+    одним id — одна запись, как ключ словаря у раскладки)."""
+    floor, gap = _gap_detector()
+    byid = nodes_by_id(graph)
+    out = set()
+    for e in g_edges(graph):
+        s, t = edge_ends(e)
+        a, b = byid.get(s), byid.get(t)
+        if a is not None and b is not None and gap(a, b) < floor:
+            out.add(str(e.get("id")))
+    return out
+
+
+def count_gaps(graph):
+    """Рёбер с зазором форм концов меньше пола раскладки (6 px) — тот же
+    счёт, что `layout.spread.defects` (Р-а, решение Максима 01.10).
+
+    Кнопка подводила формы ближе пола: сдвиг коннектора или узла укорачивал
+    трубу до невидимой (гейт блока 6 кнопки, MEASUREMENTS §142.2: ae30deb4
+    0 -> 4 — edge_220 4.85, edge_227 4.63, edge_362 4.19, edge_manual_13
+    0.31). Зазоры из построения легальны — гейт судит только прирост
+    (`_NOT_WORSE`), как и наложения."""
+    return len(_gap_ids(graph))
+
+
 def offaxis_ends(graph):
     """[(node_id, edge_id)] неосевых концов клапанов под правилом Р5.
 
@@ -982,7 +1022,9 @@ def score(graph):
     неосевых концов клапанов степени 1–2 (`offaxis_ends`); последние два —
     в `_NOT_WORSE`. `waist` — ступенек талий (`count_waist_steps`, они же
     внутри `steps`): гейт хода «ж» (`accepts_waist`). `hooks` — крючков
-    (`count_hooks`, 01.10): справочно, ни в гейт, ни в `_NOT_WORSE`."""
+    (`count_hooks`, 01.10): справочно, ни в гейт, ни в `_NOT_WORSE`.
+    `gap` — рёбер с зазором форм меньше пола раскладки (`count_gaps`,
+    Р-а 01.10): в `_NOT_WORSE`."""
     c = ec.check_canvas(graph)["counts"]
     dev = 0.0
     for e in g_edges(graph):
@@ -1008,6 +1050,7 @@ def score(graph):
         "offaxis": len(offaxis_ends(graph)),
         "waist": count_waist_steps(graph),
         "hooks": count_hooks(graph),
+        "gap": count_gaps(graph),
     }
 
 
@@ -1049,7 +1092,7 @@ class _Judge:
     повтор «г» (профиль §137: 60 % времени кнопки — `ec.along_border`), а
     проба трогает одно-два ребра и узел. Счётчики судьи аддитивны по рёбрам:
     вклад ребра (косые, почти-оси, отклонение, ступеньки, крючки, изломы,
-    вдоль, сквозь, углы, классы концов, неосевые) зависит только от самого ребра,
+    вдоль, сквозь, углы, классы концов, неосевые, зазор форм) зависит только от самого ребра,
     его концевых узлов (и их степени) и узлов, чья зона (`_zone`) задевает
     рамку ребра. Ребро пересчитывается, если изменилось оно (отпечаток
     `_sig`), его конец, степень конца или узел, чья старая либо новая зона
@@ -1113,6 +1156,7 @@ class _Judge:
         adrift = conn_off = poly_off = offaxis = waist = hooks = 0
         dev = 0.0
         seen = {}
+        gaps = set()
         for e, p in zip(links, parts):
             diag += p[0]
             near += p[1]
@@ -1131,6 +1175,8 @@ class _Judge:
             offaxis += p[11]
             waist += p[12]
             hooks += p[13]
+            if p[14]:
+                gaps.add(str(eid))
         own = sum(1 for v in seen.values() if v)
         xs, ys = [], []
         for n in nodes:
@@ -1146,7 +1192,7 @@ class _Judge:
             "w": (max(xs) - min(xs)) if xs else 0.0,
             "h": (max(ys) - min(ys)) if ys else 0.0,
             "bends": bends, "overlap": self._overlap, "offaxis": offaxis,
-            "waist": waist, "hooks": hooks,
+            "waist": waist, "hooks": hooks, "gap": len(gaps),
         }
 
     @staticmethod
@@ -1173,7 +1219,8 @@ class _Judge:
                 len(ec.through_box(mini)), len(ec.corner_ends(mini)),
                 len(cl["adrift"]), len(cl["conn_off"]), len(cl["poly_off"]),
                 len(_offaxis_of(e, nodes_by_id(mini), deg)),
-                count_waist_steps(mini), count_hooks(mini))
+                count_waist_steps(mini), count_hooks(mini),
+                bool(_gap_ids(mini)))
 
 
 _ACTIVE = None      # (холст, судья) идущего `smooth` — см. `_score`
@@ -1191,7 +1238,8 @@ def _score(graph):
 
 
 _NOT_WORSE =("along_own", "along_foreign", "through", "corner",
-              "adrift", "conn_off", "poly_off", "near", "overlap", "offaxis")
+              "adrift", "conn_off", "poly_off", "near", "overlap", "offaxis",
+              "gap")
 
 # Причины отказа (К-4): те же три ветки `_attempt`, которые снаружи
 # восстанавливал стенд (`tools/smooth_bench.py:119`), — теперь движок

@@ -1689,3 +1689,54 @@ def test_judge_counts_hooks_like_full_score():
     assert (judge(g)["steps"], judge(g)["hooks"]) == (1, 0)
     e["target_point"] = [118.0, 260.0]              # -> снова крючок
     assert judge(g) == es.score(g) and judge(g)["hooks"] == 1
+
+
+# ── Р-а: зазор форм не ближе пола раскладки (решение Максима 01.10) ─────
+@pytest.mark.parametrize("model", [False, True], ids=["старый", "модель"])
+def test_count_gaps_is_layout_defects(model):
+    """`gap` судьи кнопки — тот же счёт, что `layout.spread.defects` с полом
+    раскладки (6 px): судья хода и детектор раскладки не расходятся."""
+    from modules.graph.core.graph_access import nodes_by_id
+    from modules.graph.core.layout import LayoutParams, spread
+    g = _crop971(model)
+    want = len(spread.defects(g, nodes_by_id(g), LayoutParams().floor))
+    assert want >= 1, "фикстура: на кропе 971 есть ребро ближе пола"
+    assert es.count_gaps(g) == want
+    assert es.score(g)["gap"] == want == es._Judge()(g)["gap"]
+    assert "gap" in es._NOT_WORSE
+
+
+def _canvas_gap(dx):
+    """Ступенька 10 px между коннекторами c1 (100, 140) и c2 (400, 150):
+    закрыть её можно только сдвигом коннектора (c1 вниз или c2 вверх). У
+    каждого второй сосед — бокс по диагонали в dx px по x: c1 вниз и c2
+    вверх подходят к нему на hypot(dx, 5) (b1 под c1 слева, b2 над c2
+    справа; рёбра e1 вдоль рамок не идут)."""
+    c1, c2 = _conn("c1", 100.0, 140.0), _conn("c2", 400.0, 150.0)
+    b1 = _box("b1", 100.0 - dx - 20.0, 175.0)     # x2 = 100 - dx, y1 = 155
+    b2 = _box("b2", 400.0 + dx + 20.0, 116.0)     # x1 = 400 + dx, y2 = 136
+    e1 = _edge("e1", "c1", "c2", (100.0, 140.0), (400.0, 150.0),
+               [(200.0, 140.0), (200.0, 150.0)])
+    e2 = _edge("e2", "c1", "b1", (100.0, 140.0), (100.0 - dx, 175.0),
+               [(100.0, 175.0)])
+    e3 = _edge("e3", "c2", "b2", (400.0, 150.0), (400.0 + dx, 116.0),
+               [(400.0, 116.0)])
+    return _g([c1, c2, b1, b2], [e1, e2, e3])
+
+
+def test_connector_shift_refused_below_gap_floor():
+    """Р-а (гейт блока 6, §142.2: ae30deb4 0 -> 4): сдвиг коннектора, который
+    закрывает ступеньку ценой зазора форм меньше пола (hypot(3, 5) = 5.83 <
+    6), отклонён — холст бит-в-бит. В 9 px от бокса (10.3 после сдвига) тот
+    же холст лечится сдвигом коннектора."""
+    free = _canvas_gap(9.0)
+    st = es.smooth(free)
+    assert st["коннектор"] == 1 and es.count_steps(free) == 0, st
+    assert es.count_gaps(free) == 0
+
+    g = _canvas_gap(3.0)
+    assert es.count_gaps(g) == 0 and es.count_steps(g) == 1
+    before = copy.deepcopy(g)
+    st = es.smooth(g)
+    assert st["коннектор"] == 0 and st["лестница исчерпана"] == 1, st
+    assert g == before, "отклонённый ход обязан оставить холст бит-в-бит"
