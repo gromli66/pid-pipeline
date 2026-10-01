@@ -133,3 +133,105 @@ def test_no_node_shift_keeps_the_valve(qapp, tmp_path):
     ed = _editor(d, _edge_of_sheet(5.0, False))
     ed.smooth_canvas()
     assert ed.nodes["v"]["bbox"][0] == pytest.approx(5.0 - 3.1)
+
+
+# ── (5) почти-прямая из коннектора в талию: FXML в талии после открытия ─
+def _conn(nid, x, y):
+    return {"id": nid, "type": "connector", "class_id": -1,
+            "class_name": "connector", "centroid": [y, x], "bbox": None,
+            "segmentation": None, "degree": 0}
+
+
+def _draw_node(ed, cls, x1, y1, x2, y2):
+    """Оператор ставит узел из списка классов (протяжкой рамки)."""
+    before = set(ed.nodes)
+    ed.set_pending_node_class({"id": 0, "name": cls})
+    ed.set_mode("add_node_from_list")
+    h = ed._mode_handlers["add_node_from_list"]
+    h.on_press(ed, x1, y1, None)
+    h.on_move(ed, x2, y2, None)
+    h.on_release(ed, x2, y2, None)
+    (nid,) = set(ed.nodes) - before
+    return nid
+
+
+def _draw_edge(ed, a, b):
+    """Оператор ведёт ребро от центроида a к центроиду b."""
+    from ui.editors.mode_handlers.advanced_handlers import \
+        AddEdgeWithWaypointsHandler
+    h = AddEdgeWithWaypointsHandler()
+    ed.clear_selection()
+    ya, xa = ed.nodes[a]["centroid"]
+    yb, xb = ed.nodes[b]["centroid"]
+    n0 = len(ed.edges_data)
+    h.on_press(ed, xa, ya, None)
+    h.on_press(ed, xb, yb, None)
+    assert len(ed.edges_data) == n0 + 1
+
+
+def _fxml_miss(graph, nid):
+    """{ребро: промах конца трубы мимо талии контрола FXML, px} у клапана
+    nid (талия — от контрола выгрузки и доли таблицы скина)."""
+    import copy
+    import re
+    from modules.canvas_to_fxml import generate_canvas_fxml
+    fx = generate_canvas_fxml(copy.deepcopy(graph))
+    m = re.search(r'<(\w+Control) fx:id="%s"([^>]*)/>' % re.escape(nid), fx)
+    at = dict(re.findall(r'(\w+)="([^"]*)"', m.group(2)))
+    lx, ly, pw, ph = (float(at[k]) for k in
+                      ("layoutX", "layoutY", "prefWidth", "prefHeight"))
+    ori = at.get("orientation", "")
+    node = {n["id"]: n for n in graph["nodes"]}[nid]
+    info = contact.skin_info(node)
+    hf, vf = contact.SKIN_CONTACT_OFFSET.get(info[1], (0.0, 0.0))
+    cx, cy = lx + pw / 2, ly + ph / 2
+    if ori.startswith("HORIZONTAL") or not ori:
+        i, w = 0, cy + hf * ph
+    elif ori == "VERTICAL_REVERSE":
+        i, w = 1, cx + vf * ph
+    else:
+        i, w = 1, cx - vf * ph
+    out = {}
+    for e in graph["links"]:
+        for key, end in (("source_point", "source"),
+                         ("target_point", "target")):
+            if e.get(end) == nid:
+                out[e["id"]] = abs(e[key][i] - w)
+    return out
+
+
+@pytest.mark.parametrize("cls,w,h,off,jog", [
+    ("armatura_electro", 42.0, 37.8, -9.0, -9.0),
+    ("predohran", 42.0, 31.5, 6.0, 0.0)], ids=["armatura_electro",
+                                                 "predohran"])
+def test_button_save_open_keeps_pipe_in_waist(qapp, tmp_path, cls, w, h,
+                                              off, jog):
+    """Находка red-team (5), сценарий e3v: оператор ставит V-клапан между
+    коннекторами и ведёт к нему трубы; труба из верхнего коннектора
+    приходит в талию почти прямой (0.608 / 0.74 px). Открытие спрямляло её
+    по коннектору мимо талии — FXML промахивался больше допуска 0.35 px.
+    Теперь «Выровнять» -> сохранить -> открыть: промах FXML <= 0.35 у
+    обеих труб клапана. Без кнопки та же ловушка на месте (фикстура)."""
+    from ui.tabs.base_graph_tab import _reseat_canvas_endpoints
+
+    def run(tag, button):
+        d = tmp_path / tag
+        d.mkdir()
+        ed = _editor(d, _canvas([_conn("cL", 300.0, 150.0),
+                                 _conn("cR", 300.0 + jog, 460.0)], []))
+        xc = 300.0 + off
+        nid = _draw_node(ed, cls, xc - h / 2, 300.0 - w / 2, xc + h / 2,
+                         300.0 + w / 2)
+        _draw_edge(ed, "cL", nid)
+        _draw_edge(ed, nid, "cR")
+        if button:
+            ed.smooth_canvas()
+        p = d / "saved.json"
+        assert ed.save_graph(str(p))
+        _reseat_canvas_endpoints(p)
+        return _fxml_miss(json.loads(p.read_text(encoding="utf-8")), nid)
+
+    miss = run("button", True)
+    assert len(miss) == 2 and max(miss.values()) <= 0.35, miss
+    assert max(run("bare", False).values()) > 0.35, \
+        "фикстура: без кнопки открытие обязано уводить конец из талии"

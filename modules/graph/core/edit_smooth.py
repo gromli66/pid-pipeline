@@ -22,6 +22,14 @@
      клапаны стоят впритык, талии вразнобой — один клапан строго поперёк
      оси на разницу талий, перемычка — прямая; свой гейт `accepts_waist`
      (ступенек талий строго меньше, косых, ступенек и изломов не больше);
+  0г. «з» — ПОЧТИ-ПРЯМАЯ ИЗ КОННЕКТОРА В ТАЛИЮ (находка red-team блока 6,
+     01.10): труба из двух точек с отклонением от оси в полосе почти-оси
+     (NEAR_MIN < отклонение <= DIAG_TOL) из коннектора в талию клапана
+     модели. Судья её не видит, а открытие спрямляет её по коннектору
+     (`seating.STRAIGHT_TOL`) и уводит конец из талии — FXML мимо талии.
+     Коннектор встаёт на линию талии, иначе клапан — на линию коннектора;
+     свой гейт `accepts_near` (почти-осей строго меньше, прочее не хуже,
+     габарит рисунка не растёт);
   1. КОЛЕНО — маршрут вместо косой. Не двигает ничего. На холстах
      заказчика закрывает 41 диагональ из 46 (89%);
   2. СКОЛЬЖЕНИЕ КОНЦА по своей грани/участку — двигается только точка
@@ -710,6 +718,60 @@ def _waist_moves(graph, e, budget, big_area):
         out.append((deg.get(nid, 0), nid, dx, dy, ends))
     out.sort(key=lambda c: c[0])
     return [c[1:] for c in out]
+
+
+def _near_waist(graph, e, byid):
+    """«з» (находка red-team блока 6, 01.10): почти-прямая из коннектора в
+    талию клапана -> (роль конца клапана, id клапана, id коннектора, ось
+    сдвига 'x' | 'y', талия, поперечная координата коннектора) или None.
+
+    Труба — две точки, сегмент не короче SEG_FLOOR, отклонение от оси в
+    полосе почти-оси судьи (`ec.NEAR_MIN` < откл. <= `ec.DIAG_TOL`): косой
+    судья её не считает, кандидатом кнопки она не была. Открытие спрямляет
+    такую пару (`seating.STRAIGHT_TOL` = 3 px) по коннектору — его конец
+    центроид — и уводит конец клапана из талии: промах FXML мимо талии
+    0.608 / 0.74 px > 0.35 (репро red-team e3/e3v). Конец — на ОСЕВОЙ грани
+    клапана модели (`contact.face_refs`; на старом холсте талии нет), труба
+    вдоль его оси, на грани одна труба (веер слотов — не талия), ни один
+    конец не пин. Отклонение не больше NEAR_MIN открытие сдвигает на столько
+    же — в допуске FXML."""
+    pts = edge_pts(e)
+    if not pts or len(pts) != 2:
+        return None
+    (ax, ay), (bx, by) = pts
+    dx, dy = abs(bx - ax), abs(by - ay)
+    if max(dx, dy) < ec.SEG_FLOOR \
+            or not ec.NEAR_MIN < min(dx, dy) <= ec.DIAG_TOL:
+        return None
+    for vr, vk, ck in (("s", "source", "target"), ("t", "target", "source")):
+        v, c = byid.get(e.get(vk)), byid.get(e.get(ck))
+        if v is None or c is None or not is_connector(c):
+            continue
+        if end_kind(v, e) == "anchor" or end_kind(c, e) == "anchor":
+            continue
+        rect = seating._anchor_rect(v)
+        refs = contact.face_refs(v, rect) if rect is not None else None
+        if not refs:
+            continue
+        mx, my = pts[0] if vr == "s" else pts[-1]
+        side = seating._end_side(rect, mx, my)
+        if side not in refs or (side in ("L", "R")) != (dx > dy):
+            continue
+        k = 0
+        for x in g_edges(graph):
+            for xid, key in zip(edge_ends(x),
+                                ("source_point", "target_point")):
+                p = x.get(key)
+                if xid == v["id"] and p and seating._end_side(
+                        rect, float(p[1]), float(p[0])) == side:
+                    k += 1
+        if k != 1:
+            continue
+        cx, cy = pts[-1] if vr == "s" else pts[0]
+        axis = "y" if side in ("L", "R") else "x"
+        return vr, v["id"], c["id"], axis, refs[side], \
+            (cy if axis == "y" else cx)
+    return None
 
 
 def _breaks_anchor(graph, node_id):
@@ -1533,6 +1595,31 @@ def accepts_axial(before, after):
     return after["dev"] <= before["dev"] + 0.5
 
 
+def accepts_near(before, after):
+    """Гейт хода «з» (почти-прямая в талию, находка red-team блока 6,
+    01.10): почти-осей СТРОГО меньше; косых, ступенек и изломов не больше,
+    отклонение не больше (шум 0.5 px); прочие дефекты `_NOT_WORSE` не хуже;
+    габарит рисунка `w`/`h` не больше входа. Общий гейт `accepts` такой ход
+    не видит: почти-ось не косая и не ступенька — выигрыш только в `near`,
+    поэтому ход обязан быть чистым: сдвиг клапана у края рисунка на долю
+    пикселя, раздвинувший габарит (raw@model 7d46ff96: h 1039.8 -> 1041.2),
+    — не ход."""
+    if after["w"] > CANVAS_W + 0.5 or after["h"] > CANVAS_H + 0.5:
+        return False
+    if after["w"] > before["w"] or after["h"] > before["h"]:
+        return False
+    for k in _NOT_WORSE:
+        if k != "near" and after.get(k, 0) > before.get(k, 0):
+            return False
+    if after["near"] >= before["near"]:
+        return False
+    if after["diag"] > before["diag"] or after["steps"] > before["steps"]:
+        return False
+    if after.get("bends", 0) > before.get("bends", 0):
+        return False
+    return after["dev"] <= before["dev"] + 0.5
+
+
 def accepts_waist(before, after):
     """Гейт хода «ж» (решение Максима 01.10: талии соседних клапанов — на
     одну линию, «если гейт соседей пропускает»): ступенек талий СТРОГО
@@ -1625,9 +1712,12 @@ def _rounds(graph, stats, route_fn, reseat_fn, budget, allow_node_shift,
             # то, на что заказчик указал по graph_edited_av («не исправило
             # ступеньки»). Берём и ортогональные с одиночным шажком.
             # Ступенька талий (перемычка клапан–клапан, `count_steps`) —
-            # тоже кандидат: у неё две-три точки, и она ортогональна.
+            # тоже кандидат: у неё две-три точки, и она ортогональна. И
+            # почти-прямая из коннектора в талию («з», `_near_waist`):
+            # судья её не видит, а открытие спрямит её мимо талии.
             if is_ortho(e) and single_step(e) is None and id(e) not in off \
-                    and not _waist_step(e, byid):
+                    and not _waist_step(e, byid) \
+                    and _near_waist(graph, e, byid) is None:
                 continue
             if _try_remedies(graph, e, stats, route_fn, reseat_fn,
                              budget, allow_node_shift, big_area):
@@ -1924,6 +2014,35 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
         if reseat_fn is not None:
             reseat_fn(nid)
         judge("узел", gate=accepts_waist)
+
+    # ── 0г. «з»: ПОЧТИ-ПРЯМАЯ ИЗ КОННЕКТОРА В ТАЛИЮ (red-team, 01.10) ──
+    # Коннектор поперёк трубы на линию талии (узел стоит), иначе клапан —
+    # на линию коннектора (`allow_node_shift`, не крупный); конец клапана —
+    # ровно на линию, труба — прямая. Гейт `accepts_near`. Ребро «з» —
+    # кандидат только этой ступени: прямой паре дальше лестнице нечего.
+    near = _near_waist(graph, e, nodes_by_id(graph))
+    if near is not None:
+        vrole, vid, cid, axis, waist, line = near
+        vkey = "source_point" if vrole == "s" else "target_point"
+        i = 0 if axis == "y" else 1                  # [y, x]
+        for nid, kind, delta, at in ((cid, "коннектор", waist - line, waist),
+                                     (vid, "узел", line - waist, line)):
+            if kind == "узел" and (
+                    not allow_node_shift
+                    or _node_is_anchor_role(graph, vid, big_area)):
+                continue
+            dx, dy = (0.0, delta) if axis == "y" else (delta, 0.0)
+            _shift_node(graph, nid, dx, dy)
+            cur = live_edge()
+            if cur is not None:
+                p = list(cur[vkey])
+                p[i] = at
+                cur[vkey] = p
+                cur["waypoints"] = []
+            if reseat_fn is not None:
+                reseat_fn(nid)
+            judge(kind, gate=accepts_near)
+        return done("нет кандидата")
 
     # ── 1. КОЛЕНО: ничего не двигаем ───────────────────────────────────
     # Гейта И2 здесь НЕТ и он не нужен: кандидатом ребро становится только

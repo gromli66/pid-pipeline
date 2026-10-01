@@ -1135,6 +1135,111 @@ def test_engine_clearance_is_the_editor_route_clearance():
     assert es.ec.CLEARANCE == AdvancedGraphEditor.ROUTE_CLEARANCE
 
 
+# ── «з»: почти-прямая из коннектора в талию (red-team блока 6, 01.10) ──
+_V3 = (272.1, 279.0, 309.9, 321.0)   # V-клапан armatura_electro, талия x 299.39
+
+
+def _canvas_near(dev=-0.608, legacy=False, busy=False, end_off=0.0):
+    """Репро red-team e3v (armatura_electro −9/−9): V-клапан, коннектор c в
+    129 px над ним, труба e1 в талию верхней грани с отклонением dev по x
+    (c на x = талия − dev); снизу — прямая e2 из нижней талии к коннектору
+    d. busy — c держит вторая труба вверх, к коннектору b (сдвиг c её
+    скосил бы), и d стоит на линии c (e2 — тоже почти-прямая). end_off —
+    конец e1 на грани мимо талии на столько px."""
+    from modules.graph.core import contact
+    v = _valve("v", _V3, axis="V")
+    w = contact.face_refs(v, _V3)["T"]
+    cx = w - dev
+    dx = cx if busy else w
+    nodes = [v, _conn("c", cx, 150.0), _conn("d", dx, 460.0)]
+    links = [_edge("e1", "c", "v", (cx, 150.0), (w + end_off, _V3[1])),
+             _edge("e2", "v", "d", (w, _V3[3]), (dx, 460.0))]
+    if busy:
+        nodes.append(_conn("b", cx, 20.0))
+        links.append(_edge("e3", "c", "b", (cx, 150.0), (cx, 20.0)))
+    if legacy:
+        for n in nodes:
+            n[contact.LEGACY_KEY] = True
+    return _g(nodes, links)
+
+
+def test_near_pipe_into_waist_is_straightened():
+    """Находка red-team (5): почти-прямая (0.608 px <= DIAG_TOL) из
+    коннектора в талию клапана не была кандидатом кнопки, а открытие
+    спрямляет её по коннектору и уводит конец из талии (FXML мимо талии
+    0.608 > 0.35). Теперь «з»: коннектор встаёт на линию талии, труба —
+    прямая, конец — ровно в талии (и тот, что стоял мимо неё на 0.1 px),
+    клапан стоит."""
+    from modules.graph.core import contact
+    g = _canvas_near(end_off=0.1)
+    e1 = g["links"][0]
+    assert es.is_ortho(e1) and es.shift_target(e1) is None
+    assert es.score(g)["near"] == 1
+    w = contact.face_refs(g["nodes"][0], _V3)["T"]
+
+    st = es.smooth(g)
+
+    assert st["коннектор"] == 1 and st["узел"] == 0, st
+    c = g["nodes"][1]
+    assert c["centroid"][1] == pytest.approx(w, abs=1e-9)
+    assert e1["source_point"][1] == e1["target_point"][1] ==         pytest.approx(w, abs=1e-9)
+    assert g["nodes"][0]["bbox"] == list(_V3)
+    assert es.score(g)["near"] == 0
+
+
+@pytest.mark.parametrize("kind", ["в допуске", "холст без метки", "пин"])
+def test_near_pipe_skipped(kind):
+    """«з» не ходит: отклонение не больше NEAR_MIN (открытие сдвинет конец
+    в допуске FXML), старый холст (талии нет, ADR-009), пин на конце
+    клапана (пин — истина) — холст бит-в-бит."""
+    g = _canvas_near(dev=-0.2 if kind == "в допуске" else -0.608,
+                     legacy=kind == "холст без метки")
+    if kind == "пин":
+        e1 = g["links"][0]
+        y, x = e1["target_point"]
+        ports.set_edge_pin(g["nodes"][0], e1, "target", x, y)
+    before = copy.deepcopy(g)
+    st = es.smooth(g)
+    assert st["коннектор"] == st["узел"] == 0, (kind, st)
+    assert g == before, kind
+
+
+def test_near_gate_keeps_the_extent():
+    """Гейт «з» (`accepts_near`): выигрыш — только почти-осей, поэтому ход
+    чистый: габарит рисунка не растёт (raw@model 7d46ff96: сдвиг клапана у
+    края рисунка на 1.34 px раздвигал h 1039.8 -> 1041.2), косых, ступенек,
+    изломов и прочих дефектов не больше."""
+    base = {"diag": 0, "dev": 0.0, "steps": 0, "bends": 2, "near": 3,
+            "w": 1800.0, "h": 1039.8}
+    good = dict(base, near=2)
+    assert es.accepts_near(base, good)
+    assert not es.accepts_near(base, dict(good, h=1041.2))
+    assert not es.accepts_near(base, dict(good, w=1800.5))
+    assert not es.accepts_near(base, dict(good, steps=1))
+    assert not es.accepts_near(base, dict(good, through=1))
+    assert not es.accepts_near(base, dict(base))
+    assert not es.accepts(base, good), "общий гейт почти-ось не видит"
+
+
+def test_near_pipe_moves_the_valve_when_connector_is_held():
+    """Коннектор c держит вторая труба (его сдвиг скосил бы её — почти-осей
+    не меньше): клапан встаёт талией на линию коннектора, обе его трубы
+    прямые. allow_node_shift=False — клапан стоит, e2 выпрямляет коннектор
+    d."""
+    g = _canvas_near(busy=True)
+    assert es.score(g)["near"] == 2
+    st = es.smooth(g)
+    assert st["узел"] == 1, st
+    assert g["nodes"][0]["bbox"][0] == pytest.approx(_V3[0] + 0.608)
+    assert es.score(g)["near"] == 0
+
+    g = _canvas_near(busy=True)
+    st = es.smooth(g, allow_node_shift=False)
+    assert st["узел"] == 0 and st["коннектор"] == 1, st
+    assert g["nodes"][0]["bbox"] == list(_V3)
+    assert es.score(g)["near"] == 1
+
+
 # ── лист: положение узлов не хуже входа (red-team блока 6, 01.10) ───────
 def _canvas_manual4_edge(x1, right=False):
     """«е» у края листа (репро red-team e7_offsheet): H-клапан с рамкой от
