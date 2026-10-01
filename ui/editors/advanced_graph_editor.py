@@ -788,6 +788,8 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         if self._route_orthogonal(probe):
             # концы на осях подводящих сегментов, в портах движка
             self._engine_finish_ends(probe)
+        else:
+            self._axial_hook(probe)              # Р5: косая в талию — крючок
         sp, tp = probe['source_point'], probe['target_point']
         src_x, src_y = sp[1], sp[0]
         tgt_x, tgt_y = tp[1], tp[0]
@@ -867,6 +869,9 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                     else probe['source_point']
             if self._first_edge_shift(nid, other):
                 probe = _seat()
+        # Р5: конец в осевой талии, подход косой — достроить крючок (точки
+        # оператора остаются)
+        self._axial_hook(probe)
         src_y, src_x = probe['source_point']
         tgt_y, tgt_x = probe['target_point']
         waypoints = probe['waypoints']
@@ -1469,6 +1474,112 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 edge_data['waypoints'] = [[ym, sx], [ym, tx]]
                 return True
         return False
+
+    def _axial_hook(self, edge_data: dict) -> bool:
+        """Р5, крючок: конец ребра на осевой грани клапана степени 1–2 (по
+        модели — в талии), а смежный сегмент не перпендикулярен грани —
+        косая через угол рамки (сквозной red-team 02.10: путь мыши
+        `add_edge_with_waypoints` роутера не звал, `add_edge` — когда
+        лестница отказала). Достраивается только ПОДХОД между концом и
+        смежной точкой (излом оператора или конец партнёра): стаб наружу
+        вдоль оси клапана и ортогональный ход — до 3 изломов (`_hook_path`).
+        Промежуточные точки оператора не трогаются, конец остаётся в
+        талии. Только по модели (`_waist_model()`): старый холст — как
+        238fe6b. Кандидата нет — ребро как было. -> True, если достроен."""
+        if not self._waist_model():
+            return False
+        from modules.graph.core import contact, seating
+        from modules.graph.core.edit_checks import seat_rect
+
+        done = False
+        eid = edge_data.get('id')
+        for role, okey in (('source', 'target_point'),
+                           ('target', 'source_point')):
+            nid = edge_data.get(role)
+            node = self.nodes.get(nid)
+            p = edge_data.get(role + '_point')
+            rect = seat_rect(node)
+            if rect is None or not p:
+                continue
+            # степень — по рёбрам ПО ID, новое ребро — плюс один (как
+            # `_seat_end_ported`)
+            mine = [e for e in self.edges_data
+                    if nid in (e.get('source'), e.get('target'))]
+            deg = len(mine) + (0 if any(
+                e is edge_data or (eid is not None and e.get('id') == eid)
+                for e in mine) else 1)
+            if not contact.axial_only(node, deg):
+                continue
+            refs = contact.face_refs(node, rect)
+            side = seating._end_side(rect, float(p[1]), float(p[0]))
+            if not refs or side not in refs:
+                continue
+            wps = [list(w) for w in edge_data.get('waypoints') or []]
+            q = (wps[0] if role == 'source' else wps[-1]) if wps \
+                else edge_data.get(okey)
+            if not q:
+                continue
+            mid = self._hook_path(edge_data, (float(p[1]), float(p[0])),
+                                  side, rect, (float(q[1]), float(q[0])))
+            if not mid:
+                continue
+            mid = [[y, x] for x, y in mid]
+            edge_data['waypoints'] = mid + wps if role == 'source' \
+                else wps + mid[::-1]
+            edge_data.pop('_route_defect', None)
+            done = True
+        return done
+
+    def _hook_path(self, edge_data: dict, w, side: str, rect, q):
+        """Изломы подхода от конца w (на грани side рамки rect) к точке q,
+        [(x, y), ...] от w к q, или None (подход перпендикулярен грани в
+        допуске судьи — косой нет, либо годного кандидата нет). Почти-прямая
+        перед гранью (отклонение <= `edit_checks.DIAG_TOL`) — не косая:
+        крючок из неё сделал бы ступеньку меньше 1.5 px, её дело — кнопка
+        «Выровнять» («з», блок 6). Кандидаты: L (q перед гранью), Z через
+        середину и через стаб, крючок в 3 излома в обход рамки сверху/снизу
+        (у вертикальной оси — слева/справа). Стаб — клиренс + полтолщины
+        чернил + 0.5 (как оси `_route_fallback_z`), чтобы колено не
+        прижималось к своей грани. Сегменты судит `_fb_seg_bad` (как
+        фолбэки лестницы: свою рамку — прижатием, сквозной ход через неё
+        тоже прижатие). Лучший — меньше изломов, затем короче."""
+        horiz = side in ('L', 'R')              # нормаль грани вдоль x
+        n = 1.0 if side in ('R', 'B') else -1.0
+
+        def xy(u, v):
+            return (u, v) if horiz else (v, u)
+
+        uw, vw = (w[0], w[1]) if horiz else (w[1], w[0])
+        uq, vq = (q[0], q[1]) if horiz else (q[1], q[0])
+        from modules.graph.core.edit_checks import DIAG_TOL
+        if abs(vq - vw) <= DIAG_TOL and n * (uq - uw) > 0.5:
+            return None                         # вход перпендикулярен грани
+        off = self.ROUTE_CLEARANCE \
+            + float(edge_data.get('render_width') or 2.0) / 2.0 + 0.5
+        um = uw + n * off
+        lo, hi = (rect[1], rect[3]) if horiz else (rect[0], rect[2])
+        cands = []
+        if n * (uq - uw) >= off:                # q перед гранью
+            cands.append([xy(uq, vw)])
+            cands.append([xy((uw + uq) / 2.0, vw), xy((uw + uq) / 2.0, vq)])
+        cands.append([xy(um, vw), xy(um, vq)])
+        for vm in (lo - off, hi + off):
+            cands.append([xy(um, vw), xy(um, vm), xy(uq, vm)])
+        amn = self._amnesty_ids(edge_data)
+        best = None
+        for mid in cands:
+            pts = [w]
+            for pt in mid + [q]:                # без нулевых сегментов
+                if math.hypot(pt[0] - pts[-1][0], pt[1] - pts[-1][1]) > 1e-6:
+                    pts.append(pt)
+            if any(self._fb_seg_bad(a, b, edge_data, amn)
+                   for a, b in zip(pts, pts[1:])):
+                continue
+            key = (len(pts) - 2, sum(math.hypot(b[0] - a[0], b[1] - a[1])
+                                     for a, b in zip(pts, pts[1:])))
+            if best is None or key < best[0]:
+                best = (key, pts[1:-1])
+        return best[1] if best else None
 
     def _amnesty_ids(self, edge_data: dict) -> set:
         """Узлы, чьё нутро фолбэкам МОЖНО пересекать: те, что БАЗОВАЯ

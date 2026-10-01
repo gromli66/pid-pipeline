@@ -487,3 +487,142 @@ def test_optimize_edge_counts_its_own_edge_once(qapp, tmp_path):
     ed = _editor(qapp, tmp_path, g)
     assert ed.optimize_edge("c", "v")
     assert _ends(ed, "e1")[1] == pytest.approx([WAIST_Y, 279.0], abs=0.5)
+
+
+# ───── крючок в осевую талию по пути мыши (Р5, сквозной red-team 02.10) ─────
+# Повернуть серверный клапан редактор не может (Р3: ось после первого ребра
+# фиксирована): поперечная труба входит в осевую талию КРЮЧКОМ. До правки
+# путь мыши (`add_edge_with_waypoints`, клик-клик) роутера не звал, а
+# `add_edge` после отказа лестницы оставлял косую через угол рамки
+# ([[60, 300], [200, 321]]). Сценарий — обработчиками мыши, как у оператора.
+
+def _single_valve_canvas(mark="waist-1"):
+    """Клапан степени 1 (ось H, без `_axis_free` — серверный): e1 слева в
+    талию; коннектор t прямо над клапаном, s — левее и выше."""
+    g = _canvas()
+    g["nodes"] = [n for n in g["nodes"] if n["id"] != "b"]
+    g["links"] = [e for e in g["links"] if e["id"] != "e2"]
+    g["nodes"][1]["degree"] = 1
+    for cid, x, y in (("t", 300.0, 60.0), ("s", 150.0, 60.0)):
+        g["nodes"].append({"id": cid, "type": "connector", "class_id": -1,
+                           "class_name": "connector", "centroid": [y, x],
+                           "bbox": None, "segmentation": None, "degree": 0})
+    if mark is None:
+        del g["graph"]["canvas_transform"]["attach_model"]
+    return g
+
+
+def _mouse_edge(ed, a_xy, b_xy, wps=()):
+    """Ребро режимом «add_edge» обработчиком мыши: клик, изломы, клик."""
+    ed.set_mode("add_edge")
+    h = ed._mode_handlers["add_edge"]
+    n0 = len(ed.edges_data)
+    for x, y in (a_xy, *wps, b_xy):
+        h.on_press(ed, x, y, None)
+    assert len(ed.edges_data) == n0 + 1, "ребро не создано"
+    return ed.edges_data[-1]
+
+
+def _poly(e):
+    return [e["source_point"], *(e.get("waypoints") or []), e["target_point"]]
+
+
+def _assert_hook_into_waist(ed, e, face_x, n_operator=0):
+    """Труба ортогональна, конец ровно в талии осевой грани, подход —
+    горизонталь снаружи грани, достроено не больше 3 изломов; судья не
+    видит ни прошивания, ни прижатия к рамкам (колено не липнет к своей
+    грани)."""
+    from modules.graph.core import edit_checks
+
+    pts = _poly(e)
+    mini = {"nodes": list(ed.nodes.values()), "links": [e]}
+    assert edit_checks.through_box(mini) == [] \
+        and edit_checks.along_border(mini) == [], f"судья: {pts}"
+    assert ed._edge_is_ortho(e, tol=0.0), f"косая: {pts}"
+    assert e["target_point"] == pytest.approx([WAIST_Y, face_x], abs=1e-9)
+    assert _valve_port(ed.nodes["v"]) == pytest.approx(WAIST_Y)
+    last = pts[-2]
+    assert last[0] == pytest.approx(WAIST_Y, abs=1e-9) \
+        and (last[1] - face_x) * (face_x - 300.0) > 0, \
+        f"подход не перпендикулярен грани: {pts}"
+    assert len(e["waypoints"]) - n_operator <= 3, f"изломов > 3: {pts}"
+
+
+def test_mouse_click_click_hooks_into_axial_waist(qapp, tmp_path):
+    """Д1: клик по t, клик по клапану — крючок в свободную талию R (L занята
+    e1); Ctrl+Z / Ctrl+Y — ребро уходит и возвращается тем же крючком;
+    повторное открытие сохранённого холста ничего не двигает."""
+    ed = _editor(qapp, tmp_path, _single_valve_canvas())
+    e = _mouse_edge(ed, (300.0, 60.0), (300.0, WAIST_Y))
+    _assert_hook_into_waist(ed, e, VALVE_BBOX[2])
+    poly = copy.deepcopy(_poly(e))
+    ed.undo()
+    assert len(ed.edges_data) == 1
+    ed.redo()
+    assert _poly(ed.edges_data[-1]) == poly
+
+    p = tmp_path / "saved.json"
+    assert ed.save_graph(str(p))
+    changed, _got = _open(tmp_path, json.loads(p.read_text(encoding="utf-8")))
+    assert not changed, "открытие сдвинуло крючок"
+
+
+def test_mouse_operator_waypoint_kept_hook_builds_approach(qapp, tmp_path):
+    """Д1: излом оператора (150, 120) сохраняется как есть, достраивается
+    только подход от него к талии — в обход клапана сверху."""
+    ed = _editor(qapp, tmp_path, _single_valve_canvas())
+    e = _mouse_edge(ed, (150.0, 60.0), (300.0, WAIST_Y), wps=[(150.0, 120.0)])
+    assert e["waypoints"][0] == [120.0, 150.0], "излом оператора сдвинут"
+    _assert_hook_into_waist(ed, e, VALVE_BBOX[2], n_operator=1)
+
+
+def test_add_edge_api_hooks_when_ladder_fails(qapp, tmp_path):
+    """`add_edge` (не мышь): лестница отказывает (L через свой клапан,
+    Z без осей за ним) — тот же крючок, а не косая с `_route_defect`."""
+    ed = _editor(qapp, tmp_path, _single_valve_canvas())
+    assert ed.add_edge("t", "v")
+    e = ed.edges_data[-1]
+    assert (e["source"], e["target"]) == ("t", "v")
+    assert not e.get("_route_defect")
+    _assert_hook_into_waist(ed, e, VALVE_BBOX[2])
+
+
+def test_mouse_old_canvas_has_no_hook(qapp, tmp_path):
+    """Старый холст без метки (Р1) — как 238fe6b: правила Р5 нет, труба
+    прямая в верхнюю грань, крючка нет."""
+    ed = _editor(qapp, tmp_path, _single_valve_canvas(mark=None))
+    e = _mouse_edge(ed, (300.0, 60.0), (300.0, WAIST_Y))
+    assert e["waypoints"] == []
+    assert e["target_point"][1] == pytest.approx(300.0)
+    assert e["target_point"][0] < WAIST_Y - 10, f"не сверху: {_poly(e)}"
+
+
+def test_mouse_partner_behind_gets_three_bend_hook(qapp, tmp_path):
+    """Д1: партнёр ПОЗАДИ клапана на высоте его рамки (левая талия занята
+    e1, новой трубе — правая): Z прошёл бы сквозь свой клапан, поэтому
+    крючок в 3 излома в обход рамки."""
+    g = _single_valve_canvas()
+    g["nodes"].append({"id": "s2", "type": "connector", "class_id": -1,
+                       "class_name": "connector", "centroid": [195.0, 150.0],
+                       "bbox": None, "segmentation": None, "degree": 0})
+    ed = _editor(qapp, tmp_path, g)
+    e = _mouse_edge(ed, (150.0, 195.0), (300.0, WAIST_Y))
+    _assert_hook_into_waist(ed, e, VALVE_BBOX[2])
+    assert len(e["waypoints"]) == 3, _poly(e)
+
+
+def test_mouse_near_straight_approach_is_left_to_the_button(qapp, tmp_path):
+    """Почти-прямая перед гранью (коннектор f в 0.6 px от линии талии,
+    отклонение <= DIAG_TOL судьи) — не косая: крючок из неё сделал бы
+    ступеньку 0.6 px; её спрямляет кнопка «Выровнять» («з», блок 6). Труба
+    без изломов, конец в талии свободной грани R."""
+    g = _single_valve_canvas()
+    g["nodes"].append({"id": "f", "type": "connector", "class_id": -1,
+                       "class_name": "connector",
+                       "centroid": [WAIST_Y + 0.6, 420.0], "bbox": None,
+                       "segmentation": None, "degree": 0})
+    ed = _editor(qapp, tmp_path, g)
+    e = _mouse_edge(ed, (420.0, WAIST_Y + 0.6), (300.0, WAIST_Y))
+    assert e["waypoints"] == [], _poly(e)
+    assert e["target_point"] == pytest.approx([WAIST_Y, VALVE_BBOX[2]],
+                                              abs=1e-9)
