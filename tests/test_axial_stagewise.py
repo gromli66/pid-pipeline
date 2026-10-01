@@ -72,10 +72,29 @@ def test_cliff_keeps_valve_pipes_connector_leaves_frame():
     assert st["scale_eff"] == 0.0 and st["over"] <= axial.PRUNE_SLACK
     assert st["pipes_y"] == 2                      # v–u и v–c, не 0
     assert st["pruned"]["y"] == {"touch": 1, "drop": 0}
-    # c — на критическом пути (к ряду B): до касания, на кромке рамки
-    assert y["c"] - y["v"] >= 12.0 - 1e-6
+    # c — на критическом пути (к ряду B): до минимальной трубы — снаружи
+    # рамки на клиренс VALVE_CLEAR (решение 01.10), а не на кромке
+    assert y["c"] - y["v"] == pytest.approx(12.0 + axial.VALVE_CLEAR)
     # u — вне пути: полный пол VALVE_PIPE сверх полугабарита
     assert y["v"] - y["u"] >= 12.0 + axial.VALVE_PIPE - 1e-6
+
+
+@pytest.mark.parametrize("room", [4, 8, 10])
+def test_cliff_without_room_keeps_min_valve_pipe(room):
+    """Тесный лист: даже минимальные трубы клапана не влезают. Ступень не
+    снимает трубу клапана (раньше снимала — c78e1f02: коннектор в центре
+    рамки, труба нулевой длины), запасной attempt без труб держит трубы
+    клапана минимальными: оба коннектора снаружи рамки v на VALVE_CLEAR;
+    плата — честный вылет за холст (over), а не коннектор в теле клапана."""
+    g = _column(200, room)
+    st = axial.place(g, canvas=(600.0, 200.0))
+    y = _ys(g)
+    assert st["scale_eff"] == 0.0 and st["pruned"] == {}   # запасной attempt
+    assert st["pipes_y"] == 2 and st["valve_pipe_eff"] == axial.VALVE_CLEAR
+    assert y["c"] - y["v"] == pytest.approx(12.0 + axial.VALVE_CLEAR)
+    assert y["v"] - y["u"] == pytest.approx(12.0 + axial.VALVE_CLEAR)
+    assert st["over"] > axial.PRUNE_SLACK
+    assert y["q"] - y["P"] == pytest.approx(0.0, abs=1e-6)  # не клапан
 
 
 def test_no_cliff_no_valve_only_step():
@@ -167,3 +186,19 @@ def test_prune_drops_after_touch_when_touch_not_enough():
                                  [("a", "b", 26.0)], by_key, idx, "oy", "hh",
                                  30.0)
     assert st == {"touch": 0, "drop": 1} and kept == []
+
+
+def test_prune_with_floor_stops_at_min_pipe():
+    """floor: ослабление до полугабаритов + floor, труба не снимается, даже
+    если и так не влезает (ступень «только трубы клапанов», VALVE_CLEAR)."""
+    by_key = {"a": _it("a", 0, 10), "b": _it("b", 0, 10)}
+    idx = {"a": 0, "b": 1}
+    kept, st = axial.prune_pipes(2, [(10.0, 10.0)] * 2, [],
+                                 [("a", "b", 26.0)], by_key, idx, "oy", "hh",
+                                 30.0, floor=axial.VALVE_CLEAR)
+    assert st == {"touch": 1, "drop": 0}
+    assert kept == [("a", "b", 20.0 + axial.VALVE_CLEAR)]
+    kept, st = axial.prune_pipes(2, [(10.0, 10.0)] * 2, [],
+                                 [("a", "b", 26.0)], by_key, idx, "oy", "hh",
+                                 60.0, floor=axial.VALVE_CLEAR)
+    assert st == {"touch": 0, "drop": 0} and kept == [("a", "b", 26.0)]

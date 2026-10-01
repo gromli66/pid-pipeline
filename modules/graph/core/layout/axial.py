@@ -40,6 +40,11 @@ VALVE_PIPE = 6.0  # px: труба клапана на его оси — не к
 PRUNE_SLACK = 1.0  # px: допуск ступени «только трубы клапанов»: VPSC с полом
                    # промежутков (fit_keep) добирает ~0.1 px сверх оценки
                    # prune_pipes; принимается выход за холст до 1 px
+VALVE_CLEAR = 1.0  # px: минимальная труба клапана на его оси — коннектор
+                   # СНАРУЖИ рамки на этот клиренс (центр–центр = полугабариты
+                   # концов + VALVE_CLEAR), а не в её центре. Держится в
+                   # ступени «только трубы клапанов» (ослабление не ниже) и в
+                   # запасном attempt без труб (решение Максима 01.10)
 _SAME = object()  # сентинел: pipe_base по умолчанию наследует gap base
                   # (None — валидное значение «без капа», поэтому не годится)
 
@@ -315,7 +320,7 @@ def valve_floor(pipes, keep, by_key, want):
 
 
 def prune_pipes(n, marg, seps_fixed, pipes, by_key, idx, off_key, half_key,
-                usable):
+                usable, floor=None):
     """Поэтапный отказ от труб одной оси, пока раскладка не влезет в `usable`.
 
     Ширина считается левой предельной раскладкой (как `min_extent`, без пола
@@ -323,10 +328,16 @@ def prune_pipes(n, marg, seps_fixed, pipes, by_key, idx, off_key, half_key,
     набирается лишняя длина: сперва до касания концов, потом снимает.
     Сепарация блок-блок (`seps_fixed`) не трогается никогда: если лишнее
     набирает она, отказ останавливается.
+    floor (px) — минимальная труба: ослабление только до полугабаритов
+    концов + floor, труба не снимается (ступень «только трубы клапанов»:
+    коннектор снаружи рамки клапана, `VALVE_CLEAR`). None — до касания,
+    потом снять.
     -> (оставшиеся спеки труб, {"touch": n, "drop": n}).
     """
     lvl = [0] * len(pipes)              # 0 — целиком, 1 — касание, 2 — снята
-    touch = [by_key[a][half_key] + by_key[b][half_key] for a, b, _ in pipes]
+    cap = 2 if floor is None else 1     # floor: ниже минимума не ослабляется
+    touch = [min(nd, by_key[a][half_key] + by_key[b][half_key]
+                 + (floor or 0.0)) for a, b, nd in pipes]
     fixed = {(i, j): g
              for i, j, g in sep_gaps(seps_fixed, by_key, idx, off_key)}
 
@@ -363,7 +374,8 @@ def prune_pipes(n, marg, seps_fixed, pipes, by_key, idx, off_key, half_key,
             ks = who.get((pred[j], j))
             # дуга сжимается, только если ослабить ВСЕ трубы на её максимуме;
             # из дуг пути берётся наименее ослабленная
-            if ks and (best is None or max(lvl[k] for k in ks) < best[0]):
+            if ks and max(lvl[k] for k in ks) < cap \
+                    and (best is None or max(lvl[k] for k in ks) < best[0]):
                 best = (max(lvl[k] for k in ks), ks)
             j = pred[j]
         if best is None:
@@ -497,7 +509,7 @@ def thresholds(scale, gap, gap_min, pipe_min):
     Исключение — трубы клапана на его оси: `place` держит их не короче
     min(труба, VALVE_PIPE) при любой доле (`valve_floor`), а при scale=0
     сперва пробует ступень «только трубы клапанов» (VALVE_PIPE), и лишь
-    потом — без труб вовсе.
+    потом — без прочих труб, с минимальными трубами клапана (VALVE_CLEAR).
     """
     return gap_min + scale * (gap - gap_min), scale * pipe_min
 
@@ -795,7 +807,10 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
         Трубы клапана на его оси (`vkeep`) — не короче min(pm, VALVE_PIPE).
         valve_only — ступень перед отказом от всех труб: зазор gap_min, из
         труб остаются только трубы клапана (VALVE_PIPE), а не влезающие в
-        холст ослабляются поэтапно по критическому пути (`prune_pipes`)."""
+        холст ослабляются поэтапно по критическому пути (`prune_pipes`) —
+        не ниже минимальной трубы (полугабариты + VALVE_CLEAR). Доля 0 без
+        ступени (запасной attempt) — из труб только трубы клапана, ровно
+        минимальные: коннектор снаружи рамки клапана, а не в её центре."""
         g, pm = thresholds(scale, gap, gap_min, pipe_min)
         if valve_only:
             pm = VALVE_PIPE
@@ -805,6 +820,11 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
                      for ax, v in pipes.items()}
         vpm = min(pm, VALVE_PIPE)
         pipes = valve_floor(pipes, vkeep, by_key, vpm)
+        if scale <= 0.0 and not valve_only:
+            vpm = VALVE_CLEAR
+            pipes = {ax: [q for q in v if (q[0], q[1]) in vkeep]
+                     for ax, v in pipe_specs(graph, xa, ya, by_key,
+                                             VALVE_CLEAR).items()}
         for a, c in zip(xaxes, cx0):
             a["coord"] = c
         for a, c in zip(yaxes, cy0):
@@ -842,7 +862,8 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
                     pax, inf["pruned"][axis] = prune_pipes(
                         len(axlist), _axis_margins(axlist, by_key, okey, hkey),
                         list(sep[axis].values()), pax, by_key, idx, okey,
-                        hkey, lim - 2 * inset - PRUNE_SLACK)
+                        hkey, lim - 2 * inset - PRUNE_SLACK,
+                        floor=VALVE_CLEAR)
                 pos, good, sst, keff = solve_axis(
                     axlist, by_key, idx,
                     list(sep[axis].values()) + pax, des, lim,
@@ -922,7 +943,10 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
     # ОБРЫВ. Ни одна доля > 0 не влезла: при pm = 0 трубы исчезают ВСЕ разом,
     # и коннектор трубы клапана остаётся в его рамке (клапан стоит талией на
     # трубе — они в одной колонке/ряду). Сперва ступень «только трубы
-    # клапанов» с поэтапным отказом; attempt(0.0) без труб — последний рубеж.
+    # клапанов» с поэтапным отказом не ниже минимальной трубы; attempt(0.0)
+    # без прочих труб, с минимальными трубами клапана — последний рубеж
+    # (решение 01.10: коннектор снаружи рамки клапана ценой вылета за холст;
+    # c78e1f02 71 px, 51b339ab 39, 26747a10 24 — MEASUREMENTS §139.2).
     if best is None or best[0]["scale_eff"] <= 0.0:
         pr = attempt(0.0, valve_only=True)
         tries += 1
