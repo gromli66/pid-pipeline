@@ -56,7 +56,10 @@
     «скольжение конца» к нему неприменимо: двигается сам коннектор;
   * КОРОТКИЕ РЁБРА-ДАТЧИКИ (< SEG_FLOOR): структурный пол, не судятся;
   * ТОПОЛОГИЯ: ни одно лекарство не меняет состав рёбер и узлов;
-  * ХОЛСТ 1920x1080: выход за границу отменяет ход;
+  * ХОЛСТ 1920x1080: выход за границу отменяет ход — и габарит (`w`/`h`),
+    и положение: суммарный выход узлов за лист (`sheet`, px) ход не
+    увеличивает (находка red-team блока 6, решение Максима 01.10: «е»
+    уводил клапан у края листа на x1 −2.1 при габарите в норме);
   * НЕ НАЕЗЖАТЬ НА СОСЕДЕЙ (Р4, блок 6): число пар узлов с наложенными
     рамками (`overlap`) ход не увеличивает;
   * В КЛАПАН — ТОЛЬКО В ТАЛИЮ (Р4/Р5, блок 6): число неосевых концов
@@ -887,6 +890,34 @@ def count_overlaps(graph):
     return n
 
 
+def _node_off_sheet(n):
+    """На сколько px узел вышел за лист CANVAS_W x CANVAS_H: рамка (`bbox`
+    [x1, y1, x2, y2]), у коннектора — точка `centroid` [y, x]; сумма выхода
+    по четырём сторонам."""
+    bb = n.get("bbox")
+    if bb and len(bb) == 4:
+        x1, y1, x2, y2 = (float(v) for v in bb)
+    else:
+        c = n.get("centroid")
+        if not c or len(c) < 2:
+            return 0.0
+        y1 = y2 = float(c[0])
+        x1 = x2 = float(c[1])
+    return (max(0.0, -x1) + max(0.0, x2 - CANVAS_W)
+            + max(0.0, -y1) + max(0.0, y2 - CANVAS_H))
+
+
+def sheet_out(graph):
+    """Суммарный выход узлов за лист, px (2 знака) — положение в листе
+    (находка red-team блока 6, решение Максима 01.10). Гейт хода держит
+    габарит (`w`/`h`), а он не видит сдвига всего рисунка: «е» уводил клапан
+    у края листа на x1 −2.1 (x2 1922.1), габарит оставался прежним.
+    Выход из построения легален — гейт судит только прирост
+    (`_NOT_WORSE`)."""
+    return round(sum(_node_off_sheet(n) for n in graph.get("nodes") or ()),
+                 2)
+
+
 def _gap_detector():
     """(пол, зазор форм пары узлов) — детектор раскладки `layout._gap`.
     Импорт ленивый: пакет раскладки тянет shapely, а движку он нужен только
@@ -1041,7 +1072,8 @@ def score(graph):
     (`count_hooks`, 01.10): справочно, ни в гейт, ни в `_NOT_WORSE`.
     `gap` — рёбер с зазором форм меньше пола раскладки (`count_gaps`,
     Р-а 01.10): в `_NOT_WORSE`; судья кнопки старого холста его не меряет
-    (`_Judge(gap=False)`)."""
+    (`_Judge(gap=False)`). `sheet` — выход узлов за лист, px (`sheet_out`):
+    в `_NOT_WORSE`."""
     c = ec.check_canvas(graph)["counts"]
     dev = 0.0
     for e in g_edges(graph):
@@ -1068,6 +1100,7 @@ def score(graph):
         "waist": count_waist_steps(graph),
         "hooks": count_hooks(graph),
         "gap": count_gaps(graph),
+        "sheet": sheet_out(graph),
     }
 
 
@@ -1119,7 +1152,8 @@ class _Judge:
     же порядке, что у `score` (сумма float не ассоциативна); «вдоль» склеено
     по паре (id ребра, узел) первым вхождением в порядке рёбер — как
     склейка `ec.along_border`. Габарит — по всем узлам, наложения — заново,
-    если сдвинулся хоть один узел.
+    если сдвинулся хоть один узел; выход за лист — по узлу, пересчёт у
+    изменившихся.
 
     gap=False — судья старого холста (Р-а только на холсте с меткой модели,
     решение Максима 01.10): зазор форм не меряется, ключа `gap` в отчёте
@@ -1130,6 +1164,7 @@ class _Judge:
         self._nodes = None      # узлы прошлого вызова (те же dict)
         self._nsig = []
         self._nzone = []
+        self._nout = []         # выход узла за лист (`_node_off_sheet`)
         # id(ребро) -> (ребро, отпечаток, степени концов, рамка, вклад)
         self._edges = {}
         self._overlap = None
@@ -1143,6 +1178,7 @@ class _Judge:
             self._nodes = list(nodes)
             self._nsig = [None] * len(nodes)
             self._nzone = [None] * len(nodes)
+            self._nout = [0.0] * len(nodes)
             self._edges = {}
             self._overlap = None
         moved, zones = set(), []
@@ -1152,6 +1188,7 @@ class _Judge:
                 continue
             old, new = self._nzone[i], _zone(n)
             self._nsig[i], self._nzone[i] = s, new
+            self._nout[i] = _node_off_sheet(n)
             moved.add(n.get("id"))
             zones += [z for z in (old, new) if z is not None]
         if moved:
@@ -1215,6 +1252,7 @@ class _Judge:
             "h": (max(ys) - min(ys)) if ys else 0.0,
             "bends": bends, "overlap": self._overlap, "offaxis": offaxis,
             "waist": waist, "hooks": hooks,
+            "sheet": round(sum(self._nout), 2),
         }
         if self._gap:
             out["gap"] = len(gaps)
@@ -1406,7 +1444,7 @@ def _set_geom(e, geom):
 
 _NOT_WORSE =("along_own", "along_foreign", "through", "corner",
               "adrift", "conn_off", "poly_off", "near", "overlap", "offaxis",
-              "gap")
+              "gap", "sheet")
 
 # Причины отказа (К-4): те же три ветки `_attempt`, которые снаружи
 # восстанавливал стенд (`tools/smooth_bench.py:119`), — теперь движок
@@ -1450,7 +1488,10 @@ def accepts(before, after):
     отклонении и ступеньках ход, снимающий изломы, принимается, добавляющий
     — нет. Слияние двух ступенек в одно колено счётчику ступенек невидимо,
     а изломов становится меньше. Словари без ключа (`bends`, `overlap`,
-    `offaxis`) судятся как 0 — поведение прежнее."""
+    `offaxis`, `sheet`) судятся как 0 — поведение прежнее.
+
+    «Холст цел» — габарит рисунка в листе (`w`/`h`) и положение: выход
+    узлов за лист (`sheet`, в `_NOT_WORSE`) не больше, чем у входа."""
     if after["w"] > CANVAS_W + 0.5 or after["h"] > CANVAS_H + 0.5:
         return False
     for k in _NOT_WORSE:

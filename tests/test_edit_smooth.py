@@ -1135,6 +1135,71 @@ def test_engine_clearance_is_the_editor_route_clearance():
     assert es.ec.CLEARANCE == AdvancedGraphEditor.ROUTE_CLEARANCE
 
 
+# ── лист: положение узлов не хуже входа (red-team блока 6, 01.10) ───────
+def _canvas_manual4_edge(x1, right=False):
+    """«е» у края листа (репро red-team e7_offsheet): H-клапан с рамкой от
+    x1, труба из талии ВНУТРЕННЕЙ грани (правой у левого края, левой у
+    правого) к боксу q в 3.4 px от грани — вылет меньше клиренса, «е»
+    отводит клапан НАРУЖУ, к краю листа, на 6 − 3.4 + 0.5 = 3.1 px."""
+    from modules.graph.core import contact
+    bb = (x1, 280.0, x1 + 42.0, 318.0)
+    v = _valve("v", bb)
+    fx = bb[0] if right else bb[2]
+    qx = fx - 3.4 if right else fx + 3.4
+    waist = contact.face_refs(v, bb)["L" if right else "R"]
+    q = _box("q", qx, 520.0)
+    return _g([v, q], [_edge("em", "v", "q", (fx, waist), (qx, 500.0))])
+
+
+@pytest.mark.parametrize("x1,right", [(1.0, False), (1877.0, True)],
+                         ids=["слева", "справа"])
+def test_move_never_pushes_a_node_off_the_sheet(x1, right):
+    """Находка red-team (2): гейт судил только габарит `w`/`h`, и «е» уводил
+    клапан за лист — x1 1 -> −2.1, x2 1919 -> 1922.1 (габарит прежний).
+    Положение в листе теперь «не хуже входа» (`sheet` в `_NOT_WORSE`): «е»
+    у края отклонён, косую снимает сдвиг клапана ВНУТРЬ листа на шажок
+    3.4 px (прямая вниз). В 3.1 px от края тот же «е» проходит — клапан
+    ровно у края, в листе."""
+    g = _canvas_manual4_edge(x1, right)
+    st = es.smooth(g, route_fn=_clearance_router(g), reseat_fn=None)
+    bb = g["nodes"][0]["bbox"]
+    assert 0.0 <= bb[0] and bb[2] <= 1920.0, (st, bb)
+    assert bb[0] == pytest.approx(x1 + (-3.4 if right else 3.4)), bb
+    assert es.sheet_out(g) == 0.0 and es.score(g)["diag"] == 0
+
+    room = x1 + (-3.1 if right else 3.1)
+    g = _canvas_manual4_edge(room, right)
+    st = es.smooth(g, route_fn=_clearance_router(g), reseat_fn=None)
+    assert st["узел"] == 1, st
+    assert g["nodes"][0]["bbox"][0] == pytest.approx(x1, abs=1e-9)
+    assert es.sheet_out(g) == 0.0 and es.score(g)["diag"] == 0
+
+
+def test_sheet_out_is_position_not_extent():
+    """`sheet` — выход узлов за лист в px (рамка; у коннектора — точка), а
+    не габарит: сдвиг всего рисунка влево на 3 px габарит не меняет, выход
+    растёт на 3 на каждый узел у края. Гейт: больше входа — отказ, равно —
+    не помеха; судья с памятью считает то же."""
+    g = _g([_box("a", 20.0, 500.0), _box("b", 1899.0, 500.0),
+            _conn("c", 960.0, 1079.0)], [])
+    assert es.sheet_out(g) == 0.0
+    w0 = es.score(g)["w"]
+    for n in g["nodes"]:
+        es._shift_node(g, n["id"], -3.0, 2.0)
+    sc = es.score(g)
+    assert sc["w"] == w0 and sc["sheet"] == es.sheet_out(g) == 3.0 + 1.0
+    assert es._Judge()(g) == sc
+    base = {"diag": 1, "dev": 9.0, "steps": 0, "w": 100.0, "h": 100.0,
+            "sheet": 2.5}
+    better = dict(base, diag=0, dev=0.0)
+    assert es.accepts(base, better)
+    assert not es.accepts(base, dict(better, sheet=2.51))
+    assert not es.accepts_axial(dict(base, offaxis=1),
+                                dict(better, offaxis=0, sheet=2.51))
+    assert not es.accepts_waist(dict(base, waist=1, diag=0, dev=0.0),
+                                dict(better, waist=0, sheet=2.51))
+
+
 # ── принятый ход снимает _slack у ребра-кандидата (блок 6, S10) ────────
 
 @pytest.mark.parametrize("legacy", [False, True])
