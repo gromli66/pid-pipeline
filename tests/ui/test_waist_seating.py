@@ -626,3 +626,114 @@ def test_mouse_near_straight_approach_is_left_to_the_button(qapp, tmp_path):
     assert e["waypoints"] == [], _poly(e)
     assert e["target_point"] == pytest.approx([WAIST_Y, VALVE_BBOX[2]],
                                               abs=1e-9)
+
+
+# ───── крючок к партнёру-рамке (red-team правок 02.10, (1) и (2)) ─────
+# L-кандидат крючка ставил излом на грань ПАРТНЁРА: короткий пробег вдоль
+# неё (< ROUTE_HUG_OVERLAP_MIN) валидатор пропускал, открытие уводило конец
+# бокса в угол (труба 17–22 px вдоль грани, along_own/corner 0 -> 1), а у
+# клапана-партнёра крючок второго конца давал возвратный ход 7.5 px.
+
+def _box_partner_canvas(d):
+    """Клапан степени 1 (e1 слева в талию) и бокс unknow справа, центр на
+    d px ниже линии талии."""
+    g = _single_valve_canvas()
+    g["nodes"].append({"id": "b", "type": "equipment", "class_id": 99,
+                       "class_name": "unknow", "centroid": [WAIST_Y + d, 450.0],
+                       "bbox": [430.0, WAIST_Y + d - 20.0,
+                                470.0, WAIST_Y + d + 20.0],
+                       "segmentation": None, "degree": 1})
+    return g
+
+
+def _valve_valve_canvas(d):
+    """Второй клапан w степени 1 справа, талия на d px ниже талии v; у w
+    своя труба e2 вправо в коннектор."""
+    g = _single_valve_canvas()
+    wy = WAIST_Y + d
+    g["nodes"] += [
+        {"id": "w", "type": "equipment", "class_id": 3,
+         "class_name": "armatura_electro", "_axis": "H",
+         "centroid": [wy, 500.0],
+         "bbox": [479.0, BOX_CY + d - 18.9, 521.0, BOX_CY + d + 18.9],
+         "segmentation": None, "degree": 1},
+        {"id": "cR", "type": "connector", "class_id": -1,
+         "class_name": "connector", "centroid": [wy, 650.0], "bbox": None,
+         "segmentation": None, "degree": 1}]
+    g["links"].append({"id": "e2", "source": "w", "target": "cR",
+                       "source_point": [wy, 521.0], "target_point": [wy, 650.0],
+                       "waypoints": []})
+    return g
+
+
+def _on_face(pts, bbox):
+    """Сегментов, лежащих на грани рамки (в 0.5 px), ненулевой длины."""
+    x1, y1, x2, y2 = bbox
+    n = 0
+    for (ay, ax), (by, bx) in zip(pts, pts[1:]):
+        if abs(ax - bx) <= 0.5 and min(abs(ax - x1), abs(ax - x2)) <= 0.5 \
+                and abs(ay - by) > 1e-6:
+            n += 1
+        elif abs(ay - by) <= 0.5 and min(abs(ay - y1), abs(ay - y2)) <= 0.5 \
+                and abs(ax - bx) > 1e-6:
+            n += 1
+    return n
+
+
+def _saved_and_reopened(ed, tmp_path):
+    from modules.graph.core import edit_smooth as es
+
+    p = tmp_path / "saved.json"
+    assert ed.save_graph(str(p))
+    changed, got = _open(tmp_path, json.loads(p.read_text(encoding="utf-8")))
+    contact.apply_attach_mode(got)
+    return changed, es.score(got)
+
+
+@pytest.mark.parametrize("d, straight", [(2.5, True), (3.5, True),
+                                         (-2.5, True), (5.0, False),
+                                         (8.0, False), (-8.0, False)])
+def test_mouse_hook_to_box_partner(qapp, tmp_path, d, straight):
+    """Д1 (1): клик по боксу, клик по клапану. Почти-соосный бокс (открытие
+    оставит прямую) сам встаёт концом на линию талии — прямая, как у deploy
+    238fe6b; дальше — Z с подходом поперёк грани бокса. Ни одного сегмента
+    по грани бокса; сохранить -> открыть: ничего не двигается, вдоль своей
+    и угол — 0."""
+    ed = _editor(qapp, tmp_path, _box_partner_canvas(d))
+    e = _mouse_edge(ed, (450.0, WAIST_Y + d), (300.0, WAIST_Y))
+    pts = _poly(e)
+    assert ed._edge_is_ortho(e, tol=0.0), f"косая: {pts}"
+    assert _on_face(pts, ed.nodes["b"]["bbox"]) == 0, f"по грани бокса: {pts}"
+    assert e["target_point"] == pytest.approx([WAIST_Y, VALVE_BBOX[2]],
+                                              abs=1e-9)
+    if straight:
+        assert e["waypoints"] == [] and \
+            e["source_point"] == pytest.approx([WAIST_Y, 430.0]), pts
+    else:
+        assert len(e["waypoints"]) == 2, pts
+    changed, s = _saved_and_reopened(ed, tmp_path)
+    assert not changed, f"открытие сдвинуло трубу: {pts}"
+    assert (s["along_own"], s["corner"], s["diag"]) == (0, 0, 0), s
+
+
+@pytest.mark.parametrize("d", [2.5, 8.0])
+def test_mouse_hook_valve_to_valve_has_no_backtrack(qapp, tmp_path, d):
+    """Д1 (2): клик по клапану w, клик по клапану v — талии разнесены на d.
+    Крючок конца w не ставит излом на грань v, поэтому крючку конца v нечего
+    чинить: Z без возвратного хода, не больше 3 изломов, оба конца в
+    талиях, открытие ничего не двигает."""
+    ed = _editor(qapp, tmp_path, _valve_valve_canvas(d))
+    e = _mouse_edge(ed, (500.0, WAIST_Y + d), (300.0, WAIST_Y))
+    pts = _poly(e)
+    assert ed._edge_is_ortho(e, tol=0.0), f"косая: {pts}"
+    back = [b for a, b, c in zip(pts, pts[1:], pts[2:])
+            if (b[0] - a[0]) * (c[0] - b[0]) + (b[1] - a[1]) * (c[1] - b[1])
+            < -1e-9]
+    assert not back, f"возвратный ход: {pts}"
+    assert len(e["waypoints"]) <= 3, pts
+    assert e["source_point"] == pytest.approx([WAIST_Y + d, 479.0], abs=1e-9)
+    assert e["target_point"] == pytest.approx([WAIST_Y, VALVE_BBOX[2]],
+                                              abs=1e-9)
+    changed, s = _saved_and_reopened(ed, tmp_path)
+    assert not changed, f"открытие сдвинуло трубу: {pts}"
+    assert (s["along_own"], s["corner"], s["diag"]) == (0, 0, 0), s

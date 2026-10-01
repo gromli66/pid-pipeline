@@ -1519,8 +1519,18 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
                 else edge_data.get(okey)
             if not q:
                 continue
-            mid = self._hook_path(edge_data, (float(p[1]), float(p[0])),
-                                  side, rect, (float(q[1]), float(q[0])))
+            wpt, qpt = (float(p[1]), float(p[0])), (float(q[1]), float(q[0]))
+            # q — конец партнёра (изломов оператора нет): почти-соосный бокс
+            # встаёт на линию талии сам (`_hook_slide`), иначе его рамка
+            # судит последний сегмент подхода (`_hook_path`)
+            qrect = None if wps else seat_rect(
+                self.nodes.get(edge_data.get(okey[:-len('_point')])))
+            if qrect is not None and self._hook_slide(
+                    edge_data, okey, qrect, side, wpt, qpt):
+                edge_data.pop('_route_defect', None)
+                done = True
+                continue
+            mid = self._hook_path(edge_data, wpt, side, rect, qpt, qrect)
             if not mid:
                 continue
             mid = [[y, x] for x, y in mid]
@@ -1530,7 +1540,50 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             done = True
         return done
 
-    def _hook_path(self, edge_data: dict, w, side: str, rect, q):
+    def _hook_slide(self, edge_data: dict, okey: str, qrect, side: str,
+                    w, q) -> bool:
+        """Крючок к партнёру-БОКСУ (red-team правок 02.10, (1)): конец
+        партнёра стоит на его грани напротив талии и почти соосен с ней —
+        он едет по своей грани на линию талии, труба прямая (как у deploy
+        238fe6b). Только если прямую оставит открытие: канон вкладки
+        (`reseat_canvas`) на пробе из двух узлов и этого ребра — неподвижная
+        точка (дальше ~3.6 px, `seating.STRAIGHT_TOL` + полоса середины
+        грани, канон вернул бы конец бокса в середину грани — косая). Конец
+        клапана-партнёра (талия) и конец-пин канон возвращает на место —
+        такая проба не проходит. -> True, если сдвинут."""
+        from copy import deepcopy
+        from modules.graph.core import seating
+        from modules.graph.core.edit_checks import DIAG_TOL
+        from ui.tabs.base_graph_tab import reseat_canvas
+        horiz = side in ('L', 'R')
+        n = 1.0 if side in ('R', 'B') else -1.0
+        uw, vw = (w[0], w[1]) if horiz else (w[1], w[0])
+        uq, vq = (q[0], q[1]) if horiz else (q[1], q[0])
+        lo, hi = (qrect[1], qrect[3]) if horiz else (qrect[0], qrect[2])
+        qside = seating._end_side(qrect, q[0], q[1])
+        if qside is None or (qside in ('L', 'R')) != horiz \
+                or n * (uq - uw) <= 0 or abs(vq - vw) <= DIAG_TOL \
+                or not lo <= vw <= hi:
+            return False
+        nq = (uq, vw) if horiz else (vw, uq)
+        if self._fb_seg_bad(w, nq, edge_data, self._amnesty_ids(edge_data)):
+            return False
+        probe = dict(edge_data, waypoints=[])
+        probe[okey] = [nq[1], nq[0]]
+        mini = {'graph': deepcopy(self.model.graph_data.get('graph') or {}),
+                'nodes': [deepcopy(self.nodes[probe[k]])
+                          for k in ('source', 'target')],
+                'links': [deepcopy(probe)]}
+        reseat_canvas(mini)
+        got = mini['links'][0]
+        if got.get('waypoints') or any(
+                math.hypot(got[k][0] - probe[k][0], got[k][1] - probe[k][1])
+                > 1e-6 for k in ('source_point', 'target_point')):
+            return False
+        edge_data[okey] = [nq[1], nq[0]]
+        return True
+
+    def _hook_path(self, edge_data: dict, w, side: str, rect, q, qrect=None):
         """Изломы подхода от конца w (на грани side рамки rect) к точке q,
         [(x, y), ...] от w к q, или None (подход перпендикулярен грани в
         допуске судьи — косой нет, либо годного кандидата нет). Почти-прямая
@@ -1542,9 +1595,18 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
         чернил + 0.5 (как оси `_route_fallback_z`), чтобы колено не
         прижималось к своей грани. Сегменты судит `_fb_seg_bad` (как
         фолбэки лестницы: свою рамку — прижатием, сквозной ход через неё
-        тоже прижатие). Лучший — меньше изломов, затем короче."""
+        тоже прижатие). q — конец партнёра на его рамке qrect: последний
+        сегмент вдоль грани партнёра, на которой стоит q, не берётся при
+        любой длине (red-team правок 02.10, (1)/(2): L ставил излом на
+        грань партнёра — короткий пробег вдоль неё `_fb_seg_bad` пропускает
+        (порог ROUTE_HUG_OVERLAP_MIN), открытие уводило конец бокса в угол,
+        у клапана-партнёра крючок второго конца давал возвратный ход). Лучший —
+        меньше изломов, затем короче."""
+        from modules.graph.core import seating
         horiz = side in ('L', 'R')              # нормаль грани вдоль x
         n = 1.0 if side in ('R', 'B') else -1.0
+        qside = seating._end_side(qrect, q[0], q[1]) \
+            if qrect is not None else None
 
         def xy(u, v):
             return (u, v) if horiz else (v, u)
@@ -1572,6 +1634,10 @@ class AdvancedGraphEditor(OcrLayerMixin, SimpleGraphEditor):
             for pt in mid + [q]:                # без нулевых сегментов
                 if math.hypot(pt[0] - pts[-1][0], pt[1] - pts[-1][1]) > 1e-6:
                     pts.append(pt)
+            la, lb = pts[-2], pts[-1]
+            if qside is not None and abs(la[0] - lb[0] if qside in ('L', 'R')
+                                         else la[1] - lb[1]) <= 0.5:
+                continue                        # вдоль грани партнёра
             if any(self._fb_seg_bad(a, b, edge_data, amn)
                    for a, b in zip(pts, pts[1:])):
                 continue
