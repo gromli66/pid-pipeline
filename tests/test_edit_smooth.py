@@ -1567,6 +1567,66 @@ def test_snapshot_round_trip_is_exact():
     assert json.dumps(g) == before and g["links"][0]["w"] is not w
 
 
+def test_snapshot_keeps_numpy_values():
+    """Находка red-team (4): marshal молча пишет numpy-скаляр и массив
+    байтами — `_capture`/`_put` возвращали в холст bytes вместо числа, а
+    `_sig` давал np.float64 и его bytes один отпечаток. Теперь байты — только
+    верные содержимому (`_marshal`), иначе deepcopy: numpy остаётся numpy,
+    отпечаток — None («изменился всегда»)."""
+    np = pytest.importorskip("numpy")
+    g = _g([_box("a", 100.0, 100.0, degree=np.int64(1))],
+           [{"id": "e", "source": "a", "target": "a",
+             "source_point": [np.float64(100.0), 120.0],
+             "target_point": [80.0, 100.0], "w": np.array([1.0, 2.0])}])
+    snap = es._capture(g)
+    g["links"][0]["source_point"][0] = 7.0
+    g["nodes"][0]["degree"] = 5
+    es._put(g, snap)
+    sp, deg = g["links"][0]["source_point"][0], g["nodes"][0]["degree"]
+    assert type(sp) is np.float64 and sp == 100.0
+    assert type(deg) is np.int64 and deg == 1
+    assert isinstance(g["links"][0]["w"], np.ndarray)
+    assert g["links"][0]["w"].tolist() == [1.0, 2.0]
+    assert type(es._copy_geom(g["links"][0])[0][0]) is np.float64
+    x = np.float64(1.5)
+    assert es._sig({"v": x}) is None
+    arr = {"w": np.array([1.0, 2.0])}         # сравнение без истинности
+    assert es._sig(arr) is None
+    assert es._thaw(es._freeze(arr))["w"].tolist() == [1.0, 2.0]
+    assert es._sig({"v": x.tobytes()}) is not None
+    assert es._sig({"v": 1.5}) is not None
+
+
+def _numpy_points(g):
+    """Точки рёбер и центроиды — np.float64 (холст, собранный numpy-кодом)."""
+    np = pytest.importorskip("numpy")
+    for e in g["links"]:
+        for k in ("source_point", "target_point"):
+            e[k] = [np.float64(v) for v in e[k]]
+        e["waypoints"] = [[np.float64(v) for v in w] for w in e["waypoints"]]
+    for n in g["nodes"]:
+        n["centroid"] = [np.float64(v) for v in n["centroid"]]
+    return g
+
+
+def test_button_on_numpy_canvas():
+    """Кнопка на холсте с numpy-координатами: отклонённый ход оставляет холст
+    равным входу и типы — numpy (раньше откат писал bytes, и следующая проба
+    падала на float(bytes)); принятый ход — как на обычном холсте, с каноном
+    открытия тоже (`_Canon.polish` копирует геометрию `_copy_geom`)."""
+    np = pytest.importorskip("numpy")
+    g = _numpy_points(_canvas_gap(3.0))
+    before = copy.deepcopy(g)
+    st = es.smooth(g)
+    assert st["лестница исчерпана"] == 1 and st["коннектор"] == 0, st
+    assert g == before
+    assert all(type(v) is np.float64 for e in g["links"]
+               for v in e["source_point"] + e["target_point"])
+    free = _numpy_points(_canvas_gap(9.0))
+    st = es.smooth(free, canon_fn=lambda canvas: None)
+    assert st["коннектор"] == 1 and es.count_steps(free) == 0, st
+
+
 # ── «ж»: перемычка клапан–клапан талия-в-талию (решение Максима 01.10) ──
 # Числа — graph_edited971@model после хода «узел» по edge_52: электроарматура
 # node_36 и обратный клапан node_37 впритык (зазор 0.72 px), талии 321.686 и
