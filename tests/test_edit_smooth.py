@@ -1169,3 +1169,218 @@ def test_refused_move_keeps_slack():
     st = es.smooth(g, route_fn=None, reseat_fn=None)
 
     assert st["отклонено"] == 1 and g == before
+
+
+# ── «г»: повтор лестницы маршрута после мини-жеста (блок 6, задача 6) ──
+#
+# Холст `_canvas_single_step` (ступенька 10 px рамка -> коннектор b,
+# закрывается сдвигом коннектора) плюс второе ребро e2 от b к боксу c.
+# Подставной мини-жест при каждом вызове кладёт e2 лесенкой на 5 изломов
+# (так libavoid-сессия с нуджингом возвращала лесенку на 971/edge_52), а
+# подставная лестница маршрута строит для e2 заданный маршрут.
+
+_STAIR = [(620.0, 180.0), (660.0, 180.0), (660.0, 220.0), (700.0, 220.0),
+          (700.0, 300.0)]
+
+
+def _canvas_reroute(dup=False):
+    g = _canvas_single_step()
+    # пин на конце рамки a: сдвиг узла a (лестница берёт лучшую пробу, и
+    # он не трогал бы e2) закрыт — ступеньку закрывает только коннектор b,
+    # то есть мини-жест обязан случиться
+    ports.set_edge_pin(g["nodes"][0], g["links"][0], "source", 115.0, 140.0)
+    b = g["nodes"][1]
+    c = _box("c", 800.0, 300.0)                      # [780,280,820,320]
+    g["nodes"].append(c)
+    g["links"].append(_edge("e2", "b", "c", (620.0, 150.0), (780.0, 300.0),
+                            [(620.0, 300.0)]))
+    if dup:                                          # кратное ребро пары b-c
+        g["links"].append(_edge("e3", "c", "b", (800.0, 280.0),
+                                (620.0, 150.0), [(800.0, 150.0)]))
+    assert b["id"] == "b"
+    return g
+
+
+class _StairReseat:
+    """Мини-жест: e2 — лесенка на 5 изломов от нового центроида b;
+    снимок ребра сразу после жеста — в `after`."""
+
+    def __init__(self, g):
+        self.g, self.after = g, None
+
+    def __call__(self, nid):
+        if nid != "b":
+            return
+        e2 = next(e for e in self.g["links"] if e["id"] == "e2")
+        cy, cx = next(n for n in self.g["nodes"] if n["id"] == "b")["centroid"]
+        e2["source_point"] = [cy, cx]
+        e2["waypoints"] = [[y, x] for x, y in _STAIR]
+        for e3 in self.g["links"]:
+            if e3["id"] == "e3":                 # кратное: L по линии b
+                e3["waypoints"] = [[cy, 800.0]]
+                e3["target_point"] = [cy, cx]
+        self.after = copy.deepcopy(e2)
+
+
+def _route_e2(build):
+    """Лестница маршрута: e1 — отказ; e2 — маршрут `build(e2)`."""
+    calls = []
+
+    def route(edge):
+        if edge["id"] != "e2":
+            return False
+        calls.append(edge["id"])
+        return build(edge)
+    route.calls = calls
+    return route
+
+
+def _bends_of(e):
+    return es.count_bends({"links": [e]})[0]
+
+
+def test_reroute_after_reseat_keeps_fewer_bends():
+    """Повтор лестницы после мини-жеста: L (1 излом) вместо лесенки (5)."""
+    g = _canvas_reroute()
+    reseat = _StairReseat(g)
+
+    def ell(e):
+        cy, cx = e["source_point"]
+        e["waypoints"] = [[300.0, cx]]
+        e["_src_side"] = "bottom"
+        return True
+    st = es.smooth(g, route_fn=_route_e2(ell), reseat_fn=reseat)
+
+    e2 = g["links"][1]
+    assert st["коннектор"] == 1, st
+    assert _bends_of(reseat.after) == 5, "фикстура: жест кладёт лесенку"
+    assert _bends_of(e2) == 1 and e2["waypoints"] == [[300.0, 620.0]], \
+        f"маршрут повтора не остался: {e2['waypoints']}"
+    assert e2["_src_side"] == "bottom"
+
+
+@pytest.mark.parametrize("why, build", [
+    ("изломов больше", lambda e: (
+        e.update(waypoints=[[180.0, 620.0], [180.0, 640.0], [200.0, 640.0],
+                            [200.0, 660.0], [220.0, 660.0], [220.0, 700.0],
+                            [300.0, 700.0]], _src_side="bottom") or True)),
+    ("косая (edge_manual_1)", lambda e: (
+        e.update(waypoints=[[300.0, 640.0]], _src_side="bottom") or True)),
+    ("пометка _route_defect", lambda e: (
+        e.update(waypoints=[[300.0, 620.0]], _route_defect=True) or True)),
+    ("лестница отказала", lambda e: (
+        e.update(waypoints=[[300.0, 620.0]], _src_side="left"), False)[1]),
+])
+def test_reroute_after_reseat_rolls_back_exactly(why, build):
+    """Повтор, который хуже (изломов больше), с КОСОЙ, помеченный или
+    отказавший, — отвергается: ребро равно словарю сразу после мини-жеста,
+    ключей, которых не было, в нём нет. Ход коннектора при этом принят."""
+    g = _canvas_reroute()
+    reseat = _StairReseat(g)
+    route = _route_e2(build)
+
+    st = es.smooth(g, route_fn=route, reseat_fn=reseat)
+
+    assert route.calls, "повтор лестницы обязан был случиться"
+    assert st["коннектор"] == 1, (why, st)
+    assert g["links"][1] == reseat.after, why
+    assert "_src_side" not in g["links"][1] \
+        and "_route_defect" not in g["links"][1]
+
+
+def test_reroute_skips_non_unique_pair():
+    """Кратное ребро пары (b, c): лестница редактора адресует ребро парой и
+    переложила бы чужое — повтора нет, e2 остаётся после мини-жеста."""
+    g = _canvas_reroute(dup=True)
+    reseat = _StairReseat(g)
+
+    def ell(e):
+        e["waypoints"] = [[300.0, 620.0]]
+        return True
+    route = _route_e2(ell)
+    st = es.smooth(g, route_fn=route, reseat_fn=reseat)
+
+    assert st["коннектор"] == 1, st
+    assert route.calls == [], "кратное ребро обязано пропускаться"
+    assert g["links"][1] == reseat.after
+
+
+def _diag_reseat(g, wps):
+    """Мини-жест оставляет e2 с косым первым сегментом: от нового
+    центроида b по `wps` (x, y) к c."""
+    after = {}
+
+    def reseat(nid):
+        if nid != "b":
+            return
+        e2 = g["links"][1]
+        e2["source_point"] = list(g["nodes"][1]["centroid"])
+        e2["waypoints"] = [[y, x] for x, y in wps]
+        after.update(copy.deepcopy(e2))
+    reseat.after = after
+    return reseat
+
+
+def _ell(e):
+    e["waypoints"] = [[300.0, 620.0]]
+    return True
+
+
+def test_reroute_after_reseat_takes_orthogonal_over_diagonal():
+    """Мини-жест оставил косую в маршруте с одним изломом: повтор без
+    косой остаётся и при РАВНОМ числе изломов (у ребра — «или косая»,
+    у холста изломов не больше) — косая старше изломов."""
+    g = _canvas_reroute()
+    reseat = _diag_reseat(g, [(640.0, 300.0)])     # косой (620,140)->(640,300)
+
+    st = es.smooth(g, route_fn=_route_e2(_ell), reseat_fn=reseat)
+
+    e2 = g["links"][1]
+    assert st["коннектор"] == 1, st
+    assert es.diag_segments_of(reseat.after) and \
+        _bends_of(reseat.after) == 1, "фикстура: жест оставил косую, 1 излом"
+    assert e2["waypoints"] == [[300.0, 620.0]] and _bends_of(e2) == 1
+    assert not es.diag_segments_of(e2)
+
+
+def test_reroute_refused_when_it_adds_a_bend_to_the_canvas():
+    """Решение Максима 30.09 (счётчики холста не хуже,
+    чем сразу после мини-жеста, — и изломы тоже): мини-жест оставил чистую
+    косую (0 изломов), повтор строит L (1 излом) — изломов у холста
+    стало бы больше, повтор отвергнут. Косая остаётся, и гейт хода
+    отклоняет сам ход коннектора: холст бит-в-бит."""
+    g = _canvas_reroute()
+    before = copy.deepcopy(g)
+    reseat = _diag_reseat(g, [])                    # (620,140)->(780,300)
+    route = _route_e2(_ell)
+
+    st = es.smooth(g, route_fn=route, reseat_fn=reseat)
+
+    assert route.calls, "повтор лестницы обязан был случиться"
+    assert es.diag_segments_of(reseat.after) and _bends_of(reseat.after) == 0
+    assert st["коннектор"] == 0, st
+    assert g == before
+
+
+def test_reroute_kept_only_if_canvas_not_worse():
+    """Повтор без косой и с меньшим числом изломов, но сквозь чужой бокс f
+    (сквозь узел 0 -> 1 против холста сразу после мини-жеста) —
+    отвергается (решение Максима 30.09: счётчики холста — косые, вдоль
+    чужого, сквозь узел, изломы — не хуже, чем после мини-жеста); ребро
+    равно словарю после мини-жеста, ход коннектора принят."""
+    g = _canvas_reroute()
+    g["nodes"].append(_box("f", 620.0, 250.0, w=20.0, h=20.0))
+    reseat = _StairReseat(g)
+    assert es.score(g)["through"] == 1, "фикстура: L входа прошивает f"
+
+    def ell(e):
+        cy, cx = e["source_point"]
+        e["waypoints"] = [[300.0, cx]]
+        return True
+    route = _route_e2(ell)
+    st = es.smooth(g, route_fn=route, reseat_fn=reseat)
+
+    assert route.calls, "повтор лестницы обязан был случиться"
+    assert st["коннектор"] == 1, st
+    assert g["links"][1] == reseat.after
+    assert es.score(g)["through"] == 0

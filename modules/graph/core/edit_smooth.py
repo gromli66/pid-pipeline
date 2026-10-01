@@ -64,6 +64,11 @@
 Лестница пробует ВСЕ ступени и применяет ОДИН ход — лучшую пробу по тому
 же гейту (блок 6, `_attempt`); порядок ступеней решает только ничьи и
 несравнимые пробы: остаётся более ранняя.
+После мини-жеста пересадки (сдвиг коннектора/узла) непрямые трубы узла
+прокладываются лестницей маршрута ещё раз («г», `_with_reroute`): новый
+маршрут остаётся только без косой, с меньшим числом изломов и если
+счётчики холста (косые, вдоль чужого, сквозь узел, изломы) не хуже, чем
+сразу после мини-жеста.
 
 Чистый stdlib: ни Qt, ни shapely. Роутинг приходит колбэком `route_fn`
 (редактор отдаёт свою лестницу), потому что он живёт в UI-слое.
@@ -880,7 +885,13 @@ def smooth(graph, route_fn=None, reseat_fn=None, budget=BUDGET,
     редактора); reseat_fn(node_id) -> None — пересадить концы рёбер узла
     после сдвига (мини-жест редактора). Без них лекарства 1 и 3/4
     вырождаются: движок не изобретает своей геометрии маршрутов.
+
+    Заданы оба колбэка — мини-жест обёрнут повтором лестницы маршрута
+    («г», `_with_reroute`); обёртка живёт здесь, поэтому подмена
+    `reseat_fn` снаружи (стенд, тесты) видит и её.
     """
+    if reseat_fn is not None and route_fn is not None:
+        reseat_fn = _with_reroute(graph, reseat_fn, route_fn)
     stats = {"колено": 0, "излом": 0, "скольжение": 0, "коннектор": 0,
              "узел": 0, "осевая талия": 0, "отклонено": 0, "осталось": 0,
              "раунды": 0, **{k: 0 for k in REFUSAL_KINDS}}
@@ -903,6 +914,71 @@ def smooth(graph, route_fn=None, reseat_fn=None, budget=BUDGET,
             break
     stats["осталось"] = sum(1 for e in g_edges(graph) if not is_ortho(e))
     return stats
+
+
+def _edge_bends(e):
+    """Изломов одного ребра — тот же предикат, что `count_bends`."""
+    return count_bends({"links": [e]})[0]
+
+
+# Счётчики холста, которые повтор прокладки не имеет права ухудшить
+# против состояния сразу после мини-жеста (решение Максима 30.09).
+_REROUTE_GUARD = ("diag", "along_foreign", "through", "bends")
+
+
+def _with_reroute(graph, reseat_fn, route_fn):
+    """«г» (блок 6): после мини-жеста повторить лестницу маршрута.
+
+    Мини-жест редактора (`_reseat_after_resize`) перекладывает рёбра узла
+    оконной libavoid-сессией с нуджингом и умеет вернуть лесенку там, где
+    лестница `route_fn` строит Z (трасса 971/edge_52: 5 изломов против 2).
+    Поэтому после него для каждого НЕ прямого ребра узла лестница
+    повторяется. Новый маршрут остаётся, только если он построен (ok), без
+    пометки `_route_defect`, БЕЗ КОСОЙ (решение Максима 24.09), изломов у
+    ребра меньше либо мини-жест оставил косую, И счётчики холста — косые,
+    вдоль чужого, сквозь узел, изломы (`_REROUTE_GUARD`) — не хуже, чем
+    сразу после мини-жеста (с учётом уже оставленных повторов; решение
+    Максима 30.09: на 971 маршрут повтора без косой шёл вдоль чужой трубы
+    и сквозь узел, гейт хода отвергал весь ход, и косая edge_manual_1
+    оставалась). Иначе ребро возвращается ровно в состояние после
+    мини-жеста — снимком словаря целиком: ключи, которых не было
+    (`_src_side`, `_tgt_side`, `_route_defect`), удаляются, снятая `_slack`
+    возвращается. Оставленный маршрут — жест: `_slack` снимается
+    (`_drop_slack`).
+
+    Рёбра с неуникальной парой узлов пропускаются: `route_fn` редактора
+    адресует ребро парой (`model.edge_key`), и у кратного ребра переложил
+    бы чужое (Р7: кратные рёбра остаются у пар с `unknow`).
+    """
+    def reseat(nid):
+        out = reseat_fn(nid)
+        s0 = None
+        pairs = {}
+        for e in g_edges(graph):
+            pairs[_pair(e)] = pairs.get(_pair(e), 0) + 1
+        for e in list(g_edges(graph)):
+            if nid not in edge_ends(e) or pairs[_pair(e)] > 1:
+                continue
+            if edge_pts(e) is None or is_straight(e):
+                continue
+            snap = deepcopy(dict(e))
+            b0 = _edge_bends(e)
+            diag0 = bool(diag_segments_of(e))
+            if s0 is None:
+                s0 = score(graph)              # холст сразу после мини-жеста
+            ok = route_fn(e)
+            if (ok and not e.get("_route_defect")
+                    and not diag_segments_of(e)
+                    and (_edge_bends(e) < b0 or diag0)):
+                s1 = score(graph)
+                if all(s1[k] <= s0[k] for k in _REROUTE_GUARD):
+                    s0 = s1
+                    _drop_slack(graph, e)
+                    continue
+            e.clear()
+            e.update(snap)
+        return out
+    return reseat
 
 
 def _try_remedies(graph, e, stats, route_fn, reseat_fn, budget,
