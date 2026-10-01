@@ -70,11 +70,19 @@
 счётчики холста (косые, вдоль чужого, сквозь узел, изломы) не хуже, чем
 сразу после мини-жеста.
 
+Судья хода — `score` по всему холсту, но на время кнопки — с памятью
+(`_Judge`, блок 6, 01.10): вклад ребра пересчитывается, только если
+изменилось оно, его конец или узел рядом; снимки проб — байты marshal
+(`_capture`/`_put`). Числа и холст — бит-в-бит прежние, кнопка быстрее
+вдвое (MEASUREMENTS §137): прежде полный судья на каждую пробу съедал
+45–60 % времени.
+
 Чистый stdlib: ни Qt, ни shapely. Роутинг приходит колбэком `route_fn`
 (редактор отдаёт свою лестницу), потому что он живёт в UI-слое.
 """
 from __future__ import annotations
 
+import marshal
 import math
 from copy import deepcopy
 
@@ -688,20 +696,26 @@ def _offaxis(graph):
     """[(node_id, ребро)] — тело `offaxis_ends` (ребро — живой dict)."""
     byid = nodes_by_id(graph)
     deg = degrees(graph)
+    return [(nid, e) for e in g_edges(graph)
+            for nid in _offaxis_of(e, byid, deg)]
+
+
+def _offaxis_of(e, byid, deg):
+    """[node_id] неосевых концов ОДНОГО ребра — правило `_offaxis`
+    (`_Judge` судит ребро отдельно; степень — по рёбрам всего холста)."""
     out = []
-    for e in g_edges(graph):
-        for nid, key in zip(edge_ends(e), ("source_point", "target_point")):
-            n = byid.get(nid)
-            if n is None or not contact.axial_only(n, deg.get(nid, 0)):
-                continue
-            pt, rect = e.get(key), seating._anchor_rect(n)
-            if not pt or rect is None:
-                continue
-            if port_model.pinned_port(n, e) is not None:
-                continue
-            side = seating._end_side(rect, float(pt[1]), float(pt[0]))
-            if side not in seating._AXIAL_FACES[n["_axis"]]:
-                out.append((nid, e))
+    for nid, key in zip(edge_ends(e), ("source_point", "target_point")):
+        n = byid.get(nid)
+        if n is None or not contact.axial_only(n, deg.get(nid, 0)):
+            continue
+        pt, rect = e.get(key), seating._anchor_rect(n)
+        if not pt or rect is None:
+            continue
+        if port_model.pinned_port(n, e) is not None:
+            continue
+        side = seating._end_side(rect, float(pt[1]), float(pt[0]))
+        if side not in seating._AXIAL_FACES[n["_axis"]]:
+            out.append(nid)
     return out
 
 
@@ -804,7 +818,182 @@ def score(graph):
     }
 
 
-_NOT_WORSE = ("along_own", "along_foreign", "through", "corner",
+# ── судья с памятью (ускорение кнопки, блок 6) ─────────────────────────
+def _sig(obj):
+    """Отпечаток словаря холста: marshal версии 2 — типы, порядок ключей и
+    значения, без ссылок (равное содержимое -> равные байты; равные байты
+    -> равное содержимое). Не JSON-тип внутри — None: «изменился всегда»."""
+    try:
+        return marshal.dumps(obj, 2)
+    except ValueError:
+        return None
+
+
+def _zone(n):
+    """Рамка, вне которой узел не влияет на «вдоль»/«сквозь» чужого ребра:
+    граница судьи (`ec._node_border` — контур или bbox) + клиренс + 1 px.
+    Коннектор и узел без границы — None (судья их пропускает)."""
+    if is_connector(n):
+        return None
+    b = ec._node_border(n)
+    if not b:
+        return None
+    m = ec.CLEARANCE + 1.0
+    xs = [p[0] for p in b]
+    ys = [p[1] for p in b]
+    return (min(xs) - m, min(ys) - m, max(xs) + m, max(ys) + m)
+
+
+def _meets(a, b):
+    return not (a[2] < b[0] or a[0] > b[2] or a[3] < b[1] or a[1] > b[3])
+
+
+class _Judge:
+    """`score` с памятью по рёбрам — бит-в-бит то же число (зонд —
+    tests/test_edit_smooth.py::test_judge_equals_full_score).
+
+    Зачем: кнопка судит холст ЦЕЛИКОМ на каждую пробу лестницы, вход ребра и
+    повтор «г» (профиль §137: 60 % времени кнопки — `ec.along_border`), а
+    проба трогает одно-два ребра и узел. Счётчики судьи аддитивны по рёбрам:
+    вклад ребра (косые, почти-оси, отклонение, ступеньки, изломы, вдоль,
+    сквозь, углы, классы концов, неосевые) зависит только от самого ребра,
+    его концевых узлов (и их степени) и узлов, чья зона (`_zone`) задевает
+    рамку ребра. Ребро пересчитывается, если изменилось оно (отпечаток
+    `_sig`), его конец, степень конца или узел, чья старая либо новая зона
+    задевает его рамку; иначе вклад берётся из памяти. Узлы сверяются
+    отпечатком на каждом вызове. Пересчёт — те же функции `edit_checks` на
+    мини-холсте {узлы зоны + концы, само ребро}. Отклонение суммируется в том
+    же порядке, что у `score` (сумма float не ассоциативна); «вдоль» склеено
+    по паре (id ребра, узел) первым вхождением в порядке рёбер — как
+    склейка `ec.along_border`. Габарит — по всем узлам, наложения — заново,
+    если сдвинулся хоть один узел."""
+
+    def __init__(self):
+        self._nodes = None      # узлы прошлого вызова (те же dict)
+        self._nsig = []
+        self._nzone = []
+        # id(ребро) -> (ребро, отпечаток, степени концов, рамка, вклад)
+        self._edges = {}
+        self._overlap = None
+
+    def __call__(self, graph):
+        nodes = graph.get("nodes") or []
+        links = g_edges(graph)
+        deg = degrees(graph)
+        if (self._nodes is None or len(nodes) != len(self._nodes)
+                or any(a is not b for a, b in zip(nodes, self._nodes))):
+            self._nodes = list(nodes)
+            self._nsig = [None] * len(nodes)
+            self._nzone = [None] * len(nodes)
+            self._edges = {}
+            self._overlap = None
+        moved, zones = set(), []
+        for i, n in enumerate(nodes):
+            s = _sig(n)
+            if s is not None and s == self._nsig[i]:
+                continue
+            old, new = self._nzone[i], _zone(n)
+            self._nsig[i], self._nzone[i] = s, new
+            moved.add(n.get("id"))
+            zones += [z for z in (old, new) if z is not None]
+        if moved:
+            self._overlap = None
+        parts, live = [], {}
+        for e in links:
+            s = _sig(e)
+            ends = edge_ends(e)
+            dk = (deg.get(ends[0], 0), deg.get(ends[1], 0))
+            ent = self._edges.get(id(e))
+            if (ent is None or ent[0] is not e or s is None or ent[1] != s
+                    or ent[2] != dk or ends[0] in moved or ends[1] in moved
+                    or (ent[3] is not None
+                        and any(_meets(z, ent[3]) for z in zones))):
+                box = self._box(e)
+                ent = (e, s, dk, box, self._part(e, ends, box, nodes, deg))
+            live[id(e)] = ent
+            parts.append(ent[4])
+        self._edges = live
+        if self._overlap is None:
+            self._overlap = count_overlaps(graph)
+
+        diag = near = steps = bends = thr = corner = 0
+        adrift = conn_off = poly_off = offaxis = 0
+        dev = 0.0
+        seen = {}
+        for e, p in zip(links, parts):
+            diag += p[0]
+            near += p[1]
+            for d in p[2]:
+                dev += d
+            steps += p[3]
+            bends += p[4]
+            eid = e.get("id")
+            for nid, own in p[5]:
+                seen.setdefault((eid, nid), own)
+            thr += p[6]
+            corner += p[7]
+            adrift += p[8]
+            conn_off += p[9]
+            poly_off += p[10]
+            offaxis += p[11]
+        own = sum(1 for v in seen.values() if v)
+        xs, ys = [], []
+        for n in nodes:
+            bb = n.get("bbox")
+            if bb and len(bb) == 4:
+                xs += [bb[0], bb[2]]
+                ys += [bb[1], bb[3]]
+        return {
+            "diag": diag, "dev": round(dev, 2), "steps": steps,
+            "near": near, "along_own": own, "along_foreign": len(seen) - own,
+            "through": thr, "corner": corner, "adrift": adrift,
+            "conn_off": conn_off, "poly_off": poly_off,
+            "w": (max(xs) - min(xs)) if xs else 0.0,
+            "h": (max(ys) - min(ys)) if ys else 0.0,
+            "bends": bends, "overlap": self._overlap, "offaxis": offaxis,
+        }
+
+    @staticmethod
+    def _box(e):
+        pts = ec.edge_polyline(e)
+        if len(pts) < 2:
+            return None                     # сегментов нет — соседи не важны
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        return (min(xs) - 1.0, min(ys) - 1.0, max(xs) + 1.0, max(ys) + 1.0)
+
+    def _part(self, e, ends, box, nodes, deg):
+        """Вклад одного ребра — функции судьи на мини-холсте."""
+        sub = [n for n, z in zip(nodes, self._nzone)
+               if n.get("id") in ends
+               or (box is not None and z is not None and _meets(z, box))]
+        mini = {"nodes": sub, "links": [e]}
+        dg = ec.diag_segments(mini)
+        cl = ec.end_classes(mini)
+        return (len(dg["diag"]), len(dg["near"]),
+                tuple(d for _i, d in diag_segments_of(e)),
+                count_steps(mini), count_bends(mini)[0],
+                tuple((a["node"], a["own"]) for a in ec.along_border(mini)),
+                len(ec.through_box(mini)), len(ec.corner_ends(mini)),
+                len(cl["adrift"]), len(cl["conn_off"]), len(cl["poly_off"]),
+                len(_offaxis_of(e, nodes_by_id(mini), deg)))
+
+
+_ACTIVE = None      # (холст, судья) идущего `smooth` — см. `_score`
+
+
+def _score(graph):
+    """`score` холста идущей кнопки — судьёй с памятью, иначе полный.
+
+    Судья живёт в модуле, а не в аргументах: `_try_remedies` подменяют
+    снаружи с прежней сигнатурой (стенд `tools/smooth_bench.py`), и
+    аргумент не дошёл бы до лестницы."""
+    if _ACTIVE is not None and _ACTIVE[0] is graph:
+        return _ACTIVE[1](graph)
+    return score(graph)
+
+
+_NOT_WORSE =("along_own", "along_foreign", "through", "corner",
               "adrift", "conn_off", "poly_off", "near", "overlap", "offaxis")
 
 # Причины отказа (К-4): те же три ветки `_attempt`, которые снаружи
@@ -890,11 +1079,26 @@ def smooth(graph, route_fn=None, reseat_fn=None, budget=BUDGET,
     («г», `_with_reroute`); обёртка живёт здесь, поэтому подмена
     `reseat_fn` снаружи (стенд, тесты) видит и её.
     """
+    global _ACTIVE
     if reseat_fn is not None and route_fn is not None:
         reseat_fn = _with_reroute(graph, reseat_fn, route_fn)
     stats = {"колено": 0, "излом": 0, "скольжение": 0, "коннектор": 0,
              "узел": 0, "осевая талия": 0, "отклонено": 0, "осталось": 0,
              "раунды": 0, **{k: 0 for k in REFUSAL_KINDS}}
+    prev, _ACTIVE = _ACTIVE, (graph, _Judge())
+    try:
+        _rounds(graph, stats, route_fn, reseat_fn, budget, allow_node_shift,
+                big_area, max_rounds)
+    finally:
+        _ACTIVE = prev
+    stats["осталось"] = sum(1 for e in g_edges(graph) if not is_ortho(e))
+    return stats
+
+
+def _rounds(graph, stats, route_fn, reseat_fn, budget, allow_node_shift,
+            big_area, max_rounds):
+    """Жадные раунды `smooth` (вынесены, чтобы судья с памятью жил ровно
+    время кнопки)."""
     for _round in range(max_rounds):
         stats["раунды"] += 1
         applied = 0
@@ -912,8 +1116,6 @@ def smooth(graph, route_fn=None, reseat_fn=None, budget=BUDGET,
                 applied += 1
         if not applied:
             break
-    stats["осталось"] = sum(1 for e in g_edges(graph) if not is_ortho(e))
-    return stats
 
 
 def _edge_bends(e):
@@ -965,12 +1167,12 @@ def _with_reroute(graph, reseat_fn, route_fn):
             b0 = _edge_bends(e)
             diag0 = bool(diag_segments_of(e))
             if s0 is None:
-                s0 = score(graph)              # холст сразу после мини-жеста
+                s0 = _score(graph)             # холст сразу после мини-жеста
             ok = route_fn(e)
             if (ok and not e.get("_route_defect")
                     and not diag_segments_of(e)
                     and (_edge_bends(e) < b0 or diag0)):
-                s1 = score(graph)
+                s1 = _score(graph)
                 if all(s1[k] <= s0[k] for k in _REROUTE_GUARD):
                     s0 = s1
                     _drop_slack(graph, e)
@@ -989,30 +1191,17 @@ def _try_remedies(graph, e, stats, route_fn, reseat_fn, budget,
     try/finally, а не дисциплиной вызовов restore() по веткам: замер на
     graph_edited_fix показал, что одна ветка отката всё-таки не отрабатывала
     и мусор просачивался мимо гейта (along_foreign 0 -> 1)."""
-    before = score(graph)
-    snap_nodes = [deepcopy(n) for n in (graph.get("nodes") or [])]
-    snap_edges = [deepcopy(dict(x)) for x in g_edges(graph)]
-
-    def restore_all():
-        # deepcopy обязателен: update() копирует dict ПОВЕРХНОСТНО, и без
-        # него живое ребро получило бы тот же список waypoints, что лежит в
-        # снимке. Дальше drop_collinear делает по нему pop(), снимок
-        # укорачивается навсегда, и следующий откат возвращает уже порчу.
-        for cur, old in zip(graph.get("nodes") or [], snap_nodes):
-            cur.clear()
-            cur.update(deepcopy(old))
-        for cur, old in zip(g_edges(graph), snap_edges):
-            cur.clear()
-            cur.update(deepcopy(old))
+    before = _score(graph)
+    snap = _capture(graph)          # он же вход ребра для проб `_attempt`
 
     ok = False
     try:
         ok = _attempt(graph, e, stats, route_fn, reseat_fn, budget,
-                      allow_node_shift, big_area, before)
+                      allow_node_shift, big_area, before, snap)
         return ok
     finally:
         if not ok:
-            restore_all()
+            _put(graph, snap)       # свежие копии снимка (см. `_put`)
 
 
 def _drop_slack(graph, e):
@@ -1030,34 +1219,49 @@ def _drop_slack(graph, e):
     e.pop("_slack", None)
 
 
+def _freeze(d):
+    """Копия словаря для снимка: байты marshal (C-уровень, ссылки внутри
+    словаря сохраняются, как у deepcopy), иначе — deepcopy (не JSON-тип)."""
+    try:
+        return marshal.dumps(d)
+    except ValueError:
+        return deepcopy(d)
+
+
+def _thaw(old):
+    return marshal.loads(old) if isinstance(old, bytes) else deepcopy(old)
+
+
 def _capture(graph):
     """Снимок ПОЭЛЕМЕНТНЫЙ (узлы, рёбра), а не подменой списков: редактор
     держит индекс {id -> тот же самый dict}, и подмена graph['nodes']
     осиротила бы его — модель продолжила бы указывать на выброшенные
-    объекты."""
-    return ([deepcopy(n) for n in (graph.get("nodes") or [])],
-            [deepcopy(dict(x)) for x in g_edges(graph)])
+    объекты. Элемент — `_freeze` (профиль §137: deepcopy всего холста на
+    каждую пробу стоил до 6 % времени кнопки)."""
+    return ([_freeze(n) for n in (graph.get("nodes") or [])],
+            [_freeze(dict(x)) for x in g_edges(graph)])
 
 
 def _put(graph, snap):
     """Вернуть холст в снимок `_capture` на месте (те же dict).
 
-    deepcopy обязателен: update() копирует dict ПОВЕРХНОСТНО, и без него
-    живое ребро получило бы тот же список waypoints, что лежит в снимке.
-    Дальше drop_collinear делает по нему pop(), снимок укорачивается
-    навсегда, и следующий откат возвращает уже порчу. Здесь это критично
-    вдвойне: снимок входа ребра возвращается после КАЖДОЙ пробы лестницы."""
+    Каждый элемент — СВЕЖАЯ копия снимка (`_thaw`): update() копирует dict
+    ПОВЕРХНОСТНО, и без копии живое ребро получило бы тот же список
+    waypoints, что лежит в снимке. Дальше drop_collinear делает по нему
+    pop(), снимок укорачивается навсегда, и следующий откат возвращает уже
+    порчу. Здесь это критично вдвойне: снимок входа ребра возвращается
+    после КАЖДОЙ пробы лестницы."""
     nodes, links = snap
     for cur, old in zip(graph.get("nodes") or [], nodes):
         cur.clear()
-        cur.update(deepcopy(old))
+        cur.update(_thaw(old))
     for cur, old in zip(g_edges(graph), links):
         cur.clear()
-        cur.update(deepcopy(old))
+        cur.update(_thaw(old))
 
 
 def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
-             allow_node_shift, big_area, before):
+             allow_node_shift, big_area, before, base=None):
     """Собственно лестница (см. _try_remedies).
 
     ЛУЧШАЯ ПРОБА, а не первая (блок 6): каждая проба лестницы судится
@@ -1074,7 +1278,8 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
     Сравнение одним приоритетом, без «не хуже», проигрывало на
     graph_edited_222222: сдвиг узла (изломов на 3 меньше) вытеснял сдвиг
     коннектора, снимавший 5 прошиваний и 3 «вдоль чужого»."""
-    base = _capture(graph)
+    if base is None:
+        base = _capture(graph)
     best = []                       # [score, ход, снимок] лучшей пробы
 
     def restore():
@@ -1085,7 +1290,7 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
         лучшей к ней — запомнить. Холст возвращается во вход ребра.
         fewer_bends — проба «б» обязана ещё и снять излом; gate — свой
         гейт входа у «д» (`accepts_axial`), сравнение с лучшей — общее."""
-        after = score(graph)
+        after = _score(graph)
         if gate(before, after) and (not best or accepts(best[0], after)) \
                 and (not fewer_bends
                      or after.get("bends", 0) < before.get("bends", 0)):

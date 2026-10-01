@@ -1384,3 +1384,88 @@ def test_reroute_kept_only_if_canvas_not_worse():
     assert st["коннектор"] == 1, st
     assert g["links"][1] == reseat.after
     assert es.score(g)["through"] == 0
+
+
+# ── судья с памятью: то же число, что полный score (ускорение, блок 6) ──
+def _crop971(model):
+    """Левая часть корпусного холста 971 (x2 <= 900: 50 узлов, 40 рёбер —
+    вдоль своего/чужого, сквозь узел, наложения и неосевые есть)."""
+    import json
+    from pathlib import Path
+    from tools import corpus
+    p = (Path(__file__).resolve().parents[1] / "tools" / "bench"
+         / "smooth_corpus" / "edited" / "graph_edited971.json")
+    g = json.loads(p.read_text(encoding="utf-8"))
+    keep = {n["id"] for n in g["nodes"]
+            if (n["bbox"][2] if n.get("bbox") else n["centroid"][1]) <= 900}
+    g["nodes"] = [n for n in g["nodes"] if n["id"] in keep]
+    g["links"] = [e for e in g["links"]
+                  if e["source"] in keep and e["target"] in keep]
+    return corpus.as_model(g) if model else g
+
+
+@pytest.mark.parametrize("model", [False, True], ids=["старый", "модель"])
+def test_judge_equals_full_score(model):
+    """`_Judge` (память по рёбрам) == `score` бит-в-бит под случайными
+    правками: сдвиг узла (его рёбра и ЧУЖИЕ рёбра у его зоны), излом,
+    новый излом, конец ребра, узел без своих концов, откат и новый снимок
+    (`_put`/`_capture`)."""
+    import random
+    g = _crop971(model)
+    rnd = random.Random(5)
+    judge = es._Judge()
+    nodes, links = g["nodes"], g["links"]
+    snap = es._capture(g)
+    assert judge(g) == es.score(g)
+    for step in range(40):
+        k = rnd.random()
+        if k < 0.4:
+            n = rnd.choice(nodes)
+            es._shift_node(g, n["id"], rnd.uniform(-25, 25),
+                           rnd.uniform(-25, 25))
+        elif k < 0.6:
+            e = rnd.choice(links)
+            if e.get("waypoints"):
+                w = e["waypoints"]
+                i = rnd.randrange(len(w))
+                w[i] = [w[i][0] + rnd.uniform(-15, 15), w[i][1]]
+            else:
+                e["waypoints"] = [[e["source_point"][0], e["target_point"][1]]]
+        elif k < 0.7:
+            e = rnd.choice(links)
+            e["source_point"] = [e["source_point"][0] + rnd.uniform(-4, 4),
+                                 e["source_point"][1]]
+        elif k < 0.8:
+            # узел без своих концов (коннектор — зоны у него нет): судят
+            # концы его рёбер (conn_off, adrift, углы)
+            n = rnd.choice(nodes)
+            dx, dy = rnd.uniform(-3, 3), rnd.uniform(-3, 3)
+            n["centroid"] = [n["centroid"][0] + dy, n["centroid"][1] + dx]
+            if n.get("bbox"):
+                b = n["bbox"]
+                n["bbox"] = [b[0] + dx, b[1] + dy, b[2] + dx, b[3] + dy]
+        elif k < 0.9:
+            es._put(g, snap)
+        else:
+            snap = es._capture(g)
+        assert judge(g) == es.score(g), f"шаг {step}"
+
+
+def test_snapshot_round_trip_is_exact():
+    """`_capture`/`_put` возвращают холст бит-в-бит (типы, порядок ключей)
+    свежими копиями: int остаётся int, вложенный список — не тот же объект."""
+    g = _g([_box("a", 100.0, 100.0)],
+           [{"id": "e", "source": "a", "target": "a", "w": [1, 2.5],
+             "source_point": [100, 120], "target_point": [80, 100]}])
+    import json
+    before = json.dumps(g)
+    snap = es._capture(g)
+    g["links"][0]["source_point"][0] = 7.0
+    g["links"][0]["z"] = 1
+    es._put(g, snap)
+    assert json.dumps(g) == before
+    es._put(g, snap)
+    w = g["links"][0]["w"]
+    w.append(3)
+    es._put(g, snap)
+    assert json.dumps(g) == before and g["links"][0]["w"] is not w
