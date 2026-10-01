@@ -1593,3 +1593,99 @@ def test_waist_jumper_skipped(kind):
         es.smooth(g, route_fn=_ell_router, reseat_fn=_waist_reseat(g))
         assert g["nodes"] == before["nodes"]
         assert e53["target_point"] == before["links"][1]["target_point"]
+
+
+# ── крючок — не ступенька (решение Максима 01.10) ──────────────────────
+# Окно H-V-H (V-H-V) с коротким средним сегментом: плечи в одну сторону —
+# ступенька (линия сдвинута и продолжается, Z), в разные — крючок
+# (U-разворот: так «д» обходит клапан к свободной осевой талии). Крючок
+# судья считает отдельно (`hooks`), в гейт и в `_NOT_WORSE` он не входит.
+# Кандидатом лестницы окно крючка остаётся (`single_step`): сдвиг на его
+# шажок снимает изломы — отбор только ступенек поднял изломы edited
+# 421 -> 445 (MEASUREMENTS §138).
+
+def _hook_edge(eid="e", far_x=260.0, mid=18.0, vertical=False):
+    """Бокс a (грань R, x=120) -> вправо до x=300, шажок вниз на `mid`,
+    дальше к x=far_x: far_x < 300 — крючок (плечи навстречу), far_x > 300 —
+    ступенька. vertical — то же, повёрнутое на 90° (окно V-H-V)."""
+    pts = [(120.0, 100.0), (300.0, 100.0), (300.0, 100.0 + mid),
+           (far_x, 100.0 + mid)]
+    if vertical:
+        pts = [(y, x) for x, y in pts]
+    return _edge(eid, "a", "c", pts[0], pts[-1], pts[1:-1])
+
+
+@pytest.mark.parametrize("vertical", [False, True], ids=["H-V-H", "V-H-V"])
+def test_hook_is_not_a_step(vertical):
+    hook = _hook_edge(vertical=vertical)
+    step = _hook_edge(far_x=420.0, vertical=vertical)
+    assert es._windows(hook) == (0, 1) and es._windows(step) == (1, 0)
+    for e, steps, hooks in ((hook, 0, 1), (step, 1, 0)):
+        g = _g([_box("a", 100.0, 100.0)], [e])
+        assert (es.count_steps(g), es.count_hooks(g)) == (steps, hooks)
+        sc = es.score(g)
+        assert (sc["steps"], sc["hooks"]) == (steps, hooks)
+    # лестница берёт оба окна (сдвиг на шажок), судья — только ступеньку
+    axis = "x" if vertical else "y"
+    for e in (hook, step):
+        assert es.single_step(e) == (axis, 18.0) and es.step_index(e) == 1
+    # длиннее STEP_MAX — осмысленный изгиб: ни ступенька, ни крючок
+    assert es._windows(_hook_edge(mid=es.STEP_MAX + 1.0,
+                                  vertical=vertical)) == (0, 0)
+
+
+def test_hook_next_to_a_step_counts_one_step():
+    """Ребро с крючком и ступенькой: судья — одна ступенька и один крючок
+    (до 01.10 — две ступеньки)."""
+    e = _edge("e", "a", "c", (120.0, 100.0), (150.0, 130.0),
+              [(300.0, 100.0), (300.0, 118.0), (200.0, 118.0),
+               (200.0, 130.0)])
+    assert es._windows(e) == (1, 1)
+    g = _g([_box("a", 100.0, 100.0), _conn("c", 150.0, 130.0)], [e])
+    assert (es.count_steps(g), es.count_hooks(g)) == (1, 1)
+
+
+def test_hooks_are_not_in_the_gate():
+    """Крючок справочный: рост `hooks` хода не отклоняет, падение — не
+    выигрыш; в «не хуже» его нет."""
+    assert "hooks" not in es._NOT_WORSE
+    base = {"diag": 0, "dev": 0.0, "steps": 2, "bends": 10, "near": 0,
+            "along_own": 0, "along_foreign": 0, "through": 0, "corner": 0,
+            "adrift": 0, "conn_off": 0, "poly_off": 0, "overlap": 0,
+            "offaxis": 0, "waist": 0, "hooks": 3, "w": 100.0, "h": 100.0}
+    assert es.accepts(base, dict(base, steps=1, hooks=7))
+    assert not es.accepts(base, dict(base, hooks=0)), "крючок — не выигрыш"
+    assert es.accepts_axial(dict(base, offaxis=1), dict(base, hooks=9))
+
+
+def test_hook_is_straightened_for_bends_not_for_steps():
+    """Крючок — кандидат лестницы: сдвиг коннектора на шажок 18 px кладёт
+    трубу в прямую (изломов 2 -> 0). Ход принят по изломам: ступенек судья
+    не видел ни до, ни после (до 01.10 — по «ступеньке» 1 -> 0)."""
+    a, c = _box("a", 100.0, 100.0), _conn("c", 260.0, 118.0)
+    g = _g([a, c], [_hook_edge()])
+    s0 = es.score(g)
+    assert (s0["steps"], s0["hooks"], s0["bends"]) == (0, 1, 2)
+
+    st = es.smooth(g, route_fn=None, reseat_fn=None)
+
+    assert st["коннектор"] == 1, st
+    s1 = es.score(g)
+    assert (s1["steps"], s1["hooks"], s1["bends"]) == (0, 0, 0)
+    assert es.is_straight(g["links"][0])
+    assert c["centroid"] == pytest.approx([100.0, 260.0])
+
+
+def test_judge_counts_hooks_like_full_score():
+    """`_Judge` (память по рёбрам) считает крючки как `score`: крючок,
+    ставший ступенькой, и обратно — пересчитаны."""
+    a, c = _box("a", 100.0, 100.0), _conn("c", 260.0, 118.0)
+    g = _g([a, c], [_hook_edge()])
+    judge = es._Judge()
+    assert judge(g) == es.score(g) and judge(g)["hooks"] == 1
+    e = g["links"][0]
+    e["target_point"] = [118.0, 420.0]              # -> ступенька
+    assert judge(g) == es.score(g)
+    assert (judge(g)["steps"], judge(g)["hooks"]) == (1, 0)
+    e["target_point"] = [118.0, 260.0]              # -> снова крючок
+    assert judge(g) == es.score(g) and judge(g)["hooks"] == 1

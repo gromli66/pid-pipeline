@@ -52,3 +52,27 @@ def test_new_columns_reach_the_row_and_moves():
     cols = sb._columns(row)
     assert (cols["overlap"], cols["offaxis"]) == (1, 0)
     assert cols["moves"] == 3
+
+
+def test_hooks_column_is_reference_not_defect(monkeypatch):
+    """`hooks` (крючков, решение Максима 01.10) — справочная колонка: из
+    `edit_smooth.score` в строку прогона, но не дефект — `--check` её рост
+    не судит."""
+    assert "hooks" in dict(sb.REF_COLS)
+    assert "hooks" not in dict(sb.DEFECT_COLS)
+    real = es.score
+    monkeypatch.setattr(es, "score", lambda g: dict(real(g), hooks=4))
+    m = sb.canvas_metrics(_graph())
+    assert m["hooks"] == 4
+    stats = {k: 0 for k in sb.REMEDIES}
+    stats.update({"отклонено": 0, "раунды": 1})
+    row = {"after": m, "stats": stats, "ms": 1.0, "rollback_bad": 0,
+           "reseat_calls": 0, "reseat_blind": 0}
+    cols = sb._columns(row)
+    assert cols["hooks"] == 4
+    one = {k: {"med": v, "lo": v, "hi": v} for k, v in cols.items()}
+    grown = dict(one, hooks={"med": 9, "lo": 9, "hi": 9})
+    assert sb.growth({"x": grown}, {"x": one}, {}) == {}
+    worse = dict(one, steps={"med": cols["steps"] + 1, "lo": 0, "hi": 0})
+    assert sb.growth({"x": worse}, {"x": one}, {}) \
+        == {"x": [("steps", cols["steps"], cols["steps"] + 1)]}

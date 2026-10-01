@@ -20,7 +20,8 @@
   популяции raw/edited и @model на корпусе `tools/bench/smooth_corpus/`, эталон
   `bench/smooth_baseline.json` в git). Принятый рост дефектов пересъём узаконивает только
   ключом `--allow-growth "<основание>"`: основание и перечень выросших строк пишутся в эталон
-  (поле `allowed_growth`), docs/TESTING.md §3
+  (поле `allowed_growth`), docs/TESTING.md §3. Колонка `hooks` (крючков — U-разворот, решение
+  01.10) справочная: крючок не ступенька и не дефект, `--check` его не судит
 - corpus.py (КД7) — общий вход к корпусу `graph_validated.json` для стендов и тестов:
   сначала три графа из git (`tests/fixtures/graph/`, пункт 0.8), потом локальный
   `storage/diagrams/`. На него переведены layout_bench.py и корпусная цепочка

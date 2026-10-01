@@ -75,7 +75,9 @@
 блока 6 движок их считает — `count_overlaps`, `offaxis_ends`, и они же стоят в
 его гейте `_NOT_WORSE`; эталон входа 98b5726 снят раньше, там 0). Ход «осевая
 талия» (неосевой конец клапана в свободную осевую талию) — в колонке `moves`
-вместе с прочими.
+вместе с прочими. `hooks` — крючков (U-разворот: окно H-V-H с плечами в
+разные стороны, `edit_smooth.count_hooks`, решение Максима 01.10) —
+СПРАВОЧНАЯ колонка: крючок не ступенька и не дефект, `--check` его не судит.
 
 Запуск (из корня репо, системный python 3.11.9):
     python -X utf8 tools/smooth_bench.py --all
@@ -139,6 +141,7 @@ REF_COLS = [
     ("rounds", "раундов"),
     ("reseat_calls", "вызовов reseat"),
     ("reseat_blind", "из них обесточено"),
+    ("hooks", "крючков"),
 ]
 
 SCORE_KEYS = ("diag", "dev", "steps", "near", "along_own", "along_foreign",
@@ -224,6 +227,7 @@ def canvas_metrics(graph) -> dict:
     sc = es.score(graph)
     out = {k: sc[k] for k in SCORE_KEYS}
     out.update({k: sc.get(k, 0) for k in SCORE_NEW_KEYS})
+    out["hooks"] = sc.get("hooks", 0)
     out["bends"], out["edges"] = count_bends(graph)
     out["offsheet"], out["offsheet_pts"] = offsheet(graph)
     return out
@@ -449,6 +453,7 @@ def _columns(row: dict) -> dict:
     cols["rounds"] = st["раунды"]
     cols["reseat_calls"] = row["reseat_calls"]
     cols["reseat_blind"] = row["reseat_blind"]
+    cols["hooks"] = int(a.get("hooks", 0))
     return cols
 
 
@@ -572,9 +577,12 @@ def report(pop: str, summary: dict, detail: dict):
     calls = blind = edges_seen = blind_edges = orphan = 0
     rb_checked = rb_bad = 0
     times = []
+    hooks = [0.0, 0.0]          # справочно: крючок — не дефект (01.10)
     for name, runs in detail.items():
         mid = len(runs) // 2
         base = sorted(runs, key=lambda r: r["cols"]["diag"])[mid]
+        hooks[0] += base["before"].get("hooks", 0)
+        hooks[1] += base["after"].get("hooks", 0)
         for k, _ru in DEFECT_COLS:
             if k not in base["before"]:
                 continue
@@ -604,6 +612,8 @@ def report(pop: str, summary: dict, detail: dict):
         mark = "" if abs(a - b) < 1e-9 else ("  <-- лучше" if a < b
                                              else "  <-- ХУЖЕ")
         print(f"    {ru:<24} {b:>9.1f} -> {a:>9.1f}{mark}")
+    print(f"    {'крючков (справочно)':<24} {hooks[0]:>9.1f} -> "
+          f"{hooks[1]:>9.1f}")
     print("  ходы движка: " + ", ".join(f"{k} {tot_stats[k]}"
                                         for k in REMEDIES))
     print(f"    принято всего {sum(tot_stats[k] for k in REMEDIES)}, "

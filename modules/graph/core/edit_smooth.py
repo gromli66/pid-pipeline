@@ -65,9 +65,14 @@
 
 Гейт хода (`accepts`) — лексикографически: косые -> отклонение ->
 ступеньки -> изломы (4-й приоритет, блок 6), прочие дефекты не хуже.
-Ступенька судьи — окно H-V-H с коротким средним сегментом И ступенька
+Ступенька судьи — окно H-V-H с коротким средним сегментом, у которого
+плечи идут в одну сторону (линия сдвинута и продолжается), И ступенька
 талий: перемычка клапан–клапан с концами вразнобой поперёк оси, у которой
-иначе не видно ничего (сегменты короче SEG_FLOOR, 01.10).
+иначе не видно ничего (сегменты короче SEG_FLOOR, 01.10). Окно с плечами в
+разные стороны — КРЮЧОК (U-разворот: обход клапана к свободной осевой
+талии), не ступенька: судья считает его справочно (`hooks`), в гейт он не
+входит (решение Максима 01.10). Кандидатом лестницы окно крючка остаётся
+(`single_step`): сдвиг на его шажок снимает изломы.
 Лестница пробует ВСЕ ступени и применяет ОДИН ход — лучшую пробу по тому
 же гейту (блок 6, `_attempt`); порядок ступеней решает только ничьи и
 несравнимые пробы: остаётся более ранняя.
@@ -165,12 +170,30 @@ def diag_segments_of(e):
     return out
 
 
+def _is_hook(a, b, c, d, horiz):
+    """Окно a-b-c-d с коротким средним сегментом b-c — КРЮЧОК, а не
+    ступенька (решение Максима 01.10): плечи a-b и c-d параллельны, но идут
+    в РАЗНЫЕ стороны — труба разворачивается (U), а не смещается.
+    Ступенька — плечи в одну сторону: линия сдвинута и продолжается (Z).
+    Так обходят клапан, чтобы войти в свободную осевую талию («д», Р5).
+    horiz — плечи горизонтальны (окно H-V-H), иначе вертикальны (V-H-V).
+    Плечо нулевой длины направления не имеет — окно остаётся ступенькой."""
+    i = 0 if horiz else 1
+    return (b[i] - a[i]) * (d[i] - c[i]) < 0
+
+
 def single_step(e, step_max=STEP_MAX):
     """Зигзаг с ОДНОЙ ступенькой -> (ось, смещение d) или None.
 
     Ступенька — короткий сегмент между двумя ПАРАЛЛЕЛЬНЫМИ: труба идёт,
     делает шажок вбок и идёт дальше в ту же сторону. Ось — та, вдоль
-    которой надо сдвинуть, чтобы шажок исчез ('x' | 'y')."""
+    которой надо сдвинуть, чтобы шажок исчез ('x' | 'y').
+
+    Окно КРЮЧКА (`_is_hook`, плечи в разные стороны) лекарство тоже берёт:
+    крючок не дефект и судьёй ступенькой не считается (01.10), но сдвиг
+    коннектора/узла на его шажок со следующей прокладкой снимает изломы
+    (4-й приоритет гейта). Замер 01.10 (MEASUREMENTS §138): отбор только
+    ступенек поднял изломы edited 421 -> 445 и «вдоль своего» 44 -> 49."""
     pts = edge_pts(e)
     if not pts or len(pts) < 4:
         return None
@@ -313,7 +336,8 @@ def snap_waypoints(e, budget=BUDGET):
 
 
 def step_index(e, step_max=STEP_MAX):
-    """Индекс сегмента-шажка в полилинии (между pts[i] и pts[i+1]) или None."""
+    """Индекс сегмента-шажка в полилинии (между pts[i] и pts[i+1]) или None
+    (окно крючка — тоже, как в `single_step`)."""
     pts = edge_pts(e)
     if not pts or len(pts) < 4:
         return None
@@ -691,7 +715,10 @@ def count_steps(graph, step_max=STEP_MAX):
     321.69 и 327.22): перемычка клапан–клапан (`_waist_jumper`), концы
     которой разошлись поперёк оси на DIAG_TOL < |d| <= step_max, а судья не
     видит у неё ни окна H-V-H, ни косой (две-три точки, сегменты короче
-    SEG_FLOOR не судятся), — одна ступенька."""
+    SEG_FLOOR не судятся), — одна ступенька.
+
+    КРЮЧОК (U-разворот, `_is_hook`; решение Максима 01.10) — не ступенька:
+    его считает `count_hooks`, в гейт он не входит."""
     byid = nodes_by_id(graph)
     n = 0
     for e in g_edges(graph):
@@ -700,6 +727,14 @@ def count_steps(graph, step_max=STEP_MAX):
             k = 1
         n += k
     return n
+
+
+def count_hooks(graph, step_max=STEP_MAX):
+    """Сколько на холсте крючков — окон H-V-H (V-H-V) с коротким средним
+    сегментом, у которых плечи идут в разные стороны (`_is_hook`).
+    Справочный счётчик (решение Максима 01.10): НЕ дефект, в гейт хода и
+    в `_NOT_WORSE` не входит — стенд показывает его колонкой."""
+    return sum(_windows(e, step_max)[1] for e in g_edges(graph))
 
 
 def count_waist_steps(graph, step_max=STEP_MAX):
@@ -711,11 +746,18 @@ def count_waist_steps(graph, step_max=STEP_MAX):
 
 
 def _step_windows(e, step_max=STEP_MAX):
-    """Окон H-V-H (V-H-V) с коротким средним сегментом у одного ребра."""
+    """Окон-ступенек H-V-H (V-H-V) с коротким средним сегментом у одного
+    ребра (крючки — нет, `_is_hook`)."""
+    return _windows(e, step_max)[0]
+
+
+def _windows(e, step_max=STEP_MAX):
+    """(ступенек, крючков) у одного ребра: окна H-V-H (V-H-V) с коротким
+    средним сегментом, разделённые по `_is_hook`."""
     pts = edge_pts(e)
     if not pts or len(pts) < 4:
-        return 0
-    n = 0
+        return 0, 0
+    n = h = 0
     for i in range(1, len(pts) - 2):
         a, b, c, d = pts[i - 1], pts[i], pts[i + 1], pts[i + 2]
         L = math.hypot(c[0] - b[0], c[1] - b[1])
@@ -726,8 +768,11 @@ def _step_windows(e, step_max=STEP_MAX):
         vert = (abs(a[0] - b[0]) <= ec.DIAG_TOL
                 and abs(c[0] - d[0]) <= ec.DIAG_TOL)
         if horiz or vert:
-            n += 1
-    return n
+            if _is_hook(a, b, c, d, horiz):
+                h += 1
+            else:
+                n += 1
+    return n, h
 
 
 _FACING = {("R", "L"): (2, 0), ("L", "R"): (0, 2),
@@ -936,7 +981,8 @@ def score(graph):
     `overlap` — пар наложенных рамок (`count_overlaps`), `offaxis` —
     неосевых концов клапанов степени 1–2 (`offaxis_ends`); последние два —
     в `_NOT_WORSE`. `waist` — ступенек талий (`count_waist_steps`, они же
-    внутри `steps`): гейт хода «ж» (`accepts_waist`)."""
+    внутри `steps`): гейт хода «ж» (`accepts_waist`). `hooks` — крючков
+    (`count_hooks`, 01.10): справочно, ни в гейт, ни в `_NOT_WORSE`."""
     c = ec.check_canvas(graph)["counts"]
     dev = 0.0
     for e in g_edges(graph):
@@ -961,6 +1007,7 @@ def score(graph):
         "overlap": count_overlaps(graph),
         "offaxis": len(offaxis_ends(graph)),
         "waist": count_waist_steps(graph),
+        "hooks": count_hooks(graph),
     }
 
 
@@ -1001,8 +1048,8 @@ class _Judge:
     Зачем: кнопка судит холст ЦЕЛИКОМ на каждую пробу лестницы, вход ребра и
     повтор «г» (профиль §137: 60 % времени кнопки — `ec.along_border`), а
     проба трогает одно-два ребра и узел. Счётчики судьи аддитивны по рёбрам:
-    вклад ребра (косые, почти-оси, отклонение, ступеньки, изломы, вдоль,
-    сквозь, углы, классы концов, неосевые) зависит только от самого ребра,
+    вклад ребра (косые, почти-оси, отклонение, ступеньки, крючки, изломы,
+    вдоль, сквозь, углы, классы концов, неосевые) зависит только от самого ребра,
     его концевых узлов (и их степени) и узлов, чья зона (`_zone`) задевает
     рамку ребра. Ребро пересчитывается, если изменилось оно (отпечаток
     `_sig`), его конец, степень конца или узел, чья старая либо новая зона
@@ -1063,7 +1110,7 @@ class _Judge:
             self._overlap = count_overlaps(graph)
 
         diag = near = steps = bends = thr = corner = 0
-        adrift = conn_off = poly_off = offaxis = waist = 0
+        adrift = conn_off = poly_off = offaxis = waist = hooks = 0
         dev = 0.0
         seen = {}
         for e, p in zip(links, parts):
@@ -1083,6 +1130,7 @@ class _Judge:
             poly_off += p[10]
             offaxis += p[11]
             waist += p[12]
+            hooks += p[13]
         own = sum(1 for v in seen.values() if v)
         xs, ys = [], []
         for n in nodes:
@@ -1098,7 +1146,7 @@ class _Judge:
             "w": (max(xs) - min(xs)) if xs else 0.0,
             "h": (max(ys) - min(ys)) if ys else 0.0,
             "bends": bends, "overlap": self._overlap, "offaxis": offaxis,
-            "waist": waist,
+            "waist": waist, "hooks": hooks,
         }
 
     @staticmethod
@@ -1125,7 +1173,7 @@ class _Judge:
                 len(ec.through_box(mini)), len(ec.corner_ends(mini)),
                 len(cl["adrift"]), len(cl["conn_off"]), len(cl["poly_off"]),
                 len(_offaxis_of(e, nodes_by_id(mini), deg)),
-                count_waist_steps(mini))
+                count_waist_steps(mini), count_hooks(mini))
 
 
 _ACTIVE = None      # (холст, судья) идущего `smooth` — см. `_score`
@@ -1221,8 +1269,8 @@ def accepts_waist(before, after):
     (шум 0.5 px); прочие дефекты `_NOT_WORSE` (наложения — гейт соседей)
     не хуже; холст цел. Обмен ступеньки талий на ступеньку той же цены
     допустим: на 971 сдвиг node_36 укорачивает крючок edge_52 до 20 px —
-    судья считает его ступенькой (окно H-V-H без направления), и общий
-    гейт видел бы ничью."""
+    до 01.10 судья считал его ступенькой (окно H-V-H без направления), и
+    общий гейт видел ничью; теперь крючок — не ступенька (`_is_hook`)."""
     if after["w"] > CANVAS_W + 0.5 or after["h"] > CANVAS_H + 0.5:
         return False
     for k in _NOT_WORSE:
