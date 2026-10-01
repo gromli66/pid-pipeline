@@ -364,3 +364,56 @@ def test_drag_amnesty_base_is_gesture_input(qapp, tmp_path, with_id):
     thru, _along = ed._amnesty_ids(live)
     ed.end_drag_node()
     assert "B" in thru
+
+
+# ── red-team правок 02.10, (3): почти-прямая перемычка клапан–клапан ──
+def _waist_valve(nid, cx, wy):
+    """armatura_electro по оси H, центроид — талия (8.3916 ниже центра)."""
+    return {"id": nid, "type": "equipment", "class_name": "armatura_electro",
+            "class_id": 3, "_axis": "H", "centroid": [wy, cx],
+            "bbox": [cx - 21.0, wy - 27.2916, cx + 21.0, wy + 10.5084],
+            "segmentation": None}
+
+
+@pytest.mark.parametrize("d", [0.45, 0.6])
+def test_button_save_open_keeps_near_jumper_in_waists(qapp, tmp_path, d):
+    """Находка (3) red-team правок 02.10: два клапана степени 2 на одной
+    оси, у каждого вторая труба в коннектор; оператор ведёт перемычку
+    w -> v, талии разошлись на d (почти-ось, <= DIAG_TOL). Крючок её не
+    трогает, «з» — только с коннектором, «ж» — только ступенька; открытие
+    спрямляло пару по талии w (`seating._pick_axis_coord`: два жёстких
+    порта в 0.75 px) и уводило конец v из талии — FXML мимо талии на d.
+    Теперь «Выровнять» -> сохранить -> открыть: «ж» ставит клапан на талию
+    соседа вместе с коннектором его второй трубы, промах FXML <= 0.1 у
+    всех труб обоих клапанов. Без кнопки ловушка на месте (фикстура)."""
+    from ui.tabs.base_graph_tab import _reseat_canvas_endpoints
+
+    wy = 500.0
+
+    def edge(eid, s, t, sp, tp):
+        return {"id": eid, "source": s, "target": t, "source_point": sp,
+                "target_point": tp, "waypoints": []}
+
+    def run(tag, button):
+        dd = tmp_path / tag
+        dd.mkdir()
+        g = _canvas([_conn("cL", 550.0, wy), _waist_valve("v", 700.0, wy),
+                     _waist_valve("w", 900.0, wy + d),
+                     _conn("cR", 1050.0, wy + d)],
+                    [edge("e1", "cL", "v", [wy, 550.0], [wy, 679.0]),
+                     edge("e2", "w", "cR", [wy + d, 921.0], [wy + d, 1050.0])])
+        ed = _editor(dd, g)
+        _draw_edge(ed, "w", "v")
+        if button:
+            ed.smooth_canvas()
+        p = dd / "saved.json"
+        assert ed.save_graph(str(p))
+        _reseat_canvas_endpoints(p)
+        got = json.loads(p.read_text(encoding="utf-8"))
+        return {**{f"v:{k}": m for k, m in _fxml_miss(got, "v").items()},
+                **{f"w:{k}": m for k, m in _fxml_miss(got, "w").items()}}
+
+    miss = run("button", True)
+    assert len(miss) == 4 and max(miss.values()) <= 0.1, miss
+    assert max(run("bare", False).values()) > 0.35, \
+        "фикстура: без кнопки открытие обязано уводить конец из талии"

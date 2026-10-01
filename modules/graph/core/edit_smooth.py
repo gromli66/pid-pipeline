@@ -24,6 +24,9 @@
      клапаны стоят впритык, талии вразнобой — один клапан строго поперёк
      оси на разницу талий, перемычка — прямая; свой гейт `accepts_waist`
      (ступенек талий строго меньше, косых, ступенек и изломов не больше);
+     почти-прямая перемычка (`_near_jumper`, red-team правок 02.10) — тот
+     же ход с коннекторами прямых труб клапана (`_axis_followers`), гейт
+     `accepts_near`;
   0г. «з» — ПОЧТИ-ПРЯМАЯ ИЗ КОННЕКТОРА В ТАЛИЮ (находка red-team блока 6,
      01.10): труба из двух точек с отклонением от оси в полосе почти-оси
      (NEAR_MIN < отклонение <= DIAG_TOL) из коннектора в талию клапана
@@ -669,7 +672,9 @@ def _waist_moves(graph, e, budget, big_area):
 
     Перемычка — `_waist_jumper` (талия — `contact.face_refs`, грань —
     `seating._end_side`; своего правила нет), концы разошлись больше чем на
-    DIAG_TOL, сдвиг 0.25 <= |талия соседа − своя| <= budget. Хода нет, если
+    DIAG_TOL — или почти-прямая из двух точек (`_near_jumper`, red-team
+    правок 02.10, (3)), сдвиг 0.25 <= |талия соседа − своя| <= budget.
+    Хода нет, если
     конец перемычки — пин (пин — истина, а прямая перемычка переставила бы
     и его) или на грани перемычки у любого из клапанов не одна труба (веер
     слотов: конец не в талии). Клапан стоит, если он крупный или сдвинутая
@@ -679,7 +684,8 @@ def _waist_moves(graph, e, budget, big_area):
     меньшая степень, при равной — источник."""
     byid = nodes_by_id(graph)
     j = _waist_jumper(e, byid)
-    if j is None or abs(j[0]) <= ec.DIAG_TOL:
+    if j is None or (abs(j[0]) <= ec.DIAG_TOL
+                     and not _near_jumper(e, byid)):
         return []
     _d, axis, fa, fb = j
     s, t = edge_ends(e)
@@ -724,6 +730,44 @@ def _waist_moves(graph, e, budget, big_area):
         out.append((deg.get(nid, 0), nid, dx, dy, ends))
     out.sort(key=lambda c: c[0])
     return [c[1:] for c in out]
+
+
+def _near_jumper(e, byid):
+    """Почти-прямая перемычка клапан–клапан (red-team правок 02.10, (3)):
+    труба из двух точек между осевыми гранями двух клапанов модели
+    (`_waist_jumper`), концы разошлись в полосе почти-оси судьи
+    (`ec.NEAR_MIN` < d <= `ec.DIAG_TOL`). Ступенькой талий она не считается,
+    «з» — только с коннектором, крючок редактора почти-прямую не трогает, а
+    открытие спрямляет пару (`seating.STRAIGHT_TOL`) и уводит один конец из
+    талии: промах FXML мимо талии до 0.71 px при допуске 0.35. Лечит «ж»
+    (клапан поперёк оси на талию соседа) с гейтом `accepts_near`."""
+    if len(edge_pts(e) or ()) != 2:
+        return False
+    j = _waist_jumper(e, byid)
+    return j is not None and ec.NEAR_MIN < abs(j[0]) <= ec.DIAG_TOL
+
+
+def _axis_followers(graph, e, nid, horiz):
+    """Коннекторы, которые едут с клапаном nid в «ж» почти-прямой перемычки
+    e: дальние концы его прямых труб из двух точек вдоль оси (horiz — ось
+    H), кроме самой e. Сдвиг клапана поперёк оси иначе сделал бы такую трубу
+    почти-прямой (red-team правок 02.10, (3): у клапана степени 2 вторая
+    труба в коннектор — гейт видел обмен почти-прямой на почти-прямую).
+    Прочие трубы коннектора гейт хода судит как есть."""
+    byid = nodes_by_id(graph)
+    out = []
+    for x in g_edges(graph):
+        ends = edge_ends(x)
+        pts = edge_pts(x)
+        if x is e or nid not in ends or not pts or len(pts) != 2:
+            continue
+        (ax, ay), (bx, by) = pts
+        if abs(ay - by if horiz else ax - bx) > ec.NEAR_MIN:
+            continue
+        o = byid.get(ends[1] if ends[0] == nid else ends[0])
+        if o is not None and is_connector(o) and o["id"] not in out:
+            out.append(o["id"])
+    return out
 
 
 def _near_waist(graph, e, byid):
@@ -1748,11 +1792,13 @@ def _rounds(graph, stats, route_fn, reseat_fn, budget, allow_node_shift,
             # ступеньки»). Берём и ортогональные с одиночным шажком.
             # Ступенька талий (перемычка клапан–клапан, `count_steps`) —
             # тоже кандидат: у неё две-три точки, и она ортогональна. И
-            # почти-прямая из коннектора в талию («з», `_near_waist`):
-            # судья её не видит, а открытие спрямит её мимо талии.
+            # почти-прямая из коннектора в талию («з», `_near_waist`) и
+            # почти-прямая перемычка клапан–клапан («ж», `_near_jumper`):
+            # судья их не видит, а открытие спрямит их мимо талии.
             if is_ortho(e) and single_step(e) is None and id(e) not in off \
                     and not _waist_step(e, byid) \
-                    and _near_waist(graph, e, byid) is None:
+                    and _near_waist(graph, e, byid) is None \
+                    and not _near_jumper(e, byid):
                 continue
             if _try_remedies(graph, e, stats, route_fn, reseat_fn,
                              budget, allow_node_shift, big_area):
@@ -2043,18 +2089,27 @@ def _attempt(graph, e, stats, route_fn, reseat_fn, budget,
     # ── 0в. «ж»: ПЕРЕМЫЧКА КЛАПАН–КЛАПАН ТАЛИЯ-В-ТАЛИЮ (решение 01.10) ──
     # Клапан строго поперёк оси на разницу талий (`_waist_moves`),
     # перемычка — прямая из талии в талию, прочие трубы клапана пересаживает
-    # мини-жест; гейт входа свой (`accepts_waist`), сравнение с лучшей —
-    # общее.
+    # мини-жест; гейт входа свой (`accepts_waist`; почти-прямой перемычке —
+    # `accepts_near`: ступенек талий у неё нет), сравнение с лучшей — общее.
+    # Почти-прямой перемычке дальше лестнице нечего (как «з»); с клапаном
+    # едут коннекторы его прямых труб вдоль оси (`_axis_followers`), иначе
+    # почти-прямой стала бы соседняя труба.
+    near_j = _near_jumper(e, nodes_by_id(graph))
     for nid, dx, dy, (sp, tp) in (_waist_moves(graph, e, budget, big_area)
                                   if allow_node_shift else ()):
-        _shift_node(graph, nid, dx, dy)
+        tow = _axis_followers(graph, e, nid, dx == 0.0) if near_j else []
+        for x in [nid] + tow:
+            _shift_node(graph, x, dx, dy)
         cur = live_edge()
         if cur is not None:
             cur["source_point"], cur["target_point"] = list(sp), list(tp)
             cur["waypoints"] = []
         if reseat_fn is not None:
-            reseat_fn(nid)
-        judge("узел", gate=accepts_waist)
+            for x in [nid] + tow:
+                reseat_fn(x)
+        judge("узел", gate=accepts_near if near_j else accepts_waist)
+    if near_j:
+        return done("нет кандидата")
 
     # ── 0г. «з»: ПОЧТИ-ПРЯМАЯ ИЗ КОННЕКТОРА В ТАЛИЮ (red-team, 01.10) ──
     # Коннектор поперёк трубы на линию талии (узел стоит), иначе клапан —
