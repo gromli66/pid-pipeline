@@ -1059,6 +1059,78 @@ def test_offaxis_move_skipped(kind):
     assert g == before, kind
 
 
+def _offaxis_single():
+    """H-клапан степени 1: труба B из середины нижней грани к боксу q слева
+    внизу (неосевой конец, Р5). План — левая осевая грань (к соседу)."""
+    v = _valve("v", (400.0, 300.0, 440.0, 340.0))
+    q = _box("q", 300.0, 500.0)
+    b = _edge("B", "v", "q", (420.0, 340.0), (300.0, 480.0), [(420.0, 480.0)])
+    return _g([v, q], [b])
+
+
+def _detour(xs):
+    """Лестница маршрута — заданный обход из талии: горизонталь от конца
+    влево до xs[0], дальше по очереди вниз/влево по ступеням xs, в конце —
+    вертикаль в верх бокса q (x 300)."""
+    def route(edge):
+        y, x = edge["source_point"]
+        pts = [[y, xs[0]]]
+        ys = [380.0 + 20.0 * i for i in range(len(xs))]
+        for i, xi in enumerate(xs[1:] + [300.0]):
+            pts += [[ys[i], pts[-1][1]], [ys[i], xi]]
+        edge["waypoints"] = pts
+        return True
+    return route
+
+
+@pytest.mark.parametrize("deg,xs,taken", [
+    (1, [380.0], True), (1, [380.0, 340.0], False), (2, [380.0, 340.0], True)],
+    ids=["степень 1: крючок 3 излома", "степень 1: обход 5 изломов",
+         "степень 2: обход 5 изломов"])
+def test_offaxis_route_is_capped_by_hook(deg, xs, taken):
+    """Находка red-team (6): гейт «д» (`accepts_axial`) изломы не ограничивал
+    — труба клапана могла уйти в обход любой длины. Правило Р5: у клапана
+    степени 1 — колено или крючок, до 3 изломов (`HOOK_BENDS`). Крючок из
+    талии в 3 излома принят, обход в 5 — отклонён, холст бит-в-бит. У
+    степени 2 (колено за клапан) Р5 числа изломов не задаёт — обход
+    принят, как прежде."""
+    g = _offaxis_single() if deg == 1 else _offaxis_canvas()
+    before = copy.deepcopy(g)
+    st = es.smooth(g, route_fn=_detour(xs), reseat_fn=None)
+    b = next(x for x in g["links"] if x["id"] == "B")
+    if taken:
+        assert st["осевая талия"] == 1, st
+        assert es._edge_bends(b) == 2 * len(xs) + 1
+        assert es.score(g)["offaxis"] == 0
+    else:
+        assert st["осевая талия"] == 0, st
+        assert g == before
+    assert es.HOOK_BENDS == 3
+
+
+def test_hook_cap_is_per_pipe_and_not_below_input():
+    """Потолок крючка — у каждой трубы клапана и не ниже её изломов до хода:
+    труба, у которой и до хода было 5 изломов, ходом «д» в 5 изломов не
+    ухудшается — гейт пробы её пропускает; 7 — нет."""
+    from modules.graph.core import contact
+    g = _offaxis_single()
+    v = g["nodes"][0]
+    b = g["links"][0]
+    w = contact.face_refs(v, tuple(v["bbox"]))["L"]
+    b["waypoints"] = [[360.0, 420.0], [360.0, 460.0], [400.0, 460.0],
+                      [400.0, 440.0], [480.0, 440.0]]           # 5 изломов
+    assert es._edge_bends(b) == 5
+    gate = es._hook_gate(g, "v")
+    base = {"diag": 0, "dev": 0.0, "steps": 0, "w": 100.0, "h": 100.0,
+            "offaxis": 1}
+    good = dict(base, offaxis=0)
+    b["source_point"] = [w, 400.0]
+    _detour([380.0, 340.0])(b)                                 # 5 изломов
+    assert es._edge_bends(b) == 5 and gate(base, good)
+    _detour([390.0, 360.0, 330.0])(b)                          # 7 изломов
+    assert es._edge_bends(b) == 7 and not gate(base, good)
+
+
 # ── «е»: клапан вдоль оси при нехватке клиренса (блок 6, Р4) ──────────
 #
 # Мотив — edge_manual_4 (graph_edited971): труба из правой талии клапана
