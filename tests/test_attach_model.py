@@ -816,3 +816,91 @@ def test_editor_sibling_judged_on_its_plan_face():
                                 400.0, WAIST_Y, False, 8.0,
                                 node_edges=[eb, ec], faces=faces)
     assert (x, y) == (221.0, pytest.approx(WAIST_Y))
+
+
+# ─────────── полигон — как в каноне: посадка на контур (22.09) ───────────
+
+def _poly_off():
+    """Контур без скина: полоса x 0..1000, y 0..40 и под её левым краем
+    блок x 0..100, y 40..53. Центроид контура (x 485.84) на 14.16 px левее
+    середины рамки (500) — как у 54a60fd1 node_5 (на 13.9 px)."""
+    seg = [0.0, 0.0, 1000.0, 0.0, 1000.0, 40.0, 100.0, 40.0, 100.0, 53.0,
+           0.0, 53.0]
+    a1, a2 = 1000.0 * 40.0, 100.0 * 13.0
+    cx = (a1 * 500.0 + a2 * 50.0) / (a1 + a2)
+    cy = (a1 * 20.0 + a2 * 46.5) / (a1 + a2)
+    return {"id": "p", "type": "equipment", "class_name": "unknow",
+            "centroid": [cy, cx], "bbox": [0.0, 0.0, 1000.0, 53.0],
+            "segmentation": seg}
+
+
+def _poly_pair(name, poly, poly_is_source=True):
+    """-> (byid, ребро, ключ конца контура, ключ конца бокса)."""
+    b = _box("b", 998.0, 165.0, w=26.0, h=30.0)       # бокс без скина
+    if poly_is_source:
+        e = _edge(name, "p", "b", sp=[40.0, 985.0], tp=[150.0, 985.0])
+        keys = ("source_point", "target_point")
+    else:
+        e = _edge(name, "b", "p", sp=[150.0, 985.0], tp=[40.0, 985.0])
+        keys = ("target_point", "source_point")
+    g = _graph([poly, b], [e])
+    return (nodes_by_id(g), e) + keys
+
+
+@pytest.mark.parametrize("poly_is_source", [True, False])
+def test_polygon_keeps_straight_lock_with_mid_snap_box(poly_is_source):
+    """54a60fd1 edge_21: бокс без скина b под правым краем контура. Канон
+    сажает прямую в угол b (x 985); модель сужает диапазон b до середины
+    грани ± MID_SNAP (995..1001), с рамкой контура он пересекается
+    (995..1000) — прямая есть. Близость пары мерилась от центроида контура
+    (485.84), а не от середины рамки: |485.84 − 998| > 500 + 3 + 3, замок
+    терялся, конец уезжал лучом из центроида далеко от места врезки.
+    Полигон — как в каноне: конец на контуре по оси прямизны, конец бокса
+    в пределах MID_SNAP от середины грани."""
+    byid, e, kp, kb = _poly_pair("e", _poly_off(), poly_is_source)
+    seating.reseat_edge(byid, e, model=True)
+    (sy, sx), (ty, tx) = e[kp], e[kb]
+    assert sx == pytest.approx(tx) == pytest.approx(995.0)   # прямая
+    assert abs(tx - 998.0) <= contact.MID_SNAP + 1e-9   # середина грани b
+    assert ty == pytest.approx(150.0)                   # верхняя грань b
+    assert sy == pytest.approx(40.0)                    # на контуре
+    # канон не тронут: прямая в угол b
+    byid, e, kp, kb = _poly_pair("e2", _poly_off(), poly_is_source)
+    seating.reseat_edge(byid, e)
+    assert e[kp] == [pytest.approx(40.0), pytest.approx(985.0)]
+    assert e[kb] == [pytest.approx(150.0), pytest.approx(985.0)]
+
+
+def test_frame_middle_closeness_is_for_polygon_only():
+    """Середина рамки вместо центроида — только у полигона: бокс без
+    сегментации с тем же смещённым центроидом — рамка с серединой грани
+    ± MID_SNAP (497..503), с b прямой нет."""
+    p = _poly_off()
+    del p["segmentation"]
+    byid, e, kp, kb = _poly_pair("e", p)
+    seating.reseat_edge(byid, e, model=True)
+    assert e[kp][1] != pytest.approx(e[kb][1])
+
+
+def test_polygon_pair_with_connector_in_notch_keeps_canon_axis():
+    """13d1ef5f edge_154: коннектор в выемке контура (внутри рамки, вне
+    контура). Канон даёт только вертикаль (по Y центроид контура дальше
+    полурамки), конец — на контуре под коннектором. Близость «от середины
+    рамки» открыла бы и горизонталь, и пара с коннектором взяла бы её —
+    вход сменил бы грань (лишний обход роутера). Пара с контуром решает
+    прямую по канону."""
+    seg = [0.0, 0.0, 200.0, 0.0, 200.0, 150.0, 500.0, 150.0, 500.0, 300.0,
+           0.0, 300.0]
+    a1, a2 = 200.0 * 300.0, 300.0 * 150.0
+    p = {"id": "p", "type": "equipment", "class_name": "unknow",
+         "centroid": [(a1 * 150.0 + a2 * 225.0) / (a1 + a2),
+                      (a1 * 100.0 + a2 * 350.0) / (a1 + a2)],
+         "bbox": [0.0, 0.0, 500.0, 300.0], "segmentation": seg}
+    c = _conn("c", 450.0, 20.0)
+    for s, t, kc, kp in (("c", "p", "source_point", "target_point"),
+                         ("p", "c", "target_point", "source_point")):
+        e = _edge("e", s, t, sp=[20.0, 450.0], tp=[150.0, 450.0])
+        g = _graph([dict(p), dict(c)], [e])
+        seating.reseat_edge(nodes_by_id(g), e, model=True)
+        assert e[kc] == [pytest.approx(20.0), pytest.approx(450.0)]
+        assert e[kp] == [pytest.approx(150.0), pytest.approx(450.0)]

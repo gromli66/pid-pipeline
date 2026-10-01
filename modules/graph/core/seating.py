@@ -340,17 +340,34 @@ def reseat_edge(byid, e, straight_tol=STRAIGHT_TOL, model=False, snap=None,
             if model else (scy, tcy)
         spx, tpx = (_pref_val(src, "V", True), _pref_val(tgt, "V", True)) \
             if model else (scx, tcx)
+        near_y = abs(spy - tpy) <= \
+            (sy2 - sy1) / 2 + (ty2 - ty1) / 2 + straight_tol
+        near_x = abs(spx - tpx) <= \
+            (sx2 - sx1) / 2 + (tx2 - tx1) / 2 + straight_tol
+        if model and (_is_poly_node(src) or _is_poly_node(tgt)):
+            # Полигон — как в каноне (решение 22.09): есть ли у пары с
+            # контуром прямая, решает канон (центроиды и рамки целиком), а
+            # модель — только где на грани соседа ляжет ось (ylo..yhi,
+            # xlo..xhi ниже — из её диапазонов). Иначе модель, сузив соседа
+            # до середины грани ± MID_SNAP, мерила рамку контура от его
+            # центроида, а он у невыпуклого контура поодаль от середины
+            # (54a60fd1 node_5: на 13.9 px левее): замок терялся, конец на
+            # контуре уезжал лучом из центроида (edge_21: на 358 px).
+            ky1, ky2, kx1, kx2 = _axis_range(src)
+            my1, my2, mx1, mx2 = _axis_range(tgt)
+            near_y = abs(scy - tcy) <= \
+                (ky2 - ky1) / 2 + (my2 - my1) / 2 + straight_tol
+            near_x = abs(scx - tcx) <= \
+                (kx2 - kx1) / 2 + (mx2 - mx1) / 2 + straight_tol
         # H-прямая: диапазоны Y пересекаются (с допуском)
         ylo, yhi = max(sy1, ty1), min(sy2, ty2)
         xlo, xhi = max(sx1, tx1), min(sx2, tx2)
         h_lock = v_lock = None
-        if ylo - yhi <= straight_tol and abs(spy - tpy) <= \
-                (sy2 - sy1) / 2 + (ty2 - ty1) / 2 + straight_tol:
+        if ylo - yhi <= straight_tol and near_y:
             y = _pick_axis_coord(src, tgt, ylo, yhi, axis="H", model=model)
             if y is not None:
                 h_lock = ("H", y)
-        if xlo - xhi <= straight_tol and abs(spx - tpx) <= \
-                (sx2 - sx1) / 2 + (tx2 - tx1) / 2 + straight_tol:
+        if xlo - xhi <= straight_tol and near_x:
             x = _pick_axis_coord(src, tgt, xlo, xhi, axis="V", model=model)
             if x is not None:
                 v_lock = ("V", x)
