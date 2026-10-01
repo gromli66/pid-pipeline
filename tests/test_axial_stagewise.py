@@ -96,19 +96,23 @@ def test_cliff_tight_sheet_canvas_first(room):
 
 
 @pytest.mark.parametrize("room", [-2, -10])
-def test_cliff_no_step_fits_keeps_min_valve_pipe(room):
-    """Не влезает и прежняя ступень (сами блоки выше холста): запасной
-    attempt без прочих труб держит трубы клапана минимальными — оба
-    коннектора снаружи рамки v на VALVE_CLEAR; не клапан — без трубы."""
+def test_cliff_no_step_fits_fallback_without_pipes(room):
+    """Не влезает и прежняя ступень (сами блоки выше холста на -room px):
+    запасной attempt — без труб вовсе, как до d729fb9 (решение Максима
+    01.10: лист, который не влезает ни в одном варианте, держит меньший
+    выход за лист). Вылет — только сами блоки, а не + полугабарит v и
+    VALVE_CLEAR с минимальной трубой клапана на критическом пути (первая
+    редакция; 0aea61c0: рамки за 1080 по Y 215.5 px при 129.0 без труб);
+    плата — коннектор c в рамке v."""
     g = _column(200, room)
     st = axial.place(g, canvas=(600.0, 200.0))
     y = _ys(g)
     assert st["scale_eff"] == 0.0 and st["pruned"] == {}   # запасной attempt
-    assert st["pipes_y"] == 2 and st["valve_pipe_eff"] == axial.VALVE_CLEAR
-    assert y["c"] - y["v"] == pytest.approx(12.0 + axial.VALVE_CLEAR)
-    assert y["v"] - y["u"] == pytest.approx(12.0 + axial.VALVE_CLEAR)
-    assert st["over"] > axial.PRUNE_SLACK
-    assert y["q"] - y["P"] == pytest.approx(0.0, abs=1e-6)  # не клапан
+    assert st["pipes_y"] == 0 and st["valve_pipe_eff"] == 0.0
+    with_min_pipe = -room + 12.0 + axial.VALVE_CLEAR       # c снаружи рамки v
+    assert st["over"] == pytest.approx(-room)              # только блоки
+    assert st["over"] < with_min_pipe - 1.0
+    assert abs(y["c"] - y["v"]) < 12.0                     # плата: c в рамке v
 
 
 def test_no_cliff_no_valve_only_step():
