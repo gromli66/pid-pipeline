@@ -238,6 +238,10 @@ def apply_fixed_sizes(graph, adj):
     линия дальше половины поперечника бокса — линией трубы считается
     поперечная координата детектированного центроида.
 
+    Узел старого холста (`contact.LEGACY_KEY`, метки модели нет, Р1) —
+    как 238fe6b: рамка вокруг центроида, центроид не двигается (зовёт
+    `canvas_input.to_canvas(legacy=True)` — импорт текста на старый холст).
+
     У узла ровно ОДНА форма, и выбирается она по наличию класса в таблице
     (решение заказчика 2026-07-28, §3.7 плана AUTO_LAYOUT_INTEGRATION.md):
     есть в словаре — как в словаре, нет в словаре — как в реальности. Поэтому
@@ -257,7 +261,7 @@ def apply_fixed_sizes(graph, adj):
         w, h = _fixed_wh(cn, axis)
         cy, cx = c[0], c[1]
         by, bx = cy, cx                      # центр бокса
-        if contact.is_valve(n):
+        if contact.is_valve(n) and not n.get(contact.LEGACY_KEY):
             off = contact.waist_offset(n, axis, w, h)
             line = _pipe_line(n, adj, axis)
             cross = cy if axis == "H" else cx

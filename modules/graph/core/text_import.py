@@ -14,6 +14,14 @@
 `canvas_input.to_canvas(graph_validated)` (раскладка исходный файл не трогает),
 после-раскладочная — сам холст.
 
+До-раскладочная строится В РЕЖИМЕ ХОЛСТА (Р1, ADR-009): холст без метки
+модели (`contact.canvas_model` -> None) собран кодом 238fe6b, и его
+до-раскладочная геометрия — `to_canvas(legacy=True)`: без нормализации
+кратных рёбер (иначе индекс ребра — ключ якоря — съезжает: рассечённая пара
+добавляет ребро, и подписи уезжают к чужим трубам, замер 51b339ab — 1411 px)
+и с центроидом клапана в центре рамки (иначе якорь-узел съезжает на сдвиг
+талии). Холст с меткой — модельная `to_canvas`, как у раскладки.
+
 ЗАЧЕМ ЯКОРЬ. Замер на корпусе: привязанных блоков 0 или 2 из сотен, то есть
 96-100 % подписей ни к чему не привязаны. Раскладка переставляет ~99 % узлов,
 а подписи не трогает — и без якоря ближайший элемент меняют 308 подписей из
@@ -35,6 +43,7 @@ from __future__ import annotations
 import math
 from copy import deepcopy
 
+from . import contact
 from .canvas_input import to_canvas
 
 # Порог якоря: дальше этого ближайший элемент подписи не «свой», и блок
@@ -287,8 +296,12 @@ def import_text(canvas_graph, validated_graph, *, anchor_max=ANCHOR_MAX,
     Отметку `text_imported_sha` ставит вызывающий — он же решает, когда импорт
     разрешён (после первой правки текста на холсте первоисточником становится
     сам холст, §3.8 п. 3).
+
+    До-раскладочная геометрия — в режиме холста: без метки модели — как
+    238fe6b (`to_canvas(legacy=True)`, см. шапку модуля).
     """
-    pre, _transform = to_canvas(validated_graph)
+    legacy = contact.canvas_model(canvas_graph) is None
+    pre, _transform = to_canvas(validated_graph, legacy=legacy)
     blocks = _active(pre)
     if not blocks:
         canvas_graph["text_blocks"] = []

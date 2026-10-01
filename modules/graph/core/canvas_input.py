@@ -14,11 +14,19 @@
 рёбра, решение Р7, модуль `parallel_edges`): на графе без кратных пар он ничего
 не меняет, поэтому паритет Э2 на git-корпусе (0 пар) сохраняется; на
 storage-графах с парами эталоны пересняты (Д6).
+
+`legacy=True` — геометрия холста deploy 238fe6b (метки модели нет, Р1,
+ADR-009): без нормализации кратных рёбер, центроид клапана — центр рамки.
+Нужна одному потребителю — импорту текста на СТАРЫЙ холст (`text_import`):
+якоря подписей сверяют до-раскладочную геометрию с холстом по индексу ребра
+и центру узла, и до-раскладочная обязана быть той, от которой старый холст
+строился.
 """
 from __future__ import annotations
 
 from copy import deepcopy
 
+from . import contact
 from .parallel_edges import normalize_parallel_edges
 from .pretransform import (
     _build_adjacency,
@@ -30,7 +38,7 @@ from .pretransform import (
 __all__ = ["to_canvas"]
 
 
-def to_canvas(validated_graph, image_hw=None):
+def to_canvas(validated_graph, image_hw=None, *, legacy=False):
     """graph_validated (px растра) -> граф холста. -> (graph, transform).
 
     Вход не мутируется. `image_hw = (height, width)`; по умолчанию берётся из
@@ -49,12 +57,19 @@ def to_canvas(validated_graph, image_hw=None):
     (`layout/_shapes.py`) по этим габаритам. `apply_fixed_sizes` двигает bbox
     и — у клапанов — центроид: он встаёт в точку талии на линии трубы
     (решение заказчика 2026-09-22), остальные центроиды те же.
+
+    `legacy=True` — как 238fe6b (см. шапку модуля): кратные рёбра не
+    трогаются, узлы на время сборки получают `contact.LEGACY_KEY`
+    (`apply_fixed_sizes` — рамка вокруг центроида), в выход ключ не попадает.
+    Посадка концов `reproject_edge_endpoints` общая: на рабочих размерах
+    `FIXED_SIZES` рамка == letterbox скина 238fe6b (сверено по всем классам
+    обеих осей).
     """
     g = deepcopy(validated_graph)
     # кратные рёбра (Р7) на копии; степень — только у затронутых узлов: у
     # старых graph_validated поле degree протухло, полный пересчёт сдвинул бы всё
-    par = normalize_parallel_edges(g.get("nodes", []), g.get("links", []),
-                                   keys=("source", "target"))
+    par = {"nodes_touched": []} if legacy else normalize_parallel_edges(
+        g.get("nodes", []), g.get("links", []), keys=("source", "target"))
     if par["nodes_touched"]:
         deg = dict.fromkeys(par["nodes_touched"], 0)
         for e in g["links"]:
@@ -73,7 +88,12 @@ def to_canvas(validated_graph, image_hw=None):
     g.setdefault("graph", {})["canvas_transform"] = transform
     detected = {n["id"]: list(n["bbox"]) for n in g.get("nodes", [])
                 if n.get("bbox") and len(n["bbox"]) == 4}
+    if legacy:
+        for n in g.get("nodes", []):
+            n[contact.LEGACY_KEY] = True
     apply_fixed_sizes(g, _build_adjacency(g))
     reproject_edge_endpoints(g)
+    if legacy:
+        contact.strip_attach_mode(g.get("nodes"))
     g["graph"]["detected_bbox"] = detected
     return g, transform
