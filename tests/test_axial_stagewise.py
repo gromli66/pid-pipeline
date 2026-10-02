@@ -811,3 +811,13 @@ def test_fallback_split_round_free_axis_retried_without_split(monkeypatch):
     monkeypatch.setattr(axial, "SPLIT_PER_ROUND", 0)
     st0 = axial.place(_seed_sheet(652)[0], canvas=canvas)
     assert st0["over"] == pytest.approx(62.64)
+
+
+def test_flips_counts_only_pairs_used_by_winner():
+    """flips — пары, ось которых в проходе-победителе задала переброска, а
+    не всё, что накопилось в flip: сид 1307 — 5 выводов, пара n10–n9 в flip,
+    но в итоговом проходе не конфликтует (n9 выведен раньше) — flips 4
+    (bfcc301 считал len(flip) — 5)."""
+    g, canvas = _seed_sheet(1307)
+    st = axial.place(g, canvas=canvas)
+    assert st["splits"] == 5 and st["flips"] == 4

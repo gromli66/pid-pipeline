@@ -1174,6 +1174,12 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
             over = max(over, o)
         inf["over"] = round(over, 2)
         inf["sep_x"], inf["sep_y"] = len(sep["x"]), len(sep["y"])
+        # переброска, которой этот проход правда воспользовался: ось пары
+        # задал flip (пара в разных колонках и рядах), а не всё, что
+        # накопилось в flip за попытки (red-team bfcc301)
+        inf["flips"] = sum(1 for ax_ in ("x", "y") for pk in sep[ax_]
+                           if pk in flip and xa[pk[0]] != xa[pk[1]]
+                           and ya[pk[0]] != ya[pk[1]])
         inf["residual_tight_pairs"] = residual
         inf["overlaps_left"] = len(conflicts(items, 0.0, shapes=shapes))
         return (inf, [a["coord"] for a in xaxes], [a["coord"] for a in yaxes],
@@ -1286,8 +1292,7 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
             if best is None:
                 best = attempt(0.0)[:3]
                 tries += 1
-            won = (best, axes_state(), nsplit[0], dict(flip),
-                   off_oblique(*best[1:]))
+            won = (best, axes_state(), nsplit[0], off_oblique(*best[1:]))
         axes_restore(sv0)
         flip.clear()
         cliff[0] = split[0] = False
@@ -1300,11 +1305,10 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
             if a["over"] < b["over"] \
                     and a["overlaps_left"] <= b["overlaps_left"] \
                     and a["residual_tight_pairs"] <= b["residual_tight_pairs"] \
-                    and all(w <= p for w, p in zip(won[4],
+                    and all(w <= p for w, p in zip(won[3],
                                                    off_oblique(*pr[1:3]))):
                 axes_restore(won[1])
                 nsplit[0] = won[2]
-                flip.update(won[3])
                 best = won[0]
             else:
                 best = pr[:3]
@@ -1312,7 +1316,6 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
         inf, px, py, _l = attempt(0.0)
         tries += 1
         best = (inf, px, py)
-    st["flips"] = len(flip)
     st["splits"] = nsplit[0]
     inf, px, py = best
     for a, c in zip(xaxes, px):
