@@ -821,3 +821,16 @@ def test_flips_counts_only_pairs_used_by_winner():
     g, canvas = _seed_sheet(1307)
     st = axial.place(g, canvas=canvas)
     assert st["splits"] == 5 and st["flips"] == 4
+
+
+def test_cliff_flip_pair_with_jogged_pipe_inside(monkeypatch):
+    """Труба внутри пары с разносом колонок >= PIPE_STRAIGHT (9 px) — излом
+    виден уже на входе: пара переводится, как без трубы (доля 0.984; на
+    26747a10 запрет любой трубы внутри пары ронял долю 0.391 -> 0.172 и
+    давал +4 дефекта, косых по судье 2 -> 5). Прямую (3 px) — нет
+    (test_cliff_no_flip_pair_with_pipe_inside)."""
+    monkeypatch.setattr(axial, "SPLIT_PER_ROUND", 0)
+    g = _shift_x(_flip_sheet(50), "V", -36.0)
+    g["edges"].append({"id": "eUV", "source": "U", "target": "V"})
+    st = axial.place(g, canvas=(600.0, 200.0))
+    assert st["flips"] == 1 and st["scale_eff"] == pytest.approx(0.984)

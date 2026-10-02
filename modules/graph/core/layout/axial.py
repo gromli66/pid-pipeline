@@ -54,6 +54,12 @@ FLIP_COST = 60.0  # px: обрыв — пара критического пут�
 FLIP_ROUNDS = 6   # кругов переброски на одну попытку
 SPLIT_PER_ROUND = 4  # запасной attempt: узлов, выводимых из общей колонки
                      # (ряда) за круг переброски (как прототип C/D30)
+PIPE_STRAIGHT = 6.0  # px: труба между членами пары с разносом осей поперёк
+                     # тесной меньше этого — прямая (порог видимости,
+                     # LayoutParams.floor); перевод пары на свободную ось
+                     # сделал бы её косой (C3: 3 px -> 61). Разнос больше —
+                     # излом виден уже на входе, перевод его не портит
+                     # (26747a10: 8 пар 8-17 px, без них доля 0.391 -> 0.172)
 _SAME = object()  # сентинел: pipe_base по умолчанию наследует gap base
                   # (None — валидное значение «без капа», поэтому не годится)
 
@@ -869,6 +875,12 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
         oth, c0l = (xa, cx0) if tight == "y" else (ya, cy0)
         return abs(c0l[oth[ka]] - c0l[oth[kb]]) <= tol
 
+    def straight(ka, kb, tight):
+        """Труба ka–kb почти прямая вдоль тесной оси: разнос их осей по
+        свободной меньше `PIPE_STRAIGHT`."""
+        oth, c0l = (xa, cx0) if tight == "y" else (ya, cy0)
+        return abs(c0l[oth[ka]] - c0l[oth[kb]]) < PIPE_STRAIGHT
+
     def torn(m, p, tight):
         """Вывод m разводит колонку партнёра p по свободной оси — рвётся
         труба её члена к узлу на той же координате в ДРУГОЙ колонке
@@ -1015,8 +1027,9 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
             cand, splits = [], []
             for pk in critical_seps(axlist, by_key, idx, specs, nsep, okey,
                                     hkey):
-                if pk in flip or pk[1] in nbrs.get(pk[0], ()):
-                    continue          # ребро внутри пары: труба стала бы косой
+                if pk in flip or (pk[1] in nbrs.get(pk[0], ())
+                                  and straight(pk[0], pk[1], tight)):
+                    continue          # прямая труба внутри пары стала бы косой
                 if same_line(pk[0], pk[1], tight):
                     # общая колонка (ряд): свободной оси нет — только в
                     # запасном attempt свободный член выводится в свою ось
