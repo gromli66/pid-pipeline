@@ -513,13 +513,14 @@ def test_cliff_no_flip_pair_on_same_coordinate(monkeypatch):
 
 def _a4(xs):
     """_flip_sheet(90), T на 1 px правее U (общая колонка) и в своём ряду (на
-    5 px выше U); xs — коннекторы в ряду T с трубой к T (поперёк колонки)."""
+    5 px выше U, как A4 red-team); xs — коннекторы в ряду T с трубой к T
+    (поперёк колонки)."""
     g = _shift_x(_flip_sheet(90), "T", 1.0)
     for n in g["nodes"]:
         if n["id"] == "T":
-            n["centroid"][0] -= 5.0
-            n["bbox"][1] -= 5.0
-            n["bbox"][3] -= 5.0
+            n["centroid"][0] += 45.0
+            n["bbox"][1] += 45.0
+            n["bbox"][3] += 45.0
     for i, x in enumerate(xs):
         g["nodes"].append(_node("L%d" % i, x, 145))
         g["edges"].append({"id": "eL%d" % i, "source": "L%d" % i,
@@ -550,8 +551,10 @@ def test_fallback_split_side_toward_pipe(lx):
 
 def test_fallback_split_side_conflict_not_split(monkeypatch):
     """Соседи T по обе стороны колонки: любой вывод T ведёт одну из труб
-    сквозь U, вывод U — сквозь U трубу T. Вывода нет: граф = с выключенным
-    выводом (bfcc301 выводил T вправо — L–T сквозь U)."""
+    сквозь U, вывод U — сквозь U трубу T. Безопасного вывода нет: граф = с
+    выключенным выводом (bfcc301 выводил T вправо — L–T сквозь U). Крайняя
+    мера выключена — её сторожат test_fallback_last_resort_*."""
+    monkeypatch.setattr(axial, "SPLIT_FORCE", False)
     g = _a4([30.0, 250.0])
     st = axial.place(g, canvas=(600.0, 200.0))
     assert st["splits"] == 0
@@ -797,7 +800,10 @@ def test_fallback_split_not_better_is_plain(monkeypatch, seed, over):
     косую, трубу сквозь блок) — запасной attempt бит-в-бит как без вывода
     (bfcc301: 1383 88.0, 1083 683.8, 649 436.7 с наложением, 803 12.8 и 176
     144.8 с узлом за листом; 1001 — наложение при сравнении без наложений;
-    936 — 0 с косой трубой; 1155 — 79.0 с трубой сквозь блок)."""
+    936 — 0 с косой трубой; 1155 — 79.0 с трубой сквозь блок). Крайняя мера
+    выключена: сверка безопасных выводов (1155 с ней —
+    test_fallback_last_resort_seed_1155)."""
+    monkeypatch.setattr(axial, "SPLIT_FORCE", False)
     g, canvas = _seed_sheet(seed)
     st = axial.place(g, canvas=canvas)
     assert st["splits"] == 0 and st["flips"] == 0
@@ -868,3 +874,85 @@ def test_cliff_flip_pair_with_jogged_pipe_inside(monkeypatch):
     g["edges"].append({"id": "eUV", "source": "U", "target": "V"})
     st = axial.place(g, canvas=(600.0, 200.0))
     assert st["flips"] == 1 and st["scale_eff"] == pytest.approx(0.984)
+
+
+
+# ─────── крайняя мера: вывод сквозь соседа (решение Максима 02.10) ───────
+
+def _through_u(g):
+    return sum(_crosses(g, e["source"], e["target"], "U")
+               for e in g["edges"] if "U" not in (e["source"], e["target"]))
+
+
+def test_fallback_last_resort_split_fits(monkeypatch):
+    """Безопасного вывода нет (соседи T по обе стороны), лист не влезает
+    (вылет 83) — крайняя мера: T выводится, одна его труба идёт сквозь U,
+    лист влезает. Без крайней меры — вылет 83, выводов нет."""
+    g = _a4([30.0, 250.0])
+    st = axial.place(g, canvas=(600.0, 200.0))
+    assert st["splits"] == 1 and st["over"] == 0.0
+    assert _through_u(g) == 1
+    monkeypatch.setattr(axial, "SPLIT_FORCE", False)
+    st0 = axial.place(_a4([30.0, 250.0]), canvas=(600.0, 200.0))
+    assert st0["splits"] == 0 and st0["over"] == pytest.approx(83.0)
+
+
+@pytest.mark.parametrize("xs, left", [((30.0, 50.0, 250.0), True),
+                                      ((30.0, 230.0, 250.0), False)])
+def test_fallback_last_resort_side_fewer_pipes_through(xs, left):
+    """Крайняя мера выводит туда, где сквозь U пойдёт меньше труб: двое
+    соседей слева, один справа — T влево, сквозь U одна труба (и наоборот)."""
+    g = _a4(list(xs))
+    st = axial.place(g, canvas=(600.0, 200.0))
+    p = _xy(g)
+    assert st["splits"] == 1 and st["over"] == 0.0
+    assert (p["T"][0] < p["U"][0]) == left and _through_u(g) == 1
+
+
+def test_fallback_last_resort_off_when_safe_fits(monkeypatch):
+    """Безопасный вывод есть и лист с ним влезает — крайняя мера не
+    включается: граф и число попыток = с выключенной крайней мерой."""
+    g = _a4([30.0])
+    st = axial.place(g, canvas=(600.0, 200.0))
+    monkeypatch.setattr(axial, "SPLIT_FORCE", False)
+    g0 = _a4([30.0])
+    st0 = axial.place(g0, canvas=(600.0, 200.0))
+    assert g == g0 and st["attempts"] == st0["attempts"]
+    assert st["splits"] == 1 and st["over"] == 0.0
+
+
+def test_fallback_last_resort_rejected_bitexact(monkeypatch):
+    """Крайняя мера не помогла (холст 100 px: X кончается, выводы
+    откатываются) — граф бит-в-бит как без неё."""
+    g = _a4([30.0, 250.0])
+    st = axial.place(g, canvas=(100.0, 200.0))
+    monkeypatch.setattr(axial, "SPLIT_FORCE", False)
+    g0 = _a4([30.0, 250.0])
+    axial.place(g0, canvas=(100.0, 200.0))
+    assert g == g0 and st["splits"] == 0
+    assert st["over"] == pytest.approx(83.0)
+
+
+def test_fallback_last_resort_seed_1155(monkeypatch):
+    """Сид 1155: безопасный вывод отвергнут сверкой (труба n1–c5 сквозь n0),
+    лист не влезает (вылет 470.9) — крайняя мера берёт его: вылет 79.0,
+    узлов за листом 3 -> 2, сквозь 0 -> 1; наложений и косых не больше."""
+    g, canvas = _seed_sheet(1155)
+    st = axial.place(g, canvas=canvas)
+    assert st["splits"] == 1 and st["over"] == pytest.approx(79.0)
+    monkeypatch.setattr(axial, "SPLIT_FORCE", False)
+    st0 = axial.place(_seed_sheet(1155)[0], canvas=canvas)
+    assert st0["splits"] == 0 and st0["over"] == pytest.approx(470.9)
+
+
+def test_fallback_last_resort_rejected_by_check(monkeypatch):
+    """Сид 1001: лист не влезает и без выводов (272.3), крайняя мера даёт
+    190.8, но с наложением блоков (0 -> 1) — сверка её не берёт: граф
+    бит-в-бит как без крайней меры."""
+    g, canvas = _seed_sheet(1001)
+    st = axial.place(g, canvas=canvas)
+    assert st["splits"] == 0 and st["over"] == pytest.approx(272.28)
+    monkeypatch.setattr(axial, "SPLIT_FORCE", False)
+    g0, _c = _seed_sheet(1001)
+    axial.place(g0, canvas=canvas)
+    assert g == g0

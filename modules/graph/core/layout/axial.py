@@ -54,6 +54,9 @@ FLIP_COST = 60.0  # px: обрыв — пара критического пут�
 FLIP_ROUNDS = 6   # кругов переброски на одну попытку
 SPLIT_PER_ROUND = 4  # запасной attempt: узлов, выводимых из общей колонки
                      # (ряда) за круг переброски (как прототип C/D30)
+SPLIT_FORCE = True   # крайняя мера (решение Максима 02.10): лист и с
+                     # безопасными выводами не влез — выводы и в сторону,
+                     # где поперечная труба идёт сквозь соседа
 PIPE_STRAIGHT = 6.0  # px: труба между членами пары с разносом осей поперёк
                      # тесной меньше этого — прямая (порог видимости,
                      # LayoutParams.floor); перевод пары на свободную ось
@@ -856,6 +859,7 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
     flip = {}           # обрыв: {пара: свободная ось}
     cliff = [False]     # переброска включена (только на обрыве)
     split = [False]     # запасной attempt: вывод узла из общей колонки
+    force = [0]         # крайняя мера: вывод и при конфликте сторон (1, 2)
     nsplit = [0]
     nbrs, epairs = {}, []
     for e in edges(graph):
@@ -901,12 +905,16 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
         сторону — туда, где её почти вдоль идущие трубы к соседним колонкам
         (|по свободной оси| < |по тесной|): порядок осей везёт ту колонку
         следом, а в обратную сторону труба становится косой (C3). Соседей
-        нет — сторона входа, как прежде."""
+        нет — сторона входа, как прежде. Крайняя мера (`force`, решение
+        Максима 02.10) при конфликте: force 1 — сторона, где таких труб
+        меньше (поровну — сторона входа), force 2 — сторона входа."""
         oth, c0l = (xa, cx0) if tight == "y" else (ya, cy0)
         prp, p0l = (ya, cy0) if tight == "y" else (xa, cx0)
         ok, hk = ("oy", "hh") if tight == "y" else ("ox", "hw")
         c = c0l[oth[p]]
-        want = {1 if c0l[oth[t]] > c else -1 for t in nbrs.get(m, ())}
+        want = {1: 0, -1: 0}           # сторона -> труб, которые её требуют
+        for t in nbrs.get(m, ()):
+            want[1 if c0l[oth[t]] > c else -1] += 1
         mc = p0l[prp[m]] + by_key[m][ok]
         lo, hi = mc - by_key[m][hk], mc + by_key[m][hk]
         for a in (xaxes if tight == "y" else yaxes)[oth[p]]["members"]:
@@ -919,11 +927,14 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
                 ya_, yt = p0l[prp[a]], p0l[prp[t]]
                 if abs(d) < abs(yt - ya_) \
                         or (min(ya_, yt) < hi and max(ya_, yt) > lo):
-                    want.add(-1 if d > 0 else 1)
-        if len(want) > 1:
-            return 0
-        if want:
-            return want.pop()
+                    want[-1 if d > 0 else 1] += 1
+        if want[1] and want[-1]:
+            if not force[0]:
+                return 0
+            if force[0] == 1 and want[1] != want[-1]:
+                return 1 if want[1] > want[-1] else -1
+        elif want[1] or want[-1]:
+            return 1 if want[1] else -1
         k = 0 if tight == "y" else 1
         return 1 if node_cxy(byid0[m])[k] >= node_cxy(byid0[p])[k] else -1
 
@@ -979,7 +990,10 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
         центрам > 1 px; пар «труба сквозь рамку чужого блока» — отрезок
         центр–центр пересекает рамку, сжатую на 0.5 px) при координатах осей
         px/py (оси — текущие xaxes/yaxes). Те же судьи, что у фаззера
-        red-team, — до роутинга."""
+        red-team, — до роутинга. Четвёртое — косые из труб, прямых на входе
+        (концы на одной координате колонки или ряда, допуск `tol`): косая
+        из косой на входе — не порча, а лишь не случилось случайного
+        совпадения осей при сжатии листа (0aea61c0)."""
         from shapely.geometry import LineString, box as shp_box
         from shapely.strtree import STRtree
 
@@ -991,9 +1005,12 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
                   if x - it["hw"] < -1e-6 or y - it["hh"] < -1e-6
                   or x + it["hw"] > canvas[0] + 1e-6
                   or y + it["hh"] > canvas[1] + 1e-6)
-        obl = sum(1 for s_, t_ in epairs
-                  if abs(pos[s_][0] - pos[t_][0]) > 1.0
-                  and abs(pos[s_][1] - pos[t_][1]) > 1.0)
+        oblq = [(s_, t_) for s_, t_ in epairs
+                if abs(pos[s_][0] - pos[t_][0]) > 1.0
+                and abs(pos[s_][1] - pos[t_][1]) > 1.0]
+        torn_ = sum(1 for s_, t_ in oblq
+                    if same_line(s_, t_, "y") or same_line(s_, t_, "x"))
+        obl = len(oblq)
         blk = [it for it in items
                if not it["conn"] and it["hw"] >= 1.0 and it["hh"] >= 1.0]
         tree = STRtree([shp_box(
@@ -1007,10 +1024,15 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
                 thr += sum(1 for j in tree.query(
                     LineString([pos[s_], pos[t_]]), predicate="intersects")
                     if blk[int(j)]["key"] not in (s_, t_))
-        return off, obl, thr
+        return off, obl, thr, torn_
 
     def axes_restore(sv):
-        for cur, old in zip((xaxes, yaxes, cx0, cy0, dx, dy), sv):
+        # копией: сохранённое состояние переживает правки осей (крайняя мера
+        # восстанавливает исходные оси второй раз)
+        for cur, old in zip((xaxes, yaxes), sv[:2]):
+            cur[:] = [{"coord": a["coord"], "members": list(a["members"])}
+                      for a in old]
+        for cur, old in zip((cx0, cy0, dx, dy), sv[2:]):
             cur[:] = old
         for ix_, axl_ in ((xa, xaxes), (ya, yaxes)):
             ix_.clear()
@@ -1314,43 +1336,65 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
         # режут соседей, фаззер 176 / 128 листов); иначе, и если вывести
         # нечего (или все выводы откачены), — переброска сбрасывается,
         # запасной attempt бит-в-бит как без вывода.
+        # КРАЙНЯЯ МЕРА (решение Максима 02.10, 0aea61c0): лист и с
+        # безопасными выводами (или без них) не влез — проход, где вывод
+        # разрешён и при конфликте сторон (`split_side`): сперва сторона с
+        # меньшим числом труб сквозь соседа (force 1), не взят или лист всё
+        # ещё не влез — сторона входа, как bfcc301 (force 2; 0aea61c0: при
+        # force 1 наложений 9 -> 11, после раздвигания 17). Каждый сверяется
+        # с текущим итогом: берётся, только если вылет строго меньше, а
+        # наложений, тесных пар, узлов за листом и косых из прямых на входе
+        # не больше («сквозь» — не смотрится).
         sv0 = axes_state()
-        cliff[0] = split[0] = True
-        for fl in (VALVE_CLEAR, None):
-            pr = attempt(0.0, valve_only=True, floor=fl)
-            tries += 1
-            if pr[0]["over"] <= PRUNE_SLACK:
-                best = pr[:3]
+
+        def better(v, w, forced):
+            """Вариант v (с выводами) лучше w: вылет строго меньше,
+            наложений и тесных пар не больше, отметок `marks` — узлов за
+            листом, косых, «сквозь» — не больше. Крайняя мера: вместо косых —
+            косые из прямых на входе, «сквозь» не смотрится. v, w =
+            (результат, оси, выводов, marks)."""
+            a, b = v[0][0], w[0][0]
+            keys = (0, 3) if forced else (0, 1, 2)
+            return a["over"] < b["over"] \
+                and a["overlaps_left"] <= b["overlaps_left"] \
+                and a["residual_tight_pairs"] <= b["residual_tight_pairs"] \
+                and all(v[3][k] <= w[3][k] for k in keys)
+
+        cur = None
+        for forced in (0, 1, 2):
+            if forced and (not SPLIT_FORCE
+                           or cur[0][0]["over"] <= PRUNE_SLACK):
                 break
-        won = None
-        if nsplit[0]:
-            if best is None:
-                best = attempt(0.0)[:3]
+            force[0] = forced
+            cliff[0] = split[0] = True
+            got = None
+            for fl in (VALVE_CLEAR, None):
+                pr = attempt(0.0, valve_only=True, floor=fl)
                 tries += 1
-            won = (best, axes_state(), nsplit[0], marks(*best[1:]))
-        axes_restore(sv0)
-        flip.clear()
-        cliff[0] = split[0] = False
-        nsplit[0] = 0
-        best = None
-        if won is not None:
-            pr = attempt(0.0)
-            tries += 1
-            a, b = won[0][0], pr[0]
-            if a["over"] < b["over"] \
-                    and a["overlaps_left"] <= b["overlaps_left"] \
-                    and a["residual_tight_pairs"] <= b["residual_tight_pairs"] \
-                    and all(w <= p for w, p in zip(won[3],
-                                                   marks(*pr[1:3]))):
-                axes_restore(won[1])
-                nsplit[0] = won[2]
-                best = won[0]
-            else:
-                best = pr[:3]
-    if best is None:
-        inf, px, py, _l = attempt(0.0)
-        tries += 1
-        best = (inf, px, py)
+                if pr[0]["over"] <= PRUNE_SLACK:
+                    got = pr[:3]
+                    break
+            var = None
+            if nsplit[0]:
+                if got is None:
+                    got = attempt(0.0)[:3]
+                    tries += 1
+                var = (got, axes_state(), nsplit[0], marks(*got[1:]))
+            axes_restore(sv0)
+            flip.clear()
+            cliff[0] = split[0] = False
+            force[0] = 0
+            nsplit[0] = 0
+            if cur is None:           # запасной attempt без выводов
+                pr = attempt(0.0)
+                tries += 1
+                cur = (pr[:3], None, 0, marks(*pr[1:3]))
+            if var is not None and better(var, cur, forced):
+                cur = var
+        if cur[1] is not None:
+            axes_restore(cur[1])
+            nsplit[0] = cur[2]
+        best = cur[0]
     st["splits"] = nsplit[0]
     inf, px, py = best
     for a, c in zip(xaxes, px):
