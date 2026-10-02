@@ -220,3 +220,121 @@ def test_prune_with_floor_stops_at_min_pipe():
                                  [("a", "b", 26.0)], by_key, idx, "oy", "hh",
                                  60.0, floor=axial.VALVE_CLEAR)
     assert st == {"touch": 0, "drop": 0} and kept == [("a", "b", 26.0)]
+
+
+# ───────────────────── переброска на свободную ось (E) ─────────────────────
+
+def _flip_sheet(hh_t):
+    """Обрыв по Y при свободной оси X. Колонка x=100: высокий T над U —
+    общая колонка, разводятся только по Y. V — в другой колонке и другом
+    ряду, наложен на U на входе: правило долей холста (ov_x/600 > ov_y/200)
+    отдаёт паре U–V ось Y, и цепочка T–U–V не влезает в 199 px ни при какой
+    доле (hh_t=50: 50 + 71 + 51 + 30 = 202). Цена перевода U–V на X (по
+    координатам попытки) <= FLIP_COST: растяжка X уже развела их колонки.
+    Поодаль — клапан w с трубой к k и блок P с трубой к q: их снимают
+    ступень и запасной attempt."""
+    return {"nodes": [_node("T", 100, 100, 5, hh_t, "apparat"),
+                      _node("U", 100, 150, 40, 20, "apparat"),
+                      _node("V", 145, 198, 20, 30, "apparat"),
+                      _node("w", 400, 100, 8, 8, VALVE, _axis="V"),
+                      _node("k", 400, 150),
+                      _node("P", 300, 100, 10, 8, "apparat"),
+                      _node("q", 300, 150)],
+            "edges": [{"id": "e1", "source": "w", "target": "k"},
+                      {"id": "e2", "source": "P", "target": "q"}]}
+
+
+def _xy(g):
+    return {n["id"]: (n["centroid"][1], n["centroid"][0]) for n in g["nodes"]}
+
+
+def test_cliff_flips_pair_to_free_axis_pipes_kept(monkeypatch):
+    """Обрыв по Y, X свободен: пара U–V переведена на X, доля > 0 влезла —
+    трубы на месте, лист в холсте. Без переброски (как 5b00dd5) — запасной
+    attempt: вылет 3 px и ни одной трубы."""
+    g = _flip_sheet(50)
+    st = axial.place(g, canvas=(600.0, 200.0))
+    p = _xy(g)
+    assert st["flips"] == 1 and st["over"] == 0.0 and st["pruned"] == {}
+    assert st["scale_eff"] > 0.9
+    assert st["pipes_y"] == 2 and st["pipe_eff"] > 11.0
+    assert st["valve_pipe_eff"] == axial.VALVE_PIPE
+    # U–V разведены по X, по Y — нет: как на входе (48 < 20 + 30 + 1)
+    assert p["V"][0] - 20.0 - (p["U"][0] + 40.0) >= axial.GAP_MIN - 1e-6
+    assert p["V"][1] - p["U"][1] == pytest.approx(48.0)
+    assert max(p["V"][1] + 30.0, p["U"][1] + 20.0) <= 200.0 - axial.INSET
+
+    monkeypatch.setattr(axial, "FLIP_ROUNDS", 0)    # переброска выключена
+    g0 = _flip_sheet(50)
+    st0 = axial.place(g0, canvas=(600.0, 200.0))
+    assert st0["flips"] == 0 and st0["scale_eff"] == 0.0
+    assert st0["over"] == pytest.approx(3.0)
+    assert st0["pipes_y"] == 0 and st0["pruned"] == {}
+
+
+@pytest.mark.parametrize("hh_t, width, over, ys", [
+    # переброска помогает наполовину (вылет 83 -> 32), ступени с ней не
+    # влезают -> сброс
+    (90, 600.0, 83.0, (7.5, 118.5, 169.5)),
+    # свободной оси нет (холст 100 px): круг переброски откатывается
+    (50, 100.0, 3.0, (47.5, 118.5, 169.5)),
+])
+def test_cliff_flip_not_enough_resets_bitexact(monkeypatch, hh_t, width,
+                                               over, ys):
+    """Перевод не помогает: переброска сбрасывается, раскладка бит-в-бит как
+    без неё (5b00dd5) — запасной attempt без труб, тот же вылет, те же ряды."""
+    g = _flip_sheet(hh_t)
+    st = axial.place(g, canvas=(width, 200.0))
+    p = _xy(g)
+    assert st["flips"] == 0 and st["scale_eff"] == 0.0
+    assert st["over"] == pytest.approx(over)
+    assert st["pipes_y"] == 0 and st["pruned"] == {}
+    assert (p["T"][1], p["U"][1], p["V"][1]) == pytest.approx(ys)
+    if hh_t == 90:                  # переброска была: вылет с ней 32 px
+        assert [t[2] for t in st["tried"]] == pytest.approx([83.0, 32.0])
+
+    monkeypatch.setattr(axial, "FLIP_ROUNDS", 0)    # переброска выключена
+    g0 = _flip_sheet(hh_t)
+    axial.place(g0, canvas=(width, 200.0))
+    assert g == g0
+
+
+def test_no_cliff_no_flip():
+    """Переброска — только на обрыве. V — клапан с трубой к r (вход 2 px):
+    пол VALVE_PIPE fit_scale не видит, доля 1 не влезает (вылет 3 px), а
+    бисекция находит долю 0.25 > 0 — обрыва нет, пары не переводятся, U–V
+    разведены по Y, как без переброски (с ней влезла бы доля 1)."""
+    g = _flip_sheet(50)
+    for n in g["nodes"]:
+        if n["id"] == "V":
+            n["class_name"], n["_axis"] = VALVE, "V"
+    g["nodes"].append(_node("r", 145, 230))
+    g["edges"].append({"id": "e3", "source": "V", "target": "r"})
+    st = axial.place(g, canvas=(600.0, 206.0))
+    p = _xy(g)
+    assert st["tried"][0] == (1.0, 0.0, 3.0)        # доля 1 не влезла
+    assert st["scale_eff"] == 0.25 and st["flips"] == 0
+    assert p["V"][1] - p["U"][1] == pytest.approx(51.0)
+
+
+def test_cliff_flip_round_rollback_keeps_earlier_round():
+    """Откат круга переброски снимает только этот круг. Круг 1 переводит
+    A = U1–V1 (51 px по Y), круг 2 — B = U2–V2 (49 px), с ней X не влезает
+    в 200 px — круг 2 откатывается, A остаётся. С одной A лист влезает при
+    трубе V1–r1 до 2 px (12·доля <= 2): бисекция вверх находит долю 0.156.
+    Без отката B оставалась бы в переброске: X вылезает на любой доле,
+    переброска сбрасывается, лист — запасной attempt с вылетом 1 px."""
+    g = {"nodes": [_node("T1", 100, 100, 5, 50, "apparat"),
+                   _node("U1", 100, 150, 40, 20, "apparat"),
+                   _node("V1", 145, 198, 20, 30, "apparat"),
+                   _node("r1", 145, 240),
+                   _node("U2", 300, 150, 40, 17, "apparat"),
+                   _node("V2", 345, 198, 20, 31, "apparat")],
+         "edges": [{"id": "e1", "source": "V1", "target": "r1"}]}
+    st = axial.place(g, canvas=(200.0, 203.0))
+    p = _xy(g)
+    assert st["flips"] == 1 and st["over"] == 0.0 and st["pruned"] == {}
+    assert st["scale_eff"] == pytest.approx(0.156, abs=1e-3)
+    # A переведена: U1–V1 по Y ближе 51; B — нет: U2–V2 по Y не ближе 49
+    assert p["V1"][1] - p["U1"][1] < 51.0 - 1.0
+    assert p["V2"][1] - p["U2"][1] >= 49.0 - 1e-6

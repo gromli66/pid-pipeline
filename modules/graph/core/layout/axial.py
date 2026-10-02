@@ -48,6 +48,10 @@ VALVE_CLEAR = 1.0  # px: минимальная труба клапана на �
                    # («холст первым», решение Максима 01.10); запасной attempt
                    # её не держит — он без труб вовсе (меньший вылет за холст,
                    # решение Максима 01.10)
+FLIP_COST = 60.0  # px: обрыв — пара критического пути тесной оси переводится
+                  # на свободную ось, если там ей не хватает не больше этого
+                  # (дороже — колонка уезжает далеко, трубы её ряда режут соседей)
+FLIP_ROUNDS = 6   # кругов переброски на одну попытку
 _SAME = object()  # сентинел: pipe_base по умолчанию наследует gap base
                   # (None — валидное значение «без капа», поэтому не годится)
 
@@ -220,7 +224,8 @@ def conflicts(items, gap, eps=1e-6, base=None, floor=0.0, shapes=None):
     return sorted(out, key=lambda t: (str(t[0]), str(t[1])))
 
 
-def assign_axis(pairs, xa, ya, sep, canvas=(1920.0, 1080.0), bias=BIAS):
+def assign_axis(pairs, xa, ya, sep, canvas=(1920.0, 1080.0), bias=BIAS,
+                flip=None):
     """Раздать парам ось сепарации ОДИН РАЗ и запомнить в sep.
 
     Правило: общая колонка — разводим по y, общий ряд — по x, иначе по той
@@ -231,7 +236,8 @@ def assign_axis(pairs, xa, ya, sep, canvas=(1920.0, 1080.0), bias=BIAS):
     при нормировке, потолок 1079). Она же отвечает пожеланию заказчика
     «плотную вертикальную схему разложить горизонтально».
     Пара, уже получившая ось в предыдущем круге, не пересматривается —
-    иначе круги колеблются.
+    иначе круги колеблются. flip — {пара: ось}: пары, переведённые `place`
+    на обрыве на свободную ось (только для пар в разных колонках и рядах).
     -> число новых назначений; пары «одна ячейка» невозможны (расщеплены).
     """
     n_new = 0
@@ -246,11 +252,45 @@ def assign_axis(pairs, xa, ya, sep, canvas=(1920.0, 1080.0), bias=BIAS):
             axis = "y"
         elif same_y:
             axis = "x"
+        elif flip and pk in flip:
+            axis = flip[pk]
         else:
             axis = "x" if ov_x / (canvas[0] * bias) <= ov_y / canvas[1]                 else "y"
         sep[axis][pk] = (ka, kb, need_x if axis == "x" else need_y)
         n_new += 1
     return n_new
+
+
+def critical_seps(axlist, by_key, idx, specs, nsep, off_key, half_key):
+    """Пары сепарации (первые nsep спеков) на критическом пути левой предельной
+    раскладки оси без пола промежутков (как `min_extent`). -> [(ka, kb)]."""
+    n = len(axlist)
+    marg = _axis_margins(axlist, by_key, off_key, half_key)
+    arcs = {}
+    for k, (ka, kb, need) in enumerate(specs):
+        a, b = by_key[ka], by_key[kb]
+        ia, ib = idx[ka], idx[kb]
+        if ia == ib:
+            continue
+        if ia > ib:
+            ia, ib, a, b = ib, ia, b, a
+        arcs.setdefault(ia, []).append(
+            (ib, need + a[off_key] - b[off_key], (ka, kb) if k < nsep else None))
+    pos, pred = [0.0] * n, [None] * n
+    for i in range(n):
+        if i + 1 < n and pos[i + 1] < pos[i]:
+            pos[i + 1], pred[i + 1] = pos[i], (i, None)
+        for j, g, pk in arcs.get(i, ()):
+            if pos[j] < pos[i] + g - 1e-9:
+                pos[j], pred[j] = pos[i] + g, (i, pk)
+    j = max(range(n), key=lambda i: pos[i] + marg[i][1])
+    out = []
+    while pred[j] is not None:
+        i, pk = pred[j]
+        if pk is not None:
+            out.append(pk)
+        j = i
+    return out
 
 
 def pipe_specs(graph, xa, ya, by_key, pipe_min, base=None):
@@ -805,8 +845,55 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
           "demand_x": round(demand[0], 1), "demand_y": round(demand[1], 1)}
 
     vkeep = valve_pipes(graph, xa, ya)
+    flip = {}           # обрыв: {пара: свободная ось}
+    cliff = [False]     # переброска включена (только на обрыве)
 
     def attempt(scale, valve_only=False, floor=VALVE_CLEAR):
+        """Попытка; на обрыве (flip включён) — с переброской пар критического
+        пути тесной оси на свободную, пока вылезает только по одной оси."""
+        res = attempt1(scale, valve_only, floor)
+        if not cliff[0]:
+            return res
+        for _f in range(FLIP_ROUNDS):
+            inf = res[0]
+            if inf["over"] <= (PRUNE_SLACK if valve_only else 0.0) \
+                    or (inf["over_x"] > 0.0 and inf["over_y"] > 0.0):
+                break
+            tight = "y" if inf["over_y"] > 0.0 else "x"
+            free = "x" if tight == "y" else "y"
+            axlist, idx, okey, hkey = ((yaxes, ya, "oy", "hh") if tight == "y"
+                                       else (xaxes, xa, "ox", "hw"))
+            other = xa if tight == "y" else ya
+            fo, fh, fc = (("ox", "hw", "cx") if free == "x"
+                          else ("oy", "hh", "cy"))
+            specs, nsep = res[3][tight]
+            cand = []
+            for pk in critical_seps(axlist, by_key, idx, specs, nsep, okey,
+                                    hkey):
+                if other[pk[0]] == other[pk[1]] or pk in flip:
+                    continue          # общая колонка (ряд): свободной оси нет
+                a, b = by_key[pk[0]], by_key[pk[1]]
+                if max(4 * a["hw"] * a["hh"], 4 * b["hw"] * b["hh"]) \
+                        >= BAND_AREA:
+                    continue          # крупный блок: колонка уезжает за габарит
+                cost = a[fh] + b[fh] + gap_min \
+                    - abs((a[fc] + a[fo]) - (b[fc] + b[fo]))
+                if cost <= FLIP_COST:
+                    cand.append((cost, pk))
+            if not cand:
+                break
+            new = [pk for _c, pk in sorted(cand)]
+            for pk in new:
+                flip[pk] = free
+            r2 = attempt1(scale, valve_only, floor)
+            if r2[0]["over_" + free] > 0.0:
+                for pk in new:        # свободная ось кончилась — откат круга
+                    flip.pop(pk, None)
+                break
+            res = r2
+        return res
+
+    def attempt1(scale, valve_only=False, floor=VALVE_CLEAR):
         """Полный проход при доле порогов scale. -> (info, коорд. x, коорд. y).
 
         Трубы клапана на его оси (`vkeep`) — не короче min(pm, VALVE_PIPE).
@@ -835,6 +922,7 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
             it["cx"] = xaxes[xa[it["key"]]]["coord"]
             it["cy"] = yaxes[ya[it["key"]]]["coord"]
         sep = {"x": {}, "y": {}}
+        last = {}
         inf = {"scale_eff": round(scale, 3), "gap_eff": round(g, 2),
                # ступень: прочие трубы сняты (0), пол клапана — отдельно
                "pipe_eff": 0.0 if valve_only else round(pm, 2),
@@ -855,7 +943,8 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
             assign_axis(conflicts(items, g if _r == 0 else gap_min,
                                   shapes=shapes,
                                   base=gap_base, floor=gap_min),
-                        xa, ya, sep, canvas, bias)
+                        xa, ya, sep, canvas, bias,
+                        flip=flip)
             for axis, axlist, idx, des, lim, okey, hkey, ckey, c0 in (
                     ("x", xaxes, xa, dx, canvas[0], "ox", "hw", "cx", cx0),
                     ("y", yaxes, ya, dy, canvas[1], "oy", "hh", "cy", cy0)):
@@ -865,6 +954,7 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
                         len(axlist), _axis_margins(axlist, by_key, okey, hkey),
                         list(sep[axis].values()), pax, by_key, idx, okey,
                         hkey, lim - 2 * inset - PRUNE_SLACK, floor=floor)
+                last[axis] = (list(sep[axis].values()) + pax, len(sep[axis]))
                 pos, good, sst, keff = solve_axis(
                     axlist, by_key, idx,
                     list(sep[axis].values()) + pax, des, lim,
@@ -916,7 +1006,8 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
         inf["sep_x"], inf["sep_y"] = len(sep["x"]), len(sep["y"])
         inf["residual_tight_pairs"] = residual
         inf["overlaps_left"] = len(conflicts(items, 0.0, shapes=shapes))
-        return inf, [a["coord"] for a in xaxes], [a["coord"] for a in yaxes]
+        return (inf, [a["coord"] for a in xaxes], [a["coord"] for a in yaxes],
+                last)
 
     # ПОРОГИ ДОСУЖИВАЮТСЯ ПО ФАКТУ, а не по нижней оценке. fit_scale считает
     # demand по ОДНОМУ раздаванию осей на входных координатах; круги находят
@@ -925,7 +1016,7 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
     # выход на первой влезшей доле занижал зазор (3.5 px вместо 6.2 на
     # 51b339ab — это +19 тесных пар), поэтому бюджет попыток тратится весь.
     tried = []
-    inf, px, py = attempt(scale0)
+    inf, px, py, _l = attempt(scale0)
     tried.append((round(scale0, 3), inf["over_x"], inf["over_y"]))
     tries = 1
     best = (inf, px, py) if inf["over"] <= 0.0 else None
@@ -933,7 +1024,7 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
         lo, hi = 0.0, scale0
         while tries <= retries and hi - lo > 0.01:
             mid = (lo + hi) / 2.0
-            inf, px, py = attempt(mid)
+            inf, px, py, _l = attempt(mid)
             tried.append((round(mid, 3), inf["over_x"], inf["over_y"]))
             tries += 1
             if inf["over"] <= 0.0:
@@ -953,14 +1044,54 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
     # труба клапана (решение Максима 01.10, как до d729fb9: 0aea61c0 рамки за
     # 1080 по Y 129.0 px при 215.5 с минимальными трубами; MEASUREMENTS §141).
     if best is None or best[0]["scale_eff"] <= 0.0:
-        for fl in (VALVE_CLEAR, None):
-            pr = attempt(0.0, valve_only=True, floor=fl)
+        # ОБРЫВ, сперва — свободная ось. Клапан стоит талией на трубе: клапаны
+        # одной вертикальной трубы (стопка) и их коннекторы в одной колонке,
+        # разводятся только по Y, трубы клапана стали осевыми — тесная ось
+        # кончается, хотя по другой холст пуст (c78e1f02: X 885 из 1919). Пары
+        # критического пути тесной оси, стоящие в разных колонках и рядах,
+        # переводятся на свободную ось (`attempt`), доля ищется заново — вверх
+        # от оценки fit_scale, если с переброской она влезла.
+        best0 = best
+        cliff[0] = True
+        lo, hi = 0.0, scale0
+        pr = attempt(scale0)
+        tried.append((round(scale0, 3), pr[0]["over_x"], pr[0]["over_y"]))
+        tries += 1
+        if pr[0]["over"] <= 0.0:
+            best, lo, hi = pr[:3], scale0, 1.0
+        k = 0
+        while k < retries and hi - lo > 0.01:
+            mid = (lo + hi) / 2.0
+            pr = attempt(mid)
+            tried.append((round(mid, 3), pr[0]["over_x"], pr[0]["over_y"]))
             tries += 1
-            if pr[0]["over"] <= PRUNE_SLACK:
-                best = pr
+            k += 1
+            if pr[0]["over"] <= 0.0:
+                best, lo = pr[:3], mid
+            else:
+                hi = mid
+    if best is None or best[0]["scale_eff"] <= 0.0:
+        # ступени «только трубы клапанов» — с переброской; не влезли —
+        # переброска сбрасывается, ступени и запасной attempt — как без неё
+        for _pass in (0, 1):
+            if _pass:
+                if not cliff[0]:
+                    break
+                flip.clear()
+                cliff[0] = False
+                best = best0
+            hit = False
+            for fl in (VALVE_CLEAR, None):
+                pr = attempt(0.0, valve_only=True, floor=fl)
+                tries += 1
+                if pr[0]["over"] <= PRUNE_SLACK:
+                    best, hit = pr[:3], True
+                    break
+            if hit:
                 break
+    st["flips"] = len(flip)
     if best is None:
-        inf, px, py = attempt(0.0)
+        inf, px, py, _l = attempt(0.0)
         tries += 1
         best = (inf, px, py)
     inf, px, py = best
