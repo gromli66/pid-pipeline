@@ -851,12 +851,13 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
     cliff = [False]     # переброска включена (только на обрыве)
     split = [False]     # запасной attempt: вывод узла из общей колонки
     nsplit = [0]
-    nbrs = {}
+    nbrs, epairs = {}, []
     for e in edges(graph):
         s_, t_ = edge_ends(e)
         if s_ in by_key and t_ in by_key and s_ != t_:
             nbrs.setdefault(s_, set()).add(t_)
             nbrs.setdefault(t_, set()).add(s_)
+            epairs.append((s_, t_))
     byid0 = nodes_by_id(graph)          # вход до снапа: сторона выхода узла
 
     def same_line(ka, kb, tight):
@@ -961,15 +962,20 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
                  for a in yaxes],
                 list(cx0), list(cy0), list(dx), list(dy))
 
-    def off_sheet(px, py):
-        """Узлов, чья рамка при координатах осей px/py за холстом (оси —
-        текущие xaxes/yaxes)."""
-        return sum(1 for it in items
-                   for x, y in ((px[xa[it["key"]]] + it["ox"],
-                                 py[ya[it["key"]]] + it["oy"]),)
-                   if x - it["hw"] < -1e-6 or y - it["hh"] < -1e-6
-                   or x + it["hw"] > canvas[0] + 1e-6
-                   or y + it["hh"] > canvas[1] + 1e-6)
+    def off_oblique(px, py):
+        """(узлов, чья рамка за холстом; труб, идущих косо — |dx| и |dy| по
+        центрам > 1 px) при координатах осей px/py (оси — текущие
+        xaxes/yaxes)."""
+        off = sum(1 for it in items
+                  for x, y in ((px[xa[it["key"]]] + it["ox"],
+                                py[ya[it["key"]]] + it["oy"]),)
+                  if x - it["hw"] < -1e-6 or y - it["hh"] < -1e-6
+                  or x + it["hw"] > canvas[0] + 1e-6
+                  or y + it["hh"] > canvas[1] + 1e-6)
+        obl = sum(1 for s_, t_ in epairs
+                  if abs(px[xa[s_]] - px[xa[t_]]) > 1.0
+                  and abs(py[ya[s_]] - py[ya[t_]]) > 1.0)
+        return off, obl
 
     def axes_restore(sv):
         for cur, old in zip((xaxes, yaxes, cx0, cy0, dx, dy), sv):
@@ -1261,11 +1267,12 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
         # координатой и разводится с партнёром по свободной оси (`split_off`).
         # С ними — заново ступени «только трубы клапанов»; не влезли — без
         # труб вовсе. Вариант с выводами сравнивается с запасным attempt без
-        # них и берётся, только если вылет меньше, а наложений, тесных пар и
-        # узлов за листом не больше (red-team bfcc301: сид 1383 39.9 -> 88.0,
-        # 1083 669 -> 731, 649 — клапан наложен на блок); иначе, и если
-        # вывести нечего (или все выводы откачены), — переброска
-        # сбрасывается, запасной attempt бит-в-бит как без вывода.
+        # них и берётся, только если вылет меньше, а наложений, тесных пар,
+        # узлов за листом и косых труб не больше (red-team bfcc301: сид 1383
+        # 39.9 -> 88.0, 1083 669 -> 731, 649 — клапан наложен на блок; косая —
+        # колонка `split_cells` отстаёт от исходной, сиды 159 / 302 / 936);
+        # иначе, и если вывести нечего (или все выводы откачены), —
+        # переброска сбрасывается, запасной attempt бит-в-бит как без вывода.
         sv0 = axes_state()
         cliff[0] = split[0] = True
         for fl in (VALVE_CLEAR, None):
@@ -1280,7 +1287,7 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
                 best = attempt(0.0)[:3]
                 tries += 1
             won = (best, axes_state(), nsplit[0], dict(flip),
-                   off_sheet(*best[1:]))
+                   off_oblique(*best[1:]))
         axes_restore(sv0)
         flip.clear()
         cliff[0] = split[0] = False
@@ -1293,7 +1300,8 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
             if a["over"] < b["over"] \
                     and a["overlaps_left"] <= b["overlaps_left"] \
                     and a["residual_tight_pairs"] <= b["residual_tight_pairs"] \
-                    and won[4] <= off_sheet(*pr[1:3]):
+                    and all(w <= p for w, p in zip(won[4],
+                                                   off_oblique(*pr[1:3]))):
                 axes_restore(won[1])
                 nsplit[0] = won[2]
                 flip.update(won[3])
