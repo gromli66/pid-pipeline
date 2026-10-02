@@ -7,6 +7,7 @@ Graph Data Model — модель данных графа P&ID.
 
 import json
 import statistics
+from collections import Counter
 from copy import deepcopy
 from pathlib import Path
 from typing import Optional
@@ -255,19 +256,47 @@ class GraphDataModel:
         """O(1) поиск edge_data по ключу."""
         return self._edge_data_index.get(key)
 
-    def edge_ref(self, edge: dict):
-        """Адрес ребра в снимках жеста для undo: id ребра, без id — ключ пары.
+    def _edge_refs(self) -> list:
+        """Адреса `edge_ref` всех рёбер `edges_data`, по порядку списка."""
+        pairs = [self.edge_key(e['source'], e['target'])
+                 for e in self.edges_data]
+        base = [e.get('id') or p for e, p in zip(self.edges_data, pairs)]
+        count = Counter(base)
+        seen = Counter()
+        refs = []
+        for e, p, b in zip(self.edges_data, pairs, base):
+            if count[b] == 1:
+                refs.append(b)
+                continue
+            group = (e.get('id'), p)
+            refs.append(group + (seen[group],))
+            seen[group] += 1
+        return refs
 
-        Ключ пары у кратной пары (Р7, пары с unknow) один на все её рёбра,
-        а индекс `find_edge_data` хранит последнее: снимок по ключу пары
-        возвращал по Ctrl+Z одно ребро пары из двух."""
+    def edge_ref(self, edge: dict):
+        """Адрес ребра в снимках жеста для undo, однозначный в `edges_data`.
+
+        Обычно — id ребра, без id — ключ пары. Ключ пары у кратной пары (Р7,
+        пары с unknow) один на все её рёбра, а индекс `find_edge_data`
+        хранит последнее: снимок по ключу пары возвращал по Ctrl+Z одно
+        ребро пары из двух. Если и этот адрес не единственный (один id у
+        двух рёбер, два ребра одной пары без id), адрес — (id, ключ пары,
+        номер среди рёбер с тем же id и той же парой в порядке списка):
+        id и пара у ребра постоянны, а порядок внутри такой группы не
+        меняют ни жест, ни откат чужих команд (`remove_edge` снимает пару
+        целиком). Сквозная позиция в списке и номер среди рёбер с тем же
+        id не годятся: откат `RemoveEdgeCommand` дописывает ребро в конец.
+        Ребро не из `edges_data` (копия) — прежний адрес id / ключ пары."""
+        for e, ref in zip(self.edges_data, self._edge_refs()):
+            if e is edge:
+                return ref
         return edge.get('id') or self.edge_key(edge['source'], edge['target'])
 
     def find_edge_by_ref(self, ref) -> Optional[dict]:
-        """Ребро по адресу `edge_ref` (ключ пары — через индекс, как прежде)."""
-        if isinstance(ref, tuple):
-            return self.find_edge_data(ref)
-        return next((e for e in self.edges_data if e.get('id') == ref), None)
+        """Ребро по адресу `edge_ref` — сверкой адресов, не индексом пары:
+        у пары, где одно ребро без id, индекс отдал бы другое."""
+        return next((e for e, r in zip(self.edges_data, self._edge_refs())
+                     if r == ref), None)
 
     def rebuild_edge_data_index(self):
         """Пересоздать индекс edge_key → edge_data."""

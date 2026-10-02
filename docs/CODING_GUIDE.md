@@ -378,7 +378,7 @@ finally:
 | `AddConnectorIsolatedCommand` | `model.add_node()` + `_draw_single_node()` | `model.remove_node()` + `remove_node_items()` |
 | `DeleteNodeCommand` | Запоминает соседей → удаляет рёбра визуально → `model.remove_node()` каскадно → обновляет цвета | Восстанавливает node + все рёбра + цвета |
 | `AddEquipmentNodeCommand` | `model.add_node()` + `_draw_single_node()` | `model.remove_node()` + `remove_node_items()` |
-| `ResizeNodeCommand` | `model.update_node()` (новые bbox/centroid/area) + пины Э5 + маршруты инцидентных рёбер (`ROUTE_KEYS`; рёбра в снимках — по id, `edge_ref`, как у `DragNodeCommand`) + `_redraw_all()` | то же со снимком «до»: рамка, пины и концы/колени рёбер возвращаются вместе (1.7 — раньше undo возвращал только рамку, а `source_point`/`target_point`/`waypoints` оставались от ресайза) |
+| `ResizeNodeCommand` | `model.update_node()` (новые bbox/centroid/area) + пины Э5 + маршруты инцидентных рёбер (`ROUTE_KEYS`; рёбра в снимках — по однозначному адресу `edge_ref`, как у `DragNodeCommand`) + `_redraw_all()` | то же со снимком «до»: рамка, пины и концы/колени рёбер возвращаются вместе (1.7 — раньше undo возвращал только рамку, а `source_point`/`target_point`/`waypoints` оставались от ресайза) |
 
 Из `contour_commands.py`:
 
@@ -404,7 +404,7 @@ finally:
 | Команда | Тип | Описание |
 |---------|-----|----------|
 | `OptimizeEdgeCommand` | Granular | Пересчёт source/target point + очистка waypoints |
-| `DragNodeCommand` | Granular | Сохраняет old/new centroid, bbox, segmentation, edge points (рёбра — по id, `GraphDataModel.edge_ref`: у кратной пары ключ пары один, и по нему Ctrl+Z возвращал одно ребро пары из двух) |
+| `DragNodeCommand` | Granular | Сохраняет old/new centroid, bbox, segmentation, edge points (рёбра — по `GraphDataModel.edge_ref`: id, без id — ключ пары, а если такой адрес не единственный (дубль id, два ребра пары без id) — id, пара и номер в группе; у кратной пары ключ пары один, и по нему Ctrl+Z возвращал одно ребро пары из двух) |
 | `BatchDragCommand` | Snapshot | Alias SnapshotCommand для batch drag нескольких узлов |
 | `MoveWaypointCommand` | Granular | Перемещение одного waypoint (old/new) |
 | `AddWaypointCommand` | Granular | Вставка waypoint на сегмент ребра |
@@ -424,7 +424,7 @@ finally:
 6. Реализовать `description` property для statusbar
 7. В editor-методе вызвать `undo_mgr.execute(cmd)` (или `push_executed(cmd)` для drag/batch)
 8. После `execute()` — вызвать `editor.update_statistics()`
-9. Ребро в снимке команды адресовать `model.edge_ref(edge)` / `model.find_edge_by_ref(ref)` (id ребра), а не ключом пары `edge_key` + `find_edge_data`: у кратной пары (Р7) ключ один на все её рёбра, индекс отдаёт последнее
+9. Ребро в снимке команды адресовать `model.edge_ref(edge)` / `model.find_edge_by_ref(ref)` (однозначный адрес: id, без id — ключ пары; не единственный — id, пара и номер в группе), а не ключом пары `edge_key` + `find_edge_data` и не позицией в `edges_data`: у кратной пары (Р7) ключ один на все её рёбра, индекс отдаёт последнее, а откат `RemoveEdgeCommand` дописывает ребро в конец списка
 
 **Пример — минимальная команда:**
 

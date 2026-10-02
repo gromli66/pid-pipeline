@@ -366,6 +366,110 @@ def test_drag_amnesty_base_is_gesture_input(qapp, tmp_path, with_id):
     assert "B" in thru
 
 
+# ── red-team 25182c2: адрес ребра однозначен при дубле id и без id ─────
+_AMBIGUOUS_IDS = {
+    "дубль id в паре": ("eD", "eD", "e0"),
+    "дубль id разных пар": ("e1", "eX", "eX"),
+    "без id в кратной паре": (None, "e2", "e0"),
+    "без id у всех": (None, None, None),
+}
+
+
+def _ids_canvas(ids, order=(0, 1, 2)):
+    """Холст `_multi_canvas` (кратная пара V–U: e1, e2; коннектор cL — e0)
+    с id рёбер `ids` (None — без id); order — порядок e1, e2, e0 в списке."""
+    g = _multi_canvas(False)
+    for e, eid in zip(g["links"], ids):
+        if eid is None:
+            del e["id"]
+        else:
+            e["id"] = eid
+    g["links"] = [g["links"][i] for i in order]
+    return g
+
+
+def _by_pos(ed):
+    """Рёбра по ПОЗИЦИИ в списке: id может совпадать или отсутствовать."""
+    return [json.dumps(e, sort_keys=True) for e in ed.model.edges_data]
+
+
+def _gesture(ed, kind, nid, dy=30.0):
+    if kind == "протяжка":
+        y, x = ed.nodes[nid]["centroid"]
+        ed.set_mode("drag_node")
+        ed.start_drag_node(nid)
+        ed.drag_node_to(x, y + dy)
+        ed.end_drag_node()
+        ed.set_mode("idle")
+    else:
+        bb = list(ed.nodes[nid]["bbox"])
+        ed._start_resize(nid)
+        ed._on_node_resized(nid, [bb[0], bb[1], bb[2] + 20.0, bb[3] + 30.0])
+        ed._commit_resize(nid)
+
+
+@pytest.mark.parametrize("chain", ["протяжка", "ресайз", "цепочка"])
+@pytest.mark.parametrize("case", list(_AMBIGUOUS_IDS))
+def test_ambiguous_edge_ref_gesture_undo_redo(qapp, tmp_path, case, chain):
+    """Red-team 25182c2 (MEASUREMENTS §146): адрес снимка жеста `edge_ref`
+    был «id, без id — ключ пары». Один id у двух рёбер — снимки затирали
+    друг друга, `find_edge_by_ref` брал первое ребро с этим id, и Ctrl+Z
+    раздавал соседям чужие концы (регресс против deploy 238fe6b, где адрес
+    — ключ пары); ребро без id в кратной паре адресовалось ключом пары, а
+    индекс пары отдавал другое ребро — оно не возвращалось. Теперь адрес
+    однозначен (неединственный — id, пара и номер в группе): жест узла V
+    ведёт все три трубы, Ctrl+Z — вход бит-в-бит, Ctrl+Y — жест; цепочка
+    «протяжка V, ресайз U, протяжка U, ресайз V», 4×Ctrl+Z и 4×Ctrl+Y —
+    каждое промежуточное состояние бит-в-бит."""
+    ids = _AMBIGUOUS_IDS[case]
+    ed = _editor(tmp_path, _ids_canvas(ids))
+    assert [e.get("id") for e in ed.model.edges_data] == list(ids)
+    steps = ([("протяжка", "V", 30.0), ("ресайз", "U", 0.0),
+              ("протяжка", "U", -25.0), ("ресайз", "V", 0.0)]
+             if chain == "цепочка" else [(chain, "V", 30.0)])
+    states = [_by_pos(ed)]
+    for kind, nid, dy in steps:
+        _gesture(ed, kind, nid, dy)
+        states.append(_by_pos(ed))
+    if chain != "цепочка":
+        assert all(a != b for a, b in zip(*states)), \
+            "фикстура: жест V ведёт все три трубы"
+    assert all(a != b for a, b in zip(states, states[1:])), \
+        "фикстура: каждый жест цепочки меняет трубы"
+    for i in range(len(steps), 0, -1):
+        ed.undo_mgr.undo()
+        assert _by_pos(ed) == states[i - 1], f"Ctrl+Z -> состояние {i - 1}"
+    for i in range(1, len(steps) + 1):
+        ed.undo_mgr.redo()
+        assert _by_pos(ed) == states[i], f"Ctrl+Y -> состояние {i}"
+
+
+@pytest.mark.parametrize("kind", ["протяжка", "ресайз"])
+def test_edge_ref_survives_undone_delete(qapp, tmp_path, kind):
+    """Адрес неединственного id — номер в группе (id, пара), а не сквозная
+    позиция в списке и не номер среди рёбер с тем же id: откат удаления
+    трубы (`RemoveEdgeCommand.undo` -> `add_edge`) дописывает её в КОНЕЦ
+    списка. Жест V, удаление трубы cL–V (id eX, как у e2 пары V–U),
+    Ctrl+Z, Ctrl+Z — трубы входа (порядок списка — от отката удаления),
+    Ctrl+Y ×2 — состояние после удаления."""
+    ed = _editor(tmp_path, _ids_canvas(("e1", "eX", "eX"), order=(2, 0, 1)))
+    assert [(e["source"], e["target"]) for e in ed.model.edges_data] == \
+        [("cL", "V"), ("V", "U"), ("V", "U")]
+    before = sorted(_by_pos(ed))
+    _gesture(ed, kind, "V")
+    assert ed.remove_edge("cL", "V")
+    after_del = _by_pos(ed)
+    ed.undo_mgr.undo()
+    last = ed.model.edges_data[-1]
+    assert (last["source"], last["target"]) == ("cL", "V"), \
+        "фикстура: откат удаления дописывает трубу в конец"
+    ed.undo_mgr.undo()
+    assert sorted(_by_pos(ed)) == before
+    ed.undo_mgr.redo()
+    ed.undo_mgr.redo()
+    assert _by_pos(ed) == after_del
+
+
 # ── red-team правок 02.10, (3): почти-прямая перемычка клапан–клапан ──
 def _waist_valve(nid, cx, wy):
     """armatura_electro по оси H, центроид — талия (8.3916 ниже центра)."""
