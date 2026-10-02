@@ -954,13 +954,47 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
         ix.clear()
         ix.update(_index(axl))
 
+    def axes_state():
+        return ([{"coord": a["coord"], "members": list(a["members"])}
+                 for a in xaxes],
+                [{"coord": a["coord"], "members": list(a["members"])}
+                 for a in yaxes],
+                list(cx0), list(cy0), list(dx), list(dy))
+
+    def off_sheet(px, py):
+        """Узлов, чья рамка при координатах осей px/py за холстом (оси —
+        текущие xaxes/yaxes)."""
+        return sum(1 for it in items
+                   for x, y in ((px[xa[it["key"]]] + it["ox"],
+                                 py[ya[it["key"]]] + it["oy"]),)
+                   if x - it["hw"] < -1e-6 or y - it["hh"] < -1e-6
+                   or x + it["hw"] > canvas[0] + 1e-6
+                   or y + it["hh"] > canvas[1] + 1e-6)
+
+    def axes_restore(sv):
+        for cur, old in zip((xaxes, yaxes, cx0, cy0, dx, dy), sv):
+            cur[:] = old
+        for ix_, axl_ in ((xa, xaxes), (ya, yaxes)):
+            ix_.clear()
+            ix_.update(_index(axl_))
+
     def attempt(scale, valve_only=False, floor=VALVE_CLEAR):
         """Попытка; на обрыве (flip включён) — с переброской пар критического
-        пути тесной оси на свободную, пока вылезает только по одной оси."""
+        пути тесной оси на свободную, пока вылезает только по одной оси.
+        Круг, после которого вылезла свободная ось, откатывается. Круг с
+        выводом узла откатывается и тогда, когда вылет по тесной оси вырос
+        (red-team bfcc301: сид 1383 39.9 -> 88.0), — вывод этих пар в
+        попытке запрещается, и круг повторяется без них, как без вывода.
+        Строгого уменьшения с каждого круга не требуется (замер фаззером:
+        круг без выигрыша бывает ступенькой к следующему — 13 листов из 1500
+        хуже по вылету); итог с выводами сверяется с запасным attempt без
+        них в `place`."""
         res = attempt1(scale, valve_only, floor)
         if not cliff[0]:
             return res
-        for _f in range(FLIP_ROUNDS):
+        rej = set()           # пары, вывод которых в этой попытке откатан
+        n_round = 0
+        while n_round < FLIP_ROUNDS:
             inf = res[0]
             if inf["over"] <= (PRUNE_SLACK if valve_only else 0.0) \
                     or (inf["over_x"] > 0.0 and inf["over_y"] > 0.0):
@@ -980,7 +1014,8 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
                 if same_line(pk[0], pk[1], tight):
                     # общая колонка (ряд): свободной оси нет — только в
                     # запасном attempt свободный член выводится в свою ось
-                    if split[0] and len(splits) < SPLIT_PER_ROUND:
+                    if split[0] and pk not in rej \
+                            and len(splits) < SPLIT_PER_ROUND:
                         fm = free_member(pk, tight)
                         if fm is not None and all(fm[0] != q
                                                   for _p, q, _s in splits):
@@ -1001,26 +1036,25 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
                 flip[pk] = free
             saved = None
             if splits:
-                fl_ = (xaxes, cx0, dx) if tight == "y" else (yaxes, cy0, dy)
-                saved = ([{"coord": a["coord"], "members": list(a["members"])}
-                          for a in fl_[0]], list(fl_[1]), list(fl_[2]),
-                         nsplit[0])
+                saved = (axes_state(), nsplit[0])
                 for pk, m, side in splits:
                     split_off(m, pk[1] if m == pk[0] else pk[0], tight, side)
                     nsplit[0] += 1
                     flip[pk] = free
                 new += [pk for pk, _m, _s in splits]
             r2 = attempt1(scale, valve_only, floor)
-            if r2[0]["over_" + free] > 0.0:
-                for pk in new:        # свободная ось кончилась — откат круга
+            if r2[0]["over_" + free] > 0.0 or (
+                    splits and r2[0]["over_" + tight] > inf["over_" + tight]):
+                for pk in new:        # откат круга: переброска
                     flip.pop(pk, None)
-                if saved is not None:  # и выведенных в этом круге узлов
-                    fl_[0][:], fl_[1][:], fl_[2][:], nsplit[0] = saved
-                    ix_ = xa if tight == "y" else ya
-                    ix_.clear()
-                    ix_.update(_index(fl_[0]))
+                if saved is not None:  # и выведенные в этом круге узлы
+                    axes_restore(saved[0])
+                    nsplit[0] = saved[1]
+                    rej.update(pk for pk, _m, _s in splits)
+                    continue          # круг заново — без этих выводов
                 break
             res = r2
+            n_round += 1
         return res
 
     def attempt1(scale, valve_only=False, floor=VALVE_CLEAR):
@@ -1226,8 +1260,13 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
         # член без ребра внутри колонки уходит в свою колонку с той же
         # координатой и разводится с партнёром по свободной оси (`split_off`).
         # С ними — заново ступени «только трубы клапанов»; не влезли — без
-        # труб вовсе. Вывести нечего (или все выводы откачены) — переброска
+        # труб вовсе. Вариант с выводами сравнивается с запасным attempt без
+        # них и берётся, только если вылет меньше, а наложений, тесных пар и
+        # узлов за листом не больше (red-team bfcc301: сид 1383 39.9 -> 88.0,
+        # 1083 669 -> 731, 649 — клапан наложен на блок); иначе, и если
+        # вывести нечего (или все выводы откачены), — переброска
         # сбрасывается, запасной attempt бит-в-бит как без вывода.
+        sv0 = axes_state()
         cliff[0] = split[0] = True
         for fl in (VALVE_CLEAR, None):
             pr = attempt(0.0, valve_only=True, floor=fl)
@@ -1235,10 +1274,32 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
             if pr[0]["over"] <= PRUNE_SLACK:
                 best = pr[:3]
                 break
-        if not nsplit[0]:
-            flip.clear()
-            cliff[0] = split[0] = False
-            best = None
+        won = None
+        if nsplit[0]:
+            if best is None:
+                best = attempt(0.0)[:3]
+                tries += 1
+            won = (best, axes_state(), nsplit[0], dict(flip),
+                   off_sheet(*best[1:]))
+        axes_restore(sv0)
+        flip.clear()
+        cliff[0] = split[0] = False
+        nsplit[0] = 0
+        best = None
+        if won is not None:
+            pr = attempt(0.0)
+            tries += 1
+            a, b = won[0][0], pr[0]
+            if a["over"] < b["over"] \
+                    and a["overlaps_left"] <= b["overlaps_left"] \
+                    and a["residual_tight_pairs"] <= b["residual_tight_pairs"] \
+                    and won[4] <= off_sheet(*pr[1:3]):
+                axes_restore(won[1])
+                nsplit[0] = won[2]
+                flip.update(won[3])
+                best = won[0]
+            else:
+                best = pr[:3]
     if best is None:
         inf, px, py, _l = attempt(0.0)
         tries += 1
