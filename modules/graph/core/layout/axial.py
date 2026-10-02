@@ -859,16 +859,36 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
             nbrs.setdefault(t_, set()).add(s_)
     byid0 = nodes_by_id(graph)          # вход до снапа: сторона выхода узла
 
-    def free_member(pk, other):
-        """Член пары общей колонки (ряда) без ребра внутри неё: его трубы
-        поперёк, сдвиг по свободной оси их не ломает. Не коннектор и не
-        крупный блок; из двух — меньший по площади."""
+    def same_line(ka, kb, tight):
+        """Общая колонка (tight y) или общий ряд (tight x) — по КООРДИНАТЕ оси
+        с допуском кластеризации `tol`, а не по индексу: колонка `split_cells`
+        и колонка выведенного узла стоят на той же координате, что исходная,
+        и труба к узлу в ней идёт вдоль колонки (red-team bfcc301: вывод по
+        индексу делал её косой)."""
+        oth, c0l = (xa, cx0) if tight == "y" else (ya, cy0)
+        return abs(c0l[oth[ka]] - c0l[oth[kb]]) <= tol
+
+    def torn(m, p, tight):
+        """Вывод m разводит колонку партнёра p по свободной оси — рвётся
+        труба её члена к узлу на той же координате в ДРУГОЙ колонке
+        (`split_cells`): осевая модель такую трубу не держит."""
+        oth = xa if tight == "y" else ya
+        return any(t != m and oth[t] != oth[a] and same_line(a, t, tight)
+                   for a in (xaxes if tight == "y" else yaxes)[oth[p]]
+                   ["members"] if a != m for t in nbrs.get(a, ()))
+
+    def free_member(pk, tight):
+        """Член пары общей колонки (ряда) без ребра к узлам той же колонки:
+        его трубы поперёк, сдвиг по свободной оси их не ломает. Не коннектор
+        и не крупный блок; из двух — меньший по площади."""
         for m in sorted(pk, key=lambda k: (by_key[k]["hw"] * by_key[k]["hh"],
                                            str(k))):
             it = by_key[m]
             if it["conn"] or 4 * it["hw"] * it["hh"] >= BAND_AREA:
                 continue
-            if all(other.get(t) != other[m] for t in nbrs.get(m, ())):
+            p = pk[1] if m == pk[0] else pk[0]
+            if not any(same_line(m, t, tight) for t in nbrs.get(m, ())) \
+                    and not torn(m, p, tight):
                 return m
         return None
 
@@ -909,13 +929,13 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
             cand, splits = [], []
             for pk in critical_seps(axlist, by_key, idx, specs, nsep, okey,
                                     hkey):
-                if pk in flip:
-                    continue
-                if other[pk[0]] == other[pk[1]]:
+                if pk in flip or pk[1] in nbrs.get(pk[0], ()):
+                    continue          # ребро внутри пары: труба стала бы косой
+                if same_line(pk[0], pk[1], tight):
                     # общая колонка (ряд): свободной оси нет — только в
                     # запасном attempt свободный член выводится в свою ось
                     if split[0] and len(splits) < SPLIT_PER_ROUND:
-                        m = free_member(pk, other)
+                        m = free_member(pk, tight)
                         if m is not None and all(m != q for _p, q in splits):
                             splits.append((pk, m))
                     continue

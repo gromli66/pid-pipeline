@@ -408,3 +408,102 @@ def test_fallback_nothing_to_split_bitexact(monkeypatch, edge_tu, width):
     g0 = sheet()
     axial.place(g0, canvas=(width, 200.0))
     assert g == g0
+
+
+# ──── «та же колонка» — по координате; пара с ребром внутри (red-team) ────
+
+def _d1(cell):
+    """_flip_sheet(90), T на 1 px левее U (общая колонка), над T — zz с
+    ВЕРТИКАЛЬНОЙ трубой T–zz. cell: zz делит ячейку (колонка, ряд) с za —
+    `split_cells` даёт zz свою колонку той же координаты."""
+    g = _shift_x(_flip_sheet(90), "T", -1.0)
+    if cell:
+        g["nodes"].append(_node("za", 100, 4))
+    g["nodes"].append(_node("zz", 99, 5))
+    g["edges"].append({"id": "ez", "source": "T", "target": "zz"})
+    return g
+
+
+def test_fallback_split_pipe_to_split_cell_column_kept(monkeypatch):
+    """Колонка `split_cells` стоит на той же координате, что исходная: труба
+    T–zz идёт вдоль колонки. По индексу (bfcc301) T считался свободным и
+    выводился — T–zz косая (dx 46); вывод U разводил бы колонку T с колонкой
+    zz (её осевая модель не держит). Вывода нет: граф = с выключенным
+    выводом, T и zz в одной колонке."""
+    g = _d1(True)
+    st = axial.place(g, canvas=(600.0, 200.0))
+    p = _xy(g)
+    assert st["splits"] == 0 and p["T"][0] == p["zz"][0]
+    monkeypatch.setattr(axial, "SPLIT_PER_ROUND", 0)
+    g0 = _d1(True)
+    axial.place(g0, canvas=(600.0, 200.0))
+    assert g == g0
+
+
+def test_fallback_split_pipe_along_column_control():
+    """Контроль: zz в колонке T (ячейки нет) — T не свободен, выводится U
+    (без труб), T–zz остаётся вертикальной, лист влезает."""
+    g = _d1(False)
+    st = axial.place(g, canvas=(600.0, 200.0))
+    p = _xy(g)
+    assert st["splits"] == 1 and st["over"] == 0.0
+    assert p["T"][0] == p["zz"][0] and p["U"][0] - p["T"][0] >= 46.0 - 1e-6
+
+
+def _c3(edge):
+    """_flip_sheet(50), V в соседней колонке (3 px правее U); edge — почти
+    вертикальная труба U–V, пара U–V на критическом пути."""
+    g = _shift_x(_flip_sheet(50), "V", -42.0)
+    if edge:
+        g["edges"].append({"id": "eUV", "source": "U", "target": "V"})
+    return g
+
+
+def test_cliff_no_flip_pair_with_pipe_inside(monkeypatch):
+    """Пара с трубой между членами не переводится на свободную ось: U–V
+    разведены по X — труба U–V косая (bf9cb7a: dx 61). Вывод выключен —
+    граф = с выключенной переброской (вылет 3, труба почти вертикальна)."""
+    monkeypatch.setattr(axial, "SPLIT_PER_ROUND", 0)
+    g = _c3(True)
+    st = axial.place(g, canvas=(600.0, 200.0))
+    p = _xy(g)
+    assert st["flips"] == 0 and st["over"] == pytest.approx(3.0)
+    assert abs(p["V"][0] - p["U"][0]) <= 5.5
+    monkeypatch.setattr(axial, "FLIP_ROUNDS", 0)
+    g0 = _c3(True)
+    axial.place(g0, canvas=(600.0, 200.0))
+    assert g == g0
+    # контроль: без трубы U–V пара переводится, доля 0.984
+    monkeypatch.setattr(axial, "FLIP_ROUNDS", 6)
+    st1 = axial.place(_c3(False), canvas=(600.0, 200.0))
+    assert st1["flips"] == 1 and st1["scale_eff"] == pytest.approx(0.984)
+
+
+def _sib():
+    """_flip_sheet(50), V на координате колонки U и в ячейке с A1 —
+    `split_cells` даёт V свою колонку той же координаты; труба V–r вниз
+    вдоль колонки (r в колонке U). U уже (hw 30): цена перевода U–V <= 60."""
+    g = _flip_sheet(50)
+    for n in g["nodes"]:
+        if n["id"] == "U":
+            n["bbox"] = [70.0, 130.0, 130.0, 170.0]
+    _shift_x(g, "V", -45.0)
+    g["nodes"] += [_node("A1", 100, 198), _node("r", 100, 240)]
+    g["edges"].append({"id": "eVr", "source": "V", "target": "r"})
+    return g
+
+
+def test_cliff_no_flip_pair_on_same_coordinate(monkeypatch):
+    """Пара в колонках одной координаты (колонка `split_cells`) — общая
+    колонка, на свободную ось не переводится: по индексу (bfcc301) U–V
+    переводилась, колонка V уезжала — труба V–r косая (dx 51). Граф = с
+    выключенной переброской, V–r вертикальна."""
+    g = _sib()
+    st = axial.place(g, canvas=(600.0, 200.0))
+    p = _xy(g)
+    assert st["flips"] == 0 and st["splits"] == 0
+    assert p["V"][0] == p["r"][0]
+    monkeypatch.setattr(axial, "FLIP_ROUNDS", 0)
+    g0 = _sib()
+    axial.place(g0, canvas=(600.0, 200.0))
+    assert g == g0
