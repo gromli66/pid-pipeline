@@ -507,3 +507,67 @@ def test_cliff_no_flip_pair_on_same_coordinate(monkeypatch):
     g0 = _sib()
     axial.place(g0, canvas=(600.0, 200.0))
     assert g == g0
+
+
+# ──────────── сторона вывода — по трубам (red-team bfcc301, (1)) ────────────
+
+def _a4(xs):
+    """_flip_sheet(90), T на 1 px правее U (общая колонка) и в своём ряду (на
+    5 px выше U); xs — коннекторы в ряду T с трубой к T (поперёк колонки)."""
+    g = _shift_x(_flip_sheet(90), "T", 1.0)
+    for n in g["nodes"]:
+        if n["id"] == "T":
+            n["centroid"][0] -= 5.0
+            n["bbox"][1] -= 5.0
+            n["bbox"][3] -= 5.0
+    for i, x in enumerate(xs):
+        g["nodes"].append(_node("L%d" % i, x, 145))
+        g["edges"].append({"id": "eL%d" % i, "source": "L%d" % i,
+                           "target": "T"})
+    return g
+
+
+def _crosses(g, a, b, box_id):
+    from shapely.geometry import LineString, box
+    p = _xy(g)
+    n = {m["id"]: m for m in g["nodes"]}[box_id]
+    x1, y1, x2, y2 = n["bbox"]
+    return LineString([p[a], p[b]]).intersects(
+        box(x1 + 0.5, y1 + 0.5, x2 - 0.5, y2 - 0.5))
+
+
+@pytest.mark.parametrize("lx", [30.0, 250.0])
+def test_fallback_split_side_toward_pipe(lx):
+    """T выводится туда, где его сосед L, а не по входной координате (T на
+    1 px правее U — bfcc301 выводил вправо): труба L–T не идёт сквозь U."""
+    g = _a4([lx])
+    st = axial.place(g, canvas=(600.0, 200.0))
+    p = _xy(g)
+    assert st["splits"] == 1 and st["over"] == 0.0
+    assert (p["T"][0] - p["U"][0]) * (lx - 100.0) > 0.0
+    assert not _crosses(g, "L0", "T", "U")
+
+
+def test_fallback_split_side_conflict_not_split(monkeypatch):
+    """Соседи T по обе стороны колонки: любой вывод T ведёт одну из труб
+    сквозь U, вывод U — сквозь U трубу T. Вывода нет: граф = с выключенным
+    выводом (bfcc301 выводил T вправо — L–T сквозь U)."""
+    g = _a4([30.0, 250.0])
+    st = axial.place(g, canvas=(600.0, 200.0))
+    assert st["splits"] == 0
+    monkeypatch.setattr(axial, "SPLIT_PER_ROUND", 0)
+    g0 = _a4([30.0, 250.0])
+    axial.place(g0, canvas=(600.0, 200.0))
+    assert g == g0
+
+
+def test_fallback_split_partner_column_follows_near_vertical_pipe():
+    """C3 (U–V с трубой — не переводится): выводится T, колонка U уходит в
+    сторону V (почти вертикальная труба U–V к колонке в 3 px), T — в
+    обратную: труба U–V остаётся почти вертикальной (bf9cb7a: переброска
+    U–V, dx 61; вывод T по входу вправо — dx 49)."""
+    g = _c3(True)
+    st = axial.place(g, canvas=(600.0, 200.0))
+    p = _xy(g)
+    assert st["splits"] == 1 and st["over"] == 0.0
+    assert p["T"][0] < p["U"][0] and abs(p["V"][0] - p["U"][0]) <= 5.5

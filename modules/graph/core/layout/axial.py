@@ -877,30 +877,77 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
                    for a in (xaxes if tight == "y" else yaxes)[oth[p]]
                    ["members"] if a != m for t in nbrs.get(a, ()))
 
+    def split_side(m, p, tight):
+        """Сторона вывода m от колонки (ряда) партнёра p по свободной оси:
+        +1 — за ней (вправо / вниз), -1 — перед ней, 0 — конфликт (m не
+        выводится). m уходит туда, где его соседи: его трубы поперёк и не
+        идут сквозь партнёра (red-team bfcc301: по входной координате
+        0aea61c0 вёл все три вывода сквозь соседа). И не туда, где труба
+        члена колонки партнёра проходит через полосу m по тесной оси —
+        иначе сквозь m пошла бы она. Колонка партнёра уходит в обратную
+        сторону — туда, где её почти вдоль идущие трубы к соседним колонкам
+        (|по свободной оси| < |по тесной|): порядок осей везёт ту колонку
+        следом, а в обратную сторону труба становится косой (C3). Соседей
+        нет — сторона входа, как прежде."""
+        oth, c0l = (xa, cx0) if tight == "y" else (ya, cy0)
+        prp, p0l = (ya, cy0) if tight == "y" else (xa, cx0)
+        ok, hk = ("oy", "hh") if tight == "y" else ("ox", "hw")
+        c = c0l[oth[p]]
+        want = {1 if c0l[oth[t]] > c else -1 for t in nbrs.get(m, ())}
+        mc = p0l[prp[m]] + by_key[m][ok]
+        lo, hi = mc - by_key[m][hk], mc + by_key[m][hk]
+        for a in (xaxes if tight == "y" else yaxes)[oth[p]]["members"]:
+            if a == m:
+                continue
+            for t in nbrs.get(a, ()):
+                if t == m or oth[t] == oth[a]:
+                    continue
+                d = c0l[oth[t]] - c
+                ya_, yt = p0l[prp[a]], p0l[prp[t]]
+                if abs(d) < abs(yt - ya_) \
+                        or (min(ya_, yt) < hi and max(ya_, yt) > lo):
+                    want.add(-1 if d > 0 else 1)
+        if len(want) > 1:
+            return 0
+        if want:
+            return want.pop()
+        k = 0 if tight == "y" else 1
+        return 1 if node_cxy(byid0[m])[k] >= node_cxy(byid0[p])[k] else -1
+
     def free_member(pk, tight):
         """Член пары общей колонки (ряда) без ребра к узлам той же колонки:
         его трубы поперёк, сдвиг по свободной оси их не ломает. Не коннектор
-        и не крупный блок; из двух — меньший по площади."""
+        и не крупный блок; из двух — меньший по площади, со стороной вывода
+        без конфликта. -> (m, сторона) или None."""
         for m in sorted(pk, key=lambda k: (by_key[k]["hw"] * by_key[k]["hh"],
                                            str(k))):
             it = by_key[m]
             if it["conn"] or 4 * it["hw"] * it["hh"] >= BAND_AREA:
                 continue
             p = pk[1] if m == pk[0] else pk[0]
-            if not any(same_line(m, t, tight) for t in nbrs.get(m, ())) \
-                    and not torn(m, p, tight):
-                return m
+            if any(same_line(m, t, tight) for t in nbrs.get(m, ())) \
+                    or torn(m, p, tight):
+                continue
+            side = split_side(m, p, tight)
+            if side:
+                return m, side
         return None
 
-    def split_off(m, partner, tight):
-        """Узел m уходит из общей колонки (ряда) в свою ось с той же
-        координатой — по ту сторону от партнёра, где стоял на входе."""
-        axl, ix, c0l, dl, k = ((xaxes, xa, cx0, dx, 0) if tight == "y"
-                               else (yaxes, ya, cy0, dy, 1))
+    def split_off(m, partner, tight, side):
+        """Узел m уходит в свою ось с координатой колонки (ряда) партнёра —
+        по сторону `side` от неё. m уже один в своей оси той же координаты
+        (`split_cells`, прежний вывод) — ось переставляется к партнёру."""
+        axl, ix, c0l, dl = ((xaxes, xa, cx0, dx) if tight == "y"
+                            else (yaxes, ya, cy0, dy))
         i = ix[m]
-        axl[i]["members"].remove(m)
-        j = i + 1 if (node_cxy(byid0[m])[k]
-                      >= node_cxy(byid0[partner])[k]) else i
+        if len(axl[i]["members"]) > 1:
+            axl[i]["members"].remove(m)
+        else:
+            del axl[i], c0l[i], dl[i]
+            ix.clear()
+            ix.update(_index(axl))
+        i = ix[partner]
+        j = i + 1 if side > 0 else i
         axl.insert(j, {"coord": axl[i]["coord"], "members": [m]})
         c0l.insert(j, c0l[i])
         dl.insert(j, dl[i])
@@ -922,7 +969,6 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
             free = "x" if tight == "y" else "y"
             axlist, idx, okey, hkey = ((yaxes, ya, "oy", "hh") if tight == "y"
                                        else (xaxes, xa, "ox", "hw"))
-            other = xa if tight == "y" else ya
             fo, fh, fc = (("ox", "hw", "cx") if free == "x"
                           else ("oy", "hh", "cy"))
             specs, nsep = res[3][tight]
@@ -935,9 +981,10 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
                     # общая колонка (ряд): свободной оси нет — только в
                     # запасном attempt свободный член выводится в свою ось
                     if split[0] and len(splits) < SPLIT_PER_ROUND:
-                        m = free_member(pk, tight)
-                        if m is not None and all(m != q for _p, q in splits):
-                            splits.append((pk, m))
+                        fm = free_member(pk, tight)
+                        if fm is not None and all(fm[0] != q
+                                                  for _p, q, _s in splits):
+                            splits.append((pk,) + fm)
                     continue
                 a, b = by_key[pk[0]], by_key[pk[1]]
                 if max(4 * a["hw"] * a["hh"], 4 * b["hw"] * b["hh"]) \
@@ -958,12 +1005,11 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
                 saved = ([{"coord": a["coord"], "members": list(a["members"])}
                           for a in fl_[0]], list(fl_[1]), list(fl_[2]),
                          nsplit[0])
-                for pk, m in splits:
-                    if other[pk[0]] == other[pk[1]]:
-                        split_off(m, pk[1] if m == pk[0] else pk[0], tight)
-                        nsplit[0] += 1
+                for pk, m, side in splits:
+                    split_off(m, pk[1] if m == pk[0] else pk[0], tight, side)
+                    nsplit[0] += 1
                     flip[pk] = free
-                new += [pk for pk, _m in splits]
+                new += [pk for pk, _m, _s in splits]
             r2 = attempt1(scale, valve_only, floor)
             if r2[0]["over_" + free] > 0.0:
                 for pk in new:        # свободная ось кончилась — откат круга
