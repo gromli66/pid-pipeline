@@ -974,20 +974,40 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
                  for a in yaxes],
                 list(cx0), list(cy0), list(dx), list(dy))
 
-    def off_oblique(px, py):
+    def marks(px, py):
         """(узлов, чья рамка за холстом; труб, идущих косо — |dx| и |dy| по
-        центрам > 1 px) при координатах осей px/py (оси — текущие
-        xaxes/yaxes)."""
+        центрам > 1 px; пар «труба сквозь рамку чужого блока» — отрезок
+        центр–центр пересекает рамку, сжатую на 0.5 px) при координатах осей
+        px/py (оси — текущие xaxes/yaxes). Те же судьи, что у фаззера
+        red-team, — до роутинга."""
+        from shapely.geometry import LineString, box as shp_box
+        from shapely.strtree import STRtree
+
+        pos = {it["key"]: (px[xa[it["key"]]], py[ya[it["key"]]])
+               for it in items}
         off = sum(1 for it in items
-                  for x, y in ((px[xa[it["key"]]] + it["ox"],
-                                py[ya[it["key"]]] + it["oy"]),)
+                  for x, y in ((pos[it["key"]][0] + it["ox"],
+                                pos[it["key"]][1] + it["oy"]),)
                   if x - it["hw"] < -1e-6 or y - it["hh"] < -1e-6
                   or x + it["hw"] > canvas[0] + 1e-6
                   or y + it["hh"] > canvas[1] + 1e-6)
         obl = sum(1 for s_, t_ in epairs
-                  if abs(px[xa[s_]] - px[xa[t_]]) > 1.0
-                  and abs(py[ya[s_]] - py[ya[t_]]) > 1.0)
-        return off, obl
+                  if abs(pos[s_][0] - pos[t_][0]) > 1.0
+                  and abs(pos[s_][1] - pos[t_][1]) > 1.0)
+        blk = [it for it in items
+               if not it["conn"] and it["hw"] >= 1.0 and it["hh"] >= 1.0]
+        tree = STRtree([shp_box(
+            pos[it["key"]][0] + it["ox"] - it["hw"] + 0.5,
+            pos[it["key"]][1] + it["oy"] - it["hh"] + 0.5,
+            pos[it["key"]][0] + it["ox"] + it["hw"] - 0.5,
+            pos[it["key"]][1] + it["oy"] + it["hh"] - 0.5) for it in blk])
+        thr = 0
+        for s_, t_ in epairs:
+            if blk and pos[s_] != pos[t_]:
+                thr += sum(1 for j in tree.query(
+                    LineString([pos[s_], pos[t_]]), predicate="intersects")
+                    if blk[int(j)]["key"] not in (s_, t_))
+        return off, obl, thr
 
     def axes_restore(sv):
         for cur, old in zip((xaxes, yaxes, cx0, cy0, dx, dy), sv):
@@ -1287,11 +1307,13 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
         # С ними — заново ступени «только трубы клапанов»; не влезли — без
         # труб вовсе. Вариант с выводами сравнивается с запасным attempt без
         # них и берётся, только если вылет меньше, а наложений, тесных пар,
-        # узлов за листом и косых труб не больше (red-team bfcc301: сид 1383
-        # 39.9 -> 88.0, 1083 669 -> 731, 649 — клапан наложен на блок; косая —
-        # колонка `split_cells` отстаёт от исходной, сиды 159 / 302 / 936);
-        # иначе, и если вывести нечего (или все выводы откачены), —
-        # переброска сбрасывается, запасной attempt бит-в-бит как без вывода.
+        # узлов за листом, косых труб и труб сквозь чужую рамку не больше
+        # (red-team bfcc301: сид 1383 39.9 -> 88.0, 1083 669 -> 731, 649 —
+        # клапан наложен на блок; косая — колонка `split_cells` отстаёт от
+        # исходной, сиды 159 / 302 / 936; сквозь — лист сжат в холст, трубы
+        # режут соседей, фаззер 176 / 128 листов); иначе, и если вывести
+        # нечего (или все выводы откачены), — переброска сбрасывается,
+        # запасной attempt бит-в-бит как без вывода.
         sv0 = axes_state()
         cliff[0] = split[0] = True
         for fl in (VALVE_CLEAR, None):
@@ -1305,7 +1327,7 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
             if best is None:
                 best = attempt(0.0)[:3]
                 tries += 1
-            won = (best, axes_state(), nsplit[0], off_oblique(*best[1:]))
+            won = (best, axes_state(), nsplit[0], marks(*best[1:]))
         axes_restore(sv0)
         flip.clear()
         cliff[0] = split[0] = False
@@ -1319,7 +1341,7 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
                     and a["overlaps_left"] <= b["overlaps_left"] \
                     and a["residual_tight_pairs"] <= b["residual_tight_pairs"] \
                     and all(w <= p for w, p in zip(won[3],
-                                                   off_oblique(*pr[1:3]))):
+                                                   marks(*pr[1:3]))):
                 axes_restore(won[1])
                 nsplit[0] = won[2]
                 best = won[0]
