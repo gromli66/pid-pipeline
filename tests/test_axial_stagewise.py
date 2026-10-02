@@ -282,7 +282,10 @@ def test_cliff_flips_pair_to_free_axis_pipes_kept(monkeypatch):
 def test_cliff_flip_not_enough_resets_bitexact(monkeypatch, hh_t, width,
                                                over, ys):
     """Перевод не помогает: переброска сбрасывается, раскладка бит-в-бит как
-    без неё (5b00dd5) — запасной attempt без труб, тот же вылет, те же ряды."""
+    без неё (5b00dd5) — запасной attempt без труб, тот же вылет, те же ряды.
+    Вывод узла из общей колонки выключен: с ним лист hh_t=90 влезает
+    (test_fallback_split_common_column_sheet_fits)."""
+    monkeypatch.setattr(axial, "SPLIT_PER_ROUND", 0)
     g = _flip_sheet(hh_t)
     st = axial.place(g, canvas=(width, 200.0))
     p = _xy(g)
@@ -338,3 +341,70 @@ def test_cliff_flip_round_rollback_keeps_earlier_round():
     # A переведена: U1–V1 по Y ближе 51; B — нет: U2–V2 по Y не ближе 49
     assert p["V1"][1] - p["U1"][1] < 51.0 - 1.0
     assert p["V2"][1] - p["U2"][1] >= 49.0 - 1e-6
+
+
+# ──────────── запасной attempt: вывод узла из общей колонки ────────────
+
+def _shift_x(g, nid, dx):
+    for n in g["nodes"]:
+        if n["id"] == nid:
+            n["centroid"][1] += dx
+            n["bbox"][0] += dx
+            n["bbox"][2] += dx
+    return g
+
+
+@pytest.mark.parametrize("dx", [1.0, -1.0])
+def test_fallback_split_common_column_sheet_fits(monkeypatch, dx):
+    """Не влезает ни одна ступень, переброски мало (U–V: вылет 83 -> 32,
+    сброс). T над U в общей колонке (на входе x 100±1 — допуск оси 2 px),
+    ребра между ними нет — их трубы не идут вдоль колонки. Запасной attempt
+    выводит меньший из пары, T, в свою колонку с той же координатой — по ту
+    сторону от U, где T стоял на входе, — и разводит пару по свободной оси X:
+    ступень «только трубы клапанов» влезает, все рамки в холсте, труба
+    клапана w–k на месте. Без вывода (как 1b2dc1e) — вылет 83 px, труб 0."""
+    g = _shift_x(_flip_sheet(90), "T", dx)
+    st = axial.place(g, canvas=(600.0, 200.0))
+    p = _xy(g)
+    assert st["splits"] == 1 and st["over"] == 0.0
+    assert st["scale_eff"] == 0.0 and st["pipes_y"] == 1      # w–k
+    # T — на своей стороне от U, пара разведена по X (5 + 40 + GAP_MIN)
+    assert (p["T"][0] - p["U"][0]) * dx >= 46.0 - 1e-6
+    for n in g["nodes"]:
+        x1, y1, x2, y2 = n["bbox"]
+        assert min(x1, y1) >= 0.0 and x2 <= 600.0 and y2 <= 200.0
+
+    monkeypatch.setattr(axial, "SPLIT_PER_ROUND", 0)     # вывод выключен
+    g0 = _shift_x(_flip_sheet(90), "T", dx)
+    st0 = axial.place(g0, canvas=(600.0, 200.0))
+    assert st0["splits"] == 0 and st0["over"] == pytest.approx(83.0)
+    assert st0["pipes_y"] == 0
+
+
+@pytest.mark.parametrize("edge_tu, width", [
+    (True, 600.0),     # вывести нечего: труба T–U идёт вдоль колонки
+    (False, 100.0),    # вывести некуда: X кончается — круг с выводом откатан
+])
+def test_fallback_nothing_to_split_bitexact(monkeypatch, edge_tu, width):
+    """Вывода нет — запасной attempt бит-в-бит как до него (1b2dc1e):
+    переброска, найденная в запасном attempt заново (U–V, с ней вылет 32),
+    сбрасывается — вылет 83 px и ряды те же, что без вывода."""
+    def sheet():
+        g = _flip_sheet(90)
+        if edge_tu:
+            g["edges"].append({"id": "e3", "source": "T", "target": "U"})
+        return g
+
+    g = sheet()
+    st = axial.place(g, canvas=(width, 200.0))
+    p = _xy(g)
+    assert st["splits"] == 0 and st["flips"] == 0
+    assert st["over"] == pytest.approx(83.0)
+    assert st["pipes_y"] == 0 and st["pruned"] == {}
+    assert (p["T"][1], p["U"][1], p["V"][1]) == pytest.approx(
+        (7.5, 118.5, 169.5))
+
+    monkeypatch.setattr(axial, "SPLIT_PER_ROUND", 0)     # вывод выключен
+    g0 = sheet()
+    axial.place(g0, canvas=(width, 200.0))
+    assert g == g0

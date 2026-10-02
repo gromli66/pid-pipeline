@@ -52,6 +52,8 @@ FLIP_COST = 60.0  # px: обрыв — пара критического пут�
                   # на свободную ось, если там ей не хватает не больше этого
                   # (дороже — колонка уезжает далеко, трубы её ряда режут соседей)
 FLIP_ROUNDS = 6   # кругов переброски на одну попытку
+SPLIT_PER_ROUND = 4  # запасной attempt: узлов, выводимых из общей колонки
+                     # (ряда) за круг переброски (как прототип C/D30)
 _SAME = object()  # сентинел: pipe_base по умолчанию наследует gap base
                   # (None — валидное значение «без капа», поэтому не годится)
 
@@ -847,6 +849,43 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
     vkeep = valve_pipes(graph, xa, ya)
     flip = {}           # обрыв: {пара: свободная ось}
     cliff = [False]     # переброска включена (только на обрыве)
+    split = [False]     # запасной attempt: вывод узла из общей колонки
+    nsplit = [0]
+    nbrs = {}
+    for e in edges(graph):
+        s_, t_ = edge_ends(e)
+        if s_ in by_key and t_ in by_key and s_ != t_:
+            nbrs.setdefault(s_, set()).add(t_)
+            nbrs.setdefault(t_, set()).add(s_)
+    byid0 = nodes_by_id(graph)          # вход до снапа: сторона выхода узла
+
+    def free_member(pk, other):
+        """Член пары общей колонки (ряда) без ребра внутри неё: его трубы
+        поперёк, сдвиг по свободной оси их не ломает. Не коннектор и не
+        крупный блок; из двух — меньший по площади."""
+        for m in sorted(pk, key=lambda k: (by_key[k]["hw"] * by_key[k]["hh"],
+                                           str(k))):
+            it = by_key[m]
+            if it["conn"] or 4 * it["hw"] * it["hh"] >= BAND_AREA:
+                continue
+            if all(other.get(t) != other[m] for t in nbrs.get(m, ())):
+                return m
+        return None
+
+    def split_off(m, partner, tight):
+        """Узел m уходит из общей колонки (ряда) в свою ось с той же
+        координатой — по ту сторону от партнёра, где стоял на входе."""
+        axl, ix, c0l, dl, k = ((xaxes, xa, cx0, dx, 0) if tight == "y"
+                               else (yaxes, ya, cy0, dy, 1))
+        i = ix[m]
+        axl[i]["members"].remove(m)
+        j = i + 1 if (node_cxy(byid0[m])[k]
+                      >= node_cxy(byid0[partner])[k]) else i
+        axl.insert(j, {"coord": axl[i]["coord"], "members": [m]})
+        c0l.insert(j, c0l[i])
+        dl.insert(j, dl[i])
+        ix.clear()
+        ix.update(_index(axl))
 
     def attempt(scale, valve_only=False, floor=VALVE_CLEAR):
         """Попытка; на обрыве (flip включён) — с переброской пар критического
@@ -867,11 +906,19 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
             fo, fh, fc = (("ox", "hw", "cx") if free == "x"
                           else ("oy", "hh", "cy"))
             specs, nsep = res[3][tight]
-            cand = []
+            cand, splits = [], []
             for pk in critical_seps(axlist, by_key, idx, specs, nsep, okey,
                                     hkey):
-                if other[pk[0]] == other[pk[1]] or pk in flip:
-                    continue          # общая колонка (ряд): свободной оси нет
+                if pk in flip:
+                    continue
+                if other[pk[0]] == other[pk[1]]:
+                    # общая колонка (ряд): свободной оси нет — только в
+                    # запасном attempt свободный член выводится в свою ось
+                    if split[0] and len(splits) < SPLIT_PER_ROUND:
+                        m = free_member(pk, other)
+                        if m is not None and all(m != q for _p, q in splits):
+                            splits.append((pk, m))
+                    continue
                 a, b = by_key[pk[0]], by_key[pk[1]]
                 if max(4 * a["hw"] * a["hh"], 4 * b["hw"] * b["hh"]) \
                         >= BAND_AREA:
@@ -880,15 +927,32 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
                     - abs((a[fc] + a[fo]) - (b[fc] + b[fo]))
                 if cost <= FLIP_COST:
                     cand.append((cost, pk))
-            if not cand:
+            if not cand and not splits:
                 break
             new = [pk for _c, pk in sorted(cand)]
             for pk in new:
                 flip[pk] = free
+            saved = None
+            if splits:
+                fl_ = (xaxes, cx0, dx) if tight == "y" else (yaxes, cy0, dy)
+                saved = ([{"coord": a["coord"], "members": list(a["members"])}
+                          for a in fl_[0]], list(fl_[1]), list(fl_[2]),
+                         nsplit[0])
+                for pk, m in splits:
+                    if other[pk[0]] == other[pk[1]]:
+                        split_off(m, pk[1] if m == pk[0] else pk[0], tight)
+                        nsplit[0] += 1
+                    flip[pk] = free
+                new += [pk for pk, _m in splits]
             r2 = attempt1(scale, valve_only, floor)
             if r2[0]["over_" + free] > 0.0:
                 for pk in new:        # свободная ось кончилась — откат круга
                     flip.pop(pk, None)
+                if saved is not None:  # и выведенных в этом круге узлов
+                    fl_[0][:], fl_[1][:], fl_[2][:], nsplit[0] = saved
+                    ix_ = xa if tight == "y" else ya
+                    ix_.clear()
+                    ix_.update(_index(fl_[0]))
                 break
             res = r2
         return res
@@ -1089,11 +1153,32 @@ def place(graph, canvas=(1920.0, 1080.0), gap=GAP, gap_min=GAP_MIN,
                     break
             if hit:
                 break
-    st["flips"] = len(flip)
+    if best is None:
+        # ЗАПАСНОЙ ATTEMPT — лист не влез ни в одной ступени (0aea61c0):
+        # переброска и вывод узла из общей колонки (решение Максима 02.10
+        # (3)). Пара общей колонки (ряда) на критическом пути тесной оси:
+        # член без ребра внутри колонки уходит в свою колонку с той же
+        # координатой и разводится с партнёром по свободной оси (`split_off`).
+        # С ними — заново ступени «только трубы клапанов»; не влезли — без
+        # труб вовсе. Вывести нечего (или все выводы откачены) — переброска
+        # сбрасывается, запасной attempt бит-в-бит как без вывода.
+        cliff[0] = split[0] = True
+        for fl in (VALVE_CLEAR, None):
+            pr = attempt(0.0, valve_only=True, floor=fl)
+            tries += 1
+            if pr[0]["over"] <= PRUNE_SLACK:
+                best = pr[:3]
+                break
+        if not nsplit[0]:
+            flip.clear()
+            cliff[0] = split[0] = False
+            best = None
     if best is None:
         inf, px, py, _l = attempt(0.0)
         tries += 1
         best = (inf, px, py)
+    st["flips"] = len(flip)
+    st["splits"] = nsplit[0]
     inf, px, py = best
     for a, c in zip(xaxes, px):
         a["coord"] = c
