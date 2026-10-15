@@ -55,6 +55,7 @@ from typing import Optional
 from xml.sax.saxutils import escape
 
 from modules.graph_to_fxml import (
+    BOUND_TEXT_WRAPPING,
     BRIDGE_GAP_STROKE_FACTOR,
     CLASS_COLORS,
     CLASS_NAME_TO_SKIN,
@@ -357,6 +358,11 @@ def generate_canvas_fxml(graph_data: dict,
         b.get('block_id') for b in bindings
         if b.get('block_id') and (b.get('kind') == 'edge' or b.get('edge_key'))
     }
+    # Привязанные к узлу печатаются коробкой фиксированной ширины.
+    node_bound_block_ids = {
+        b.get('block_id') for b in bindings
+        if b.get('block_id') and not (b.get('kind') == 'edge' or b.get('edge_key'))
+    }
     printable_blocks = {
         blk.get('id') for blk in (graph_data.get('text_blocks') or [])
         if blk.get('merged_into') is None and (blk.get('text') or '').strip()
@@ -459,7 +465,9 @@ def generate_canvas_fxml(graph_data: dict,
             continue
         if not (blk.get('text') or '').strip():
             continue
-        t = generate_fxml_text(blk)
+        t = generate_fxml_text(
+            blk,
+            BOUND_TEXT_WRAPPING if blk.get('id') in node_bound_block_ids else None)
         if t:
             text_elements.append(t)
 

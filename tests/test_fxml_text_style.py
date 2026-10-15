@@ -24,7 +24,14 @@ size="18.0"/>` плюс жирность отдельным inline-стилем.
 Центрирование — вариант **Б** (решение Максима): координату не вычисляем,
 выравнивание отдаёт формат. `textAlignment="CENTER"` эмитился и раньше, но
 для однострочного `<Text>` без `wrappingWidth` он мёртв — потому и жила
-оценка длины. Теперь `layoutX` = край рамки, `wrappingWidth` = её ширина.
+оценка длины. `layoutX` = край рамки.
+
+⛔ **`wrappingWidth` остался ТОЛЬКО у привязанных подписей** (80 px,
+`BOUND_TEXT_WRAPPING`; решение Максима 2026-08-26). У непривязанного блока
+атрибута нет вовсе: рамки блоков в разы уже кегля 18, и перенос по ширине
+рамки рвал подпись в столбик по одной букве. Значит у свободной подписи
+центрирование снова мертво — она идёт одной строкой от левого края рамки,
+а замки ниже запирают именно отсутствие атрибута.
 
 ⛔ **Граница блока (редтим):** у СКИНОВОЙ KKS-подписи семейство шрифта
 атрибутами не задаётся вовсе — в файл уходит только `kksFontSize`. Подпись
@@ -40,7 +47,9 @@ import pytest
 from modules import graph_to_fxml
 from modules.canvas_to_fxml import generate_canvas_fxml
 from modules.graph.core.pretransform import pretransform
-from modules.graph_to_fxml import TEXT_STYLES, generate_fxml, generate_fxml_text
+from modules.graph_to_fxml import (
+    BOUND_TEXT_WRAPPING, TEXT_STYLES, generate_fxml, generate_fxml_text,
+)
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "graph")
 
@@ -157,20 +166,31 @@ def test_вертикальная_подпись_несёт_тот_же_шриф
 
 # ── центрирование: рамкой, а не оценкой длины строки ─────────────────────
 
-def test_горизонтальная_подпись_выравнивается_шириной_рамки():
+def test_горизонтальная_свободная_подпись_идёт_от_края_рамки():
+    """Свободная подпись: `layoutX` = левый край, `wrappingWidth` не эмитится."""
     xml = generate_fxml_text(_block(HBOX))
-    x1, _y1, x2, _y2 = HBOX
+    x1, _y1, _x2, _y2 = HBOX
     assert float(_attr(xml, "layoutX")) == pytest.approx(x1, abs=0.05)
-    assert float(_attr(xml, "wrappingWidth")) == pytest.approx(x2 - x1, abs=0.05)
+    assert _attr(xml, "wrappingWidth") is None
     assert _attr(xml, "textAlignment") == "CENTER"
 
 
-def test_вертикальная_подпись_выравнивается_высотой_рамки():
-    """Повёрнутая строка идёт вверх от `layoutY`; длина рамки — её высота."""
+def test_привязанная_подпись_несёт_коробку_переноса():
+    """Единственный носитель `wrappingWidth` — привязанная подпись."""
+    xml = generate_fxml_text(_block(HBOX), BOUND_TEXT_WRAPPING)
+    x1, _y1, x2, _y2 = HBOX
+    assert float(_attr(xml, "wrappingWidth")) == pytest.approx(BOUND_TEXT_WRAPPING, abs=0.05)
+    # коробка центрируется на рамке — подпись остаётся там, где привязана
+    assert float(_attr(xml, "layoutX")) == pytest.approx(
+        (x1 + x2) / 2 - BOUND_TEXT_WRAPPING / 2, abs=0.05)
+
+
+def test_вертикальная_свободная_подпись_идёт_вверх_от_нижней_грани():
+    """Повёрнутая строка идёт вверх от `layoutY`; коробки переноса у неё нет."""
     xml = generate_fxml_text(_block(VBOX))
     x1, _y1, x2, y2 = VBOX
     assert float(_attr(xml, "layoutY")) == pytest.approx(y2, abs=0.05)
-    assert float(_attr(xml, "wrappingWidth")) == pytest.approx(VBOX[3] - VBOX[1], abs=0.05)
+    assert _attr(xml, "wrappingWidth") is None
     # толщина строки центрируется по оси рамки — кеглем, не оценкой длины
     assert float(_attr(xml, "layoutX")) == pytest.approx((x1 + x2) / 2 - SIZE / 2, abs=0.05)
 

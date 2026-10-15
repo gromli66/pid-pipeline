@@ -61,6 +61,8 @@ class GraphDataModel:
         self.text_blocks: list[dict] = []
         self.bindings: list[dict] = []
         self.manual_block_counter: int = 0
+        # Сколько кратных труб разрезано коннектором при загрузке (см. load).
+        self.multi_edges_split: int = 0
 
     # =================================================================
     # I/O
@@ -133,6 +135,11 @@ class GraphDataModel:
                 except ValueError:
                     pass
 
+        # 4a. Кратные трубы (две и более между одной парой узлов) — разрезать
+        #     коннектором: ключ ребра здесь пара узлов, второй трубе своего
+        #     ключа не достаётся.
+        self.multi_edges_split = self._split_multi_edges()
+
         # 5. Build index
         self.rebuild_edge_data_index()
 
@@ -152,11 +159,87 @@ class GraphDataModel:
 
         return True
 
+    def _split_multi_edges(self) -> int:
+        """Разрезать коннектором вторую и последующие трубы между одной парой.
+
+        Ребро здесь адресуется ПАРОЙ узлов (`edge_key`), и другого адреса у
+        него нет. Две трубы между одними и теми же аппаратами — на схемах это
+        обычное дело (два патрубка теплообменника) — в такой адресации
+        неразличимы, и дальше всё врёт: холст рисует обе линии, а знает про
+        одну (вторая — призрак, который нечем удалить и который не едет за
+        узлом); `remove_edge` сносит из данных ОБЕ записи разом, а со сцены
+        снимает одну; undo возвращает одну трубу из двух.
+
+        Коннектор посередине даёт второй трубе собственные ключи
+        (`a—c`, `c—b`) и всю обычную механику: удаление, тягу, undo.
+        Геометрия сохраняется точка в точку — коннектор садится на саму
+        линию. Идемпотентно: после разреза кратных пар не остаётся.
+
+        Returns:
+            сколько труб разрезано.
+        """
+        seen: set[tuple[str, str]] = set()
+        extra: list[dict] = []
+        for edge in self.edges_data:
+            key = self.edge_key(edge['source'], edge['target'])
+            if key in seen:
+                extra.append(edge)
+            else:
+                seen.add(key)
+
+        for edge in extra:
+            self._split_edge_with_connector(edge)
+        return len(extra)
+
+    def _split_edge_with_connector(self, edge: dict):
+        """Разрезать одну трубу коннектором посередине (на месте)."""
+        sp, tp = edge.get('source_point'), edge.get('target_point')
+        waypoints = edge.get('waypoints') or []
+
+        if waypoints:
+            # Коннектор садится на средний излом — обе половины остаются
+            # ровно там, где шла труба.
+            k = len(waypoints) // 2
+            mid = list(waypoints[k])
+            wp_head, wp_tail = waypoints[:k], waypoints[k + 1:]
+        elif sp and tp:
+            mid = [(sp[0] + tp[0]) / 2, (sp[1] + tp[1]) / 2]
+            wp_head, wp_tail = [], []
+        else:
+            return  # геометрии нет — резать не по чему
+
+        node = self.create_connector_node(mid[1], mid[0])
+        self.add_node(node)
+        node_id = node['id']
+
+        head = deepcopy(edge)
+        tail = deepcopy(edge)
+        self.manual_edge_counter += 1
+        head['id'] = f"edge_manual_{self.manual_edge_counter}"
+        self.manual_edge_counter += 1
+        tail['id'] = f"edge_manual_{self.manual_edge_counter}"
+
+        head['target'] = node_id
+        head['target_point'] = list(mid)
+        head['waypoints'] = wp_head
+        tail['source'] = node_id
+        tail['source_point'] = list(mid)
+        tail['waypoints'] = wp_tail
+        for half in (head, tail):
+            s, t = half['source_point'], half['target_point']
+            half['straight_line_distance'] = (
+                (t[0] - s[0]) ** 2 + (t[1] - s[1]) ** 2) ** 0.5
+
+        self.edges_data = [e for e in self.edges_data if e is not edge]
+        self.add_edge(head['source'], head['target'], head)
+        self.add_edge(tail['source'], tail['target'], tail)
+
     def save(self, path: str) -> bool:
         """Сохранить граф в JSON.
 
         Синхронизирует graph_data['graph'] метаданные:
         - links, num_edges, num_nodes, num_isolated_nodes.
+        Пересчитывает degree узлов по фактическим рёбрам.
         """
         if not self.graph_data:
             return False
@@ -167,6 +250,22 @@ class GraphDataModel:
         # OCR текст-блоки и привязки — часть единого графа.
         self.graph_data['text_blocks'] = self.text_blocks
         self.graph_data['bindings'] = self.bindings
+
+        # degree — производное от рёбер, а редактор правит рёбра жестами:
+        # без пересчёта поле уезжает в файл таким, каким его посчитала
+        # сборка ДО правок оператора (замер 2026-08-26 на c78e1f02: четыре
+        # узла, два из них «изолированные» при живом ручном ребре).
+        # Формула — как в сборке (modules/graph/core/nodes.py
+        # update_node_degrees): каждое ребро даёт +1 обоим концам. Считаем
+        # по edges_data, а не по self.edges: в файл уедет именно он.
+        for node in self.nodes.values():
+            node['degree'] = 0
+        for edge in self.edges_data:
+            src, tgt = edge.get('source'), edge.get('target')
+            if src in self.nodes:
+                self.nodes[src]['degree'] += 1
+            if tgt in self.nodes:
+                self.nodes[tgt]['degree'] += 1
 
         # Метаданные
         graph_meta = self.graph_data.setdefault('graph', {})

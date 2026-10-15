@@ -290,6 +290,12 @@ class BaseGraphEditor(QGraphicsView):
             self.update_status("Ошибка загрузки графа")
             return False
 
+        if self.model.multi_edges_split:
+            logger.info(
+                "load_data: кратных труб разрезано коннектором — %d "
+                "(две трубы между одной парой узлов неадресуемы)",
+                self.model.multi_edges_split)
+
         # 3. Scene
         self.setup_scene()
         self.update_statistics()
@@ -707,6 +713,9 @@ class BaseGraphEditor(QGraphicsView):
         item.setPen(pen)
         item.setZValue(1)
         self.scene.addItem(item)
+        # Один ключ — один предмет: перезапись словаря без снятия старого
+        # оставляла на сцене неучтённую линию, убрать которую уже нечем.
+        self._drop_scene_item(self.edge_items.get(edge_key))
         self.edge_items[edge_key] = item
 
         # Diameter label on the edge
@@ -761,7 +770,13 @@ class BaseGraphEditor(QGraphicsView):
         label.setPos(mid_x - br.width() / 2, mid_y - br.height() / 2)
 
         self.scene.addItem(label)
+        self._drop_scene_item(self.edge_label_items.get(edge_key))
         self.edge_label_items[edge_key] = label
+
+    def _drop_scene_item(self, item):
+        """Снять предмет со сцены, если он там ещё есть."""
+        if item is not None and item.scene() is not None:
+            self.scene.removeItem(item)
 
     def remove_edge_item(self, key: tuple):
         """Удалить визуальный элемент ребра + подпись. Public — для Commands."""
@@ -1107,6 +1122,14 @@ class BaseGraphEditor(QGraphicsView):
 
     def remove_node_items(self, node_id: str):
         """Удалить все визуальные элементы узла. Public — для Commands."""
+        # Выбор и hover не должны пережить сам узел: иначе следующий же
+        # mouseMove уйдёт в self.nodes[<удалённого>] и режим «Добавить/Удалить
+        # ребро» начнёт сыпать KeyError на каждое движение мыши (узел удаляют
+        # Ctrl+ПКМ прямо из-под выбора, а также undo создания коннектора).
+        if self.selected_node == node_id:
+            self.clear_selection()
+        if self.hovered_node == node_id:
+            self.update_hover(None)
         self._remove_side_marks(node_id)
         if node_id in self.node_items:
             self.scene.removeItem(self.node_items[node_id])
@@ -1537,7 +1560,11 @@ class BaseGraphEditor(QGraphicsView):
                 self.preview_line = None
             return
 
-        src = self.nodes[self.selected_node]
+        src = self.nodes.get(self.selected_node)
+        if src is None:
+            # Узел исчез из-под выбора (удалён или откачен) — снять выбор молча.
+            self.clear_selection()
+            return
         x1, y1 = src['centroid'][1], src['centroid'][0]
 
         if self.hovered_node and self.hovered_node != self.selected_node:
